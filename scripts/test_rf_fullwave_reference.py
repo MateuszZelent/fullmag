@@ -1,5 +1,7 @@
 """Small manufactured tests for the standalone Maxwell FEM reference."""
 
+from functools import partial
+
 import numpy as np
 import pytest
 from scipy.constants import c, epsilon_0, mu_0
@@ -104,3 +106,38 @@ def test_ece_retains_dielectric_current_when_wavelength_is_much_larger_than_doma
     expected = 1j * 2 * np.pi * frequency * epsilon_0 * dielectric * length
     assert result.terminal_currents_a["drive"] / expected == pytest.approx(1, rel=1e-5)
     assert result.terminal_currents_a["ground"] / expected == pytest.approx(-1, rel=1e-5)
+
+@pytest.mark.parametrize("model", ["maxwell", "darwin"])
+def test_floating_load_returns_current_through_tied_output_electrodes(model):
+    from rf_darwin_reference import solve_darwin_ece
+
+    points, cells = brick(6)
+    system = assemble(points, cells, 10.0, 1.0, 5e4)
+    x, y, _ = points.T
+    end = x == 1
+    terminals = {
+        "drive": np.flatnonzero(x == 0),
+        "ground": np.flatnonzero((y == 0) & (x >= 2/6) & (x <= 4/6)),
+        "signal_out": np.flatnonzero(end & (y >= 2/6) & (y <= 4/6)),
+        "left_out": np.flatnonzero(end & (y <= 1/6)),
+        "right_out": np.flatnonzero(end & (y >= 5/6 - 1e-12)),
+    }
+    impedance = 0.4 + 0.2j
+    branch = ("signal_out", ("left_out", "right_out"), impedance)
+    solve = system.solve_ece if model == "maxwell" else partial(solve_darwin_ece, system)
+    result = solve(terminals, {"drive": 1, "ground": 0}, {}, floating_load=branch)
+    v, i = result.terminal_voltages_v, result.terminal_currents_a
+    assert v["left_out"] == v["right_out"]
+    assert abs(v["left_out"]) > 1e-3
+    assert abs(i["right_out"]) > 1e-3
+    resistor_current = (v["signal_out"] - v["left_out"]) / impedance
+    assert abs(resistor_current) > 1e-3
+    assert i["signal_out"] == pytest.approx(-resistor_current, abs=1e-9)
+    assert i["left_out"] + i["right_out"] == pytest.approx(resistor_current, abs=1e-9)
+    assert sum(i.values()) == pytest.approx(0, abs=1e-9)
+    correction = result.power_mix_w if model == "darwin" else 0
+    assert result.power_in_w == pytest.approx(result.power_joule_w + correction, rel=1e-9)
+
+    with pytest.raises(ValueError, match="floating"):
+        solve(terminals, {"drive": 1, "ground": 0}, {},
+              floating_load=("signal_out", ("left_out", "left_out"), impedance))

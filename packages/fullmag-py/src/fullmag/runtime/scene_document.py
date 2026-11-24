@@ -1749,6 +1749,7 @@ def build_scene_document_from_builder(builder: dict[str, Any]) -> dict[str, Any]
     material_assignments = material_metadata["assignments"] if material_metadata is not None else {}
     object_ids = material_metadata["object_ids"] if material_metadata is not None else {}
     magnetization_assets: list[dict[str, Any]] = []
+    hidden_object_ids = set(builder.get("hidden_scene_object_ids") or [])
 
     for geometry in geometries:
         name = str(geometry.get("name", "object"))
@@ -1808,7 +1809,7 @@ def build_scene_document_from_builder(builder: dict[str, Any]) -> dict[str, Any]
                 "allocated_region_ids": allocated_region_ids,
                 "material_parameter_fields": geometry.get("material_parameter_fields") or [],
                 "visualization_hint": geometry.get("visualization_hint") or {},
-                "visible": True,
+                "visible": object_id not in hidden_object_ids,
                 "locked": False,
                 "tags": [f"role:{role}"] if is_auxiliary else [],
             }
@@ -2342,6 +2343,9 @@ def build_builder_from_scene_document(scene: dict[str, Any]) -> dict[str, Any]:
         "output_storage": study.get("output_storage"),
         "initial_state": study.get("initial_state"),
         "geometries": geometries,
+        "hidden_scene_object_ids": sorted(
+            obj["id"] for obj in scene.get("objects") or [] if obj.get("visible") is False
+        ),
         "material_assets": material_assets_from_scene(scene),
         "couplings": scene.get("couplings") or [],
         "current_modules": [*antenna_modules, *transports],
@@ -2448,8 +2452,10 @@ def build_builder_from_scene_document(scene: dict[str, Any]) -> dict[str, Any]:
             builder[collection] = copy.deepcopy(value)
             if collection == "antenna_field_solve_stages":
                 for stage in builder[collection]:
-                    if isinstance(stage, dict) and stage.get("conservative_current_view_ref") is None:
-                        stage.pop("conservative_current_view_ref", None)
+                    if isinstance(stage, dict):
+                        for key in ("conservative_current_view_ref", "retained_current_source"):
+                            if stage.get(key) is None:
+                                stage.pop(key, None)
     return builder
 
 
@@ -2727,6 +2733,7 @@ def builder_overrides_from_scene_document(scene: dict[str, Any]) -> dict[str, An
         "output_storage": builder.get("output_storage"),
         "initial_state": builder.get("initial_state"),
         "geometries": builder.get("geometries") or [],
+        "hidden_scene_object_ids": builder["hidden_scene_object_ids"],
         "material_assets": builder.get("material_assets"),
         "couplings": builder.get("couplings") or [],
         "field_drives": builder.get("field_drives") or [],

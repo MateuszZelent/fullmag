@@ -426,7 +426,7 @@ def export_builder_draft(
             mode.to_ir() for mode in base_problem.antenna_port_modes
         ],
         "antenna_field_solve_stages": [
-            stage.to_ir() for stage in authored_problem.antenna_field_solve_stages
+            stage.to_ir(source_root=source_root) for stage in authored_problem.antenna_field_solve_stages
         ],
         "antenna_target_projections": [
             projection.to_ir() for projection in authored_problem.antenna_target_projections
@@ -454,6 +454,9 @@ def export_builder_draft(
         ],
         "excitation_analysis": _export_excitation_analysis(base_problem),
     }
+    hidden_object_ids = authored_problem.runtime_metadata.get("hidden_scene_object_ids")
+    if hidden_object_ids:
+        draft["hidden_scene_object_ids"] = hidden_object_ids
     from fullmag.runtime.domain_mesh_source import source_from_problem
     shared_source = source_from_problem(base_problem)
     if shared_source is not None:
@@ -567,7 +570,9 @@ def render_loaded_problem_as_script(
     loaded: LoadedProblem,
     *,
     overrides: dict[str, object] | None = None,
+    source_preparation_assets=None,
 ) -> str:
+    source_preparation_assets = source_preparation_assets if source_preparation_assets is not None else _source_preparation_capture_records(loaded)
     overrides = _normalize_mapping(overrides)
     actual_stages = loaded.stages
     stages = actual_stages or (
@@ -816,6 +821,7 @@ def render_loaded_problem_as_script(
         region_vars=region_vars,
         source_root=source_root,
         mask_renderer=mask_renderer,
+        source_preparation_assets=source_preparation_assets,
     )
     if stage_lines:
         lines.append("")
@@ -824,10 +830,11 @@ def render_loaded_problem_as_script(
     authored_problem = loaded.workspace_problem or loaded.problem
     declaration_lines = _render_antenna_inventory_declarations(
         {
-            collection: [item.to_ir() for item in getattr(authored_problem, collection)]
+            collection: [(item.to_ir(source_root=source_root) if collection == "antenna_field_solve_stages" else item.to_ir()) for item in getattr(authored_problem, collection)]
             for collection in _ANTENNA_SCENE_COLLECTIONS[1:]
         },
         [stage.action for stage in stages if isinstance(stage.action, dict)],
+        source_preparation_assets=source_preparation_assets,
     )
     if declaration_lines:
         lines.append("")
@@ -845,6 +852,12 @@ def render_loaded_problem_as_script(
         lines.append(
             f"fm.runtime_metadata('material_assets', {_py_literal(canonical_material_assets(material_metadata))})"
         )
+
+    hidden_object_ids = overrides.get(
+        "hidden_scene_object_ids", authored_problem.runtime_metadata.get("hidden_scene_object_ids")
+    )
+    if hidden_object_ids:
+        lines.append(f"fm.runtime_metadata('hidden_scene_object_ids', {_py_literal(hidden_object_ids)})")
 
     normalized = "\n".join(lines).rstrip() + "\n"
     return normalized
@@ -864,6 +877,7 @@ def render_scene_document_as_script(
     include_authored_stages: bool = True,
     include_legacy_relax_stages: bool = True,
     _source_root: str | Path | None = None,
+    source_preparation_assets=None,
 ) -> str:
     """Render a canonical Python script directly from a SceneDocument.
 
@@ -897,6 +911,7 @@ def render_scene_document_as_script(
         builder,
         include_authored_stages=include_authored_stages,
         include_legacy_relax_stages=include_legacy_relax_stages,
+        source_preparation_assets=source_preparation_assets,
     )
     scene_for_render = copy.deepcopy(scene)
     if include_authored_stages:
@@ -911,10 +926,18 @@ def render_scene_document_as_script(
     with tempfile.TemporaryDirectory(prefix="fullmag-scene-export-") as temporary:
         script_path = Path(temporary) / "scene_document.py"
         script_path.write_text(bootstrap, encoding="utf-8")
-        loaded = load_problem_from_script(script_path, lightweight_assets=True)
+        if source_preparation_assets:
+            roots = {_source_preparation_from_capture({"asset_id": key, "content_sha256": record["sha256"]}, source_preparation_assets)[1]
+                     for key, record in source_preparation_assets.items()}
+            if len(roots) != 1:
+                raise ValueError("source preparation export requires one observed source closure")
+            script_path = next(iter(roots)) / "scene_document.py"
+            loaded = load_problem_from_script(script_path, lightweight_assets=True, source_bytes=bootstrap.encode("utf-8"))
+        else:
+            loaded = load_problem_from_script(script_path, lightweight_assets=True)
         for collection in _ANTENNA_SCENE_COLLECTIONS:
             if collection in builder:
-                actual = [item.to_ir() for item in getattr(
+                actual = [(item.to_ir(source_root=script_path.parent) if collection == "antenna_field_solve_stages" else item.to_ir()) for item in getattr(
                     loaded.workspace_problem or loaded.problem, collection
                 )]
                 if actual != builder[collection]:
@@ -938,6 +961,7 @@ def render_scene_document_as_script(
         return render_loaded_problem_as_script(
             loaded,
             overrides=overrides,
+            source_preparation_assets=source_preparation_assets,
         )
 
 
@@ -1311,6 +1335,7 @@ def _render_scene_document_bootstrap(
     *,
     include_authored_stages: bool = False,
     include_legacy_relax_stages: bool = True,
+    source_preparation_assets=None,
 ) -> str:
     """Build a minimal capture script that realizes the scene's typed objects."""
     profile, layers = _execution_profile_values(builder, context="builder")
@@ -1651,7 +1676,7 @@ def _render_scene_document_bootstrap(
                 raise ValueError("gilbert_damping_by_object requires a run stage")
             stage_lines = _render_scene_stage_bootstrap(
                 payload, index=index, solver=solver, magnet_vars=snapshot_handles,
-                mask_renderer=mask_renderer,
+                mask_renderer=mask_renderer, source_preparation_assets=source_preparation_assets,
             )
             lines.extend(_with_run_damping(stage_lines, damping, snapshot_handles_by_id))
         _render_external_field_change(lines, active_field, base_field, "legacy")
@@ -1664,7 +1689,7 @@ def _render_scene_document_bootstrap(
             kwargs = _scene_relax_stage_kwargs(stage, solver=solver)
             lines.append(f"study.stages.add_relax({_python_keyword_args(kwargs)})")
 
-    lines.extend(_render_antenna_inventory_declarations(builder, authored_stages))
+    lines.extend(_render_antenna_inventory_declarations(builder, authored_stages, source_preparation_assets=source_preparation_assets))
     lines.extend(_render_execution_intent({}, overrides=builder, surface="study"))
     lines.append("")
     return "\n".join(lines) + "\n"
@@ -1847,7 +1872,7 @@ def _scene_antenna_stage_sequence(builder: Mapping[str, object]) -> list[dict[st
 
 
 def _render_antenna_inventory_declarations(
-    inventory: Mapping[str, object], actions: Sequence[object]
+    inventory: Mapping[str, object], actions: Sequence[object], *, source_preparation_assets=None
 ) -> list[str]:
     used = {collection: set() for collection in _ANTENNA_SCENE_COLLECTIONS[1:]}
     for action in actions:
@@ -1886,7 +1911,8 @@ def _render_antenna_inventory_declarations(
             if not isinstance(entry, dict):
                 raise ValueError(f"{collection} declarations must be objects")
             if entry.get("id") not in used[collection]:
-                lines.append(f"study.{method}({parameter}={render(entry)})")
+                expression = render(entry, source_preparation_assets=source_preparation_assets) if collection == "antenna_field_solve_stages" else render(entry)
+                lines.append(f"study.{method}({parameter}={expression})")
     return lines
 
 
@@ -1984,6 +2010,7 @@ def _render_scene_stage_bootstrap(
     solver: object,
     magnet_vars: dict[str, str],
     mask_renderer: "_MaskAntennaRenderer | None" = None,
+    source_preparation_assets=None,
 ) -> list[str]:
     """Capture SceneDocument stage intent through the public DSL for final rendering."""
     kind = str(stage.get("kind") or "relax").strip().lower()
@@ -1998,7 +2025,7 @@ def _render_scene_stage_bootstrap(
     if kind == "antenna_field_solve":
         _reject_unrendered_scene_stage_fields(stage, kind=kind, rendered_fields={"definition", "port_mode_ids"})
         definition = stage["definition"]
-        return [f"study.stages.add_antenna_field_solve(id={_py_literal(definition['id'])}, definition={_render_antenna_field_solve_definition_expr(definition)})"]
+        return [f"study.stages.add_antenna_field_solve(id={_py_literal(definition['id'])}, definition={_render_antenna_field_solve_definition_expr(definition, source_preparation_assets=source_preparation_assets)})"]
     if kind == "antenna_source_spectrum":
         _reject_unrendered_scene_stage_fields(stage, kind=kind, rendered_fields={"request"})
         return [f"study.add_antenna_spectrum_request(request={_render_antenna_spectrum_request_expr(stage['request'])})"]
@@ -6561,7 +6588,59 @@ def _render_field_target_payload_expr(value: object) -> str:
     return f"fm.FieldTarget(**{_py_literal(target)})"
 
 
-def _render_antenna_field_solve_definition_expr(definition: dict[str, object]) -> str:
+def _source_preparation_capture_records(loaded: LoadedProblem) -> dict[str, dict[str, object]]:
+    records = {}
+    root = loaded.source_path.parent
+    problems = [loaded.problem, loaded.workspace_problem, *(stage.problem for stage in loaded.stages)]
+    for problem in problems:
+        if problem is None:
+            continue
+        for stage in problem.antenna_field_solve_stages:
+            asset = stage.retained_source_preparation
+            if asset is not None:
+                path = asset.resolved_source(root)
+                reference = asset.to_ir(source_root=root)
+                records[reference["asset_id"]] = {"asset_id": reference["asset_id"],
+                    "relative_path": "source/" + path.relative_to(root).as_posix(),
+                    "absolute_path": str(path), "sha256": asset.content_sha256}
+    return records
+
+
+def _source_preparation_from_capture(reference, records):
+    import hashlib
+    from fullmag.model.antenna import AntennaSourcePreparationAsset
+    from fullmag.runtime.antenna_source_preparation import MAX_ASSET_BYTES
+    if not isinstance(reference, dict) or set(reference) != {"asset_id", "content_sha256"}:
+        raise ValueError("source preparation export requires an exact immutable asset reference")
+    record = (records or {}).get(reference["asset_id"])
+    if not isinstance(record, Mapping):
+        raise ValueError("source preparation export requires its immutable input closure")
+    relative = record.get("relative_path")
+    if (not isinstance(relative, str) or not relative.startswith("source/")
+            or any(part in {"", ".", ".."} for part in relative.split("/"))
+            or record.get("asset_id") != reference["asset_id"]
+            or record.get("sha256") != reference["content_sha256"]
+            or "script-file-" + hashlib.sha256(relative.encode()).hexdigest() != reference["asset_id"]):
+        raise ValueError("source preparation export closure identity differs")
+    source = record.get("absolute_path")
+    if not isinstance(source, str):
+        raise ValueError("source preparation export requires a resolved input path")
+    path = Path(source)
+    suffix = Path(relative.removeprefix("source/"))
+    root = path
+    for _ in suffix.parts:
+        root = root.parent
+    asset = AntennaSourcePreparationAsset(path, reference["content_sha256"])
+    if asset.to_ir(source_root=root) != reference or path.relative_to(root).as_posix() != suffix.as_posix():
+        raise ValueError("source preparation export path differs from immutable closure")
+    with path.open("rb") as handle:
+        data = handle.read(MAX_ASSET_BYTES + 1)
+    if not data or len(data) > MAX_ASSET_BYTES or hashlib.sha256(data).hexdigest() != asset.content_sha256:
+        raise ValueError("source preparation export bytes differ from immutable closure")
+    return asset, root
+
+
+def _render_antenna_field_solve_definition_expr(definition: dict[str, object], *, source_preparation_assets=None) -> str:
     scalar_fields = (
         "id", "source_object_id", "current_transport_id", "port_mode_ids",
         "model", "oersted_realization", "conductor_mesh_policy", "solver_policy",
@@ -6570,6 +6649,13 @@ def _render_antenna_field_solve_definition_expr(definition: dict[str, object]) -
     if definition.get("surface_field_policy") is not None:
         args.append("surface_field_policy=fm.AntennaSurfaceFieldPolicy(**"
                     + _py_literal(_normalize_mapping(definition["surface_field_policy"])) + ")")
+    if definition.get("retained_current_source") is not None:
+        args.append("retained_current_source=fm.AntennaRetainedCurrentSource(**"
+                    + _py_literal(_normalize_mapping(definition["retained_current_source"])) + ")")
+    if definition.get("retained_source_preparation") is not None:
+        asset, _ = _source_preparation_from_capture(definition["retained_source_preparation"], source_preparation_assets)
+        args.append("retained_source_preparation=fm.AntennaSourcePreparationAsset("
+                    f"source={_py_literal(str(asset.source))}, content_sha256={_py_literal(asset.content_sha256)})")
     if definition.get("conservative_current_view_ref") is not None:
         args.append(
             "conservative_current_view_ref="
@@ -9708,6 +9794,7 @@ def _render_stages(
     region_vars: dict[tuple[str, str], str],
     source_root: Path,
     mask_renderer: "_MaskAntennaRenderer | None" = None,
+    source_preparation_assets=None,
 ) -> list[str]:
     if not stages:
         return []
@@ -9768,7 +9855,7 @@ def _render_stages(
                 lines.append(
                     "study.stages.add_antenna_field_solve("
                     f"id={_py_literal(definition['id'])}, "
-                    f"definition={_render_antenna_field_solve_definition_expr(definition)})"
+                    f"definition={_render_antenna_field_solve_definition_expr(definition, source_preparation_assets=source_preparation_assets)})"
                 )
                 continue
             if action_kind == "antenna_source_spectrum":
@@ -12259,7 +12346,7 @@ def _export_spin_torque_entry(module: object) -> dict[str, object]:
 
 def _export_geometry_kind_params(geom: object) -> tuple[str, dict[str, object]]:
     """Extract kind string and parameter dict from a geometry object."""
-    descriptor = _export_geometry_descriptor(geom, flatten_translation=True)
+    descriptor = _export_geometry_descriptor(geom, flatten_translation=False)
     return str(descriptor["geometry_kind"]), _normalize_mapping(descriptor["geometry_params"])
 
 

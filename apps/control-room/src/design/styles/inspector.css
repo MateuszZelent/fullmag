@@ -851,8 +851,9 @@ button.fm-inspector__breadcrumb:hover {
 
 .fm-inspector__tab-list {
   display: grid;
-  grid-template-columns: repeat(var(--fm-inspector-tab-count, 4), minmax(0, 1fr));
+  grid-template-columns: repeat(var(--fm-inspector-tab-count, 4), minmax(max-content, 1fr));
   width: 100%;
+  height: auto;
   min-height: var(--fm-control-height-regular);
   padding: var(--fm-space-1);
   border: 1px solid var(--fm-border-subtle);
@@ -866,6 +867,13 @@ button.fm-inspector__breadcrumb:hover {
 
 .fm-inspector__tab-list:has(> :nth-child(2):last-child) {
   --fm-inspector-tab-count: 2;
+}
+
+/* Keep all labels visible when the Inspector is narrower than four tabs. */
+@container (max-width: 24rem) {
+  .fm-inspector__tab-list {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
 }
 
 /* Inspector tabs: raised active pill */
@@ -1684,6 +1692,12 @@ button.fm-inspector__breadcrumb:hover {
 
 .fm-inspector .fm-inspector-field-row__value small {
   font-size: var(--fm-font-size-sm);
+}
+
+/* A multiline description must contribute to the shared header height. */
+.fm-inspector :is([data-slot="inspector-group-header"], [data-slot="inspector-group-trigger"]):has([data-slot="inspector-group-heading"] > p) {
+  height: auto;
+  min-height: var(--fm-control-height-sm);
 }
 
 .fm-inspector [data-slot="inspector-group-heading"] h3 {

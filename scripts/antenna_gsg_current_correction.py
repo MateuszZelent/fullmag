@@ -7,11 +7,19 @@ from collections.abc import Mapping
 from decimal import Context, Decimal, ROUND_HALF_EVEN, localcontext
 from itertools import zip_longest
 import math
+from types import MappingProxyType
 
 from antenna_rt0_surface_oracle import fit_retained_rt0
 
 
-def weighted_rt0_h1_correction(cells, electric_potential_v, conductivity_spm, expected_cells):
+SOURCE_CELL_LIMITS = MappingProxyType({
+    'legacy72911': 72911,
+    'gsg_junction_refinement_80k.v1': 80000,
+    'gsg_junction_refinement_86k.v1': 86000,
+})
+
+
+def weighted_rt0_h1_correction(cells, electric_potential_v, conductivity_spm, expected_cells, *, cell_limit_profile='legacy72911'):
     """Exact degree-two Tet4 integrals in Decimal120; no centroid quadrature."""
     def require(condition, reason):
         if not condition:
@@ -26,7 +34,9 @@ def weighted_rt0_h1_correction(cells, electric_potential_v, conductivity_spm, ex
         require(math.isfinite(value), 'finite numeric data required')
         return Decimal.from_float(value)
 
-    require(type(expected_cells) is int and 0 < expected_cells <= 72911, 'invalid complete source cell count')
+    require(type(cell_limit_profile) is str and cell_limit_profile in SOURCE_CELL_LIMITS, 'unknown source cell limit profile')
+    require(type(expected_cells) is int and 0 < expected_cells <= SOURCE_CELL_LIMITS[cell_limit_profile],
+            'invalid complete source cell count')
     require(isinstance(electric_potential_v, Mapping) and 0 < len(electric_potential_v) <= 4*expected_cells,
             'invalid potential identity map')
     require(all(type(i) is int and 0 <= i < 2**64 for i in electric_potential_v), 'invalid potential vertex identity')
@@ -75,7 +85,7 @@ def weighted_rt0_h1_correction(cells, electric_potential_v, conductivity_spm, ex
                 'source_authentication':'caller responsibility; mathematical analysis only'}
 
 
-def partitioned_weighted_rt0_h1_correction(cells, electric_potential_v, conductivity_spm, expected_cells, parts):
+def partitioned_weighted_rt0_h1_correction(cells, electric_potential_v, conductivity_spm, expected_cells, parts, *, cell_limit_profile='legacy72911'):
     """Localize the same correction on an exact cell partition; never average eta."""
     from itertools import islice
 
@@ -83,7 +93,9 @@ def partitioned_weighted_rt0_h1_correction(cells, electric_potential_v, conducti
         if not condition:
             raise ValueError(reason)
 
-    require(type(expected_cells) is int and 0 < expected_cells <= 72911, 'invalid complete source cell count')
+    require(type(cell_limit_profile) is str and cell_limit_profile in SOURCE_CELL_LIMITS, 'unknown source cell limit profile')
+    require(type(expected_cells) is int and 0 < expected_cells <= SOURCE_CELL_LIMITS[cell_limit_profile],
+            'invalid complete source cell count')
     require(isinstance(electric_potential_v, Mapping)
             and 0 < len(electric_potential_v) <= 4*expected_cells
             and all(type(i) is int and 0 <= i < 2**64 for i in electric_potential_v),
@@ -114,7 +126,8 @@ def partitioned_weighted_rt0_h1_correction(cells, electric_potential_v, conducti
             selected=[rows[i] for i in indices];used={i for row in selected for i in row[1:5]}
             result=weighted_rt0_h1_correction(
                 ((i,*row[1:]) for i,row in enumerate(selected)),
-                {i:electric_potential_v[i] for i in used},(sigmas[i] for i in indices),len(indices))
+                {i:electric_potential_v[i] for i in used},(sigmas[i] for i in indices),len(indices),
+                cell_limit_profile=cell_limit_profile)
             numerator+=Decimal(result['correction_energy_W']);denominator+=Decimal(result['h1_energy_W'])
             results.append({'part_id':part_id,'source_cells':len(indices),**result})
         eta=(numerator/denominator).sqrt();rounded=float(eta)

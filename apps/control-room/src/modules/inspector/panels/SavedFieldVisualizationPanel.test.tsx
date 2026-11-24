@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import type { MaterializedDatasetResource } from "@/kernel/api/apiTypes";
 import { renderToStaticMarkup } from "react-dom/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -32,7 +33,7 @@ vi.mock("../visualization/ViewportClippingControls", () => ({
   },
 }));
 vi.mock("./ObjectVisualizationOverview", () => ({
-  VisualizationInspectorOverview: (props: { clipping?: ReactNode; clippingSummary?: string }) => {
+  VisualizationInspectorOverview: (props: { context?: ReactNode; clipping?: ReactNode; clippingSummary?: string }) => {
     mocks.overview(props);
     return <>{props.clipping}<span>{props.clippingSummary}</span></>;
   },
@@ -54,6 +55,27 @@ describe("saved field workspace section", () => {
     vi.clearAllMocks();
     mocks.section.optimisticData = null;
     mocks.session.epoch = "epoch-A";
+  });
+
+  it("retained_dtq_display_distinguishes_raw_and_signed_per_a", () => {
+    const controller = new ObjectVisualizationController();
+    controller.setSavedFieldPresentation(selection, "H_ant", "3");
+    const dataset = {
+      integrity: "verified", dataset: { status: { availability: "ready" } },
+      field: { producer_id: "fullmag.retained-current-field", producer_version: "1", accepted_state: null,
+        descriptor: { quantity_id: "H_ant", unit: "A/m", value_representation: "physical_field",
+          normalization: "none", complex_encoding: "real", sample_location: "node" },
+        coverage: { component_count: "3", total_elements: "4" } },
+    } as unknown as MaterializedDatasetResource;
+    renderToStaticMarkup(<SavedFieldVisualizationPanel
+      presentation={controller.getSnapshot().savedFieldPresentation!} dataset={dataset} />);
+    const context = renderToStaticMarkup(mocks.overview.mock.calls[0]?.[0].context as ReactNode);
+    expect(context).toContain("Raw H [A/m]");
+    expect(context).toContain("Signed per-A [1/m] is unavailable");
+    expect(context).toContain("no canonical H/I transform");
+    expect(context).not.toContain("role=\"combobox\"");
+    expect(dataset.field.descriptor.unit).toBe("A/m");
+    expect(dataset.field.descriptor.normalization).toBe("none");
   });
 
   it("exposes the common section with exactly one visualization resource owner", () => {

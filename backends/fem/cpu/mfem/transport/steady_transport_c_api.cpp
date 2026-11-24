@@ -2207,6 +2207,8 @@ int solve_rt0(
     const fullmag::fem::oersted::SurfaceRt0ProgressObserver *observer = nullptr)
 {
     validate_rt0_header(request, result);
+    const auto progress_target_count = surface_request ? surface_request->target_points_xyz_len / 3 :
+        (oersted_request ? oersted_request->target_points_xyz_len / 3 : 0);
     const bool coincident = request.closure_kind == FULLMAG_FEM_STEADY_TRANSPORT_RT0_CLOSURE_CLOSED_GEOMETRY &&
         rt0_string(request.closed_geometry->operator_version, "closure operator") == "fem_closed_current_geometry.v2";
     rt0_require(!coincident || source_snapshot != nullptr, "coincident cut v2 requires the owned source-snapshot ABI");
@@ -2371,7 +2373,7 @@ int solve_rt0(
                 "prepared execution digest differs from independently computed caller binding");
         }
         if (observer) observer->emit(fullmag::fem::oersted::AntennaProgressPhase::solving_potential,
-            0, surface_request->target_points_xyz_len / 3, device_mesh_view.n_elements);
+            0, progress_target_count, device_mesh_view.n_elements);
         periodic_snapshot =
             fullmag::fem::transport::PeriodicChargePotentialSolver::Solve(periodic);
         if (prepared_request) {
@@ -2395,7 +2397,7 @@ int solve_rt0(
     }
 
     if (observer) observer->emit(fullmag::fem::oersted::AntennaProgressPhase::reconstructing_current,
-        0, surface_request->target_points_xyz_len / 3, device_mesh_view.n_elements);
+        0, progress_target_count, device_mesh_view.n_elements);
     const auto view = fullmag::fem::transport::ConservativeCurrentView::Build(build);
     if (prepared_snapshot) {
         rt0_require(view->canonical_balance_certificate_bytes().size() <= prepared_snapshot->canonical_balance_certificate_capacity,
@@ -2524,7 +2526,7 @@ int solve_rt0(
             target_points.push_back(point);
         }
         const auto direct = fullmag::fem::oersted::DirectTetraQuadrature::Evaluate(
-            *view, target_points, options);
+            *view, target_points, options, observer);
         rt0_require(direct.h_xyz_apm.size() <=
                 oersted_result->h_xyz_apm_capacity,
             "OE-F1 result size exceeds output capacity");
@@ -3529,19 +3531,43 @@ extern "C" int fullmag_fem_solve_prepared_closed_loop_rt0_v2(
 #endif
     });
 }
-extern "C" int fullmag_fem_solve_prepared_closed_loop_rt0_oersted_v2(
+static int solve_prepared_closed_loop_rt0_oersted(
     const fullmag_fem_prepared_closed_loop_oersted_request_v2 *request,
     fullmag_fem_steady_transport_rt0_oersted_result_v1 *result,
     fullmag_fem_steady_transport_rt0_charge_snapshot_result_v1 *charge,
     fullmag_fem_direct_oersted_snapshot_result_v1 *quadrature,
-    fullmag_fem_prepared_closed_loop_source_snapshot_result_v2 *source)
+    fullmag_fem_prepared_closed_loop_source_snapshot_result_v2 *source,
+    const fullmag_fem_antenna_operation_observer_v1 *observer)
 {
+    if (observer && (observer->abi_version != FULLMAG_FEM_ANTENNA_OPERATION_PROGRESS_ABI_VERSION ||
+        observer->reserved_flags != 0 || observer->struct_size != sizeof(*observer) || !observer->callback))
+        return FULLMAG_FEM_ERR_INVALID;
+    // Capture callback metadata before the output wrappers clear their buffers.
+    const auto callback = observer ? *observer : fullmag_fem_antenna_operation_observer_v1{};
     if(!result || result->struct_size!=sizeof(*result) || !prepared_output_ranges_are_disjoint(&result->rt0,result,sizeof(*result),charge,source,quadrature,result->h_xyz_apm,result->h_xyz_apm_capacity))return FULLMAG_FEM_ERR_INVALID;
     return call_with_prepared_closed_loop(result,charge,source,quadrature,[&] {
 #if FULLMAG_HAS_MFEM_STACK
         rt0_require(request && result && request->abi_version == FULLMAG_FEM_PREPARED_CLOSED_LOOP_ABI_VERSION && request->reserved_flags == 0 && request->struct_size == sizeof(*request),"prepared Oersted request ABI mismatch");
         rt0_require(result->abi_version == FULLMAG_FEM_STEADY_TRANSPORT_RT0_OERSTED_ABI_VERSION && result->struct_size == sizeof(*result) && result->reserved_flags == 0,"prepared Oersted result ABI mismatch");
         rt0_require(quadrature && quadrature->abi_version == FULLMAG_FEM_DIRECT_OERSTED_SNAPSHOT_ABI_VERSION && quadrature->reserved_flags == 0 && quadrature->struct_size == sizeof(*quadrature),"prepared quadrature ABI mismatch");
+        struct Observation {
+            fullmag_fem_antenna_operation_observer_v1 target;
+            std::chrono::steady_clock::time_point started;
+        } observation{callback, {}};
+        std::optional<fullmag::fem::oersted::SurfaceRt0ProgressObserver> progress;
+        if (observer) {
+            observation.started = std::chrono::steady_clock::now();
+            progress.emplace(fullmag::fem::oersted::SurfaceRt0ProgressObserver{&observation,
+                [](void *context, fullmag::fem::oersted::AntennaProgressPhase phase,
+                    std::uint64_t completed, std::uint64_t total, std::uint64_t cells) noexcept {
+                    const auto &state = *static_cast<Observation *>(context);
+                    const fullmag_fem_antenna_operation_progress_v1 value{
+                        FULLMAG_FEM_ANTENNA_OPERATION_PROGRESS_ABI_VERSION, 0, sizeof(value),
+                        static_cast<std::uint32_t>(phase), 0, completed, total, cells,
+                        std::chrono::duration<double>(std::chrono::steady_clock::now()-state.started).count()};
+                    try { state.target.callback(state.target.user_data, &value); } catch (...) {}
+                }});
+        }
         const auto count = request->target_points_xyz_len/3u;
         rt0_require(request->target_points_xyz && request->target_points_xyz_len%3u == 0 && count>0 && count<=FULLMAG_FEM_DIRECT_OERSTED_SNAPSHOT_MAX_TARGETS && quadrature->target_records && quadrature->target_records_capacity>=count,"prepared Oersted target buffer mismatch");
         fullmag_fem_steady_transport_rt0_oersted_request_v1 adapter{};
@@ -3549,12 +3575,34 @@ extern "C" int fullmag_fem_solve_prepared_closed_loop_rt0_oersted_v2(
         adapter.target_points_xyz = request->target_points_xyz; adapter.target_points_xyz_len = request->target_points_xyz_len;
         adapter.base_quadrature_order = request->base_quadrature_order; adapter.maximum_subdivision_depth = request->maximum_subdivision_depth;
         adapter.absolute_tolerance_apm = request->absolute_tolerance_apm; adapter.relative_tolerance = request->relative_tolerance; adapter.maximum_source_target_pairs = request->maximum_source_target_pairs;
-        return solve_rt0(adapter.rt0,result->rt0,result,&adapter,nullptr,nullptr,charge,quadrature,&source->source,&request->rt0,source);
+        if (progress) progress->emit(fullmag::fem::oersted::AntennaProgressPhase::preparing_source,
+            0, count, request->rt0.base.mesh.cell_types_len);
+        return solve_rt0(adapter.rt0,result->rt0,result,&adapter,nullptr,nullptr,charge,quadrature,
+            &source->source,&request->rt0,source,nullptr,nullptr,nullptr,progress ? &*progress : nullptr);
 #else
         set_error(result,"prepared closed-loop source requires FULLMAG_USE_MFEM_STACK=ON");
         return FULLMAG_FEM_ERR_UNAVAILABLE;
 #endif
     });
+}
+extern "C" int fullmag_fem_solve_prepared_closed_loop_rt0_oersted_v2(
+    const fullmag_fem_prepared_closed_loop_oersted_request_v2 *request,
+    fullmag_fem_steady_transport_rt0_oersted_result_v1 *result,
+    fullmag_fem_steady_transport_rt0_charge_snapshot_result_v1 *charge,
+    fullmag_fem_direct_oersted_snapshot_result_v1 *quadrature,
+    fullmag_fem_prepared_closed_loop_source_snapshot_result_v2 *source)
+{
+    return solve_prepared_closed_loop_rt0_oersted(request,result,charge,quadrature,source,nullptr);
+}
+extern "C" int fullmag_fem_solve_prepared_closed_loop_rt0_oersted_observed_v1(
+    const fullmag_fem_prepared_closed_loop_oersted_request_v2 *request,
+    fullmag_fem_steady_transport_rt0_oersted_result_v1 *result,
+    fullmag_fem_steady_transport_rt0_charge_snapshot_result_v1 *charge,
+    fullmag_fem_direct_oersted_snapshot_result_v1 *quadrature,
+    fullmag_fem_prepared_closed_loop_source_snapshot_result_v2 *source,
+    const fullmag_fem_antenna_operation_observer_v1 *observer)
+{
+    return solve_prepared_closed_loop_rt0_oersted(request,result,charge,quadrature,source,observer);
 }
 
 static int solve_prepared_closed_loop_rt0_surface(

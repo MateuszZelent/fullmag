@@ -1387,3 +1387,24 @@ ponownego odczytania usuniętego kontenera lub kwalifikacji jego binariów.
 Dla dokładnie przypiętej grupy `just docker-dev-stop-native-terminal <attempt> <config_sha256> <source_root> <port>` zapisuje publiczny stan, wiązanie zaakceptowanej komendy oraz niezmienne rekordy runu. Obsługuje zwolniony startup Study albo pojedynczy HTTP Compute nadal oznaczony jako Accepted, jeśli jego trwała recepta i bieżący dziennik wskazują ten sam run. Pozostała kolejka i aktywne komendy muszą być puste. Odczytowy preflight poprzedza zamknięcie dokładnego procesu API; właściwy natywny odczyt pod blokadą i potwierdzony drain pozostają obowiązkowe. Dla automatycznego HTTP Compute brak `start_release.json` jest przypiętą częścią dowodu. Probe korzysta z tej samej konfiguracji ABI CPU co entrypoint obrazu.
 
 Po sprawdzeniu terminalnego receiptu stopu i jego SHA `just docker-dev-recreate-native-terminal <attempt> <config_sha256> <source_root> <stop_attempt> <stop_sha256> <port>` archiwizuje całą poprzednią przestrzeń runtime i ledgeru przed utworzeniem świeżego środowiska. Dowód zachowania natywnego wyniku służy tej archiwizacji; odtworzenie aktywnego widoku wymaga własnego kontraktu. Przebudowa zachowuje jawny pojedynczy subnet z przypiętego Compose i ponownie sprawdza jego dostępność. Wszystkie kroki pozostają lokalne dla wybranej grupy WSL.
+
+### Odzyskanie samej blokady przy historycznym OWNER Ready
+
+`just docker-dev-reconcile-offline ATTEMPT CONFIG_SHA256 SOURCE_ROOT OPERATION_ATTEMPT PORT true`
+wykonuje tylko odczytowe preview wariantu `fullmag.docker-offline-control-reconciliation.v2`.
+Wariant jest jawny: domyślne `false` zachowuje odmowy v1 dla OWNER Ready.
+Dotyczy wyłącznie przerwanej iteracji `restarting-idle-backend`, przy obu właściwych
+kontenerach zakończonych i braku pierwotnego helpera. Wymaga pełnego dowodu abrupt-stop:
+tożsamości inkarnacji, wszystkich terminalnych runów, artefaktów i zwolnionego ledgeru.
+
+Zastosowanie wymaga ponowienia tych samych argumentów z końcówką `true true PLAN_SHA256`.
+Pierwsze `true` wybiera v2, drugie jawnie zatwierdza apply. Kontroler ponownie sprawdza
+dowody pod `operation.lock`, zapisuje archiwalne `interrupted-retained` i zwalnia
+wyłącznie dokładnie przypięty lease `active`. Zmiana pinów oznacza odmowę.
+Nie zmienia OWNER, process-tree, wyników, pierwotnego receipt ani `iteration/current`;
+nie dopisuje sukcesu buildu i nie tworzy jego `terminal.json`.
+
+Receipt opublikowany przed zwolnieniem `active` pozostaje pending.
+Odczyt v2 wymaga jawnego wyboru wariantu; zwykłe resume nadal odmawia użycia go
+jako dowodu gotowości runtime. Procedura nie uruchamia usług, nie usuwa kontenerów
+i nie uruchamia Solve. Późniejsze recovery kontenerów wymaga własnego odbioru.

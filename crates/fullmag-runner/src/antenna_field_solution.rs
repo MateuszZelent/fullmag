@@ -1,6 +1,14 @@
 use crate::antenna_spectrum::FieldTetraBvh;
 pub(crate) mod direct_quadrature;
 pub(crate) mod closed_loop_v2;
+mod retained_current_execution;
+pub(crate) mod retained_dtq_binding;
+pub use retained_current_execution::{VerifiedRetainedCurrentParentContent, VerifiedRetainedCurrentSourceContent, ProducedRetainedCurrentField,
+    ProducedRetainedDirectField, verify_retained_direct_field_for_publication, execute_retained_direct_field_inspection_observed_typed,
+    execute_retained_preparation_field_inspection, execute_retained_preparation_field_inspection_observed_typed,
+    verify_retained_preparation_field_for_publication,
+    verify_retained_current_source_content, verify_retained_current_parent_content, execute_retained_current_field_inspection, execute_retained_current_field_inspection_observed_typed,
+    verify_retained_current_field_for_publication};
 mod closed_loop_field_evidence;
 mod closed_loop_public_inspection;
 pub use closed_loop_public_inspection::{load_antenna_closed_loop_inspection_bytes, load_published_antenna_closed_loop_inspection, verify_antenna_closed_loop_inspection_bytes, LoadedAntennaClosedLoopInspection};
@@ -85,14 +93,7 @@ pub(crate) struct AntennaFieldSolutionInput {
     pub bases: Vec<AntennaFieldBasisInput>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(deny_unknown_fields)]
-pub struct AntennaSampleCarrier {
-    pub domain: FieldTargetIR,
-    pub carrier_kind: String,
-    pub location: String,
-    pub topology_digest: String,
-}
+pub use fullmag_antenna_artifacts::AntennaSampleCarrier;
 
 fn validate_sample_carrier(carrier: Option<&AntennaSampleCarrier>) -> Result<(), RunError> {
     let Some(carrier) = carrier else {
@@ -2377,6 +2378,8 @@ mod tests {
             current_transport_id: "current_1".into(),
             port_mode_ids: vec!["common".into()],
             conservative_current_view_ref: Some("current_1:rt0".into()),
+            retained_current_source: None,
+            retained_source_preparation: None,
             model: fullmag_ir::AntennaFieldModelIR::QuasistaticConductionBiotSavart3d,
             oersted_realization: fullmag_ir::AntennaOerstedRealizationIR::DirectTetraQuadrature,
             surface_field_policy: None,

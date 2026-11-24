@@ -7,6 +7,7 @@ import { resolveSavedFieldViewportMetadataEligibility } from "@/kernel/resources
 import { useMaterializedDatasetResource } from "@/kernel/resources/solutionSetResources";
 import { useSessionResourceIdentity } from "@/kernel/resources/useSessionStatus";
 import { useVisualizationStateResource } from "@/kernel/visualization/useVisualizationStateResource";
+import { isInspectionField } from "@/kernel/resources/savedAntennaSourceContextResources";
 import { useObjectVisualizationController, useSavedFieldPresentation } from "@/kernel/visualization/useObjectVisualization";
 import type { SavedFieldPresentation, VisualizationColorMode, VisualizationTargetPatch } from "@/kernel/visualization/ObjectVisualizationController";
 import { Button } from "@/shared/ui/Button";
@@ -82,6 +83,9 @@ export function SavedFieldVisualizationPanel({ presentation, dataset, error = nu
         ? refreshWarning ? "Last verified · refresh failed" : "Verified" : "Verifying saved field…"} />
       <FieldRow label="Representation" value={dataset?.field.descriptor.value_representation === "physical_field"
         ? "Physical field · values as stored" : dataset?.field.descriptor.value_representation ?? "Verifying saved field…"} />
+      {dataset && isInspectionField(dataset, "H_ant") && dataset.field.producer_id === "fullmag.retained-current-field"
+        ? <p className="fm-inspection-source-guidance" role="note">Raw H [A/m] as stored. Signed per-A [1/m] is unavailable: this retained result has no canonical H/I transform. Inspection only · NOT VERIFIED; not a reusable basis or LLG drive.</p>
+        : null}
       <FieldRow label="Samples / components" value={dataset ? `${dataset.field.coverage.total_elements} / ${dataset.field.coverage.component_count}` : "Unavailable"} />
       <FieldRow label="Sampling" value="Own saved mesh and active support" />
       <p className="fm-inspection-source-guidance" role="note">This view uses the selected result’s sampling domain, which may cover only part of space. It does not replace or extend the editable Universe. Missing samples are not zero field.</p>
@@ -96,6 +100,10 @@ export function SavedFieldVisualizationPanel({ presentation, dataset, error = nu
         { id: "wireframe", label: "Wireframe", pressed: settings.wireframeVisible, disabled: !ready, onToggle: () => patch({ wireframeVisible: !settings.wireframeVisible }) },
         { id: "vectors", label: "Vectors", pressed: vector && settings.vectorsVisible, disabled: !ready || !vector, onToggle: () => patch({ vectorsVisible: !settings.vectorsVisible }) },
         { id: "legend", label: "Legend", pressed: settings.viewportColorbarVisible, disabled: !ready, onToggle: () => patch({ viewportColorbarVisible: !settings.viewportColorbarVisible }) },
+        ...(dataset && isInspectionField(dataset, "H_ant") ? [{
+          id: "source-geometry", label: "Antenna geometry", pressed: presentation.sourceGeometryVisible !== false,
+          disabled: !ready, onToggle: () => controller.setSavedFieldSourceGeometryVisible(ref, presentation.sourceGeometryVisible === false),
+        }] : []),
       ]} />
       {scalar ? <p role="note">This quantity is scalar and has no vector arrows.</p> : null}
       <p role="note">Display settings are local to this saved result. They do not start a solve. The viewport also verifies its saved geometry and active support before drawing.</p>

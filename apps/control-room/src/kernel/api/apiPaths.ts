@@ -1269,3 +1269,23 @@ export const WORKSPACE_MATERIAL_LIBRARY_PATH = openApiV2Path("/v2/workspace/mate
 export const WORKSPACE_MATERIAL_LIBRARY_ENTRY_PATH = openApiV2Path("/v2/workspace/material-library/{id}");
 export const WORKSPACE_MATERIAL_LIBRARY_VERSIONS_PATH = openApiV2Path("/v2/workspace/material-library/versions");
 export const WORKSPACE_MATERIAL_LIBRARY_VERSION_PATH = openApiV2Path("/v2/workspace/material-library/versions/{family}/{version}");
+
+export const PROJECT_SAVED_PLANAR_META_PATH = openApiV2Path(
+  "/v2/persistence/projects/{project_id}/runs/{run_id}/solution-sets/{solution_set_id}/revisions/{revision}/members/{member_id}/artifacts/{artifact_id}/saved-planar/meta",
+);
+
+export const PROJECT_SAVED_PLANAR_SCALAR_PATH = openApiV2Path(
+  "/v2/persistence/projects/{project_id}/runs/{run_id}/solution-sets/{solution_set_id}/revisions/{revision}/members/{member_id}/artifacts/{artifact_id}/saved-planar/scalar",
+);
+
+export const PROJECT_SAVED_PLANAR_VECTORS_PATH = openApiV2Path(
+  "/v2/persistence/projects/{project_id}/runs/{run_id}/solution-sets/{solution_set_id}/revisions/{revision}/members/{member_id}/artifacts/{artifact_id}/saved-planar/vectors",
+);
+
+export const PROJECT_SAVED_PLANAR_OCCUPANCY_PATH = openApiV2Path(
+  "/v2/persistence/projects/{project_id}/runs/{run_id}/solution-sets/{solution_set_id}/revisions/{revision}/members/{member_id}/artifacts/{artifact_id}/saved-planar/occupancy",
+);
+
+export const PROJECT_SAVED_PLANAR_PROBE_PATH = openApiV2Path(
+  "/v2/persistence/projects/{project_id}/runs/{run_id}/solution-sets/{solution_set_id}/revisions/{revision}/members/{member_id}/artifacts/{artifact_id}/saved-planar/probe",
+);

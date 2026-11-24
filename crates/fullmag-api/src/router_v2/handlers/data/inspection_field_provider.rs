@@ -224,6 +224,59 @@ pub(crate) fn from_closed(
     Ok(fields)
 }
 
+fn retained_view_admission(payload_bytes: usize, projected_bytes: usize) -> Result<(), ApiError> {
+    let bound = projected_bytes.checked_mul(16).and_then(|n| n.checked_add(payload_bytes))
+        .and_then(|n| n.checked_add(2 * 1024 * 1024))
+        .ok_or_else(|| invalid("retained field view admission overflow"))?;
+    if bound > 128 * 1024 * 1024 {
+        return Err(invalid("retained field views exceed the 128 MiB materialization budget"));
+    }
+    Ok(())
+}
+
+/// Adapt only the child's verified H and its own target mesh, never parent V/J.
+/// Durable ownership and full parent physics are verified by the runtime reader.
+pub(crate) fn from_retained(
+    owner: ArtifactFieldOwnerBinding,
+    loaded: fullmag_antenna_artifacts::retained_current::RetainedCurrentFieldBundleAny,
+    observation_revision: u64,
+) -> Result<VerifiedInspectionFields, ApiError> {
+    loaded.manifest().validate_payloads(loaded.payloads())
+        .map_err(|_| invalid("retained field payload integrity differs"))?;
+    let manifest = loaded.manifest();
+    if owner.authored_stage_id != manifest.stage_id()
+        || owner.module_id != manifest.current_transport_id()
+        || owner.object_id != manifest.source_object_id()
+        || owner.output_id != manifest.output_id()
+        || owner.source_digest != manifest.parent().source.accepted_source_state_digest
+        || owner.content_digest != manifest.content_digest()
+        || owner.native_mesh_identity != manifest.sample_carrier().topology_digest
+        || owner.native_topology_identity != manifest.sample_carrier().topology_digest
+        || owner.accepted_artifact.as_ref().is_none_or(|accepted|
+            accepted.project_id != manifest.parent().owner.project_id) {
+        return Err(invalid("retained field view differs from verified child ownership"));
+    }
+    let payload_bytes = loaded.payloads().values().try_fold(0usize, |sum, payload|
+        sum.checked_add(payload.capacity())).ok_or_else(|| invalid("retained payload size overflow"))?;
+    let projected_bytes = ["sample_xyz", "sample_cells", "h_raw"].iter()
+        .try_fold(0usize, |sum, key| sum.checked_add(loaded.payloads()[*key].len()))
+        .ok_or_else(|| invalid("retained field view size overflow"))?;
+    retained_view_admission(payload_bytes, projected_bytes)?;
+    let samples = xyz(&loaded.payloads()["sample_xyz"])?;
+    let cells = tet4(&loaded.payloads()["sample_cells"], samples.len())?;
+    let sample_carrier: super::antenna::AntennaSampleCarrierResource =
+        serde_json::from_value(serde_json::to_value(manifest.sample_carrier())
+            .map_err(|e| ApiError::internal(e.to_string()))?)
+            .map_err(|_| invalid("retained field sampling descriptor differs"))?;
+    let topology = &manifest.sample_carrier().topology_digest;
+    let mut fields = VerifiedInspectionFields { fields: BTreeMap::new(), retained_bytes: 0 };
+    let identities = (0..samples.len()).map(|i| ArtifactSampleIdentity::SampleOrdinal(i as u64)).collect();
+    insert(&mut fields, "H_ant", "H_ant", f64s(&loaded.payloads()["h_raw"])?, &owner,
+        samples, identities, Some(cells), ArtifactSampleIndexing::SampleNodes,
+        observation_revision, topology, topology, Some(&manifest.sample_carrier().domain), Some(sample_carrier))?;
+    Ok(fields)
+}
+
 pub(crate) fn from_external(
     owner: ArtifactFieldOwnerBinding, loaded: LoadedAntennaExternalLeadSolution, observation_revision: u64,
 ) -> Result<VerifiedInspectionFields, ApiError> {
@@ -496,7 +549,7 @@ mod sample_carrier_tests {
     use super::super::resolved_spatial_field::SpatialFieldCarrier;
     use crate::schemas::fields::ArtifactFieldLocatorResource;
 
-    fn owner() -> ArtifactFieldOwnerBinding {
+    pub(super) fn owner() -> ArtifactFieldOwnerBinding {
         ArtifactFieldOwnerBinding {
             session_id: "session".into(), session_epoch: "1".into(), request_scope_epoch: "scope".into(),
             run_id: "run".into(), runtime_stage_id: "runtime-stage".into(), authored_stage_id: "inspect".into(),
@@ -625,5 +678,337 @@ mod sample_carrier_tests {
         wrong_object.sample_carrier.as_mut().unwrap().domain =
             super::super::antenna::AntennaFieldTargetResource::Object { object_id: "foreign-probe".into() };
         assert!(ResolvedSpatialField::from_artifact_samples("H_ant", vec![1.; 42], Arc::new(wrong_object), 1).is_err());
+    }
+}
+
+#[cfg(test)]
+mod retained_sample_tests {
+    use super::*;
+    use fullmag_antenna_artifacts::retained_current::*;
+    use serde_json::{json, Value};
+
+fn cas(n: char, bytes: u64) -> CasObjectRef {
+    CasObjectRef {
+        object_ref: n.to_string().repeat(64),
+        byte_count: bytes,
+    }
+}
+fn parent_owner() -> ParentInspectionOwner {
+    ParentInspectionOwner {
+        project_id: "project".into(),
+        run_id: "parent-run".into(),
+        study_step_id: "parent-step".into(),
+        native_stage_id: "parent-native".into(),
+        task_id: "parent-task".into(),
+        attempt_id: "parent-attempt".into(),
+        ownership_epoch: "18446744073709551615".into(),
+        artifact_id: "parent-artifact".into(),
+        package: cas('a', 256),
+        package_codec_id: PARENT_CODEC_ID.into(),
+        package_codec_version: PARENT_CODEC_VERSION.into(),
+        manifest_schema: PARENT_MANIFEST_SCHEMA.into(),
+        output_manifest_artifact_id: "parent-manifest".into(),
+        output_manifest: cas('b', 512),
+    }
+}
+fn policy() -> Value {
+    json!({"policy_version":"caller_supplied_rt0_surface.inspection.v1",
+        "limits":{"total":vec![4000000_u64;14],"per_target":vec![40000_u64;14],"maximum_raw_integer_bits":1024,
+        "maximum_reduced_fraction_bits":1024,"maximum_lifetime_peak_rss_bytes":1000000,"guard_interval_events":1,
+        "maximum_total_seconds":1800.0,"maximum_target_seconds":90.0},
+        "tolerances":{"absolute_field_apm":1e-9,"relative_field":1e-5,"cancellation_floor_apm":1e-6,
+        "scalar_relative_80":1e-45,"scalar_relative_120":1e-55,"angle_relative_80":1e-45,"angle_relative_120":1e-55,
+        "binary_scalar_epsilon_factor":64.0,"binary_roundoff_epsilon_factor":64.0,
+        "binary_cancellation_limit":1e8,"highprecision_cancellation_limit":1e40}})
+}
+fn fixture() -> (RetainedCurrentFieldManifest, BTreeMap<String, Vec<u8>>) {
+    let xyz = [[0., 0., 0.], [1e-6, 0., 0.], [0., 1e-6, 0.], [0., 0., 1e-6]]
+        .into_iter()
+        .flatten()
+        .flat_map(f64::to_le_bytes)
+        .collect::<Vec<_>>();
+    let h = [1_f64; 12]
+        .into_iter()
+        .flat_map(f64::to_le_bytes)
+        .collect::<Vec<_>>();
+    let cells = [0_u32, 1, 2, 3]
+        .into_iter()
+        .flat_map(u32::to_le_bytes)
+        .collect::<Vec<_>>();
+    let payloads = BTreeMap::from([
+        ("sample_xyz".into(), xyz),
+        ("sample_cells".into(), cells),
+        ("h_raw".into(), h),
+        (
+            "evidence".into(),
+            b"opaque encoding fixture; NOT physical evidence".to_vec(),
+        ),
+    ]);
+    let reference = |key: &str, layout: &str, unit: &str| {
+        let bytes = &payloads[key];
+        RetainedCurrentPayloadRef {
+            sha256: fullmag_session::hex_sha256(bytes),
+            byte_count: bytes.len() as u64,
+            layout: layout.into(),
+            unit: unit.into(),
+        }
+    };
+    let source = json!({"kind":"published_inspection","project_id":"project","run_id":"parent-run",
+        "task_id":"parent-task","attempt_id":"parent-attempt","ownership_epoch":"18446744073709551615",
+        "artifact_id":"parent-artifact","object_ref":"a".repeat(64)});
+    let execution = json!({"discretization":"fem","device":"cpu","precision":"double","execution_mode":"strict"});
+    let stage = json!({"id":"child","source_object_id":"antenna","current_transport_id":"transport",
+        "port_mode_ids":["port"],"retained_current_source":source,"model":"quasistatic_conduction_biot_savart3d",
+        "oersted_realization":"analytic_rt0_surface","surface_field_policy":policy(),"conductor_mesh_policy":"retained",
+        "field_sampling_domain":{"kind":"global"},"target_refs":[],"solver_policy":"inspection",
+        "outputs":[{"id":"field","quantity":"H_ant_basis"}]});
+    let dig = format!("sha256:{}", "e".repeat(64));
+    let mut manifest = RetainedCurrentFieldManifest {
+        schema_version: RETAINED_CURRENT_FIELD_SCHEMA.into(),
+        status: "inspection_only".into(),
+        qualification: "not_verified".into(),
+        content_digest: String::new(),
+        stage_id: "child".into(),
+        output_id: "field".into(),
+        port_mode_id: "port".into(),
+        source_object_id: "antenna".into(),
+        current_transport_id: "transport".into(),
+        parent: RetainedCurrentParent {
+            owner: parent_owner(),
+            source: ParentCurrentDigests {
+                prepared_execution_digest: dig.clone(),
+                accepted_charge_field_digest: dig.clone(),
+                accepted_source_state_digest: dig.clone(),
+                view_identity_digest: dig.clone(),
+                current_balance_certificate_digest: dig.clone(),
+            },
+            evidence_capsule: cas('f', 512),
+        },
+        sample_carrier: fullmag_antenna_artifacts::AntennaSampleCarrier {
+            domain: fullmag_ir::FieldTargetIR::Global {},
+            carrier_kind: "fem_domain_mesh_asset".into(),
+            location: "node".into(),
+            topology_digest: dig,
+        },
+        source_vertex_count: 4,
+        source_cell_count: 1,
+        target_count: 4,
+        sample_cell_count: 1,
+        requested_intent: serde_json::from_value(stage).unwrap(),
+        resolved_execution: RetainedCurrentResolvedExecution {
+            requested_execution: serde_json::from_value(execution.clone()).unwrap(),
+            execution: serde_json::from_value(execution).unwrap(),
+            operator_version: RETAINED_CURRENT_OPERATOR.into(),
+            basis_version: RETAINED_CURRENT_BASIS.into(),
+            evidence_schema: RETAINED_CURRENT_EVIDENCE_SCHEMA.into(),
+        },
+        field_policy: serde_json::from_value(policy()).unwrap(),
+        payloads: RetainedCurrentPayloads {
+            sample_xyz: reference("sample_xyz", "sample_xyz_f64_le", "m"),
+            sample_cells: reference("sample_cells", "tet4_u32_le", "1"),
+            h_raw: reference("h_raw", "sample_xyz_f64_le", "A/m"),
+            evidence: reference("evidence", RETAINED_CURRENT_EVIDENCE_SCHEMA, "1"),
+        },
+    };
+    manifest.content_digest = manifest.expected_content_digest().unwrap();
+    (manifest, payloads)
+}
+
+    // Structural display fixture only; the runtime reader must verify physical evidence first.
+    fn bundle_and_owner(domain: fullmag_ir::FieldTargetIR) -> (RetainedCurrentFieldBundle, ArtifactFieldOwnerBinding) {
+        let (mut manifest, payloads) = fixture();
+        manifest.sample_carrier.domain = domain.clone();
+        manifest.requested_intent.field_sampling_domain = domain;
+        if matches!(manifest.sample_carrier.domain, fullmag_ir::FieldTargetIR::Object { .. }) {
+            manifest.sample_carrier.carrier_kind = "fem_mesh_asset:probe-geometry".into();
+        }
+        manifest.content_digest = manifest.expected_content_digest().unwrap();
+        let mut owner = super::sample_carrier_tests::owner();
+        owner.run_id = "child-run".into();
+        owner.authored_stage_id = manifest.stage_id.clone();
+        owner.module_id = manifest.current_transport_id.clone();
+        owner.object_id = manifest.source_object_id.clone();
+        owner.output_id = manifest.output_id.clone();
+        owner.source_digest = manifest.parent.source.accepted_source_state_digest.clone();
+        owner.content_digest = manifest.content_digest.clone();
+        owner.native_mesh_identity = manifest.sample_carrier.topology_digest.clone();
+        owner.native_topology_identity = manifest.sample_carrier.topology_digest.clone();
+        owner.accepted_artifact = Some(crate::schemas::fields::AcceptedInspectionArtifactOwner {
+            project_id: manifest.parent.owner.project_id.clone(),
+            task_id: fullmag_session::task_id_for_study_step(&owner.run_id, &owner.runtime_stage_id).unwrap(),
+            attempt_id: "child-attempt".into(), ownership_epoch: "2".into(),
+            artifact_id: "child-artifact".into(), object_ref: "1".repeat(64),
+        });
+        (RetainedCurrentFieldBundle { manifest_bytes: serde_json::to_vec(&manifest).unwrap(), manifest, payloads }, owner)
+    }
+
+    // Structural DTQ encoding only; no native solve or scientific qualification.
+    fn direct_bundle(domain: fullmag_ir::FieldTargetIR) -> (RetainedCurrentFieldBundleAny, ArtifactFieldOwnerBinding) {
+        let (surface, mut owner) = bundle_and_owner(domain);
+        let mut payloads = surface.payloads;
+        let h = [-3_f64, -0., 0., 6., -9., 0., 1., 2., 3., -1., -2., -3.];
+        payloads.insert("h_raw".into(), h.into_iter().flat_map(f64::to_le_bytes).collect());
+        let mut value = serde_json::to_value(surface.manifest).unwrap();
+        value["schema_version"] = json!(RETAINED_CURRENT_FIELD_SCHEMA_V2);
+        value.as_object_mut().unwrap().remove("field_policy");
+        let policy = RetainedCurrentDirectFieldPolicyV2::for_solver_policy("volume_inspection_v1").unwrap();
+        value["direct_field_policy"] = serde_json::to_value(&policy).unwrap();
+        value["requested_intent"]["oersted_realization"] = json!("direct_tetra_quadrature");
+        value["requested_intent"].as_object_mut().unwrap().remove("surface_field_policy");
+        value["requested_intent"]["solver_policy"] = json!("volume_inspection_v1");
+        value["requested_intent"]["retained_source_preparation"] = json!({
+            "asset_id":format!("script-file-{}", "1".repeat(64)), "content_sha256":"2".repeat(64)});
+        value["resolved_execution"]["operator_version"] = json!(RETAINED_CURRENT_OPERATOR_V2);
+        value["resolved_execution"]["evidence_schema"] = json!(RETAINED_CURRENT_EVIDENCE_SCHEMA_V2);
+        let mut evidence = b"FM-OEF1-Q3-V2\0\0\0".to_vec();
+        evidence.extend_from_slice("e".repeat(64).as_bytes());
+        evidence.extend_from_slice("e".repeat(64).as_bytes());
+        for n in [4_u64, 4, 0, 0, 4, 4, policy.base_quadrature_order as u64,
+            policy.maximum_subdivision_depth as u64, policy.maximum_source_target_pairs,
+            policy.maximum_final_leaves_per_target, policy.maximum_kernel_evaluations, policy.maximum_ledger_leaf_visits] {
+            evidence.extend_from_slice(&n.to_le_bytes());
+        }
+        for x in [0_f64, policy.absolute_tolerance_apm, policy.relative_tolerance,
+            policy.relative_scale_floor_apm, -3., -1. / 3., 3.] { evidence.extend_from_slice(&x.to_le_bytes()); }
+        for (xyz, field) in payloads["sample_xyz"].chunks_exact(24).zip(h.chunks_exact(3)) {
+            evidence.extend_from_slice(xyz);
+            for x in field { evidence.extend_from_slice(&x.to_le_bytes()); }
+            let tolerance = policy.relative_tolerance.mul_add(field[0].hypot(field[1]).hypot(field[2]), policy.absolute_tolerance_apm);
+            for x in [0_f64, tolerance, 0.] { evidence.extend_from_slice(&x.to_le_bytes()); }
+            for n in [1_u64; 3] { evidence.extend_from_slice(&n.to_le_bytes()); }
+        }
+        payloads.insert("evidence".into(), evidence);
+        for key in ["h_raw", "evidence"] {
+            value["payloads"][key]["sha256"] = json!(fullmag_session::hex_sha256(&payloads[key]));
+            value["payloads"][key]["byte_count"] = json!(payloads[key].len());
+        }
+        value["payloads"]["evidence"]["layout"] = json!(RETAINED_CURRENT_EVIDENCE_SCHEMA_V2);
+        let mut manifest: RetainedCurrentFieldManifestV2 = serde_json::from_value(value).unwrap();
+        manifest.content_digest = manifest.expected_content_digest().unwrap();
+        owner.content_digest = manifest.content_digest.clone();
+        (RetainedCurrentFieldBundleAny::DirectV2(RetainedCurrentFieldBundleV2 {
+            manifest_bytes: serde_json::to_vec(&manifest).unwrap(), manifest, payloads }), owner)
+    }
+
+    #[test]
+    fn retained_dtq_v2_quantity_catalog_only_raw_h() {
+        for domain in [fullmag_ir::FieldTargetIR::Global {},
+            fullmag_ir::FieldTargetIR::Object { object_id: "probe".into() }] {
+            let (bundle, owner) = direct_bundle(domain);
+            let raw_bits = f64s(&bundle.payloads()["h_raw"]).unwrap().into_iter().map(f64::to_bits).collect::<Vec<_>>();
+            let expected_carrier = serde_json::to_value(bundle.manifest().sample_carrier()).unwrap();
+            let fields = from_retained(owner.clone(), bundle, 17).unwrap();
+            assert_eq!(fields.fields.keys().map(String::as_str).collect::<Vec<_>>(), ["H_ant"]);
+            let h = &fields.fields["H_ant"];
+            assert_eq!(h.canonical_unit, "A/m");
+            assert_eq!(h.values.iter().map(|v| v.to_bits()).collect::<Vec<_>>(), raw_bits);
+            assert_eq!(h.values[1].to_bits(), (-0_f64).to_bits());
+            let locator = locator(h).unwrap();
+            assert_eq!(locator.owner, owner);
+            assert_eq!(locator.indexing, ArtifactSampleIndexing::SampleNodes);
+            assert_eq!(serde_json::to_value(locator).unwrap()["sample_carrier"], expected_carrier);
+        }
+    }
+
+    #[test]
+    fn retained_dtq_v2_owner_and_materialization_limits() {
+        let (bundle, owner) = direct_bundle(fullmag_ir::FieldTargetIR::Global {});
+        for key in ["source", "content", "topology", "project", "task"] {
+            let mut crossed = owner.clone();
+            match key {
+                "source" => crossed.source_digest = format!("sha256:{}", "7".repeat(64)),
+                "content" => crossed.content_digest = format!("sha256:{}", "7".repeat(64)),
+                "topology" => crossed.native_topology_identity = format!("sha256:{}", "7".repeat(64)),
+                "project" => crossed.accepted_artifact.as_mut().unwrap().project_id = "foreign".into(),
+                _ => crossed.accepted_artifact.as_mut().unwrap().task_id = "parent-task".into(),
+            }
+            assert!(from_retained(crossed, bundle.clone(), 17).is_err(), "{key}");
+        }
+        for key in ["v_raw", "j_local_raw", "m", "h_per_a", "H_ant_basis"] {
+            let mut extra = bundle.clone();
+            let RetainedCurrentFieldBundleAny::DirectV2(ref mut direct) = extra else { unreachable!() };
+            direct.payloads.insert(key.into(), vec![0; 8]);
+            assert!(from_retained(owner.clone(), extra, 17).is_err(), "{key}");
+        }
+        let limit = 128 * 1024 * 1024;
+        assert!(retained_view_admission(limit - 2 * 1024 * 1024, 0).is_ok());
+        assert!(retained_view_admission(limit - 2 * 1024 * 1024 + 1, 0).is_err());
+        assert!(retained_view_admission(0, limit / 16).is_err());
+        assert!(retained_view_admission(0, usize::MAX).is_err());
+        assert!(retained_view_admission(usize::MAX, 1).is_err());
+        let fields = from_retained(owner, bundle, 17).unwrap();
+        assert!(fields.retained_bytes < limit);
+        let h = &fields.fields["H_ant"];
+        let own = locator(h).unwrap();
+        assert!(require_binary_pins(Some(&own.owner.runtime_stage_id), Some(&own.carrier_id), Some(&own.carrier_revision)).is_ok());
+        assert!(require_binary_pins(None, Some(&own.carrier_id), Some(&own.carrier_revision)).is_err());
+        assert!(require_binary_pins(Some(&own.owner.runtime_stage_id), None, Some(&own.carrier_revision)).is_err());
+        assert!(require_binary_pins(Some(&own.owner.runtime_stage_id), Some(&own.carrier_id), None).is_err());
+        assert!(validate_scope(h, Some("full"), None, Some(&own.carrier_revision), Some(&own.owner.object_id)).is_ok());
+        assert!(validate_scope(h, Some("object"), Some("antenna"), Some(&own.carrier_revision), None).is_err());
+        assert!(validate_scope(h, Some("full"), None, Some("0"), None).is_err());
+        assert!(validate_scope(h, Some("full"), None, Some(&own.carrier_revision), Some("foreign")).is_err());
+    }
+
+    #[test]
+    fn retained_dtq_raw_display_does_not_bypass_invalid_signed_normalization() {
+        let (bundle, owner) = direct_bundle(fullmag_ir::FieldTargetIR::Global {});
+        for (current, scale) in [(0_f64, 1_f64), (-0., -1.), (f64::NAN, 1.),
+            (f64::INFINITY, 1.), (-3., 1. / 3.), (-3., -1. / 9.)] {
+            let RetainedCurrentFieldBundleAny::DirectV2(mut direct) = bundle.clone() else { unreachable!() };
+            let evidence = direct.payloads.get_mut("evidence").unwrap();
+            evidence[272..280].copy_from_slice(&current.to_le_bytes());
+            evidence[280..288].copy_from_slice(&scale.to_le_bytes());
+            direct.manifest.payloads.evidence.sha256 = fullmag_session::hex_sha256(evidence);
+            direct.manifest.content_digest = direct.manifest.expected_content_digest().unwrap();
+            let mut changed_owner = owner.clone();
+            changed_owner.content_digest = direct.manifest.content_digest.clone();
+            let error = from_retained(changed_owner, RetainedCurrentFieldBundleAny::DirectV2(direct), 17);
+            assert!(error.is_err(), "current={current:?}, scale={scale:?}");
+        }
+    }
+
+    #[test]
+    fn retained_h_uses_only_child_owner_and_exact_target_carrier() {
+        for domain in [fullmag_ir::FieldTargetIR::Global {},
+            fullmag_ir::FieldTargetIR::Object { object_id: "probe".into() }] {
+            let (bundle, owner) = bundle_and_owner(domain.clone());
+            assert_ne!(owner.run_id, bundle.manifest.parent.owner.run_id);
+            let expected = serde_json::to_value(&bundle.manifest.sample_carrier).unwrap();
+            let fields = from_retained(owner.clone(), fullmag_antenna_artifacts::retained_current::RetainedCurrentFieldBundleAny::SurfaceV1(bundle), 17).unwrap();
+            assert_eq!(fields.fields.keys().map(String::as_str).collect::<Vec<_>>(), ["H_ant"]);
+            let h = &fields.fields["H_ant"];
+            let locator = locator(h).unwrap();
+            assert_eq!(locator.owner, owner);
+            assert_eq!(locator.sample_count, 4);
+            assert_eq!(h.quantity_revision, 17);
+            assert_eq!(serde_json::to_value(&locator).unwrap()["sample_carrier"], expected);
+            assert_eq!(locator.indexing, ArtifactSampleIndexing::SampleNodes);
+            assert_eq!(locator.carrier_scope_kind, if matches!(domain, fullmag_ir::FieldTargetIR::Global {}) { "full" } else { "object" });
+            assert!(fields.retained_bytes < 128 * 1024 * 1024);
+            for absent in ["V_electric", "J_charge", "m", "H_ant_basis"] { assert!(!fields.fields.contains_key(absent)); }
+        }
+    }
+
+    #[test]
+    fn retained_h_refuses_crossed_owner_and_transport_payloads() {
+        let (bundle, owner) = bundle_and_owner(fullmag_ir::FieldTargetIR::Global {});
+        for key in ["source", "content", "topology", "project", "task"] {
+            let mut crossed = owner.clone();
+            match key {
+                "source" => crossed.source_digest = format!("sha256:{}", "7".repeat(64)),
+                "content" => crossed.content_digest = format!("sha256:{}", "7".repeat(64)),
+                "topology" => crossed.native_mesh_identity = format!("sha256:{}", "7".repeat(64)),
+                "project" => crossed.accepted_artifact.as_mut().unwrap().project_id = "foreign".into(),
+                _ => crossed.accepted_artifact.as_mut().unwrap().task_id = "parent-task".into(),
+            }
+            assert!(from_retained(crossed, fullmag_antenna_artifacts::retained_current::RetainedCurrentFieldBundleAny::SurfaceV1(bundle.clone()), 1).is_err(), "{key}");
+        }
+        let mut extra = bundle.clone();
+        extra.payloads.insert("v_raw".into(), vec![0; 32]);
+        assert!(from_retained(owner.clone(), fullmag_antenna_artifacts::retained_current::RetainedCurrentFieldBundleAny::SurfaceV1(extra), 1).is_err());
+        let mut corrupt = bundle;
+        corrupt.payloads.get_mut("h_raw").unwrap()[0] ^= 1;
+        assert!(from_retained(owner, fullmag_antenna_artifacts::retained_current::RetainedCurrentFieldBundleAny::SurfaceV1(corrupt), 1).is_err());
     }
 }

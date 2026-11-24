@@ -38,6 +38,7 @@ pub struct AcceptedExternalLeadInspectionResource {
 pub enum AcceptedAntennaInspectionResource {
     ExternalLead(AcceptedExternalLeadInspectionResource),
     ClosedLoop(AcceptedClosedLoopInspectionResource),
+    RetainedCurrent(AcceptedRetainedCurrentInspectionResource),
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -52,6 +53,60 @@ pub struct AcceptedClosedLoopInspectionResource {
     pub normalization: String,
     /// Existing verified, bounded closed-loop descriptors; numerical arrays stay binary.
     pub closed_loop_display: serde_json::Value,
+}
+
+/// Exact verified references; this response never carries numerical arrays.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct AcceptedRetainedCurrentPayloadResource {
+    pub sha256: String,
+    pub byte_count: u64,
+    pub layout: String,
+    pub unit: String,
+}
+
+impl From<fullmag_antenna_artifacts::retained_current::RetainedCurrentPayloadRef>
+    for AcceptedRetainedCurrentPayloadResource {
+    fn from(value: fullmag_antenna_artifacts::retained_current::RetainedCurrentPayloadRef) -> Self {
+        Self { sha256: value.sha256, byte_count: value.byte_count, layout: value.layout, unit: value.unit }
+    }
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct AcceptedRetainedCurrentPayloadsResource {
+    pub sample_xyz: AcceptedRetainedCurrentPayloadResource,
+    pub sample_cells: AcceptedRetainedCurrentPayloadResource,
+    pub h_raw: AcceptedRetainedCurrentPayloadResource,
+    pub evidence: AcceptedRetainedCurrentPayloadResource,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct AcceptedRetainedCurrentInspectionResource {
+    pub schema_version: String,
+    pub resource_id: String,
+    pub project_id: String,
+    pub owner: AcceptedAntennaInspectionIdentity,
+    pub port_mode_id: String,
+    pub output_id: String,
+    pub capabilities: AntennaInspectionDisplayCapabilities,
+    pub normalization: String,
+    pub status: String,
+    pub qualification: String,
+    pub content_digest: String,
+    pub source_object_id: String,
+    pub current_transport_id: String,
+    /// Detached parent owner, five source pins and evidence reference; no parent arrays or live authority.
+    pub parent: serde_json::Value,
+    pub sample_carrier: serde_json::Value,
+    pub source_vertex_count: u64,
+    pub source_cell_count: u64,
+    pub target_count: u64,
+    pub sample_cell_count: u64,
+    pub payloads: AcceptedRetainedCurrentPayloadsResource,
+}
+
+fn retained_current_capabilities() -> AntennaInspectionDisplayCapabilities {
+    AntennaInspectionDisplayCapabilities { display: true, current_density: false,
+        per_ampere_basis: false, source_fft: false, llg_drive: false }
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -191,6 +246,25 @@ pub async fn get_accepted_antenna_inspection(
                     owner: inspection.identity, port_mode_id, output_id, manifest, display,
                 }))
             }
+            AcceptedAntennaInspectionData::RetainedCurrent { loaded, port_mode_id, output_id } => {
+                let manifest = loaded.manifest();
+                Ok(AcceptedAntennaInspectionResource::RetainedCurrent(AcceptedRetainedCurrentInspectionResource {
+                    schema_version: "accepted_antenna_inspection.retained_current.v1".into(),
+                    resource_id, project_id: project_id.as_str().into(), owner: inspection.identity,
+                    port_mode_id, output_id, capabilities: retained_current_capabilities(),
+                    normalization: "raw_retained_current".into(), status: manifest.status().to_owned(),
+                    qualification: manifest.qualification().to_owned(), content_digest: manifest.content_digest().to_owned(),
+                    source_object_id: manifest.source_object_id().to_owned(), current_transport_id: manifest.current_transport_id().to_owned(),
+                    parent: serde_json::to_value(manifest.parent()).map_err(|e| ApiError::internal(e.to_string()))?,
+                    sample_carrier: serde_json::to_value(manifest.sample_carrier()).map_err(|e| ApiError::internal(e.to_string()))?,
+                    source_vertex_count: manifest.source_vertex_count(), source_cell_count: manifest.source_cell_count(),
+                    target_count: manifest.target_count(), sample_cell_count: manifest.sample_cell_count(),
+                    payloads: AcceptedRetainedCurrentPayloadsResource {
+                        sample_xyz: manifest.payloads().sample_xyz.clone().into(), sample_cells: manifest.payloads().sample_cells.clone().into(),
+                        h_raw: manifest.payloads().h_raw.clone().into(), evidence: manifest.payloads().evidence.clone().into(),
+                    },
+                }))
+            }
             AcceptedAntennaInspectionData::ClosedLoop { loaded, port_mode_id, output_id } => {
                 Ok(AcceptedAntennaInspectionResource::ClosedLoop(AcceptedClosedLoopInspectionResource {
                     schema_version: "accepted_antenna_inspection.closed_loop.v1".into(),
@@ -218,6 +292,27 @@ pub async fn get_accepted_antenna_inspection(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn retained_current_metadata_is_h_only_and_does_not_promote_the_parent() {
+        let document = <crate::openapi_v2::ApiDoc as utoipa::OpenApi>::openapi();
+        let value = serde_json::to_value(document).unwrap();
+        let schemas = &value["components"]["schemas"];
+        let properties = &schemas["AcceptedRetainedCurrentInspectionResource"]["properties"];
+        for field in ["owner", "parent", "sample_carrier", "target_count", "sample_cell_count", "payloads"] {
+            assert!(properties[field].is_object(), "{field}");
+        }
+        for field in ["manifest", "closed_loop_display", "device_current", "device_potential", "session_id", "session_epoch", "runtime_stage_id", "accepted_state_ref"] {
+            assert!(properties.get(field).is_none(), "H-only must not invent {field}");
+        }
+        let payloads = schemas["AcceptedRetainedCurrentPayloadsResource"]["properties"].as_object().unwrap();
+        assert_eq!(payloads.len(), 4);
+        for field in ["sample_xyz", "sample_cells", "h_raw", "evidence"] { assert!(payloads.contains_key(field)); }
+        let capabilities = super::retained_current_capabilities();
+        assert!(capabilities.display);
+        assert!(!capabilities.current_density && !capabilities.per_ampere_basis
+            && !capabilities.source_fft && !capabilities.llg_drive);
+    }
+
     #[test]
     fn accepted_resources_require_publication_pins_and_do_not_invent_live_scope() {
         let document = <crate::openapi_v2::ApiDoc as utoipa::OpenApi>::openapi();

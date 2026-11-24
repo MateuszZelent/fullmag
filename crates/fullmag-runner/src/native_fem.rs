@@ -97,6 +97,7 @@ pub(crate) use steady_transport::{
     execute_native_fem_steady_transport_plans, solve_native_fem_steady_transport,
     solve_native_fem_steady_transport_rt0, solve_native_fem_prepared_closed_loop_classified,
     NativeFemPreparedClosedLoopChargeRequest, PreparedClosedLoopRuntimeBinding, NativeFemSurfaceRt0Profile,
+    evaluate_retained_rt0_surface, evaluate_retained_rt0_direct, verify_retained_dtq_binding,
     NativeFemSteadyTransportBundle,
     NativeFemSteadyTransportExecution, NativeFemSteadyTransportGauge,
     NativeFemSteadyTransportInterface, NativeFemSteadyTransportRequest,

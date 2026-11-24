@@ -329,7 +329,7 @@ import {
 import { resolveViewport3DCameraFovDegrees } from "../viewport3dCameraFov";
 import { useMaterializedDatasetResource } from "@/kernel/resources/solutionSetResources";
 import { useSavedFieldViewportResources } from "@/kernel/resources/savedFieldViewportResources";
-import { buildSavedFieldViewportSceneModel } from "../savedFieldViewportAdapter";
+import { buildSavedFieldViewportSceneModel, finalizeSavedFieldColors } from "../savedFieldViewportAdapter";
 import { useSavedAntennaSourceContextResources } from "@/kernel/resources/savedAntennaSourceContextResources";
 import { buildSavedAntennaSourceModel } from "../model/savedAntennaSourceModel";
 
@@ -3215,9 +3215,10 @@ export function useViewport3DSceneModel({
   selection: Selection;
   tracker?: Viewport3DResourceTracker;
 }) {
-  const { presentation: savedPresentation, projectId: savedProjectId } = useSavedFieldPresentation();
+  const { presentation: savedPresentation, projectId: savedProjectId, runId: savedRunId } = useSavedFieldPresentation();
   const savedDatasetSelection = savedPresentation?.selection ?? resolvePinnedMaterializedDatasetSelection(selection);
-  const savedProjectMatches = savedDatasetSelection !== null && savedDatasetSelection.projectId === savedProjectId;
+  const savedProjectMatches = savedDatasetSelection !== null && savedDatasetSelection.projectId === savedProjectId
+    && (!savedRunId || savedDatasetSelection.runId === savedRunId);
   const savedSelectionActive = savedDatasetSelection !== null;
   const liveViewportResourcesEnabled = !savedSelectionActive;
   const savedDatasetResource = useMaterializedDatasetResource(
@@ -4186,6 +4187,12 @@ export function useViewport3DSceneModel({
     ) ??
     resourceBounds ??
     primitiveBounds;
+  const savedSamplingBounds = useMemo(
+    () => savedViewportResourcesFresh && savedViewportResources.topology.data
+      ? resolveTopologyBounds(savedViewportResources.topology.data)
+      : null,
+    [savedViewportResources.topology.data, savedViewportResourcesFresh],
+  );
   const savedViewportBounds = useMemo(
     () =>
       savedViewportResourcesFresh && savedViewportResources.topology.data
@@ -4236,10 +4243,12 @@ export function useViewport3DSceneModel({
   );
   const savedShaderColorMode = savedPresentation?.settings.shaderColorMode;
   const savedVectorBudget = savedPresentation?.settings.vectorBudget;
+  const savedVectorLengthScale = savedPresentation?.settings.vectorLengthScale;
   const savedFieldBuildSettings = useMemo(() => savedShaderColorMode !== undefined && savedVectorBudget !== undefined ? {
     shaderColorMode: savedShaderColorMode,
     vectorBudget: savedVectorBudget,
-  } : undefined, [savedShaderColorMode, savedVectorBudget]);
+    vectorLengthScale: savedVectorLengthScale,
+  } : undefined, [savedShaderColorMode, savedVectorBudget, savedVectorLengthScale]);
   const savedViewportSceneModel = useMemo(
     () => {
       if (
@@ -4282,6 +4291,38 @@ export function useViewport3DSceneModel({
       vectorScale,
     ],
   );
+  const savedColorModes = useMemo(() => new Set(
+    [savedShaderColorMode ?? "magnitude", vectorColorMode]
+      .filter(mode => ["magnitude", "x", "y", "z", "orientation"].includes(mode)),
+  ), [savedShaderColorMode, vectorColorMode]);
+  const savedColorRanges = useMemo(() => new Map(
+    Object.entries(savedPresentation?.colorRanges ?? {}).map(([mode, range]) =>
+      [mode, { min: range.minimum, max: range.maximum }]),
+  ), [savedPresentation?.colorRanges]);
+  const savedChunkedColors = useViewport3DChunkedScalarColors({
+    buildDomainId: savedViewportResources.field.data?.savedScopeKey,
+    buildSessionId: savedViewportResources.field.data?.savedScopeKey,
+    colorModes: savedColorModes,
+    colorPalette: scalarColorPalette,
+    enabled: Boolean(savedSelectionActive && savedViewportSceneModel && savedPresentation?.settings.visible),
+    fieldRevision: savedViewportResources.field.data?.savedScopeKey,
+    fieldScalarRangesByMode: savedColorRanges,
+    fieldVector: savedViewportSceneModel?.fieldVector,
+    topology: savedViewportSceneModel?.topologyModel,
+    topologyRevision: savedViewportSceneModel?.topologyModel?.meshRevision,
+  });
+  const savedFieldRenderModel = useMemo(() => {
+    if (!savedViewportSceneModel) return null;
+    const model = savedViewportSceneModel.fieldModel;
+    const partColors = new Map(
+      [...(model?.targetPasses.keys() ?? [])].map(id => [id, savedChunkedColors.colors]),
+    );
+    return finalizeSavedFieldColors(
+      mergeViewport3DFieldScalarColors(model, savedChunkedColors.colors, vectorColorMode, partColors),
+      savedViewportSceneModel.activeNodeMask,
+      vectorColorMode,
+    );
+  }, [savedChunkedColors.colors, savedViewportSceneModel, vectorColorMode]);
   const selectionBounds = useMemo(
     () =>
       resolveViewport3DRegionSelectionBounds(selection, allRegionOverlays) ??
@@ -7377,7 +7418,7 @@ export function useViewport3DSceneModel({
     ? savedViewportSceneModel?.femDomain ?? EMPTY_FEM_RENDER_DOMAIN
     : femDomain;
   const effectiveViewportFieldModel = savedSelectionActive
-    ? savedViewportSceneModel?.fieldModel ?? null
+    ? savedFieldRenderModel
     : fieldRenderModel;
   const effectiveViewportTopologyModel = savedSelectionActive
     ? savedViewportSceneModel?.topologyModel ?? null
@@ -7461,7 +7502,19 @@ export function useViewport3DSceneModel({
     },
     [buildDiagnosticsSnapshotVersion],
   );
-  const diagnostics = buildViewport3DDiagnostics({
+  const diagnostics = buildViewport3DDiagnostics(savedSelectionActive ? {
+    airboxPartCount: 0,
+    buildFallbacks: buildFallbackDiagnostics,
+    cache: getCacheStats(),
+    fieldRevision: savedDatasetResource.data?.manifest_object_ref ?? null,
+    fieldStatus: savedViewportResourcesFresh ? "ready" : "loading",
+    objectCount: 0,
+    pipelineDiagnostics: buildPipelineDiagnostics,
+    quantityId: effectiveViewportQuantityId,
+    targetDiagnostics: effectiveViewportFieldModel?.targetDiagnostics,
+    topologyRevision: effectiveViewportTopologyRevision,
+    tracker: resourceCounts,
+  } : {
     airboxPartCount: femDomain.airboxParts.length,
     airboxFieldVectorPartStates: airboxFieldVectors.partStates,
     buildFallbacks: buildFallbackDiagnostics,
@@ -7854,7 +7907,9 @@ export function useViewport3DSceneModel({
     domainSummary: savedSelectionActive
       ? savedViewportSceneModel
         ? savedAntennaSourceModel
-          ? "saved sampling domain · archived antenna source"
+          ? savedPresentation?.sourceGeometryVisible === false
+            ? "saved sampling domain · antenna geometry hidden"
+            : "saved sampling domain · archived antenna source"
           : savedDatasetForViewport?.field.descriptor.quantity_id === "H_ant"
             ? "saved sampling domain · antenna context: " + (savedAntennaSourceContext.status === "ready" ? "surface unavailable" : savedAntennaSourceContext.reason)
             : "saved sampling domain"
@@ -7997,8 +8052,11 @@ export function useViewport3DSceneModel({
       : !savedSelectionActive && !effectiveViewportQuantityId ? "No quantity selected" : effectiveViewportQuantityId,
     regionOverlays: savedSelectionActive ? [] : regionOverlays,
     resourceFrameKey,
+    retrySavedAntennaSourceContext: savedSelectionActive &&
+      (savedAntennaSourceContext.status === "unavailable" || savedAntennaSourceContext.status === "error")
+      ? savedAntennaSourceContext.refetch : null,
     savedViewportActive: savedSelectionActive,
-    savedAntennaSourceModel: savedSelectionActive && savedViewportResourcesFresh ? savedAntennaSourceModel : null,
+    savedAntennaSourceModel: savedSelectionActive && savedViewportResourcesFresh && savedPresentation?.sourceGeometryVisible !== false ? savedAntennaSourceModel : null,
     savedFieldIdentity: savedSelectionActive ? savedPresentation?.selection.nodeId ?? savedDatasetSelection?.nodeId ?? null : null,
     savedFieldUnit: savedSelectionActive ? savedDatasetResource.data?.field.descriptor.unit ?? null : null,
     selectedLabel,
@@ -8008,6 +8066,7 @@ export function useViewport3DSceneModel({
     selectionBounds: savedSelectionActive ? null : selectionBounds,
     scalarColorPalette,
     savedViewportCamera,
+    savedSamplingBounds,
     semanticTargetCatalog: savedSelectionActive
       ? EMPTY_SEMANTIC_RENDER_TARGET_CATALOG
       : semanticTargetCatalog,

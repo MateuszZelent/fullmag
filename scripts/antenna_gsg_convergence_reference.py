@@ -8,6 +8,13 @@ import struct
 
 from antenna_triangle_surface_oracle import Budget, require
 
+# Keep the frozen reference tool closure independent of the correction helper.
+SOURCE_CELL_LIMITS = MappingProxyType({
+    'legacy72911': 72911,
+    'gsg_junction_refinement_80k.v1': 80000,
+    'gsg_junction_refinement_86k.v1': 86000,
+})
+
 PROFILE_ID = 'gsg_source_convergence_reference_v1'
 PROPOSAL_SHA256 = '7c61be489e0638d52bdec8324480fc24572c3ae8988fee77e8a9f8eb6c475c04'
 SOURCE_IR_SHA256S = (
@@ -61,7 +68,53 @@ class GsgSourceConvergenceBudget(Budget):
                     source_provenance_authentication='caller responsibility; not a budget claim')
 
 
-def evaluate_retained_field(cells, target_m, expected_cells, budget, *, native_h_apm=None, progress=None):
+# A separate immutable copy leaves the original three-source profile intact.
+JUNCTION_FINE_LIMITS = MappingProxyType(dict(PROFILE_LIMITS))
+JUNCTION_FINE_86K_LIMITS = MappingProxyType(dict(PROFILE_LIMITS,pairs_target=1032000))
+
+
+class GsgJunctionFineBudget(Budget):
+    """One source and three registered targets share one lifetime budget."""
+
+    def __init__(self, source_ir_sha256, *, work_profile="gsg_junction_fine_reference_v1"):
+        require(type(work_profile) is str and work_profile in (
+            "gsg_junction_fine_reference_v1","gsg_junction_fine_reference_86k_v1"),
+            "unknown fine work profile")
+        self._work_profile = work_profile
+        require(type(source_ir_sha256) is str and len(source_ir_sha256) == 64
+                and all(c in "0123456789abcdef" for c in source_ir_sha256),
+                "invalid fine source IR digest")
+        super().__init__()
+        self._source_sha256 = source_ir_sha256
+
+    @property
+    def limits(self):
+        return JUNCTION_FINE_LIMITS if self._work_profile == "gsg_junction_fine_reference_v1" else JUNCTION_FINE_86K_LIMITS
+
+    def activate_source(self, source_ir_sha256):
+        require(source_ir_sha256 == self._source_sha256, "foreign fine source IR identity")
+        self.guard()
+        self.target = "unset"
+
+    def activate(self, target):
+        require(type(target) is str and target in _TARGET_KEYS, "unregistered fine reference target")
+        super().activate(self._source_sha256 + ":" + target)
+
+    def charge(self, kind, precision=None):
+        require(self.target != "unset", "activate fine target before work")
+        super().charge(kind, precision)
+
+    def report(self):
+        return dict(super().report(), limits=dict(self.limits),
+                    profile_id=self._work_profile,
+                    cell_limit_profile=("gsg_junction_refinement_80k.v1" if self._work_profile ==
+                        "gsg_junction_fine_reference_v1" else "gsg_junction_refinement_86k.v1"),
+                    source_ir_sha256=self._source_sha256, target_keys=sorted(_TARGET_KEYS),
+                    source_provenance_authentication="caller responsibility; not a budget claim")
+
+
+def evaluate_retained_field(cells, target_m, expected_cells, budget, *, native_h_apm=None, progress=None,
+                            cell_limit_profile='legacy72911'):
     """Sum all supplied cells280 records with existing local/global precision gates.
 
     No solve or source authentication. The caller verifies the full source count
@@ -78,7 +131,10 @@ def evaluate_retained_field(cells, target_m, expected_cells, budget, *, native_h
                 all(type(v) in (int, float) and math.isfinite(v) for v in values), 'finite vector3 required')
         return tuple(float(v) for v in values)
 
-    require(type(expected_cells) is int and 0 < expected_cells <= 72911, 'invalid full source cell count')
+    require(type(cell_limit_profile) is str and cell_limit_profile in SOURCE_CELL_LIMITS,
+            'unknown source cell limit profile')
+    require(type(expected_cells) is int and 0 < expected_cells <= SOURCE_CELL_LIMITS[cell_limit_profile],
+            'invalid full source cell count')
     require(isinstance(budget, Budget), 'explicit shared reference budget required')
     target = vector(target_m)
     native = None if native_h_apm is None else vector(native_h_apm)

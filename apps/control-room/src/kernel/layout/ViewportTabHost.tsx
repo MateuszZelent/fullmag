@@ -14,11 +14,11 @@ import { MountedModule } from "./SlotHost";
 import { useLayoutActions, useLayoutSelector } from "./useLayout";
 import { selectActiveViewportModule } from "./ViewportTabHost.model";
 
-export function ViewportTabHost() {
+export function ViewportTabHost({ savedOnly = false }: { savedOnly?: boolean }) {
   const kernel = useKernel();
   const modules = useMemo(
-    () => kernel.modules.forSlot("viewport-main"),
-    [kernel.modules],
+    () => kernel.modules.forSlot("viewport-main").filter(module => !savedOnly || module.id === "viewport-3d" || module.id === "field-map"),
+    [kernel.modules, savedOnly],
   );
   const activeModuleId = useLayoutSelector(
     (layout) => layout.activeViewportMainModuleId,
@@ -26,7 +26,7 @@ export function ViewportTabHost() {
   const companion = useLayoutSelector((layout) => layout.viewportCompanion ?? null);
   const { setActiveViewportMainModule, setViewportCompanion } = useLayoutActions();
   const activeModule = selectActiveViewportModule(modules, activeModuleId);
-  const companionModule = companion && companion.moduleId !== activeModule?.id
+  const companionModule = !savedOnly && companion && companion.moduleId !== activeModule?.id
     ? modules.find((module) => module.id === companion.moduleId) ?? null
     : null;
 

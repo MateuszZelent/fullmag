@@ -19,6 +19,7 @@ import { statusRefreshIntervalMs } from "../realtime/communicationPolicy";
 import { ResourceInvalidationController } from "../resources/ResourceInvalidationController";
 import { SESSION_STATUS_RESOURCE_KEY } from "../resources/useSessionStatus";
 import { SavedResultsPlaybackController } from "../saved-results/SavedResultsPlaybackController";
+import { ObjectVisualizationController } from "../visualization/ObjectVisualizationController";
 import {
   resetSharedResourceRuntimeStoreForTests,
 } from "../resources/ResourceRuntimeStore";
@@ -761,6 +762,7 @@ function makeKernel(
   for (const command of startScreenManifest.contributes?.commands ?? []) commands.register(command);
   return {
     savedResultsPlayback: options.savedResultsPlayback,
+    visualization: new ObjectVisualizationController(),
     api: {
       diagnostics: {
         cpuTelemetry: async () => { throw new Error("telemetry is not served in this test"); },

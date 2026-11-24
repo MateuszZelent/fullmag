@@ -24,6 +24,9 @@ def compare(full, full_fields, candidate, candidate_fields):
     for name in _SHARED_INPUTS:
         if full[name] != candidate[name]:
             raise ValueError(f"model inputs differ in {name}")
+    for name, default in (("output_return", "reference"), ("floating_load", None)):
+        if full.get(name, default) != candidate.get(name, default):
+            raise ValueError(f"model inputs differ in {name}")
     if not np.array_equal(full_fields["probe_xyz_m"], candidate_fields["probe_xyz_m"]):
         raise ValueError("model inputs differ in probe geometry")
     reference = full_fields["probe_H_over_I_per_m"]

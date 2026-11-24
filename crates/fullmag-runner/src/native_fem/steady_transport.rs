@@ -100,6 +100,14 @@ mod direct_oersted_snapshot;
 #[path = "surface_rt0.rs"]
 mod surface_rt0;
 use surface_rt0::SurfaceSnapshotBuffer;
+#[path = "retained_surface_rt0.rs"]
+mod retained_surface_rt0;
+#[path = "retained_rt0_source.rs"]
+mod retained_rt0_source;
+#[path = "retained_direct_rt0.rs"]
+mod retained_direct_rt0;
+pub(crate) use retained_direct_rt0::{evaluate_retained_rt0_direct, verify_retained_dtq_binding};
+pub(crate) use retained_surface_rt0::evaluate_retained_rt0_surface;
 use crate::antenna_field_solution::surface_rt0_evidence_v1::SurfaceRt0Snapshot;
 mod closed_loop_source_snapshot;
 mod prepared_closed_loop;
@@ -1708,6 +1716,12 @@ fn solve_rt0_common(request:Rt0NumericInput<'_>,view:Rt0InputView<'_>,oersted_me
     let mut direct_oersted_result_ffi = None;
     let mut vector_potential_result_ffi = None;
     let mut surface_result_ffi = None;
+    let native_observer = observer.map(|_| ffi::fullmag_fem_antenna_operation_observer_v1 {
+        abi_version: 1, reserved_flags: 0,
+        struct_size: std::mem::size_of::<ffi::fullmag_fem_antenna_operation_observer_v1>() as u64,
+        callback: Some(antenna_operation_progress_callback),
+        user_data: (&observer as *const Option<&crate::AntennaOperationProgressObserver<'_>>).cast_mut().cast(),
+    });
     let status = match oersted_method {
         NativeFemSteadyTransportOerstedMethod::DirectTetraQuadrature => {
             if let Some(target_points) = target_points {
@@ -1762,7 +1776,7 @@ fn solve_rt0_common(request:Rt0NumericInput<'_>,view:Rt0InputView<'_>,oersted_me
                             target_points_xyz:oersted_request.target_points_xyz,target_points_xyz_len:oersted_request.target_points_xyz_len,
                             base_quadrature_order:oersted_request.base_quadrature_order,maximum_subdivision_depth:oersted_request.maximum_subdivision_depth,
                             absolute_tolerance_apm:oersted_request.absolute_tolerance_apm,relative_tolerance:oersted_request.relative_tolerance,maximum_source_target_pairs:oersted_request.maximum_source_target_pairs};
-                        ffi::fullmag_fem_solve_prepared_closed_loop_rt0_oersted_v2(&request,&mut outer_result,&mut charge_snapshot_ffi,&mut snapshot_buffer.header,&mut prepared.outer)
+                        ffi::fullmag_fem_solve_prepared_closed_loop_rt0_oersted_observed_v1(&request,&mut outer_result,&mut charge_snapshot_ffi,&mut snapshot_buffer.header,&mut prepared.outer, native_observer.as_ref().map_or(std::ptr::null(), |value| value))
                     } else if let Some(source) = source_snapshot_buffer.as_mut() {
                         ffi::fullmag_fem_solve_steady_transport_rt0_oersted_with_source_snapshot_v2(
                             &oersted_request, &mut outer_result, &mut charge_snapshot_ffi,
@@ -1812,12 +1826,6 @@ fn solve_rt0_common(request:Rt0NumericInput<'_>,view:Rt0InputView<'_>,oersted_me
                 rt0:prepared.descriptor(&request_ffi), target_points_xyz:flat_points.as_ptr(),
                 target_points_xyz_len:flat_points.len() as u64, options:buffer.options(),
             };
-            let native_observer = observer.map(|_| ffi::fullmag_fem_antenna_operation_observer_v1 {
-                abi_version: 1, reserved_flags: 0,
-                struct_size: std::mem::size_of::<ffi::fullmag_fem_antenna_operation_observer_v1>() as u64,
-                callback: Some(antenna_operation_progress_callback),
-                user_data: (&observer as *const Option<&crate::AntennaOperationProgressObserver<'_>>).cast_mut().cast(),
-            });
             let status = if let Some(profile) = surface_profile.as_deref_mut() {
                 let mut native_profile = ffi::fullmag_fem_surface_rt0_profile_result_v1 {
                     abi_version: ffi::FULLMAG_FEM_SURFACE_RT0_PROFILE_ABI_VERSION,

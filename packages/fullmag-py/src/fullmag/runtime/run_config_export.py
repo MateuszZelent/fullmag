@@ -112,7 +112,7 @@ def export_run_config(
         "study_pipeline": study_pipeline,
         "stages": stages,
     }
-    inventory = loaded.antenna_inventory.to_ir()
+    inventory = loaded.antenna_inventory.to_ir(source_root=source_root)
     if any(inventory.values()):
         config["antenna_inventory"] = inventory
     return config

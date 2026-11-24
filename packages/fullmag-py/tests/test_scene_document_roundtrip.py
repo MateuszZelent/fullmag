@@ -382,3 +382,42 @@ def test_scene_round_trip_preserves_authored_global_mesh_order(tmp_path: Path) -
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def test_scene_script_round_trip_preserves_hidden_cpw_geometry(tmp_path: Path) -> None:
+    authored = tmp_path / "cpw.py"
+    authored.write_text(
+        """import fullmag as fm
+study = fm.study("CPW visibility")
+study.engine("fem")
+study.objects.mesh.defaults(maximum_element_size=60e-9, order=1)
+for name in ("copper_source", "open_gsg", "sampling"):
+    shape = fm.Box(name=name, size=(1e-6, 10e-9, 10e-9))
+    study.geometry_object(shape, name=name, type="geometry", object_id=name)
+""",
+        encoding="utf-8",
+    )
+    loaded = fm.load_problem_from_script(authored, lightweight_assets=True)
+    scene = build_scene_document_from_builder(export_builder_draft(loaded))
+    assert all(obj["visible"] for obj in scene["objects"])
+    source = next(obj for obj in scene["objects"] if obj["id"] == "copper_source")
+    source["visible"] = False
+
+    canonical = tmp_path / "canonical.py"
+    canonical.write_text(render_scene_document_as_script(scene), encoding="utf-8")
+    reloaded = fm.load_problem_from_script(canonical, lightweight_assets=True)
+    restored = build_scene_document_from_builder(export_builder_draft(reloaded))
+    assert {obj["id"]: obj["visible"] for obj in restored["objects"]} == {
+        "copper_source": False, "open_gsg": True, "sampling": True,
+    }
+    assert [g.geometry_name for g in reloaded.problem.auxiliary_geometries] == [
+        g.geometry_name for g in loaded.problem.auxiliary_geometries
+    ]
+    next(obj for obj in restored["objects"] if obj["id"] == "copper_source")["visible"] = True
+    rewritten = rewrite_loaded_problem_script(
+        reloaded, overrides=builder_overrides_from_scene_document(restored)
+    )["rendered_source"]
+    canonical.write_text(rewritten, encoding="utf-8")
+    all_visible = fm.load_problem_from_script(canonical, lightweight_assets=True)
+    restored_again = build_scene_document_from_builder(export_builder_draft(all_visible))
+    assert all(obj["visible"] for obj in restored_again["objects"])

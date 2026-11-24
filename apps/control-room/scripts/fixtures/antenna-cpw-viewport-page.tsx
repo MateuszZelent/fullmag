@@ -70,6 +70,7 @@ export default function AntennaCpwViewportFixturePage() {
   const [side, setSide] = useState<"above" | "below">("above");
   const [invalid, setInvalid] = useState(false);
   const [closedCircuit, setClosedCircuit] = useState(false);
+  const [closedGsg, setClosedGsg] = useState(false);
   const [mounted, setMounted] = useState(true);
   const [tracker] = useState(() => new Viewport3DResourceTracker());
   const runtime = useRef<Runtime>({ root: null, frames: 0 });
@@ -84,14 +85,20 @@ export default function AntennaCpwViewportFixturePage() {
         inlet_connection_offset_v_m: 0, outlet_connection_offset_v_m: 0,
         inlet_connection_part_id: "inlet-custom", outlet_connection_part_id: "outlet-custom",
         inlet_connection_conductivity_s_per_m: 3e7, outlet_connection_conductivity_s_per_m: 3e7 } };
+    const gsgParams = { ...params, conductivity_s_per_m: 5.8e7, loop: { enabled: true,
+      inlet_connection_length_m: 200e-9, outlet_connection_length_m: 200e-9,
+      inlet_crossbar_length_m: 50e-9, outlet_crossbar_length_m: 50e-9,
+      inlet_connection_part_id: "inlet-gsg", outlet_connection_part_id: "outlet-gsg",
+      inlet_connection_conductivity_s_per_m: 3e7, outlet_connection_conductivity_s_per_m: 3e7 } };
     const descriptor = closedCircuit ? { geometry_kind: "MicrostripAntennaLayout", geometry_params: microstripParams }
-      : { ...antenna.geometry, geometry_params: invalid ? { ...params, stations: params.stations.map((station, index) => index === 2 ? { ...station, left_gap_m: 0 } : station) } : params };
+      : closedGsg ? { geometry_kind: "CPWAntennaLayout", geometry_params: gsgParams }
+        : { ...antenna.geometry, geometry_params: invalid ? { ...params, stations: params.stations.map((station, index) => index === 2 ? { ...station, left_gap_m: 0 } : station) } : params };
     const authored = { ...antenna, geometry: descriptor };
     const placementScene = { ...scene, objects: [target, authored] };
-    const placement = resolveAntennaPlacement((closedCircuit ? placementScene : scene) as unknown as SceneResource, realization as unknown as GeometryRealizationResource, antennaId, targetId, side, gap);
+    const placement = resolveAntennaPlacement((closedCircuit || closedGsg ? placementScene : scene) as unknown as SceneResource, realization as unknown as GeometryRealizationResource, antennaId, targetId, side, gap);
     return buildViewport3DPrimitiveRenderModel({ ...scene, objects: [target, { ...authored,
       transform: { ...transform, translation: Array.from(placement.translation) } }] }, null);
-  }, [side, invalid, closedCircuit]);
+  }, [side, invalid, closedCircuit, closedGsg]);
   useEffect(() => () => tracker.disposeAll(), [tracker]);
   useEffect(() => {
     if (!colors || !clientReady) return;
@@ -120,7 +127,8 @@ export default function AntennaCpwViewportFixturePage() {
     <Button onClick={() => setSide("below")}>Below sample</Button>
     <Button onClick={() => setInvalid((value) => !value)}>Toggle invalid CPW</Button>
     <Button onClick={() => setMounted((value) => !value)}>Toggle layer</Button>
-    <Button onClick={() => setClosedCircuit((value) => !value)}>Toggle closed microstrip</Button>
+    <Button onClick={() => { setClosedGsg(false); setClosedCircuit((value) => !value); }}>Toggle closed microstrip</Button>
+    <Button onClick={() => { setClosedCircuit(false); setClosedGsg((value) => !value); }}>Toggle closed GSG</Button>
     <div data-testid="cpw-canvas" style={{ width: 1000, height: 620 }}>
       {clientReady && colors ? <Canvas frameloop="demand" dpr={1} gl={resolveViewport3DCanvasGlOptions(profile)}
         camera={{ position: [2.3e-6, -3e-6, 2e-6], up: [0, 0, 1], near: 1e-9, far: 1e-3, fov: 40 }}

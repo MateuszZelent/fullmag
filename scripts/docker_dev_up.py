@@ -1218,6 +1218,15 @@ def _reconcile_group(group: RetainedGroup, args: argparse.Namespace) -> None:
         resume,
     )
 
+    import docker_readonly_result_archive as readonly_archive
+    requested_archive = readonly_archive.option_pins(getattr(args, "readonly_result_archive_request", None),
+        getattr(args, "readonly_result_archive_request_sha256", None))
+    descriptor = readonly_archive.validate_document(group.document)
+    retained_archive = ((descriptor["request_path"], descriptor["request_sha256"]) if descriptor else None)
+    if requested_archive is not None and requested_archive != retained_archive:
+        raise DockerDevUpError("Readonly result archive mount changes require explicit managed recreation")
+    if retained_archive is not None:
+        readonly_archive.load_request(group.control, group.source_root, retained_archive)
     mode = _service_mode(group)
     if mode in {"running-healthy", "backend-running-frontend-stopped"}:
         _qualify_running_runtime(group)

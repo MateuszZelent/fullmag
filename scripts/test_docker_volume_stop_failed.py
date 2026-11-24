@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ast
+from copy import deepcopy
 import importlib.util
 from pathlib import Path
 import sys
@@ -145,6 +146,57 @@ class NativeFailedStopTests(unittest.TestCase):
             api_start_failure_probe(), "a" * 64, api_start_failure=True
         )
         self.assertEqual(value["failed_owner"]["children"][0]["status"], "exited_failure")
+
+    def test_api_start_failure_preserves_historical_drained_owner(self):
+        historical = {**owner(), "state": "drained"}
+        document = api_start_failure_probe(failed_owner=historical)
+        before = deepcopy(document)
+        value = stop._validate_native_failure_probe(
+            document, "a" * 64, api_start_failure=True
+        )
+        self.assertEqual(value["failed_owner"], historical)
+        self.assertEqual(document, before)
+
+    def test_drained_owner_is_not_a_general_native_failure(self):
+        historical = {**owner(), "state": "drained"}
+        for validate in (
+            lambda: stop._validate_native_failed_owner(historical),
+            lambda: stop._validate_native_failure_probe(
+                probe(failed_owner=historical), "a" * 64
+            ),
+            lambda: stop._validate_native_after_ready_failure_probe(
+                after_ready_probe(failed_owner=historical), "a" * 64
+            ),
+        ):
+            with self.subTest(validate=validate):
+                with self.assertRaises(stop.BuildControlError):
+                    validate()
+
+    def test_api_start_drained_owner_requires_successful_children(self):
+        for status in ("exited_failure", "running", "unknown"):
+            with self.subTest(status=status):
+                historical = {**owner(compute_status=status), "state": "drained"}
+                with self.assertRaises(stop.BuildControlError):
+                    stop._validate_native_failure_probe(
+                        api_start_failure_probe(failed_owner=historical),
+                        "a" * 64, api_start_failure=True,
+                    )
+
+    def test_api_start_drained_owner_still_checks_processes_resources_and_pins(self):
+        historical = {**owner(), "state": "drained"}
+        for changes in (
+            {"api_pid_exists": True}, {"native_processes_live": True},
+            {"owner_pid_exists": True}, {"child_pids_exist": True},
+            {"active_lease_count": 1}, {"reservation_states": ["active"]},
+            {"lease_states": ["active"]}, {"lease_states": ["unknown"]},
+            {"process_receipt_sha256": "c" * 64}, {"failure_mode": None},
+        ):
+            with self.subTest(changes=changes):
+                with self.assertRaises(stop.BuildControlError):
+                    stop._validate_native_failure_probe(
+                        api_start_failure_probe(failed_owner=historical, **changes),
+                        "a" * 64, api_start_failure=True,
+                    )
 
     def test_rejects_stderr_only_as_api_start_failure(self):
         document = api_start_failure_probe(

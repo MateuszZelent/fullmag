@@ -684,6 +684,7 @@ pub(crate) fn test_app_state() -> Arc<AppState> {
         local_compute_operator_token: None,
         repo_root: PathBuf::from("."),
         submit_store_root: None,
+        readonly_result_archive: None,
         submit_backlog_limit: std::num::NonZeroUsize::new(
             crate::run_intent_persistence::DEFAULT_ACCEPTED_RUN_BACKLOG_LIMIT,
         )
@@ -3256,6 +3257,7 @@ async fn test_router_with_session_store_state() -> (axum::Router, Arc<AppState>,
         local_compute_operator_token: None,
         repo_root: repo_root.clone(),
         submit_store_root: Some(repo_root.join("submit-store")),
+        readonly_result_archive: None,
         submit_backlog_limit: std::num::NonZeroUsize::new(
             crate::run_intent_persistence::DEFAULT_ACCEPTED_RUN_BACKLOG_LIMIT,
         )

@@ -3647,6 +3647,59 @@ fn fdm_object_region_material_overrides_materialize_to_cell_fields() {
 }
 
 #[test]
+fn fdm_regional_damping_uses_the_object_id_when_the_magnet_name_differs() {
+    let mut ir = ProblemIR::bootstrap_example();
+    ir.magnets[0].name = "YIG film".to_string();
+    ir.magnets[0].object_id = Some("yig".to_string());
+    let base_damping = ir.materials[0].damping;
+    let regional_damping = 0.32;
+    let mut region = default_test_object_region();
+    region.owner_object = "yig".to_string();
+    region.region_id = "yig:edge".to_string();
+    region.material_overrides = vec![fullmag_ir::RegionMaterialOverrideIR {
+        parameter: fullmag_ir::MaterialParameterNameIR::Alpha,
+        value: fullmag_ir::MaterialParameterFieldIR::Constant {
+            value: serde_json::json!(regional_damping),
+            unit: None,
+        },
+        priority: 10,
+        conflict_policy: fullmag_ir::RegionConflictPolicyIR::Error,
+    }];
+    ir.object_regions.push(region);
+
+    let plan = plan(&ir).expect("FDM should resolve regional damping");
+    assert_eq!(plan.common.material_field_plans.len(), 1);
+    let field_plan = &plan.common.material_field_plans[0];
+    assert_eq!(field_plan.object_id, "yig");
+    assert_eq!(
+        field_plan.parameter,
+        fullmag_ir::MaterialParameterNameIR::Alpha
+    );
+    assert_eq!(
+        field_plan.realization_location,
+        fullmag_ir::MaterialFieldLocationIR::Cell
+    );
+    let fullmag_ir::BackendPlanIR::Fdm(fdm) = plan.backend_plan else {
+        panic!("expected FDM plan");
+    };
+    let damping = fdm
+        .material
+        .alpha_field
+        .expect("missing regional damping field");
+    assert_eq!(damping.len(), fdm.region_mask.len());
+    assert!(fdm.region_mask.contains(&0));
+    assert!(fdm.region_mask.contains(&1));
+    for (value, marker) in damping.iter().zip(fdm.region_mask) {
+        let expected = if marker == 1 {
+            regional_damping
+        } else {
+            base_damping
+        };
+        assert!((*value - expected).abs() < 1e-12);
+    }
+}
+
+#[test]
 fn fdm_cuda_region_material_fields_plan_cellwise_ms() {
     let mut ir = ProblemIR::bootstrap_example();
     ir.problem_meta.runtime_metadata.insert(

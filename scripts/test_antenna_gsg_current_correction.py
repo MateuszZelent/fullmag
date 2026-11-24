@@ -22,6 +22,33 @@ def evaluate(rows, potential, sigmas, count=None):
 
 
 class GsgCurrentCorrectionTests(unittest.TestCase):
+    def test_corner12p5_profile_is_explicit_and_keeps_complete_source_checks(self):
+        from antenna_gsg_current_correction import (
+            weighted_rt0_h1_correction, partitioned_weighted_rt0_h1_correction)
+        row, potential = sample(correction=(.1, 0., 0.))
+        fine = "gsg_junction_refinement_80k.v1"
+        for profile in ("legacy72911", fine):
+            result = weighted_rt0_h1_correction([row], potential, [2.], 1,
+                                               cell_limit_profile=profile)
+            self.assertAlmostEqual(result["eta"], .05)
+            result = partitioned_weighted_rt0_h1_correction(
+                [row], potential, [2.], 1, {"all": [0]}, cell_limit_profile=profile)
+            self.assertAlmostEqual(result["eta"], .05)
+        for profile, count in (("legacy72911", 72912), (fine, 80001), ("unknown", 1), (None, 1)):
+            with self.subTest(profile=profile, count=count):
+                with self.assertRaisesRegex(ValueError, "profile|cell count"):
+                    weighted_rt0_h1_correction([], potential, [], count, cell_limit_profile=profile)
+                with self.assertRaisesRegex(ValueError, "profile|cell count"):
+                    partitioned_weighted_rt0_h1_correction(
+                        [], potential, [], count, {"all": []}, cell_limit_profile=profile)
+        with self.assertRaisesRegex(ValueError, "incomplete"):
+            weighted_rt0_h1_correction([], potential, [], 80000, cell_limit_profile=fine)
+        with self.assertRaisesRegex(ValueError, "source cell or conductivity count differs"):
+            partitioned_weighted_rt0_h1_correction([], potential, [], 80000,
+                                                   {"all": []}, cell_limit_profile=fine)
+        with self.assertRaisesRegex(ValueError, "cell count"):
+            weighted_rt0_h1_correction([], potential, [], 72912)
+
     def test_identical_h1_and_rt0_give_zero_correction(self):
         row,v=sample();result=evaluate([row],v,[2.])
         self.assertEqual(result['eta'],0.)

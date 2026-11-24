@@ -196,6 +196,44 @@ pub(crate) fn execution_plan_log_lines(
         stage.entrypoint_kind
     )];
     match &plan.backend_plan {
+        BackendPlanIR::AntennaRetainedCurrentFieldInspection(inspection) => {
+            lines.push("Backend plan: antenna_retained_current_field_inspection (H-only; no LLG)".to_string());
+            lines.push(format!("Stage: {}", inspection.stage.id));
+            lines.push(format!(
+                "Field sampling: {} / {} ({} positions); topology={}",
+                inspection.field_sampling.carrier_kind,
+                inspection.field_sampling.location,
+                inspection.field_sampling.positions_xyz_m.len(),
+                inspection.field_sampling.topology_digest,
+            ));
+            lines.push("Source mesh: unresolved until durable retained-parent validation; no new current solve".to_string());
+        }
+        BackendPlanIR::AntennaRetainedDirectFieldInspection(inspection) => {
+            lines.push("Backend plan: antenna_retained_direct_field_inspection (H-only; no LLG)".to_string());
+            lines.push(format!("Stage: {}", inspection.stage.id));
+            lines.push(format!("Source preparation asset: {} / {}", inspection.preparation_asset.asset_id, inspection.preparation_asset.content_sha256));
+            lines.push(format!(
+                "Field sampling: {} / {} ({} positions); topology={}",
+                inspection.field_sampling.carrier_kind,
+                inspection.field_sampling.location,
+                inspection.field_sampling.positions_xyz_m.len(),
+                inspection.field_sampling.topology_digest,
+            ));
+            lines.push("Source mesh: frozen input asset requires exact durable retained-parent validation; no new current solve".to_string());
+        }
+        BackendPlanIR::AntennaRetainedPreparationFieldInspection(inspection) => {
+            lines.push("Backend plan: antenna_retained_preparation_field_inspection (H-only; no LLG)".to_string());
+            lines.push(format!("Stage: {}", inspection.stage.id));
+            lines.push(format!("Source preparation asset: {} / {}", inspection.preparation_asset.asset_id, inspection.preparation_asset.content_sha256));
+            lines.push(format!(
+                "Field sampling: {} / {} ({} positions); topology={}",
+                inspection.field_sampling.carrier_kind,
+                inspection.field_sampling.location,
+                inspection.field_sampling.positions_xyz_m.len(),
+                inspection.field_sampling.topology_digest,
+            ));
+            lines.push("Source mesh: frozen input asset requires exact durable retained-parent validation; no new current solve".to_string());
+        }
         BackendPlanIR::AntennaFieldOnly(carrier) => {
             lines.push(format!("  field-only: source={} sampling_points={} magnetic_dofs=0", carrier.source_object_id, carrier.field_sampling.positions_xyz_m.len()));
         }
@@ -344,6 +382,71 @@ pub(crate) fn current_artifact_layout(
     plan: &ExecutionPlanIR,
 ) -> serde_json::Value {
     match &plan.backend_plan {
+        BackendPlanIR::AntennaRetainedCurrentFieldInspection(inspection) => serde_json::json!({
+            "backend": "antenna_retained_current_field_inspection",
+            "stage_kind": "antenna_retained_current_field_inspection",
+            "stage_id": inspection.stage.id,
+            "retained_current_source": inspection.stage.retained_current_source,
+            "magnetization": null,
+            "source_mesh_name": null,
+            "source_mesh_node_count": null,
+            "source_mesh_element_count": null,
+            "source_resolution": "requires_durable_parent_validation",
+            "field_sampling": {
+                "domain": inspection.field_sampling.domain,
+                "carrier_kind": inspection.field_sampling.carrier_kind,
+                "location": inspection.field_sampling.location,
+                "topology_digest": inspection.field_sampling.topology_digest,
+                "node_count": inspection.field_sampling.positions_xyz_m.len(),
+                "element_count": inspection.field_sampling.cells.len(),
+            },
+            "requested_execution": inspection.requested_execution,
+            "qualification": "NOT VERIFIED",
+        }),
+        BackendPlanIR::AntennaRetainedDirectFieldInspection(inspection) => serde_json::json!({
+            "backend": "antenna_retained_direct_field_inspection",
+            "stage_kind": "antenna_retained_direct_field_inspection",
+            "stage_id": inspection.stage.id,
+            "retained_current_source": inspection.stage.retained_current_source,
+            "source_preparation_asset": inspection.preparation_asset,
+            "magnetization": null,
+            "source_mesh_name": null,
+            "source_mesh_node_count": null,
+            "source_mesh_element_count": null,
+            "source_resolution": "requires_durable_parent_validation",
+            "field_sampling": {
+                "domain": inspection.field_sampling.domain,
+                "carrier_kind": inspection.field_sampling.carrier_kind,
+                "location": inspection.field_sampling.location,
+                "topology_digest": inspection.field_sampling.topology_digest,
+                "node_count": inspection.field_sampling.positions_xyz_m.len(),
+                "element_count": inspection.field_sampling.cells.len(),
+            },
+            "requested_execution": inspection.requested_execution,
+            "qualification": "NOT VERIFIED",
+        }),
+        BackendPlanIR::AntennaRetainedPreparationFieldInspection(inspection) => serde_json::json!({
+            "backend": "antenna_retained_preparation_field_inspection",
+            "stage_kind": "antenna_retained_preparation_field_inspection",
+            "stage_id": inspection.stage.id,
+            "retained_current_source": inspection.stage.retained_current_source,
+            "source_preparation_asset": inspection.preparation_asset,
+            "magnetization": null,
+            "source_mesh_name": null,
+            "source_mesh_node_count": null,
+            "source_mesh_element_count": null,
+            "source_resolution": "requires_durable_parent_validation",
+            "field_sampling": {
+                "domain": inspection.field_sampling.domain,
+                "carrier_kind": inspection.field_sampling.carrier_kind,
+                "location": inspection.field_sampling.location,
+                "topology_digest": inspection.field_sampling.topology_digest,
+                "node_count": inspection.field_sampling.positions_xyz_m.len(),
+                "element_count": inspection.field_sampling.cells.len(),
+            },
+            "requested_execution": inspection.requested_execution,
+            "qualification": "NOT VERIFIED",
+        }),
         BackendPlanIR::AntennaFieldOnly(carrier) => serde_json::json!({"backend": "fem", "stage_kind": "antenna_field_solve", "magnetization": null, "source_mesh_name": carrier.source_mesh.mesh_name, "field_sampling": carrier.field_sampling}),
         BackendPlanIR::AntennaExternalLeadInspection(inspection) => {
             let input = &inspection.input;

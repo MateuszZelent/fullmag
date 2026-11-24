@@ -131,6 +131,8 @@ mod canonical_relaxation_time_tests {
             current_transport_id: "current".into(),
             port_mode_ids: vec!["port".into()],
             conservative_current_view_ref: None,
+            retained_current_source: None,
+            retained_source_preparation: None,
             model: fullmag_ir::AntennaFieldModelIR::QuasistaticConductionBiotSavart3d,
             oersted_realization: fullmag_ir::AntennaOerstedRealizationIR::DirectTetraQuadrature,
             surface_field_policy: None,
@@ -887,6 +889,13 @@ fn classify_stage_transition(
 
 fn classify_action_stage_transition(action: &ResolvedScriptStageAction) -> StageTransitionMetadata {
     match action {
+        ResolvedScriptStageAction::AntennaRetainedDirectInspection { .. }
+        | ResolvedScriptStageAction::AntennaRetainedPreparationInspection { .. }
+        | ResolvedScriptStageAction::AntennaRetainedCurrentInspection { .. } => StageTransitionMetadata::boundary(
+            StageTransitionKind::AntennaRetainedCurrentInspection,
+            StageTransitionReason::AntennaRetainedCurrentInspection,
+            None,
+        ),
         ResolvedScriptStageAction::AntennaClosedLoopInspection { .. } => StageTransitionMetadata::boundary(
             StageTransitionKind::AntennaClosedLoopInspection,
             StageTransitionReason::AntennaClosedLoopInspection,
@@ -1012,6 +1021,27 @@ fn resolve_antenna_field_solve_action(
     stage_id: &str,
     port_mode_id: &str,
 ) -> Result<ResolvedScriptStageAction> {
+    if ir.antenna_field_solve_stages.iter().any(|stage| stage.id == stage_id
+        && (stage.retained_source_preparation.is_some() || stage.retained_current_source.is_some())
+        && stage.oersted_realization == fullmag_ir::AntennaOerstedRealizationIR::DirectTetraQuadrature) {
+        let plan = fullmag_plan::plan_retained_direct_field_inspection(ir, stage_id, port_mode_id)
+            .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+        return Ok(ResolvedScriptStageAction::AntennaRetainedDirectInspection { plan });
+    }
+    if ir.antenna_field_solve_stages.iter().any(|stage| {
+        stage.id == stage_id && stage.retained_source_preparation.is_some()
+    }) {
+        let plan = fullmag_plan::plan_retained_preparation_field_inspection(ir, stage_id, port_mode_id)
+            .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+        return Ok(ResolvedScriptStageAction::AntennaRetainedPreparationInspection { plan });
+    }
+    if ir.antenna_field_solve_stages.iter().any(|stage| {
+        stage.id == stage_id && stage.retained_current_source.is_some()
+    }) {
+        let plan = fullmag_plan::plan_retained_current_field_inspection(ir, stage_id, port_mode_id)
+            .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+        return Ok(ResolvedScriptStageAction::AntennaRetainedCurrentInspection { plan });
+    }
     let plan = fullmag_plan::plan_antenna_field_solve_execution(ir, stage_id, port_mode_id)
         .map_err(|error| anyhow::anyhow!(error.to_string()))?;
     Ok(match plan {

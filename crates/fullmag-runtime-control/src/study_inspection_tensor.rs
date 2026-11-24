@@ -20,6 +20,9 @@ pub(crate) fn materialize(
     source: &SolutionArtifactRef, output: &FmsStudyOutputManifestEntry,
     claim: &TaskClaim, run_spec_digest: &str, solution_set_id: &str,
 ) -> Result<Vec<SolutionArtifactRef>> {
+    if matches!(step.kind, fullmag_authoring::StudyStepKind::RetainedCurrentFieldInspection { .. }) {
+        bail!("retained-current H-only requires its own H tensor owner and sample carrier; closed-loop V/J/H tensor replay is forbidden");
+    }
     if output.codec_id != fullmag_application::ANTENNA_INSPECTION_BUNDLE_CODEC_ID
         || output.codec_version != fullmag_application::ANTENNA_INSPECTION_BUNDLE_CODEC_VERSION
         || output.data_kind != "artifact" || source.kind != SolutionArtifactKind::Other

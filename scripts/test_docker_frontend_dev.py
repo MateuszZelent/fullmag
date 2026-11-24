@@ -1193,6 +1193,11 @@ else:
             binary.write_text("#!/usr/bin/env node\n", encoding="utf-8")
             app_next = workspace / "apps" / "control-room" / "node_modules" / "next"
             app_next.symlink_to(virtual_next, target_is_directory=True)
+            installed_lock = workspace / "node_modules" / ".pnpm" / "lock.yaml"
+            self.assertFalse(self.module._dependency_tree_ready(inputs))
+            installed_lock.write_bytes(b"previous dependency generation")
+            self.assertFalse(self.module._dependency_tree_ready(inputs))
+            installed_lock.write_bytes((workspace / "pnpm-lock.yaml").read_bytes())
             self.assertTrue(self.module._dependency_tree_ready(inputs))
 
     @skipIf(os.name == "nt", "dependency reconciliation regression uses Linux symlink semantics")

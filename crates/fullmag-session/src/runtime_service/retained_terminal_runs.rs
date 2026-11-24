@@ -21,6 +21,7 @@ use crate::types::{
     FmsTaskPreparedObservationOutcome, FmsWorkerProcessExitReceipt,
 };
 use crate::FmsWorkerInboxRecord;
+use super::retained_pending_inboxes::{RetainedPendingInboxPin, RetainedAbsentInboxPin};
 
 use super::retained_cancelled_runs::{self, ReadBudget, MAX_RETAINED_CANCELLED_TASKS};
 
@@ -111,6 +112,29 @@ pub(super) fn validate_terminal_runs_subset_with_histories(
     referenced_object_refs: &mut BTreeSet<String>,
     histories: &[super::retained_attempt_histories::RetainedAttemptHistoryPin],
 ) -> Result<usize> {
+    validate_terminal_runs_subset_with_pending(store, pins, budget, referenced_object_refs, histories, &[])
+}
+
+pub(super) fn validate_terminal_runs_subset_with_pending(
+    store: &SessionStore,
+    pins: &[RetainedTerminalRunPin],
+    budget: &mut ReadBudget,
+    referenced_object_refs: &mut BTreeSet<String>,
+    histories: &[super::retained_attempt_histories::RetainedAttemptHistoryPin],
+    pending: &[RetainedPendingInboxPin],
+) -> Result<usize> {
+    validate_terminal_runs_subset_with_absences(store, pins, budget, referenced_object_refs, histories, pending, &[])
+}
+
+pub(super) fn validate_terminal_runs_subset_with_absences(
+    store: &SessionStore, pins: &[RetainedTerminalRunPin], budget: &mut ReadBudget,
+    referenced_object_refs: &mut BTreeSet<String>,
+    histories: &[super::retained_attempt_histories::RetainedAttemptHistoryPin],
+    pending: &[RetainedPendingInboxPin], absent: &[RetainedAbsentInboxPin],
+) -> Result<usize> {
+    if !absent.is_empty() { super::retained_pending_inboxes::validate_absent_pins(absent, pins, pending, histories)?; }
+
+    if !pending.is_empty() { super::retained_pending_inboxes::validate_pins(pending, pins)?; }
     if pins.len() > retained_cancelled_runs::MAX_RETAINED_CANCELLED_RUN_PINS {
         bail!("terminal subset pin count must not exceed 128");
     }
@@ -270,8 +294,14 @@ pub(super) fn validate_terminal_runs_subset_with_histories(
             referenced_object_refs,
             budget,
         )?;
+        for absence in absent.iter().filter(|pin| pin.run_id == run_id) {
+            claim_task(&tasks, &absence.task_id, &absence.attempt_id, absence.ownership_epoch, Some(&absence.resource_id))?;
+            if retained_cancelled_runs::optional_directory(store.root(), &format!("runs/{run_id}/worker_inbox"))?.is_some() {
+                bail!("v7 requires an absent inbox directory, not an empty one");
+            }
+        }
         let journals = read_coordinator_journals(store, &run_id, &tasks, &solver_leases, budget)?;
-        let inboxes = read_worker_inboxes(store, &run_id, &tasks, &solver_leases, budget)?;
+        let inboxes = read_worker_inboxes(store, &run_id, &tasks, &solver_leases, budget, pending)?;
         validate_terminal_streams(
             store,
             &run_id,
@@ -280,6 +310,8 @@ pub(super) fn validate_terminal_runs_subset_with_histories(
             &inboxes,
             &solver_leases,
             budget,
+            pending,
+            absent,
         )?;
         if histories.iter().any(|pin| pin.run_id == run_id) {
             validate_history_worker_exits(store, &run_id, &tasks, &current_tasks, &solver_leases, budget)?;
@@ -826,13 +858,16 @@ fn read_worker_inboxes(
     tasks: &BTreeMap<String, FmsTaskCatalogEntry>,
     leases: &BTreeMap<ClaimKey, FmsResourceLease>,
     budget: &mut ReadBudget,
+    pending_pins: &[RetainedPendingInboxPin],
 ) -> Result<BTreeMap<InboxKey, FmsWorkerInboxRecord>> {
     let relative = format!("runs/{run_id}/worker_inbox");
     let Some(directory) = retained_cancelled_runs::optional_directory(store.root(), &relative)?
     else {
+        if pending_pins.iter().any(|pin| pin.run_id == run_id) { bail!("v6 pinned inbox directory is absent"); }
         return Ok(BTreeMap::new());
     };
     let mut inboxes = BTreeMap::new();
+    let mut seen_pending = BTreeSet::new();
     for entry in fs::read_dir(directory)? {
         let entry = entry?;
         budget.observe_entry()?;
@@ -885,13 +920,25 @@ fn read_worker_inboxes(
             || claim.get("attempt_id").and_then(Value::as_str) != Some(attempt_id)
             || claim.get("ownership_epoch").and_then(Value::as_u64) != Some(epoch)
             || claim.get("lease_token").and_then(Value::as_str) != Some(lease.lease_token.as_str())
-            || !inbox.payload.get("pending").is_some_and(Value::is_null)
         {
             bail!("terminal-run worker inbox has a pending or mismatched claim");
+        }
+        let pin = pending_pins.iter().find(|pin| pin.run_id == run_id && pin.task_id == task_id
+            && pin.attempt_id == attempt_id && pin.ownership_epoch == epoch && pin.resource_id == resource_id);
+        match (inbox.payload.get("pending"), pin) {
+            (Some(value), None) if value.is_null() => {},
+            (Some(value), Some(pin)) if !value.is_null() && crate::hex_sha256(&bytes) == pin.inbox_sha256 => {
+                seen_pending.insert((pin.task_id.clone(), pin.attempt_id.clone()));
+            },
+            _ => bail!("terminal-run worker inbox pending is unpinned, changed or absent"),
         }
         if inboxes.insert((task.task_id.clone(), attempt_id.to_owned()), inbox).is_some() {
             bail!("terminal-run task has duplicate worker inbox records");
         }
+    }
+    if pending_pins.iter().filter(|pin| pin.run_id == run_id).any(|pin|
+        !seen_pending.contains(&(pin.task_id.clone(), pin.attempt_id.clone()))) {
+        bail!("v6 pending pin has no exact durable inbox");
     }
     Ok(inboxes)
 }
@@ -904,11 +951,20 @@ fn validate_terminal_streams(
     inboxes: &BTreeMap<InboxKey, FmsWorkerInboxRecord>,
     leases: &BTreeMap<ClaimKey, FmsResourceLease>,
     budget: &mut ReadBudget,
+    pending_pins: &[RetainedPendingInboxPin],
+    absent_pins: &[RetainedAbsentInboxPin],
 ) -> Result<()> {
     for task in tasks.values() {
         let Some(attempt_id) = task.attempt_id.as_deref() else {
             continue;
         };
+        let pending_pin = pending_pins.iter().find(|pin| pin.run_id == run_id && pin.task_id == task.task_id
+            && pin.attempt_id == attempt_id && task.ownership_epoch == Some(pin.ownership_epoch)
+            && task.resource_id.as_deref() == Some(pin.resource_id.as_str()));
+        let absent_pin = absent_pins.iter().find(|pin| pin.run_id == run_id && pin.task_id == task.task_id
+            && pin.attempt_id == attempt_id && task.ownership_epoch == Some(pin.ownership_epoch)
+            && task.resource_id.as_deref() == Some(pin.resource_id.as_str()));
+        let no_spawn = pending_pin.is_some_and(|pin| pin.kind == "cancelled_before_spawn");
         let command = journals
             .get(&(task.task_id.clone(), attempt_id.to_owned(), "command".to_owned()))
             .map(Vec::as_slice)
@@ -922,6 +978,9 @@ fn validate_terminal_streams(
                 "claimed terminal task `{}` has no terminal coordinator event",
                 task.task_id
             );
+        }
+        if (pending_pin.is_some() || absent_pin.is_some()) && command.is_empty() {
+            bail!("v6 pending inbox requires a durable command stream");
         }
         let command_sequence = u64::try_from(command.len())?;
         let event_sequence = u64::try_from(events.len())?;
@@ -1005,7 +1064,12 @@ fn validate_terminal_streams(
                         bail!("terminal-run worker inbox does not preserve the exact pinned command envelope");
                     }
                 }
-                if applied.len() != command.len() {
+                if pending_pin.is_some_and(|pin| pin.kind == "failed_final_heartbeat") && applied.len() == command.len() {
+                    bail!("v6 pending heartbeat cannot already be applied");
+                }
+                if no_spawn {
+                    validate_cancelled_before_spawn(store, run_id, task, command, events, inbox, leases, budget)?;
+                } else if applied.len() != command.len() {
                     validate_unapplied_heartbeat_suffix(
                         store,
                         run_id,
@@ -1017,9 +1081,11 @@ fn validate_terminal_streams(
                         &tasks,
                         leases,
                         budget,
+                        pending_pin.is_some_and(|pin| pin.kind == "failed_final_heartbeat"),
                     )?;
                 }
             }
+            (false, None) if absent_pin.is_some() => validate_absent_prepare_cancellation(store, run_id, task, command, events, leases, budget)?,
             (_, None) => bail!("terminal-run command stream has no worker inbox receipt"),
             (true, Some(inbox)) => {
                 let applied = inbox
@@ -1032,7 +1098,7 @@ fn validate_terminal_streams(
                 }
             }
         }
-        if task.lifecycle == FmsTaskLifecycle::Cancelled {
+        if task.lifecycle == FmsTaskLifecycle::Cancelled && !no_spawn && absent_pin.is_none() {
             validate_claimed_cancelled_task(
                 store,
                 run_id,
@@ -1079,17 +1145,17 @@ fn validate_unapplied_heartbeat_suffix(
     tasks: &BTreeMap<String, FmsTaskCatalogEntry>,
     leases: &BTreeMap<ClaimKey, FmsResourceLease>,
     budget: &mut ReadBudget,
+    allow_pinned_pending: bool,
 ) -> Result<()> {
     if task.lifecycle != FmsTaskLifecycle::Failed || commands.len() != applied_count + 1 {
         bail!("terminal-run inbox has more than one unapplied command or a non-failed task");
     }
-    if inbox
-        .payload
-        .get("pending")
-        .is_some_and(|pending| !pending.is_null())
-    {
-        bail!("terminal-run worker inbox has an unresolved pending command");
-    }
+    let pending = inbox.payload.get("pending").context("terminal-run inbox lacks pending field")?;
+    if allow_pinned_pending {
+        if pending.is_null() || Some(pending) != commands.last().and_then(|entry| entry.payload.pointer("/message/envelope")) {
+            bail!("v6 pending heartbeat differs from the exact final command");
+        }
+    } else if !pending.is_null() { bail!("terminal-run worker inbox has an unresolved pending command"); }
 
     let attempt_id = task
         .attempt_id
@@ -1162,7 +1228,10 @@ fn validate_unapplied_heartbeat_suffix(
     let receipt = read_matching_worker_exit_receipt(store, run_id, task, tasks, lease, budget)?;
     // A reaped process terminated by signal has no numeric exit code. The
     // receipt's task validation already requires its failure reason.
-    if receipt.status_success || receipt.exit_code == Some(0) {
+    if receipt.status_success || receipt.exit_code == Some(0)
+        || (allow_pinned_pending && (receipt.exit_code.is_none() || receipt.timed_out
+            || receipt.process_start_token.as_deref().is_none_or(str::is_empty)))
+    {
         bail!("unapplied terminal heartbeat requires a failed process-exit receipt");
     }
     Ok(())
@@ -1301,6 +1370,104 @@ fn validate_final_heartbeat_reconciliation(
         bail!("accepted worker exited with an ambiguous final heartbeat history");
     }
     Ok(Some(expected))
+}
+
+/// The v6 caller separately validates the pinned WorkerNoSpawn proof under
+/// the ledger lock. Here we certify the exact unexecuted Start transcript.
+fn validate_cancelled_before_spawn(
+    store: &SessionStore, run_id: &str, task: &FmsTaskCatalogEntry,
+    commands: &[FmsCoordinatorJournalEntry], events: &[FmsCoordinatorJournalEntry],
+    inbox: &FmsWorkerInboxRecord, leases: &BTreeMap<ClaimKey, FmsResourceLease>,
+    budget: &mut ReadBudget,
+) -> Result<()> {
+    if task.lifecycle != FmsTaskLifecycle::Cancelled || commands.len() != 3 || events.len() != 2 {
+        bail!("v6 pre-spawn cancellation requires exact Prepare/Start/Stop and Prepared/Stopped");
+    }
+    for (entry, kind) in commands.iter().zip(["prepare", "start", "stop"]) {
+        if entry.payload.pointer("/message/envelope/command/kind").and_then(Value::as_str) != Some(kind) {
+            bail!("v6 pre-spawn command stream has an extra or reordered command");
+        }
+    }
+    if terminal_event_kind(&events[0])? != "prepared" || terminal_event_kind(&events[1])? != "stopped"
+        || events[0].checkpoint_watermarks()? != (1, 1)
+        || events[1].checkpoint_watermarks()? != (3, 2)
+        || commands[2].payload.pointer("/message/envelope/command/reason").and_then(Value::as_str).is_none_or(|s| s.trim().is_empty())
+        || inbox.payload.get("applied").and_then(Value::as_array).map(Vec::len) != Some(1)
+        || inbox.payload.get("pending") != commands[1].payload.pointer("/message/envelope") {
+        bail!("v6 pre-spawn cancellation lacks exact pending Start or closed checkpoints");
+    }
+    let attempt = task.attempt_id.as_deref().context("pre-spawn task has no attempt")?;
+    let key = (task.task_id.clone(), attempt.to_owned(), task.ownership_epoch.context("pre-spawn task has no epoch")?, task.resource_id.clone().context("pre-spawn task has no resource")?);
+    let lease = leases.get(&key).context("pre-spawn task has no released lease")?;
+    if lease.state != FmsResourceLeaseState::Released || lease.heartbeat_sequence != 0 {
+        bail!("pre-spawn task lease is active or has worker heartbeats");
+    }
+    let relative = format!("runs/{run_id}/worker_process_exit_receipts");
+    if let Some(directory) = retained_cancelled_runs::optional_directory(store.root(), &relative)? {
+        for entry in fs::read_dir(directory)? {
+            let entry = entry?;
+            budget.observe_entry()?;
+            reject_link(&entry.path())?;
+            let name = entry.file_name().into_string().map_err(|_| anyhow::anyhow!("exit filename is not UTF-8"))?;
+            let id = name.strip_suffix(".json").context("worker exit receipt must be JSON")?;
+            validate_store_id(id)?;
+            budget.observe_file(store.root(), &format!("{relative}/{name}"), MAX_JOURNAL_BYTES)?;
+            let receipt = store.read_worker_process_exit_receipt(run_id, id)?.context("worker exit disappeared")?;
+            if receipt.task_id == task.task_id && receipt.attempt_id == attempt {
+                bail!("WorkerNoSpawn cannot coexist with a process-exit receipt");
+            }
+        }
+    }
+    Ok(())
+}
+
+fn validate_absent_prepare_cancellation(
+    store: &SessionStore, run_id: &str, task: &FmsTaskCatalogEntry,
+    commands: &[FmsCoordinatorJournalEntry], events: &[FmsCoordinatorJournalEntry],
+    leases: &BTreeMap<ClaimKey, FmsResourceLease>, budget: &mut ReadBudget,
+) -> Result<()> {
+    if retained_cancelled_runs::optional_directory(store.root(), &format!("runs/{run_id}/worker_inbox"))?.is_some() {
+        bail!("v7 requires an absent inbox directory");
+    }
+    if task.lifecycle != FmsTaskLifecycle::Cancelled || commands.len() != 2 || events.len() != 1
+        || terminal_event_kind(&events[0])? != "stopped" || events[0].checkpoint_watermarks()? != (2, 1)
+        || commands[0].checkpoint_watermarks()? != (1, 0) || commands[1].checkpoint_watermarks()? != (2, 0) {
+        bail!("v7 requires exact unreceived Prepare/Stop and sole Stopped transcript");
+    }
+    for entry in commands.iter().chain(events) {
+        if entry.payload.pointer("/checkpoint/claim/lease/heartbeat_sequence").and_then(Value::as_u64) != Some(0) {
+            bail!("v7 unreceived Prepare checkpoint has worker heartbeats");
+        }
+    }
+    for (entry, kind) in commands.iter().zip(["prepare", "stop"]) {
+        if entry.payload.pointer("/message/envelope/command/kind").and_then(Value::as_str) != Some(kind) {
+            bail!("v7 absence transcript contains Start or another command");
+        }
+    }
+    if commands[1].payload.pointer("/message/envelope/command/reason").and_then(Value::as_str).is_none_or(|reason| reason.trim().is_empty()) {
+        bail!("v7 cancelled Prepare lacks a Stop reason");
+    }
+    let attempt = task.attempt_id.as_deref().context("v7 task has no attempt")?;
+    let key = (task.task_id.clone(), attempt.to_owned(), task.ownership_epoch.context("v7 task has no epoch")?, task.resource_id.clone().context("v7 task has no resource")?);
+    let lease = leases.get(&key).context("v7 absent inbox has no exact released lease")?;
+    if lease.state != FmsResourceLeaseState::Released || lease.heartbeat_sequence != 0 {
+        bail!("v7 absent inbox lease is active or has heartbeats");
+    }
+    let relative = format!("runs/{run_id}/worker_process_exit_receipts");
+    if let Some(directory) = retained_cancelled_runs::optional_directory(store.root(), &relative)? {
+        for entry in fs::read_dir(directory)? {
+            let entry = entry?; budget.observe_entry()?; reject_link(&entry.path())?;
+            let name = entry.file_name().into_string().map_err(|_| anyhow::anyhow!("exit filename is not UTF-8"))?;
+            let id = name.strip_suffix(".json").context("worker exit receipt must be JSON")?;
+            validate_store_id(id)?;
+            budget.observe_file(store.root(), &format!("{relative}/{name}"), MAX_JOURNAL_BYTES)?;
+            let receipt = store.read_worker_process_exit_receipt(run_id, id)?.context("worker exit disappeared")?;
+            if receipt.task_id == task.task_id && receipt.attempt_id == attempt {
+                bail!("v7 WorkerNoSpawn cannot coexist with a worker exit receipt");
+            }
+        }
+    }
+    Ok(())
 }
 
 /// A claimed cancellation is recoverable only after the accepted worker
@@ -1500,6 +1667,7 @@ fn validate_transition_payload(
                     | "worker_protocol.v2"
                     | "worker_protocol.v3"
                     | "worker_protocol.v4"
+                    | "worker_protocol.v6"
             )
         )
     {
@@ -2360,6 +2528,30 @@ mod tests {
     }
 
     #[test]
+    fn v6_transition_keeps_existing_replay_fences() {
+        let fixture = fixture();
+        let task = &fixture.catalog.tasks[0];
+        for direction in [FmsCoordinatorJournalDirection::Command, FmsCoordinatorJournalDirection::Event] {
+            let status = if direction == FmsCoordinatorJournalDirection::Command { "start" } else { "failed" };
+            let mut entry = journal(RUN_ID, TASK_ID, "v6-message", direction, 1,
+                direction == FmsCoordinatorJournalDirection::Event, 1, 1, status, Utc::now());
+            entry.payload["message"]["envelope"]["schema_version"] = serde_json::json!("worker_protocol.v6");
+            validate_transition_payload(&entry, task).unwrap();
+            for (pointer, value) in [
+                ("/message/envelope/schema_version", serde_json::json!("worker_protocol.v5")),
+                ("/message/envelope/schema_version", serde_json::json!("worker_protocol.v7")),
+                ("/message/envelope/claim/ownership_epoch", serde_json::json!(2)),
+                ("/message/envelope/sequence", serde_json::json!(2)),
+                ("/checkpoint/claim/lease/resource_id", serde_json::json!("resource-foreign")),
+            ] {
+                let mut changed = entry.clone();
+                *changed.payload.pointer_mut(pointer).unwrap() = value;
+                assert!(validate_transition_payload(&changed, task).is_err(), "accepted changed {pointer}");
+            }
+        }
+    }
+
+    #[test]
     fn pending_worker_inbox_command_is_rejected() {
         let fixture = fixture();
         let pending = serde_json::json!({
@@ -2519,6 +2711,110 @@ mod tests {
         });
         write_inbox(&fixture.store, Some(pending));
         assert!(validate(&fixture).is_err());
+    }
+
+    #[test]
+    fn v7_unreceived_prepare_requires_exact_transcript_and_directory_absence() {
+        let fixture = fixture();
+        let mut task = fixture.catalog.tasks[0].clone(); task.lifecycle = FmsTaskLifecycle::Cancelled;
+        let now = Utc::now();
+        let commands = vec![
+            journal(RUN_ID, TASK_ID, "prepare", FmsCoordinatorJournalDirection::Command, 1, false, 1, 0, "prepare", now),
+            journal(RUN_ID, TASK_ID, "stop", FmsCoordinatorJournalDirection::Command, 2, false, 2, 0, "stop", now),
+        ];
+        let events = vec![journal(RUN_ID, TASK_ID, "stopped", FmsCoordinatorJournalDirection::Event, 1, false, 2, 1, "stopped", now)];
+        let leases = BTreeMap::from([((TASK_ID.into(), ATTEMPT_ID.into(), 1, RESOURCE_ID.into()), fixture.lease.clone())]);
+        let check = |commands: &[FmsCoordinatorJournalEntry], events: &[FmsCoordinatorJournalEntry]| {
+            validate_absent_prepare_cancellation(&fixture.store, RUN_ID, &task, commands, events, &leases, &mut ReadBudget::default())
+        };
+        assert!(check(&commands, &events).is_err());
+        fs::remove_dir_all(fixture.store.root().join(format!("runs/{RUN_ID}/worker_inbox"))).unwrap();
+        let before = tree_snapshot(fixture.store.root());
+        check(&commands, &events).unwrap(); assert_eq!(before, tree_snapshot(fixture.store.root()));
+        let mut start = commands.clone(); start[0].payload["message"]["envelope"]["command"]["kind"] = serde_json::json!("start");
+        assert!(check(&start, &events).is_err());
+        let mut prepared = events.clone(); prepared[0].payload["message"]["envelope"]["event"]["kind"] = serde_json::json!("prepared");
+        assert!(check(&commands, &prepared).is_err());
+        let mut extra = commands.clone(); extra.push(commands[1].clone()); assert!(check(&extra, &events).is_err());
+        let mut heartbeat = commands.clone(); heartbeat[0].payload["checkpoint"]["claim"]["lease"]["heartbeat_sequence"] = serde_json::json!(1);
+        assert!(check(&heartbeat, &events).is_err());
+        fs::create_dir(fixture.store.root().join(format!("runs/{RUN_ID}/worker_inbox"))).unwrap();
+        assert!(check(&commands, &events).is_err());
+    }
+
+    #[test]
+    fn v6_pinned_missing_inbox_directory_is_rejected() {
+        let fixture = fixture();
+        let pin = RetainedPendingInboxPin { run_id: "missing-run".into(), task_id: TASK_ID.into(),
+            attempt_id: ATTEMPT_ID.into(), resource_id: RESOURCE_ID.into(), ownership_epoch: 1,
+            inbox_sha256: "a".repeat(64), kind: "failed_final_heartbeat".into(), release_proof_sha256: None };
+        assert!(read_worker_inboxes(&fixture.store, "missing-run", &BTreeMap::new(), &BTreeMap::new(),
+            &mut ReadBudget::default(), &[pin]).is_err());
+    }
+
+    #[test]
+    fn v6_cancelled_before_spawn_transcript_rejects_launch_and_extra_commands() {
+        let fixture = fixture();
+        let now = Utc::now();
+        let mut task = fixture.catalog.tasks[0].clone();
+        task.lifecycle = FmsTaskLifecycle::Cancelled;
+        let commands = vec![
+            journal(RUN_ID, TASK_ID, "command-one", FmsCoordinatorJournalDirection::Command, 1, false, 1, 0, "prepare", now),
+            journal(RUN_ID, TASK_ID, "command-two", FmsCoordinatorJournalDirection::Command, 2, false, 2, 1, "start", now),
+            journal(RUN_ID, TASK_ID, "command-three", FmsCoordinatorJournalDirection::Command, 3, false, 3, 1, "stop", now),
+        ];
+        let events = vec![
+            journal(RUN_ID, TASK_ID, "event-one", FmsCoordinatorJournalDirection::Event, 1, false, 1, 1, "prepared", now),
+            journal(RUN_ID, TASK_ID, "event-two", FmsCoordinatorJournalDirection::Event, 2, false, 3, 2, "stopped", now),
+        ];
+        let mut payload = inbox_record(None).payload;
+        payload["applied"] = serde_json::json!([commands[0].payload.pointer("/message/envelope").unwrap()]);
+        payload["pending"] = commands[1].payload.pointer("/message/envelope").unwrap().clone();
+        let inbox = FmsWorkerInboxRecord::new(payload).unwrap();
+        let leases = BTreeMap::from([((TASK_ID.into(), ATTEMPT_ID.into(), 1, RESOURCE_ID.into()), fixture.lease.clone())]);
+        let check = |commands: &[FmsCoordinatorJournalEntry], events: &[FmsCoordinatorJournalEntry], inbox: &FmsWorkerInboxRecord| {
+            validate_cancelled_before_spawn(&fixture.store, RUN_ID, &task, commands, events, inbox, &leases, &mut ReadBudget::default())
+        };
+        check(&commands, &events, &inbox).unwrap();
+        let mut extra = commands.clone(); extra.push(commands[2].clone()); assert!(check(&extra, &events, &inbox).is_err());
+        let mut launched = events.clone(); launched[0].payload["message"]["envelope"]["event"]["kind"] = serde_json::json!("started");
+        assert!(check(&commands, &launched, &inbox).is_err());
+        let mut wrong_pending = inbox.clone(); wrong_pending.payload["pending"] = commands[2].payload.pointer("/message/envelope").unwrap().clone();
+        assert!(check(&commands, &events, &wrong_pending).is_err());
+        let mut applied_start = inbox.clone(); applied_start.payload["applied"].as_array_mut().unwrap().push(commands[1].payload.pointer("/message/envelope").unwrap().clone());
+        assert!(check(&commands, &events, &applied_start).is_err());
+    }
+
+    #[test]
+    fn v6_pending_heartbeat_is_exact_pinned_read_only_and_legacy_rejected() {
+        let mut fixture = fixture();
+        add_unapplied_heartbeat_suffix(&mut fixture, "heartbeat");
+        let entry: FmsCoordinatorJournalEntry = serde_json::from_slice(&fs::read(fixture.store.root().join(
+            format!("runs/{RUN_ID}/coordinator_journal/command/command-three.json"))).unwrap()).unwrap();
+        write_inbox(&fixture.store, Some(entry.payload.pointer("/message/envelope").unwrap().clone()));
+        let inbox_path = fs::read_dir(fixture.store.root().join(format!("runs/{RUN_ID}/worker_inbox"))).unwrap().next().unwrap().unwrap().path();
+        let pin = RetainedPendingInboxPin {
+            run_id: RUN_ID.into(), task_id: TASK_ID.into(), attempt_id: ATTEMPT_ID.into(),
+            resource_id: fixture.lease.resource_id.clone(), ownership_epoch: 1,
+            inbox_sha256: crate::hex_sha256(&fs::read(&inbox_path).unwrap()),
+            kind: "failed_final_heartbeat".into(), release_proof_sha256: None,
+        };
+        let check = |pin: &RetainedPendingInboxPin| {
+            validate_terminal_runs_subset_with_pending(&fixture.store, std::slice::from_ref(&fixture.pin),
+                &mut ReadBudget::default(), &mut BTreeSet::new(), &[], std::slice::from_ref(pin))
+        };
+        let before = tree_snapshot(fixture.store.root());
+        assert!(validate(&fixture).is_err());
+        check(&pin).unwrap();
+        assert_eq!(before, tree_snapshot(fixture.store.root()));
+        let mut changed = pin.clone(); changed.inbox_sha256 = "f".repeat(64); assert!(check(&changed).is_err());
+        let mut changed = pin.clone(); changed.ownership_epoch = 2; assert!(check(&changed).is_err());
+        let mut changed = pin.clone(); changed.kind = "cancelled_before_spawn".into(); changed.release_proof_sha256 = Some("a".repeat(64)); assert!(check(&changed).is_err());
+        let mut changed_entry = entry;
+        changed_entry.payload["message"]["envelope"]["claim"]["lease_token"] = serde_json::json!("foreign-token");
+        write_inbox(&fixture.store, Some(changed_entry.payload.pointer("/message/envelope").unwrap().clone()));
+        let mut repinned = pin.clone(); repinned.inbox_sha256 = crate::hex_sha256(&fs::read(&inbox_path).unwrap());
+        assert!(check(&repinned).is_err());
     }
 
     #[test]

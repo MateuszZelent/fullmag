@@ -62,6 +62,7 @@ Instrukcje dotyczą GPT-Astra, GPT-Sol, GPT-Luna oraz innych agentów pracujący
 - W Docker DEV `FULLMAG_SCRIPT_OUTPUT_DIRECTORY` w `.env` głównego checkoutu wskazuje istniejący podkatalog
   wybranego checkoutu i mapuje go jako RW `/opt/fullmag/script-output`; bind źródeł pozostaje RO. Zapis
   ogranicz do wybranego drzewa; nie montuj całego checkoutu RW.
+  Przed każdym managed update porównaj żądane mounty z bieżącym Compose i zachowaj wcześniej zatwierdzony grant FULLMAG_SCRIPT_OUTPUT_DIRECTORY, także gdy był przekazywany tylko w środowisku procesu. Przed rozpoczęciem operacji Prepare sprawdź odczyt wszystkich przypiętych wejść w kontenerze; brak aliasu musi zatrzymać preflight przed zajęciem blokady.
 
 - Build cache, staging i pakiety w wolumenach Docker mają być odtwarzalne. Istniejący root
   `BuildControl.volume` i ledger mogą zawierać unikalne rekordy control/owner/lock, więc nie traktuj całego
@@ -256,3 +257,10 @@ W `.agents/skills` wybierz skill pasujący do konkretnej czynności. Dla backend
 - Deleguj istotne, niezależne podzadanie, gdy host pozwala i podział oszczędza czas lub poprawia jakość. Nie twórz agentów dla formalności. Przekaż zakres, ograniczenia, pliki i wymagane dowody; koordynuj wspólne zapisy, staging i zasoby builda. Zachowaj ustawienia modeli użytkownika.
 - Długą pracę kontynuuj z krótkiego checkpointu: cel, decyzje, zakończone kroki, dowody i pozostałe zadania. Nie powtarzaj ukończonej pracy po kompakcji.
 - Dla review, PR, commit description i odpowiedzi na review używaj `google-eng-review-practices`. Sprawdź poprawność, zakres, kontrakty i dowody. Rozmiar pliku jest sygnałem do review, nie automatycznym nakazem podziału.
+
+
+## Project Learnings
+
+- Przed importem `.fms` sprawdź manifest: `manifest/project.json` wymaga publicznego `projects/open`, a `manifest/session.json` ścieżki importu sesji; rozszerzenie pliku nie rozstrzyga formatu. Otwarcie projektu nie oznacza uruchomienia sesji ani Solve.
+- Decyzja użytkownika 11.11.2026: przy problemach buildu lub uruchomienia używaj standardowej przebudowy Fullmaga w grupie Docker według skilla i AGENTS.md; nie rozwijaj kolejnych procedur recovery w tym zadaniu. Priorytetem są poprawność fizyki, odtworzenie publikacji i optymalizacja obliczeń. Przebudowa zachowuje wyniki i nie upoważnia do kasowania danych ani obchodzenia istniejących zabezpieczeń.
+- W zadaniu anten najpierw zakwalifikuj V/J/H źródła i pole w obszarze próbki (E3–E5); do tego odbioru odłóż LLG, wzbudzanie fal i dalsze kontrole solvera magnetycznego. Punktowa zgodność H dla tego samego prądu nie zastępuje zbieżności i kwalifikacji źródła.

@@ -181,8 +181,13 @@ export class Viewport3DResourceTracker {
   >();
   private counts: Viewport3DResourceCounts = { ...EMPTY_COUNTS };
   private resourceSequence = 0;
+  private committedFrames = 0;
 
   constructor(private readonly options: Viewport3DResourceTrackerOptions = {}) {}
+
+  getCommittedFrameCount(): number {
+    return this.committedFrames;
+  }
 
   getSnapshot(): Viewport3DResourceCounts {
     return this.counts;
@@ -264,6 +269,7 @@ export class Viewport3DResourceTracker {
   }
 
   recordDirtyFrame(reason: Viewport3DDirtyReason): void {
+    if (reason === "frame-commit") this.committedFrames += 1;
     recordVisualizationDebugViewportFrame(reason);
     this.dirtyReasonCounts.set(
       reason,

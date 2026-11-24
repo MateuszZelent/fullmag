@@ -91,7 +91,7 @@ def test_artifacts_preserve_quadrature_and_observed_terminal_voltage(monkeypatch
     from rf_cpw_reference import _solve
 
     def fake_assemble(points, cells, sigma, eps, frequency):
-        def fake_solve(terminal_ids, input_voltage, loads):
+        def fake_solve(terminal_ids, input_voltage, loads, *, floating_load=None):
             currents = dict.fromkeys(terminal_ids, 0j)
             currents.update(signal_input=0.1+0.005j, signal_output=-0.01-0.001j,
                             left_ground_input=-0.09-0.004j)
@@ -118,7 +118,7 @@ def test_artifacts_preserve_quadrature_and_observed_terminal_voltage(monkeypatch
 
     monkeypatch.setattr(rf_fullwave_reference, "assemble", fake_assemble)
     monkeypatch.setattr(rf_darwin_reference, "solve_darwin_ece",
-                        lambda system, *args: system.solve_ece(*args))
+                        lambda system, *args, **kwargs: system.solve_ece(*args, **kwargs))
     output = tmp_path/"result"
     _solve(make_case(), output, 20.0, model)
     report = json.loads((output/"manifest.json").read_text())
@@ -133,3 +133,22 @@ def test_artifacts_preserve_quadrature_and_observed_terminal_voltage(monkeypatch
         np.testing.assert_allclose(fields["probe_H_over_I_per_m"][:, 1],
                                    (10+20j)/(0.1+0.005j))
         assert ("potential_nodes_V" in fields) == (model == "darwin")
+
+@pytest.mark.parametrize("cpw", [1, 2])
+def test_local_return_changes_only_output_circuit(cpw):
+    from rf_cpw_reference import preflight
+
+    original = make_case(cpw=cpw)
+    local = make_case(cpw=cpw, output_return="local-gsg")
+    original_info, local_info = preflight(original), preflight(local)
+    assert local_info["sha256"] == original_info["sha256"]
+    assert local_info["terminal_vertices"] == original_info["terminal_vertices"]
+    assert local_info["terminal_voltages_v"] == {
+        "left_ground_input": [0, 0], "signal_input": [1, 0], "right_ground_input": [0, 0],
+    }
+    assert local_info["terminal_loads_ohm"] == {}
+    assert local_info["floating_load"] == {
+        "signal_terminal": "signal_output",
+        "return_terminals": ["left_ground_output", "right_ground_output"],
+        "impedance_ohm": [50, 0],
+    }

@@ -2,8 +2,10 @@
 
 **Reprodukcja publikacji: NOT VERIFIED.** Datowane rozdziały poniżej zachowują
 stan w chwili kontroli; ich liczniki i decyzje nie opisują późniejszych prób.
-Bieżący postęp kwalifikacji całej anteny znajduje się w
-[planie wykonania](../superpowers/plans/2026-10-11-antenna-transport-e2e-implementation.md).
+Bieżący cel obejmuje sekwencyjną reprodukcję Fig1,2,3,4,6:
+[plan wykonania](../superpowers/plans/2026-11-15-sushruth-publication-reproduction.md).
+Analityczny model Fig1 przeszedł odbiór15.11.2026; walidacja pola i widma
+Fullmaga pozostaje osobnym nieukończonym krokiem.
 
 (problem-statement)=
 ## Problem fizyczny
@@ -298,9 +300,11 @@ Nie są to surowe dane autorów, eksperymentu ani nowy próg zaliczenia:
 
 | Punkt porównania | Odczyt Fig.3 | Wzorzec TableI | Różnica model−rysunek |
 |---|---:|---:|---:|
-| Szary znacznik FMR | około7,208GHz | 7,500GHz | około0,292GHz |
+| Adnotacja FMR w panelu(a), nie pomiar materiału | około7,208GHz | 7,500GHz | około0,292GHz między modelem i rysunkiem |
 | Dodatnie maksimum S, alfa0,01 | około7,340GHz | 7,800GHz | około0,460GHz |
 | Ujemne minimum S, alfa0,01 | około7,208GHz | 7,605GHz | około0,397GHz |
+
+Odczyt adnotacji nie jest pomiarem materiałowego FMR ani jego błędu. Pełne pasma kreski i obu ramek sprawdzono ponownie w {ref}`sushruth-figure3-axis-and-annotation-recheck`.
 
 Kalibracja osi obrazu:6–9GHz na pikselach92–534, czyli około6,79MHz/piksel.
 Położenia maksimum/minimum odnoszą się do skrajnych rzędów niebieskiej linii,
@@ -408,6 +412,8 @@ błędu digitizacji, oznaczenia FMR ani modelu fizycznego.
 | Szara kreska oznaczona FMR | 7,13494–7,16386GHz, kolumny745–749 | 7,500GHz z TableI |
 | Maksimum Re(T) GSG/alfa0,01 | około7,59759GHz; skrajny rząd ma jeden piksel x809 | 8,175GHz na siatce5MHz |
 | Minimum Re(T) GSG/alfa0,01 | około7,71687GHz; zakres7,71325–7,72048GHz | 8,355GHz na siatce5MHz |
+
+Poniższy odstęp od adnotacji nie jest różnicą względem zmierzonego materiałowego FMR; por. {ref}`sushruth-figure3-axis-and-annotation-recheck`.
 
 Dodatkowa diagnostyka odejmuje od maksimum jego własne oznaczenie FMR,
 bez przesuwania jakiejkolwiek krzywej. Dla panelu(e) daje to przedział
@@ -1136,6 +1142,992 @@ f3615a496bd9011bab89101465e02870d977899cc2355c9ffa37e4879e5e6082.
 Wynik4bd240539daf848e639c94c5068d52bfbee0466273d7e4be5d7f1351a1b867b4.
 [Pełne piny i zakres dowodu](../superpowers/plans/2026-11-08-sushruth-table-one-consistency-audit.md).
 
+(sushruth-figure3-period-audit)=
+## Odstępy oscylacji Fig.3 — zakres diagnostyki 11.11.2026
+
+<!-- DOC-ANCHOR:sushruth-figure3-period-audit -->
+
+Cel: odróżnić zmianę początku osi i globalnego znaku od zmiany odstępów
+między oscylacjami. Jest to formalizacja wykonanego odczytu rozpoznawczego,
+nie ślepa prerejestracja. Nie zmieniamy równań, parametrów, kwadratury ani
+zachowanych wartości wzorca. Odczyt rastra nie jest surowymi danymi autorów.
+
+Dla dwóch kolejnych ekstremów tego samego znaku albo zer o tym samym
+kierunku przejścia definiujemy obserwowany odstęp:
+
+```{math}
+:label: eq-sushruth-figure3-period-measurement
+
+\Delta f_j=f_{j+1}-f_j,\qquad
+\Delta f_j\in[f_{j+1}^{-}-f_j^{+},f_{j+1}^{+}-f_j^{-}].
+```
+
+| Symbol | Znaczenie | SI |
+|---|---|---|
+| $f_j$ | częstotliwość j-tego zidentyfikowanego zdarzenia | $\mathrm{Hz}$ |
+| $f_j^{-},f_j^{+}$ | dolna i górna granica odczytu zdarzenia | $\mathrm{Hz}$ |
+| $\Delta f_j$ | odstęp kolejnych zdarzeń tej samej klasy | $\mathrm{Hz}$ |
+
+Źródła wejściowe są przypięte: oryginalny raster APS1015×1524 oraz gęsty
+JSON wzorca o kroku5MHz, jak w rozdziale porównania Fig.3. Analizujemy S
+i GSG przy alfa0,01. Nie mieszamy przeciwnych kierunków przejścia przez zero.
+Zakres odczytu rastra obejmuje plateau/bracket i dodatkowe pół piksela na
+każdym końcu; nie stanowi pełnej niepewności digitizacji. Modelowe ekstrema
+mają dodatkowo rozdzielczość siatki, bez interpolacji.
+
+Kryteria odbioru narzędzia: znany sygnał sinusoidalny, brackety zer, odmowa
+niejednoznacznych dużych przerw i kontrola tożsamości wejść. Odczyt rzeczywisty
+musi zapisać kalibrację osi, okna i maski tekstu, wszystkie częstotliwości,
+przedziały i hashe. Wynik nie może ogłaszać przyczyny rozbieżności ani
+kwalifikacji solvera. Minima i zera stanowią dodatkowe kontrole względem
+wcześniejszych maksimów, ale nie są statystycznie niezależnymi eksperymentami.
+
+Mapa implementacji: scripts/verify_sushruth_2020_figure3_periods.py::audit_periods
+oraz scripts/test_sushruth_figure3_periods.py::class Figure3PeriodTests.
+Parametry narzędzia to wymagane ścieżki do przypiętych PNG i JSON (typ Path,
+jednostka $1$; nieznany digest oznacza odmowę); wyjście CLI jest nową ścieżką
+JSON i odmawia nadpisania. Narzędzie nie serializuje się do ProblemIR, nie
+zmienia publicznego DSL, planera, sesji ani runtime. Wszystkie cztery realizacje
+FDM CPU/GPU i FEM CPU/GPU pozostają poza zakresem tego postprocessingu;
+żaden backend Fullmaga nie jest przez niego uruchamiany.
+
+### Wykonany pomiar odstępów — 11.11.2026
+
+Odczyt przypiętych wejść zakończył się poprawnie w0,819s, bez nowej kwadratury
+lub solvera. Dla GSG kolejne minima rastra dają odstępy0,25663 i0,24940GHz,
+a wzorzec0,370 i0,345GHz. Zera przechodzące od wartości ujemnej do dodatniej
+dają odpowiednio0,26386/0,25301GHz oraz0,385/0,385GHz. Dla S różnica jest
+również obecna: minima0,26810/0,25452GHz wobec0,390/0,360GHz.
+Przedziały odczytu kreski i rozdzielczości modelu dla tych par nie zachodzą
+na siebie. Nie są pełnym budżetem niepewności całego porównania.
+
+Surowy JSON zachowuje również małe maksimum modelu S przy7,43GHz poniżej
+własnego FMR. Nie traktujemy go jako propagującej fali; wykres diagnostyczny
+używa wyłącznie pierwszych dwóch odstępów minimów i zer −→+ dla S i GSG.
+Różnica powstaje już przy zestawieniu rysunku z literalnym modelem publikacji.
+Nie identyfikuje osobno grubości, materiału, odległości lub konwencji, ani nie
+dowodzi błędu autorów lub poprawności solvera Fullmaga. Reprodukcja: NOT VERIFIED.
+
+Sześć lekkich testów narzędzia, w tym niezależny raster o znanym okresie,
+przeszło. Źródła równań i zapisany wzorzec pozostają niezmienione.
+[Raport, wejścia i piny](../superpowers/plans/2026-11-11-sushruth-figure3-period-audit.md).
+
+(sushruth-finite-k-native-control)=
+## Kontrola LLG przy skończonym k — plan pomiaru 11.11.2026
+
+<!-- DOC-ANCHOR:sushruth-finite-k-native-control -->
+
+Cel: zmierzyć rzeczywisty operator demag i ewolucję pojedynczej harmonicznej
+w FDM CPU/double. To syntetyczna kontrola modelu jednorodnego po grubości,
+bez PMA i wymiany, nie eksperymentalna próbka Co/Ni ani transmisja anteny.
+Dotychczasowe k=0 nie kontrolowało dynamicznego demag zależnego od k.
+
+Dla dodatnio określonych sztywności pola w teslach liniowe LLG ma postać:
+
+```{math}
+:label: eq-sushruth-finite-k-llg-control
+
+\frac{d}{dt}\begin{pmatrix}a_x\\a_y\end{pmatrix}
+=\frac{\gamma_B}{1+\alpha^2}
+\begin{pmatrix}-\alpha A_k&-B_k\\A_k&-\alpha B_k\end{pmatrix}
+\begin{pmatrix}a_x\\a_y\end{pmatrix},
+\quad
+A_k=b_e+b_M n(k),\quad B_k=b_e.
+```
+
+```{math}
+:label: eq-sushruth-finite-k-eigenvalue-control
+
+\lambda_\pm=-\Lambda\pm i\Omega,\qquad
+\Lambda=\frac{\alpha\gamma_B(A_k+B_k)}{2(1+\alpha^2)},\quad
+\Omega=\frac{\gamma_B}{1+\alpha^2}
+\sqrt{A_kB_k-\frac{\alpha^2(A_k-B_k)^2}{4}}.
+```
+
+Dla zmierzonego operatora używamy osobno sztywności dyskretnych, bez
+przyjmowania z góry zerowego Nyy:
+
+```{math}
+:label: eq-sushruth-finite-k-discrete-stiffness
+
+b_{e,d}=1.14\,\mathrm T-b_M N_{zz}(0),\qquad
+A_{k,d}=b_{e,d}+b_M N_{xx}(k),\quad
+B_{k,d}=b_{e,d}+b_M N_{yy}(k).
+```
+
+Sama zgodność średniego okresu i zaniku nie sprawdza lokalnej ewolucji.
+Przed rzeczywistym Run dodajemy kontrolę pełnego propagatora:
+
+```{math}
+:label: eq-sushruth-finite-k-propagator
+
+\mathbf a_{\rm ref}(t)=e^{-\Lambda\tau}
+\left[\mathsf I\cos(\Omega\tau)
++\frac{\mathsf D+\Lambda\mathsf I}{\Omega}\sin(\Omega\tau)\right]
+\mathbf a(t_0),\qquad \tau=t-t_0.
+```
+
+Macierz D jest macierzą generatora w równaniu liniowego LLG z dyskretnymi
+sztywnościami A_k,d i B_k,d. Początkowa amplituda pochodzi z pierwszej próbki;
+nie dopasowujemy fazy, czasu ani amplitudy.
+
+| Symbol | Znaczenie | SI |
+|---|---|---|
+| $a_x,a_y$ | amplitudy kosinusowej harmonicznej magnetyzacji zredukowanej | $1$ |
+| $A_k,B_k$ | sztywności pól liniowej odpowiedzi w płaszczyźnie filmu | $\mathrm T$ |
+| $\lambda_\pm$ | zespolone wartości własne liniowego LLG | $\mathrm{s^{-1}}$ |
+| $\Lambda$ | dodatnia szybkość zaniku amplitudy | $\mathrm{s^{-1}}$ |
+| $\Omega$ | dodatnia częstość kołowa tłumionej precesji | $\mathrm{rad\,s^{-1}}$ |
+| $\epsilon$ | amplituda początkowej perturbacji poprzecznej | $1$ |
+| $N_{zz}(0)$ | statyczny czynnik demag rzeczywiście użytego operatora | $1$ |
+| $N_{xx}(k),N_{yy}(k)$ | diagonalne czynniki demag dla badanej harmonicznej | $1$ |
+| $b_{e,d}$ | efektywne pole statyczne zmierzonego operatora | $\mathrm T$ |
+| $A_{k,d},B_{k,d}$ | sztywności zmierzonego operatora dyskretnego | $\mathrm T$ |
+| $\mathsf D$ | macierz generatora liniowej ewolucji amplitud | $\mathrm{s^{-1}}$ |
+| $\mathbf a_{\rm ref}$ | kontrolna trajektoria amplitudy poprzecznej | $1$ |
+| $t_0,\tau$ | czas pierwszej próbki oraz czas od tej próbki | $\mathrm s$ |
+
+Pozostałe symbole i n(k) są zdefiniowane wcześniej. Wzorzec czasu swobodnego
+korzysta z dokładnego liniowego LLG przy zadanym alfa, podczas gdy Eq.1
+publikacji pomija część wyrazów tłumienia. Nie utożsamiamy częstości
+tłumionej precesji z maksimum zespolonej transmisji.
+
+| Parametr skryptu | Typ i zadana wartość | SI | Walidacja, znaczenie i istniejący kontrakt |
+|---|---|---|---|
+| LX, LY | float, 1.28e-6, 1.28e-6 | $\mathrm m$ | dodatnie; rozmiar manualnego Universe i Box |
+| THICKNESS | float, 20e-9 | $\mathrm m$ | dodatni; jedna warstwa z, jednorodność po grubości |
+| NX, NY, NZ | int, 128, 1, 1 | $1$ | dodatnie; cell=(LX/NX,LY/NY,THICKNESS/NZ) |
+| IMAGES | int, 4 albo8 | $1$ | osobne przypadki; FdmPeriodicityIR.image_counts=[I,I,0], axes=periodic/periodic/open |
+| epsilon w initial_m.json | float, 1e-4 | $1$ | 0<epsilon<1; SampledMagnetization, x+NX*(y+NY*z) |
+| k | float, 2pi/LX | $\mathrm{rad\,m^{-1}}$ | dodatni; kosinus na centrach128 komórek |
+| Ms | float, 0.89/mu0 | $\mathrm{A\,m^{-1}}$ | dodatni; materiał magnetyka, b_M=0.89T |
+| Aex | float, 13e-12 | $\mathrm{J\,m^{-1}}$ | dodatnia wartość materiałowa; exchange jawnie wyłączone |
+| alpha | float, 0.01 | $1$ | 0<=alpha<1; materiał magnetyka |
+| Bext,z | float, 1.14 | $\mathrm T$ | stałe pole zewnętrzne; brak anizotropii |
+| gamma | float, mu0*2pi*30e9 | $\mathrm{m\,A^{-1}\,s^{-1}}$ | dodatni; istniejące study.dynamics.gyromagnetic_ratio |
+| fix_dt | float, 0.5e-12 | $\mathrm s$ | dodatni; RK4, istniejący fixed_timestep |
+| until | float, 3e-9 | $\mathrm s$ | dodatni; pojedynczy Run, bez Relax lub anteny |
+| sampling | float, 2e-12 | $\mathrm s$ | dodatni; tabela oraz pełne pola m i H_demag |
+
+W nieskończonym filmie bez PMA zewnętrzne1,14T minus b_M daje b_e=0,25T.
+Dla skończonego sumowania obrazów najpierw mierzymy Nzz(0) i odpowiadające
+pole efektywne; nie zmieniamy biasu po obejrzeniu częstotliwości.
+Ny=1 i duża komórka po y narzucają ky=0, bez fizycznie otwartych bocznych
+brzegów. PBC truncated_images ma81 lub289 składników obrazu, bez podnoszenia
+istniejącego limitu. Dwa warianty nie stanowią pełnego dowodu zbieżności
+do nieskończonego filmu. Wymagane jest zachowanie metadanych requested/resolved.
+
+Z każdego pełnego snapshotu liczymy projekcję kosinusową i sinusową po x
+dla podstawowego k. Czystość kontrolujemy resztą całego m_xy po odjęciu
+odtworzonej harmonicznej kosinusowej, obejmując wszystkie pozostałe mody,
+a nie tylko wybraną drugą harmoniczną. Normalizacja używa RMS podstawowego
+modu. Globalne średnie m_x/m_y nie mierzą tej fali. Częstotliwość mierzymy odstępami przejść a_y od−do+
+po początkowych0,25ns, z liniowymi bracketami czasu; FFT okna3ns nie daje
+wystarczającej rozdzielczości. Tłumienie kontrolujemy na obwiedni.
+Osobno mierzymy Nxx/Nyy i Nzz ze zapisanych pól. Reszta operatora obejmuje
+całe H_xy względem odtworzonego diagonalnego pola podstawowego modu;
+normalizacja używa Ms i RMS podstawowego modu. Sama reszta po projekcji
+nie wystarcza, bo ukrywa obce harmoniczne pola. Porównanie LLG z mierzonym operatorem jest
+kontrolą implementacji czasu; nie zmienia parametrów modelu fizycznego.
+
+Kryteria przed wykonaniem: kompletna trajektoria i prawidłowe SI, brak
+niezamierzonego Relax/exchange/PMA lub zmiany backendu, perturbacja poprzeczna
+pozostająca liniowa, brak brakujących próbek. Błąd częstości względem liniowego
+LLG dla zmierzonego operatora ma być <=2e-4 względnie, a szybkości zaniku<=1e-2.
+Udział niezamierzonych harmonicznych poprzecznych ma być <1e-3 amplitudy
+podstawowej. Zmiana obrazów4→8 oraz różnica wobec n(k) są raportowane oddzielnie;
+bez dopasowania i bez automatycznej kwalifikacji źródła anteny lub publikacji.
+Przed wykonaniem ustalono granicę reszty znormalizowanej przez Ms i amplitudę
+modu:1e-4. Przy jej przekroczeniu oba wnioski zgodności czasu są odrzucane.
+Przy istotnym sprzężeniu do składowej sinusowej diagonalny wzorzec ma odmówić
+wnioskowania zamiast ukrywać sprzężenie.
+
+Dodatkowy warunek przed Run: maksymalny względny błąd pełnej projekcji a_xy
+wobec propagatora ma być <=2e-3, z normalizacją normą a_ref w danej chwili.
+To silniejszy, osobny warunek przebiegu, który odrzuca lokalne błędy fazy
+nawet przy poprawnym globalnym nachyleniu częstości i zaniku.
+
+Mapowanie źródeł: dwa przykłady poniżej definiują jawny stage-first study;
+SampledMagnetization.to_ir, StudyBuilder.pbc/save i StudyStagesBuilder.add_run
+z publicznego API przekazują istniejący ProblemIR do plan_fdm.
+ExchangeLlgProblem::create_workspace wybiera compute_periodic_newell_kernels
+w CPU. record_due_outputs zapisuje pełne pola; odbiór wymaga sąsiedniego
+Zarr na ext4 WSL, nie samego stanu CAS lub etykiety Succeeded.
+Nie zmieniamy DSL, IR, planera, runtime, zakresu katalogu quantities ani limitów.
+
+| Realizacja | Zakres tej kontroli |
+|---|---|
+| FDM CPU/double | zaplanowany rzeczywisty Run, jeszcze niewykonany |
+| FDM GPU | brak wykonania i brak kwalifikacji w tym eksperymencie |
+| FEM CPU | nie dotyczy tej dyskretyzacji; brak nowego dowodu |
+| FEM GPU | nie dotyczy tej dyskretyzacji; brak nowego dowodu |
+
+### Wykonany odbiór definicji przed Run
+
+Początkowe128 wektorów są jawnym wejściem
+examples/fdm_sushruth_2020_finite_k_initial_m.json, zapisanym przez
+fullmag.init.state_io::save_magnetization i czytanym przez
+MagnetizationHandle.loadfile. Eksporter wymaga takiej jawnej referencji
+dla sampled_field; anonimowy initializer poprawnie odmówił eksportu.
+Nie zmieniono tej bramki. Hash wejścia:
+3eeae98e974cf05aa30a9c5d30b04db8eb2484b6cf28353fa9357c191a739f72.
+
+Oba skrypty deklarują StageAutosave(state,continuous,zarr) z osobnymi polami
+m i H_demag oraz rzeczywistymi czasami każdej próbki. Trzy testy publicznego
+authoringu przeszły, w tym pełny IR i autosave po round-trip.
+Pierwszych sześć kontroli analizy objęło niezależną ewolucję macierzową,
+obce rozmiary, braki czasu, drugi mod przestrzenny, nie-diagonalne pole
+i brak chunka Zarr. Przegląd ujawnił trzy dodatkowe kontrprzykłady: trzeci mod
+magnetyzacji, trzeci mod pola oraz lokalną modulację czasu przy poprawnym
+średnim okresie. Trzy nowe regresje odtworzyły fałszywą akceptację przed poprawką.
+Po poprawce wszystkie9 kontroli analizy przeszły; świadkowie są odrzucani.
+Odbiór rzeczywistego Run pozostaje niewykonany.
+
+Mapowanie pomiaru: scripts/verify_sushruth_finite_k_control.py::analyze_trajectory,
+::_linear_modes i ::read_trajectory. Wymagane argumenty analizy to tablica
+times w sekundach oraz dwie skończone tablice[T,128,3]: magnetyzacja
+zredukowana o jednostce1 i demag w A/m, bez domyślnych wartości.
+Odmowa występuje przy niewłaściwym rozmiarze, brakach, niewłaściwej kolejności,
+nieznanym układzie Zarr lub za małej liczbie zer. Funkcja nie uwierzytelnia
+runu; provenance musi zostać sprawdzone oddzielnie na rzeczywistym wykonaniu.
+Żaden wynik testu syntetycznego nie jest wynikiem Fullmaga.
+
+
+(sushruth-metal-thickness-filter)=
+## Wpływ grubości metalu na porównanie anten — 12.11.2026
+
+To niezależna diagnostyka różnicy **modeli źródła**. W części analitycznej
+publikacji przyjęto cienkie paski; równania6–8 zawierają szerokość, szczelinę
+i odstęp od filmu, lecz nie grubość metalu. Nasza zachowana geometria ma
+metal90nm, szerokość200nm, szczelinę250nm i dolną powierzchnię30nm nad
+z=0. Analiza zachowuje całkowity prąd, położenie dolnej powierzchni,
+szerokości oraz orientację wszystkich gałęzi.
+
+### Wyprowadzenie i ograniczenia
+
+Dla porównawczego modelu pasków nieskończonych wzdłuż y, jednorodnego
+prądu po grubości i płaszczyzny obserwacji poniżej przewodnika każda
+warstwa na wysokości $\zeta$ wnosi czynnik $e^{-|k|\zeta}$ z równania6.
+Superpozycja daje następujące własne wyprowadzenie:
+
+```{math}
+:label: eq-sushruth-metal-thickness-average
+
+h_{t_c}(k;s)
+=\frac{1}{t_c}\int_0^{t_c}h_0(k;s+\zeta)\,d\zeta
+=F_c(k,t_c)\,h_0(k;s).
+```
+
+```{math}
+:label: eq-sushruth-metal-thickness-factor
+
+u=|k|t_c,\qquad
+F_c(k,t_c)=
+\begin{cases}
+(1-e^{-u})/u,&u>0,\\
+1,&u=0.
+\end{cases}
+\qquad
+|h_{t_c}|^2=F_c^2|h_0|^2.
+```
+
+| Symbol | Znaczenie | SI |
+|---|---|---|
+| $k$ | podpisany wektor falowy wzdłuż x | $\mathrm{rad\,m^{-1}}$ |
+| $s$ | odstęp dolnej powierzchni od płaszczyzny obserwacji | $\mathrm{m}$ |
+| $t_c$ | grubość przewodnika, osobna od grubości magnetyka | $\mathrm{m}$ |
+| $\zeta$ | współrzędna warstwy ponad dolną powierzchnią metalu | $\mathrm{m}$ |
+| $u$ | moduł wektora falowego razy grubość metalu | $1$ |
+| $F_c$ | dodatni rzeczywisty czynnik grubości przy tym samym prądzie | $1$ |
+| $h_0$ | sprawność cienkiego źródła z tą samą arbitralną normalizacją co powyżej | $1$ |
+| $h_{t_c}$ | sprawność porównawczego źródła o jednorodnym prądzie po grubości | $1$ |
+
+Dla $u>0$ zachodzi $0<F_c<1$; granice $k\to0$ i $t_c\to0$ dają1.
+Wyrażenie $-\operatorname{expm1}(-u)/u$ zapobiega utracie cyfr.
+To dodatni filtr przestrzenny. Nie obraca samodzielnie fazy o pi.
+Zmienia względne wagi różnych k, więc zespolona odpowiedź po całkowaniu
+z podatnością może się zmienić. W znormalizowanych R/T z równań9–10
+zmienia się także mianownik; nie wolno utożsamiać ich stosunku z $F_c^2$.
+
+Założenia tej diagnostyki nie opisują pełnego obwodu3D: nie obejmują
+połączeń końcowych, niejednorodnego RT0 przy narożach, prądów wirowych,
+skin/proximity lub ekranowania w magnetyku. 
+Wysokość cienkiego źródła musi być jawna. Powyższe $F_c$ odnosi się do
+paska na dolnej powierzchni metalu. Dla porównawczego cienkiego paska
+w środku metalu definiujemy odrębny czynnik:
+
+```{math}
+:label: eq-sushruth-metal-midplane-factor
+
+h_{\mathrm{mid}}(k;s)
+=e^{-|k|t_c/2}h_0(k;s),\qquad
+F_{\mathrm{mid}}(k,t_c)
+=\frac{h_{t_c}}{h_{\mathrm{mid}}}
+=e^{u/2}F_c
+=\frac{\sinh(u/2)}{u/2},\quad F_{\mathrm{mid}}(0)=1.
+```
+
+Iloraz jest rozumiany jako czynnik modeli, również w granicy zer widma.
+Środek zachowanego metalu jest na75nm, dolna powierzchnia na30nm.
+Wysokości30/75nm są współrzędnymi względem z=0. Dla płaszczyzny
+obserwacji poniżej z=0 odstęp w równaniu6 otrzymujemy, odejmując jej
+współrzędną od wysokości źródła. Czynniki grubości pozostają takie same,
+gdy oba modele obserwujemy w tej samej płaszczyźnie poniżej metalu.
+
+To dwie jawne aproksymacje tego samego rozkładu prądu, bez zmiany
+istniejącego źródła lub dobierania efektywnego s do wyników.
+$F_{\mathrm{mid}}\ge1$, więc nie wolno porównywać liczb dla dolnej
+powierzchni tak, jakby dotyczyły cienkiego paska w środku.
+
+| Symbol | Znaczenie | SI |
+|---|---|---|
+| $h_{\mathrm{mid}}$ | sprawność porównawczego cienkiego źródła w środku metalu | $1$ |
+| $F_{\mathrm{mid}}$ | czynnik grubości względem tej płaszczyzny | $1$ |
+
+
+Nie jest to korekta
+nakładana na natywne H ani granica jego błędu. Nie wykonujemy FFT
+niejednorodnych92próbek; źródłem są wyłącznie przypięte parametry geometrii.
+
+### Parametry i mapowanie implementacji
+
+| Interfejs/parametr | Typ; default | SI | Walidacja, znaczenie i mapowanie |
+|---|---|---|---|
+| `metal_thickness_factor.k_rad_per_m` | float/int; required | $\mathrm{rad\,m^{-1}}$ | skończony, signed, bez bool; używany moduł k |
+| `metal_thickness_factor.metal_thickness_m` | float/int; required | $\mathrm{m}$ | skończony≥0, bez bool; zero to jawna granica cienkiego metalu |
+| `geometry_filter_report.parameters_si` | dict; required | jednostki pól poniżej | wymagane cztery pola: width/gap/metal/insulator; pozostałe parametry zachowanego obwodu są metadanymi wejścia |
+| `conductor_width_m` | float; required200e-9 w zachowanej geometrii | $\mathrm{m}$ | dodatni; zachowana szerokość, nie parametr dopasowania |
+| `gap_m`, `insulator_thickness_m` | float; required250e-9 i30e-9 w zachowanej geometrii | $\mathrm{m}$ | nieujemne; zachowane szczelina i dolny odstęp |
+| `metal_thickness_m` | float; required90e-9 w zachowanej geometrii | $\mathrm{m}$ | nieujemny; różnicuje porównawcze źródło cienkie i grube |
+| `WAVENUMBERS_RAD_PER_M` | tuple; zamknięte0/1/3/5/7/10/20×1e6 | $\mathrm{rad\,m^{-1}}$ | punkty kontroli ustalone przed wykonaniem; nie są siatką FFT, modem ani wynikiem LLG |
+
+Brak nowego publicznego API Python, ProblemIR, planera, formatu V/J/H,
+runtime/session lub publikacji bazy. `scripts/antenna_metal_thickness_diagnostic.py::metal_thickness_factor`
+realizuje czynnik; `::geometry_filter_report` porównuje modele.
+Źródło parametrów:
+`examples/sushruth_2020_closed_gsg/edge_field_20261111/verification/edge-field-comparison.json`,
+SHA256 `615f0e95379fe39cba2a93eacdd13f35acdd1256bb88c8708c16b4b665a325bf`.
+Odczyt tych parametrów nie jest porównaniem z wartościami natywnego H.
+
+| Realizacja | Status diagnostyki |
+|---|---|
+| FEM CPU | niezależna algebra porównawcza; nie dowodzi wykonania FEM lub zbieżności RT0 |
+| FEM GPU | brak wykonania/parytetu; ta sama algebra nie jest kwalifikacją urządzenia |
+| FDM CPU | nie uruchamia FDM; brak kwalifikacji pola obliczanego przez aplikację |
+| FDM GPU | brak wykonania/parytetu i bez fallbacku |
+
+### Weryfikacja i rozdzielenie dwóch rozbieżności
+
+Kontrole obejmą całkę po grubości policzoną niezależną kwadraturą,
+przypadek $u=1$, granicę cienkiego metalu, signed k, monotoniczność,
+walidację i wykonanie na zachowanych parametrach w istniejącym
+kontenerze przez receptę interpretowaną. Wykonano137/137testów, w tym6kontroli tego modułu; rzeczywiste zapisane
+wymiary przeliczono w istniejącym kontenerze przez interpretowaną receptę just.
+Niezależna kwadratura, oba położenia cienkiego źródła i granice przechodzą.
+To diagnostyka modeli; nowe native V/J/H i kwalifikacja źródła: NOT VERIFIED.
+Pełny nowy V/J/H i referencje fine pozostają osobnym etapem.
+
+Wcześniejszy wzorzec Fig.3,
+`scripts/reference_sushruth_2020_response.py::inductive_response`,
+korzysta już z cienkiego widma
+`scripts/reference_sushruth_2020_antenna_spectrum.py::antenna_spectra`.
+Jego `film_thickness_m` opisuje magnetyk, nie metal. Zatem różnica90nm
+może dotyczyć porównania przyszłego źródła3D z modelem publikacji,
+ale nie wyjaśnia dawnej rozbieżności między naszym cienkim wzorcem
+równań1–10 a Fig.3. Nie podmieniamy parametrów ani historycznego FAIL.
+Bibliografia i źródło równania6: Sushruth i in., DOI powyżej.
+
+
+(sushruth-figure3-axis-and-annotation-recheck)=
+## Osie i adnotacja FMR — kontrola 13.11.2026
+
+Nie należy nazywać odczytu szarej kreski **zmierzonym rezonansem materiału**.
+Wartość około7,208GHz w starszej tabeli powyżej jest historyczną pozycją
+adnotacji w panelu(a). Nie jest niezależnym pomiarem FMR ani parametrem,
+który można wstawić do modelu w miejsce TableI. W panelu(e) ta sama
+adnotacja ma inną współrzędną częstotliwości. Dopuszczenie arbitralnego
+przesunięcia krzywej na tej podstawie ukrywałoby nierozstrzygnięte założenia
+generatora rysunku.
+
+Oryginalny raster APS i Fig03.png ze źródeł arXiv sprawdzono osobno.
+Przypięte hashe obrazów podano w istniejących sekcjach; nowy
+`figure3_raster_calibration_20261113/preregistration.json` zachowuje je ponownie,
+razem z oknami pomiaru i ręcznie odczytanymi tickami, przed wykonaniem kontroli.
+Nie pobierano nowych rysunków, nie modyfikowano ich i nie uruchamiano TeX.
+
+Kalibracja każdego panelu stosuje jego własną ramkę:
+
+```{math}
+:label: eq-sushruth-raster-axis-calibration
+
+f(p)=10^9\,\mathrm{Hz}\left[
+6+3\,\frac{p-p_{\mathrm L}}{p_{\mathrm R}-p_{\mathrm L}}
+\right].
+```
+
+| Symbol | Znaczenie | SI |
+|---|---|---|
+| $f(p)$ | Częstotliwość odpowiadająca współrzędnej obrazu, nie estymator rezonansu | $\mathrm{Hz}$ |
+| $p$ | Pozioma współrzędna obrazu liczona od zera | $1$ |
+| $p_{\mathrm L}$ | Współrzędna lewej ramki danego panelu | $1$ |
+| $p_{\mathrm R}$ | Współrzędna prawej ramki danego panelu | $1$ |
+
+Implementacja `affine_frequency` zwraca liczbę w GHz, a jawny czynnik
+$10^9\,\mathrm{Hz}$ powyżej określa jej przeliczenie do SI.
+Nie korzysta z podatności, siatki FEM, prądu ani pola.
+
+| Raster / panel | Lewa i prawa ramka [piksel] | Niezależne ticki7GHz;8GHz [piksel] |
+|---|---|---|
+| APS(a) | 92;534 | 239–240;387 |
+| APS(e) | 588;1003 | 726;864–865 |
+| arXiv(a) | 478;2587 | 1181;1884 |
+| arXiv(e) | 2844;4825 | 3504;4164–4165 |
+
+Pięć ręcznie odczytanych ticków6,5–8,5GHz na każdy z czterech paneli
+mieści się w zarejestrowanej tolerancji jednego piksela. To kontrola
+kalibracji po oględzinach, **nie OCR** ani pełny budżet niepewności
+rysunku. Kadrowanie i szerokości paneli nie wyjaśniają wcześniejszej
+różnicy okresów około1,4.
+
+Dla rastra APS dodatkowo odczytano pełne pasma ramek i szarej kreski.
+Przedział poniżej obejmuje wszystkie kombinacje ich krańców po dodaniu
+pół piksela do każdego pasma; nie jest przedziałem ufności materiałowego FMR.
+
+| Panel | Przedział położenia adnotacji z ramką/pikselem [GHz] |
+|---|---|
+| (a) | 7,187783–7,228507 |
+| (e) | 7,127711–7,171084 |
+
+Przedziały są rozłączne. Zatem nie wyznaczają jednego wspólnego
+parametru rezonansu. Model z literalnymi wielkościami TableI nadal ma
+częstotliwość jednorodną7,5GHz; kontrola rastra nie zmienia parametrów
+ani nie rozstrzyga, jakich wartości użył generator publikacji.
+
+### Poprawka narzędzia i wykonany odbiór
+
+W `scripts/plot_sushruth_2020_response_reference.py::measure_figure3_anchors`
+domyślny panel(a) wcześniej wykonywał `argmax` również dla pustej maski.
+Dla całkowicie brakującej kreski taki algorytm zwracałby około6,447964GHz.
+Wspólny `measure_gray_annotation_pixels` wymaga teraz jednej ciągłej
+kreski o zarejestrowanym pionowym pokryciu; brak albo kilka rozdzielonych
+pasm daje odmowę. Oba panele zwracają
+`annotation_is_measured_fmr=False`. Stare nazwy `published_FMR_marker_*`
+pozostają aliasami **odczytu rysunku**, nie pomiaru fizycznego.
+Nie są nowymi quantity, parametrami materiałowymi ani polem ProblemIR.
+
+Wykonana kontrola zachowała każde stare pole i wartość rzeczywistego
+odczytu obu paneli. Dodała wyłącznie jawny zakres i interpretację.
+18 interpretowanych testów rastra i okresów przeszło; obejmują brak/split
+adnotacji, niezależne ramki, dystraktory oraz znany okres i kierunek zer.
+Nie kompilowano testów native.
+
+Zachowane przedziały pierwszych dwóch odstępów minimów i zer rosnących
+GSG z Fig.3 nie zachodzą na przedziały literalnego modelu. Stały dodatek
+do częstotliwości nie zmienia odstępów; wniosek pozostaje niezależny od
+położenia szarej kreski. **Przyczyna różnicy jest nadal nierozstrzygnięta**.
+Ta kontrola nie kwalifikuje pełnego źródła3D, pola w całej próbce,
+transmisji, RF ani LLG.
+
+Nie zmieniono publicznego Python DSL, ProblemIR, planera, runtime,
+formatu wyników anteny lub istniejących rezultatów. Dla FDMCPU, FDMGPU,
+FEMCPU i FEMGPU niniejszy odbiór jest **nie dotyczy wykonania backendu**:
+jest postprocessingiem obrazu i zachowanych liczb, bez nowego Solve.
+Status kwalifikacji backendów z wcześniejszych tabel pozostaje bez zmian.
+
+Dowód:
+`examples/sushruth_2020_closed_gsg/figure3_raster_calibration_20261113/result.json`,
+SHA256 `17f9644da3273e7ea8d9f3af89cff060682674e06ceba19fd1ed7f3a09b4881a`, oraz `tests.log`.
+JSON zachowuje osobno brak estymaty materiałowego FMR,
+`cause_resolved=false`, `publication_reproduced=false`, zerową liczbę
+nowych całkowań, transportu i LLG. Historyczne artefakty nie zostały
+nadpisane.
+
+
+(sushruth-figure1-field-fft-sampling)=
+## Próbkowanie pola i konwencje transformaty — kontrola niezależna
+
+Zadanie dotyczy osobno pola w przestrzeni i jego transformaty, nie zagęszczania
+samej osi modelu A(k). Publikacja Eq6–8 używa operatora translacji z dodatnim
+wykładnikiem. Istniejący kernel Fullmaga używa ujemnego wykładnika i lokalnego
+środka płaszczyzny. Brak uwzględnienia tej różnicy odwraca część urojoną GS
+przy zachowaniu mocy. Nie dowodzi to przyczyny rozbieżności dynamicznej Fig3.
+
+Dla prądu+Y i obserwacji poniżej przewodnika całka prawa Biota–Savarta po
+nieskończonym kierunkuY i po szerokości daje:
+
+```{math}
+:label: eq-sushruth-real-space-field-fft-reference
+
+h_x(x;s,0)=\frac{H_x(x)}{I}
+=-\frac{1}{2\pi L}\left[
+\arctan\frac{x+L/2}{s}-\arctan\frac{x-L/2}{s}\right],
+\qquad
+h_x(x;s,t_c)=\frac{1}{t_c}\int_s^{s+t_c}h_x(x;a,0)\,da .
+```
+
+Pierwszy wzór dla dodatniego odstępu; dla zerowego przyjmujemy jednostronny
+ślad pola pod idealną warstwą: −1/(2L) pod paskiem, zero na zewnątrz, połowę
+wartości na krawędzi. Nie tworzymy zerowej grubości siatki FEM.
+Drugą całkę liczymy niezależną kwadraturą warstw Gaussa16 i sprawdzamy32.
+Kontrola testowa używa osobnej dwuwymiarowej całki po przekroju, bez atan.
+
+```{math}
+:label: eq-sushruth-sampled-field-fourier-convention
+
+x_j=-R+(j+\tfrac12)\Delta x,\quad N\Delta x=2R,\quad
+k_n=\frac{2\pi n}{N\Delta x},\quad \Delta k=\frac{2\pi}{N\Delta x},
+\qquad
+\widehat h^-_n=\Delta x\,e^{-ik_nx_0}
+\sum_{j=0}^{N-1}h_x(x_j)e^{-i2\pi nj/N},
+\quad A^-_n=-2\widehat h^-_n,\quad A^+(k)=A^-(-k).
+```
+
+Dla rzeczywistego pola ostatnią równość realizujemy sprzężeniem amplitudy
+przy dodatnimk. Nie jest to dopasowanie fazy. Mnożnik−2 wynika z całki pola
+pojedynczego paska po całej prostej równej−1/2 na amper, nie z normalizacji
+zmierzonego maksimum lub zera. Znak prądu pozostaje niezmieniony.
+
+| Symbol | Znaczenie | SI |
+|---|---|---|
+| $H_x$ | Fizyczne pole źródła w kierunkuX | $\mathrm{A\,m^{-1}}$ |
+| $h_x(x;s,t_c)$ | Pole na jednostkę prądu poniżej paska | $\mathrm{m^{-1}}$ |
+| $x,x_j,x_0$ | Fizyczna pozycja próbki i pierwszy punkt | $\mathrm m$ |
+| $s$ | Odległość od płaszczyzny obserwacji do dolnej powierzchni metalu | $\mathrm m$ |
+| $t_c$ | Grubość przewodnika | $\mathrm m$ |
+| $L$ | Szerokość jednorodnego paska | $\mathrm m$ |
+| $a$ | Wysokość warstwy źródła nad obserwacją | $\mathrm m$ |
+| $I$ | Podpisany prąd paska w kierunku dodatnimY | $\mathrm A$ |
+| $R$ | Połowa okresowego okna całkowania | $\mathrm m$ |
+| $\Delta x$ | Odstęp próbek w przestrzeni | $\mathrm m$ |
+| $k,k_n,\Delta k$ | Wektor falowy, bin i odstęp binów | $\mathrm{rad\,m^{-1}}$ |
+| $N,j,n$ | Liczba próbek i indeksy całkowite | $1$ |
+| $A^-,A^+$ | Bezwymiarowe amplitudy obu konwencji | $1$ |
+| $\widehat h^-_n$ | Przestrzenna całka pola na amper | $1$ |
+| $i$ | Jednostka urojona transformaty | $1$ |
+| $\pi$ | Stała kołowa | $1$ |
+
+| Parametr / interfejs | Typ / default | SI | Walidacja, zakres i wpływ na ProblemIR |
+|---|---|---|---|
+| width_m | float /200e-9 | $\mathrm m$ | Dodatni; szerokość każdego paska; brak nowego IR |
+| gap_m | float /200e-9 lub250e-9 | $\mathrm m$ | Nieujemny; jawne przypadki, bez fitu |
+| spacing_m | float /0 lub43.7e-9 | $\mathrm m$ | Od obserwacji do dolnej powierzchni, nie współrzędna worldz |
+| thickness_m | float /0 lub90e-9 | $\mathrm m$ | Zero oznacza model analityczny warstwy, nie geometrię native |
+| layer_order | int /16, kontrola32 | $1$ | Co najmniej2; niezależna kontrola zmiany warstw |
+| half_width_m | list[float] /8,16,32,64µm | $\mathrm m$ | Okno i jego zbieżność niezależne od kroku |
+| step_m | list[float] /50,25,12.5,6.25nm | $\mathrm m$ | Co najmniej4próbki, rosnące jednolite pozycje; bez resamplingu |
+| maximum_k_rad_per_m | float /30e6 | $\mathrm{rad\,m^{-1}}$ | Tylko fizyczne dodatnie biny wraz z zerem |
+| normalization / window | integral_si / rectangular | $1$ | Bez odjęcia średniej, paddingu i korekcji coherent gain |
+| criteria / output-dir | Path / wymagane | $1$ | Kryteria przed wynikiem; wynik nie nadpisuje katalogu |
+| progi amplitudy/mocy | float /1e-3,8e-3 | $1$ | Na najgęstszej siatce; moc S ma jawny czynnik4 |
+| progi przyrostów | float /2e-3,1e-3 | $1$ | Osobno zmiana kroku i zmiana okna |
+| próg warstw16/32 | float /1e-10 | $1$ | Max różnicy podzielone przez max pola, bez dzielenia przez zero pola |
+
+Trzy przypadki: (g,s,t_c)=(200,0,0)nm dlaFig1; (200,43.7,90)nm dla
+samego wpływu wysokości i grubości; (250,43.7,90)nm dla nominalnego przekroju
+zachowanejGSG. Wysokość43.7nm wynika z30nm izolatora,5nm capu i8.7nm
+do środka stosu magnetycznego. To trzy różne modele, nie te same wyniki.
+Wszystkie zakładają uniform current, nieskończoneY, brak końców i ekranowania.
+Nie kwalifikują skończonej zamkniętej pętli, taperu, zachowanego RT0 lub LLG.
+
+Biny porównujemy bez interpolacji. Kontrola kroku używa tego samego okna;
+kontrola okna używa tego samego kroku i wspólnych binów dwóch okresów.
+Padding nie zwiększa rozdzielczości fizycznej ani nie zastępuje kontroli okna.
+Publiczny kernel ma2D endpoint-inclusive sampling, a ten test1D używa
+środków komórek; nie utożsamiamy liczbyN z samym zasięgiem między endpointami.
+Dla translacyjnie niezmiennegoY redukcja publicznego binu k_v0 wymaga dzielenia
+przez rzeczywistą wagę sumowania poY, a nie automatycznie przez geometryczną
+szerokość. Dla pełnego obwodu3D nie zakładamy takiej niezmienności.
+
+### Mapowanie, realizacje i stan odbioru
+
+Prywatny skrypt nie dodaje klasy publicznego Python, ProblemIR, planera,
+runtime stage, formatu danych lub możliwości kwalifikowanej bazy.
+Python→IR, capabilities i requested/resolved provenance pozostają bez zmian.
+CSV zawiera fizyczne x oraz Hx/I, a oddzielnie k, obie fazy amplitudy i wzorzec.
+Kryteria i piny kodu są zachowane w wynikach. Regresje6nowych+19istniejących
+przeszły. Wykonano144profile w3.505s,peakRSS99.9MiB; wszystkie uprzednie kryteria przechodzą. Największy błąd amplitudy wynosi8.824e-4, mocy7.056e-3, przyrost kroku1.677e-3 i okna8.824e-4. Wyniki, wejścia,25testów i obraz są w examples/sushruth_2020_closed_gsg/figure1_sampling_20261115/raport-probkowania-i-konwencji.md. Nie uruchomiono Fullmaga.
+
+| Realizacja | Zakres tego eksperymentu | Kwalifikacja |
+|---|---|---|
+| FDM CPU | Niezależny Python, bez solvera FDM | NOT VERIFIED |
+| FDM GPU | Brak wykonania GPU | NOT VERIFIED |
+| FEM CPU | Brak nowego pola native, audyt źródeł FFT | NOT VERIFIED |
+| FEM GPU | Brak wykonania GPU | NOT VERIFIED |
+
+Standardowy start3203 odmówił ze względu na niezdrowy backend. Nie rozwijamy
+recovery i nie omijamy publicznej kontroli pochodzenia pola. Wynik odniesienia
+pozostaje referencją, nawet gdy przejdzie własne kryteria.
+
+Plan walidacji: fizyczny znak prawej dłoni, bezwzględne jednostki, przesunięty
+origin, zespolona faza GS, odrzucenie niejednorodnych próbek, osobna całka
+Biota–Savarta po przekroju, siatki przestrzenne i okna. Pozostałe: rzeczywiste
+pole Fullmaga na zgodnym nośniku, skończona długość i zamknięcie obwodu,
+pełna kwalifikacja oraz kolejne wyniki publikacji.
+
+
+(sushruth-retained-rt0-line-spectrum)=
+## Niezależne widmo z zachowanego prądu3D — prerejestracja15.11.2026
+
+To postprocessing referencyjny zapisanego RT0, bez nowego transportu, H-only,
+DLL, runtime i natywnego spectrum. Nie publikuje zaakceptowanej bazy i nie
+zmienia statusu inspection-only. Pozwala oddzielić całkowanie po źródle od
+ograniczonego okna obserwacji. Wspólne prawo Biota–Savarta pozostaje w nocie0950.
+
+Dla obserwacji $\mathbf r=(x,y_0,z_0)$ i źródła $\mathbf r'$ przyjmujemy:
+```{math}
+:label: eq-sushruth-retained-line-kernel
+
+\Delta y=y_0-y',\quad\Delta z=z_0-z',\quad
+a^2=(\Delta y)^2+(\Delta z)^2,\quad q=|k|,\quad u=qa,
+\qquad
+\widehat H_x^+(k;y_0,z_0)=
+\frac{1}{2\pi}\int_{\Omega_c}
+[J_y(\mathbf r')\Delta z-J_z(\mathbf r')\Delta y]\,
+\frac{uK_1(u)}{a^2}e^{ikx'}\,dV',
+\quad \lim_{u\to0}uK_1(u)=1,\qquad A=-2\widehat H_x^+/I_\mathrm{ref}.
+```
+
+Całka po $x$ w prawie Biota–Savarta daje $2qK_1(qa)/a$:
+[DLMF10.32.E11](https://dlmf.nist.gov/10.32.E11), z granicą
+[DLMF10.30.E2](https://dlmf.nist.gov/10.30.E2). Czynnik2 skraca4π do2π.
+Nie ma μ0: obliczamy H, nie B. Wzór uwzględnia pełną geometrię i wszystkie
+składowe źródła wpływające na Hx; nie zakłada niezmienności poY.
+Wymagamy zwartego całkowalnego prądu i dodatniego oddalenia linii od źródła:
+w tym przypadku cały metal jest nad płaszczyzną obserwacji. Wtedy można
+zamienić całki; całka bezwzględna ma ograniczenie przez stałą razy normę L1
+prądu. Dla zwartej, bezdywergencyjnej zamkniętej pętli ponad płaszczyzną
+prawo Ampère'a wymaga zerowej całki Hx po całej osi x dla k0.
+Nie wymuszamy tego zera numerycznie: jest oddzielną diagnostyką, nie fit.
+
+Wykorzystujemy tę samą rekonstrukcję RT0 co zachowany source:
+```{math}
+:label: eq-sushruth-retained-rt0-volume-cancellation
+
+D_T=\det(v_1-v_0,v_2-v_0,v_3-v_0)>0,\quad
+J(\mathbf r)=\frac{\sum_{i=0}^{3}c_i(\mathbf r-v_i)}{D_T},
+\quad c_i=2\Phi_i,\qquad
+J(\mathbf r_q)\,dV_q=w_q^\mathrm{ref}
+\sum_{i=0}^{3}c_i(\mathbf r_q-v_i),\quad
+\sum_q w_q^\mathrm{ref}=1/6.
+```
+
+| Symbol | Znaczenie | SI |
+|---|---|---|
+| $\mathbf r,\mathbf r',v_i,\mathbf r_q$ | Pozycja obserwacji, źródła, wierzchołki i próbka kwadratury | $\mathrm m$ |
+| $x,x',y_0,z_0,y',z',\Delta y,\Delta z,a$ | Współrzędne, różnice i odległość poprzeczna | $\mathrm m$ |
+| $\Omega_c,dV'$ | Źródłowy przewodnik i miara objętości | $\mathrm{m^3}$ |
+| $J,J_y,J_z$ | Prąd i składowe jego gęstości | $\mathrm{A\,m^{-2}}$ |
+| $k,q$ | Podpisany wektor falowy i jego moduł | $\mathrm{rad\,m^{-1}}$ |
+| $u,K_1(u)$ | Argument i zmodyfikowana funkcja Bessela drugiego rodzaju | $1$ |
+| $\widehat H_x^+$ | Jednowymiarowa transformata Hx z dodatnim wykładnikiem | $\mathrm A$ |
+| $I_\mathrm{ref},c_i,\Phi_i$ | Podpisany prąd źródła, współczynnikRT0, strumień ściany | $\mathrm A$ |
+| $D_T,dV_q$ | Sześciokrotność objętości dodatniego Tet4 i miara próbki | $\mathrm{m^3}$ |
+| $w_q^\mathrm{ref},A,i,\pi$ | Waga na referencyjnym Tet4, amplituda, jednostka urojona, stała kołowa | $1$ |
+
+| Parametr / interfejs | Typ / default | SI | Walidacja i rola / ProblemIR |
+|---|---|---|---|
+| frozen source | bytes / wymagane | $1$ | Parser sprawdza22payloady i SHA; pack_rt0 kontroluje dodatnią orientację i zachowuje momenty; brak nowego IR |
+| observation_y_m / observation_z_m | float /0,-13.7e-9 | $\mathrm m$ | Linia pod całym metalem; minimum odstępu43.7nm |
+| k_rad_per_m | list[float] /0…30e6 co1e6 | $\mathrm{rad\,m^{-1}}$ | Skończone, signed w interfejsie; pilot31punktów, nie gęsty odbiór Fig1 |
+| quadrature_orders | list[int] /2,3,4 | $1$ | Tensorowe Gauss–Duffy:8,27,64punkty/Tet; brak zdegenerowanej geometrii |
+| check_order / check_k | int/list /6;0,1,3,6,12,20,30e6 | $1$ / $\mathrm{rad\,m^{-1}}$ | Niezależne zagęszczenie do216punktów/Tet na7wybranych k |
+| progi przyrostów | float /1e-3,1e-3 | $1$ | Max bezwzględnej różnicy A dla3→4 i4→6, bez dzielenia przez zero widma |
+| próg zera Ampère'a | float /1e-4 | $1$ | Kontrola A(k0), bez ręcznego odejmowania DC |
+| test pryzmatu | float /1e-6 | $1$ | Pole/normalizacja względem niezależnego całkowania i antypochodnej |
+| zasoby | CPU1, pamięć do2048MiB | $1$ | Tylko prywatny proces Python; pomiar czasu iRSS; bez zmian polityk runtime |
+
+Numerator RT0 liczymy ze względnych krawędzi w longdouble; determinant
+skraca się z miarą i nie dzielimy przez bardzo małe D. Funkcja K1 i faza
+używają double; sumy rzeczywiste/urojone longdouble. Raportujemy sumę
+modułów składników i redukcję przez cancellation, bez gwarancji błędu
+wynikającej wyłącznie z różnicy dwóch reguł kwadratury.
+
+Pełny source ma85980Tet4,23263wierzchołki,188926momentów; metal90nm,
+szerokość pasków200nm,szczelinę250nm i końce przyY±12µm.
+Referencja porównawcza ma te same szerokości,szczeliny i pionową warstwę,
+ale nieskończone proste paski z jednorodnym prądem. Jest innym modelem.
+Zbieżność kwadratury nie potwierdza zbieżności J ani małego wpływu końców.
+
+### Mapowanie, walidacja i realizacje
+
+Prywatny Python: scripts/reference_retained_rt0_spectrum.py +
+tetra_rule, rt0_sample_moment, line_kernel, field_spectrum, run_reference.
+Źródło: tools/gsg_surface_native_probe.py + read_bundle, pack_rt0,
+backends/fem/cpu/mfem/transport/affine_rt0_element.cpp +
+AffineRt0Element::retained_current_at. Testy: scripts/test_reference_retained_rt0_spectrum.py +
+class RetainedSpectrumTests. Nie dodajemy publicznej klasy Python, ProblemIR,
+planera, capabilities, runtime stage, formatu pola lub zaakceptowanej bazy.
+Requested/resolved execution starego wyniku pozostaje zachowane; nowe
+provenance odnosi się tylko do referencyjnego postprocessingu.
+Dla FDM CPU/GPU i FEM CPU/GPU nie jest to nowe wykonanie backendu:
+wszystkie cztery lane dla tego widma pozostają NOT VERIFIED.
+Kontrole: objętość i momenty liniowe Tet4, stałe J, niezależna całka
+cosinusowa, skończony pryzmat, faza przesunięcia, odwrócenie prądu,
+wkład Jz oraz odmowa przecięcia źródła. Pilot wykonano:3→4=1.69812e-4,4→6=4.30242e-6 i A(k0)=6.17174e-8, przy progach1e-3/1e-3/1e-4. Czas58.94s iRSS210.22MiB. BłądL2 względem zgodnego przekroju nieskończonego wynosi6.6150e-6 na31k; nie jest to porównanie z idealnąFig1. Siedem nowych regresji przechodzi. Po pilocie prerejestrowano gęstą kontrolę241k, n4 oraz n6 na61k i kroki1/0.5/0.25/0.125rad/µm; progi przyrostuA1e-3, zmiany położenia maksimum0.125rad/µm i mocy1e-3. To nadal postprocessing referencyjny.
+Piny i kryteria przed obliczeniem: examples/sushruth_2020_closed_gsg/
+figure1_retained_spectrum_20261115/criteria-preregistered.json.
+Pozostałe: gęsty profil, publiczny native field/spectrum, zbieżność źródła,
+granica cienkich/długich pasków oraz Fig2,3,4,6.
+
+
+
+### Wykonany odbiór gęstego postprocessingu i zapisanych Hx
+
+Przetworzono pełne85980Tet4 bez ponownego V/J/H. Gęsty przebieg ma241k
+na0–30rad/µm z krokiem0.125rad/µm; n6 sprawdzono na61k.
+Przyrost4→6 wynosi4.3663121e-06, dyskretne względneL2 wobec zgodnego
+przekroju nieskończonego wynosi6.57720842e-06 dla n4 i1.31660572e-07 na61k dla n6.
+To różnica dwóch określonych modeli, nie błąd względem idealnejFig1.
+Zwiększenie n obniża różnicę, więc wynik n4 nie jest samą miarą efektu
+skończonej długości. Kryteria próbkowania i kwadratury przeszły;32powiązane
+testy są zielone. Pełny proces gęsty trwał260.72s, sama faza obliczeń258.57s,
+RSS fazy obliczeń171.27MiB; pamięci całego procesu z renderem nie zmierzono.
+
+Wspólny węzeł maksimum na kilku siatkach nie wystarcza do lokalizacji piku.
+Osobno prerejestrowano i wykonano33k z n6 w5.75–6.25rad/µm.
+Ostatni krok wynosi0.015625rad/µm; maksimum próbkowane wypada przy
+5.96875rad/µm z mocą
+1.134861314, tak samo jak referencja na tej siatce.
+To lokalizacja na siatce, bez twierdzenia o dokładnym maksimum ciągłym.
+
+Niezależnie odczytano20uprzednio zapisanych natywnych Hx w A/m, sprawdzając
+SHA całego bundle i wszystkich22payloadów. Normalizacja używa signed
+Iref=1.7551508469637155e-5A, bez fitu. WzględneL2 wobec modelu
+nieskończonych pasków o tych samych wysokościach wynosi
+1.30705513e-07; max różnicy wynosi
+0.3346264431/m.
+To rzeczywiste stare Hx Fullmaga, a nie wynik nowego kernela referencyjnego.
+Dwadzieścia próbek nie kwalifikuje całej mapy, Hy/Hz, widma ani źródła.
+
+Kontrolowane zmiany analityczne (maxima na tej samej siatce241k):
+g200/s0/t0 daje3.271063; zmiana g250 daje3.409697;
+dodanie wysokości43.7nm daje1.924044; dodanie grubości90nm daje1.134687.
+Przesunięcie i obniżenie widma wynikają w tych modelach z jawnych parametrów,
+bez korekcji amplitudy lub fazy. To nie diagnoza dawnej rozbieżności Fig3.
+Dowody: examples/sushruth_2020_closed_gsg/figure1_retained_spectrum_20261115/
+raport-zachowanego-pradu-i-widma.md, dense-results/results.json,
+native-hx-point-comparison.json i peak-results.json.
+Natywne spectrum, kwalifikacja źródła i pełna reprodukcja Fig1 pozostają
+NOT VERIFIED; Fig2,3,4,6 są nadal otwarte.
+
+
+
+(sushruth-retained-source-stability)=
+## Stabilność dwóch zapisanych źródeł GSG — prerejestracja15.11.2026
+
+Porównujemy zachowane40728Tet4 i85980Tet4, nie uruchamiając nowegoSolve.
+Audyt zachowanych authoring_receipt i conductivity potwierdził te same:
+geometrię, obwód, źródło, port, metodę transportu, tolerancje, backend_policy
+i requested_execution. Pięć regionów ma tę samą przewodność3.5e7S/m.
+Zmiana hmin i ośmiu stref naroży25→12.5nm jest jawna, lecz dwa wykonania
+mają różne dirtyruntimeversions. Nie dowiedziono tożsamości kodu, więc
+wniosek dotyczy stabilności tych dwóch zapisanych rozwiązań, nie czystego
+mesh-only eksperymentu ani rzędu asymptotycznego.
+
+Dodatkowo do pola porównujemy objętościową normę zachowanego prądu.
+Dla RT0 całka kwadratu jest analityczna, bez kwadratury pola:
+```{math}
+:label: eq-sushruth-retained-current-volume-norm
+
+\bar v_T=\frac14\sum_{i=0}^{3}v_i,\quad
+s_T=\sum_{i=0}^{3}c_i,\quad
+F_T=\sum_{i=0}^{3}c_i(\bar v_T-v_i),\qquad
+Q_T=\int_T|\mathbf J_T|^2\,dV
+=\frac{|F_T|^2+\frac{s_T^2}{20}\sum_{i=0}^{3}|v_i-\bar v_T|^2}{6D_T},
+\quad
+C_J=\frac{\sum_TQ_T}{I_\mathrm{ref}^2},\qquad R_J=C_J/\sigma.
+```
+
+Czynnik1/20 jest śladem kowariancji jednostajnej miary na Tet4:
+pierwszy moment barycentryczny1/4, drugi diagonalny1/10 i mieszany1/20.
+R_J jest rezystancją równoważną dyssypacji wyliczoną ze źródłowego RT0
+przy jednorodnej dodatniej przewodności. Nie zastępuje osobnego sprawdzenia
+zgodności J=σE lub mocy dostarczanej przez źródło. Nie dodajemy termiki.
+
+| Symbol | Znaczenie | SI |
+|---|---|---|
+| $\bar v_T,v_i$ | Środek i cztery wierzchołki tetraedru | $\mathrm m$ |
+| $s_T,c_i,I_\mathrm{ref}$ | Suma współczynników, współczynnik i podpisany prąd normalizacji | $\mathrm A$ |
+| $F_T$ | Licznik RT0 w środku komórki | $\mathrm{A\,m}$ |
+| $D_T$ | Dodatni determinant sześciokrotnej objętości | $\mathrm{m^3}$ |
+| $\mathbf J_T$ | Gęstość prądu w komórce | $\mathrm{A\,m^{-2}}$ |
+| $Q_T$ | Całka kwadratu prądu w komórce | $\mathrm{A^2\,m^{-1}}$ |
+| $C_J$ | Norma prądu na kwadrat prądu źródła | $\mathrm{m^{-1}}$ |
+| $\sigma$ | Jednorodna przewodność | $\mathrm{S\,m^{-1}}$ |
+| $R_J$ | Rezystancja równoważna dyssypacji RT0 | $\Omega$ |
+| $T,i,dV$ | Tetraedr, indeks wierzchołka i miara objętości | $1,1,\mathrm{m^3}$ |
+
+| Parametr / interfejs | Typ / default | SI | Walidacja i rola / IR |
+|---|---|---|---|
+| coarse_bundle / fine_frozen | Path / przypięte | $1$ | Pełne SHA i kontrola payloadów; źródła inspection-only |
+| vertices / coefficients | ndarray / wymagane | $\mathrm m$ / $\mathrm A$ | Skończone4×3 i4 na komórkę; determinant dodatni, bez smoothing |
+| conductivity_s_per_m | float /3.5e7 | $\mathrm{S\,m^{-1}}$ | Przypięta wartość z odrębnego audytu obu payloadów; driver nie odczytuje σ z bundle |
+| k_rad_per_m | list[float] /61pkt0…30e6 | $\mathrm{rad\,m^{-1}}$ | Te samek dla obu źródeł, nie dopasowanie |
+| coarse_orders / high_check_order | list[int]/4,6 oraz8 | $1$ | N4 i6 na61k, N8 na0,1,3,6,12,20,30e6 dla obu źródeł |
+| progi stabilności | float /1e-3 | $1$ | L2 i max amplitudy, L2 nativeHx i względna zmianaC_J |
+| próg kwadratury6→8 | float /1e-6 | $1$ | Oddzielnie od zmiany rozwiązania; nie dowód rygorystycznego error bound |
+| y0 / z0 | float /0,-13.7e-9 | $\mathrm m$ | Linia pod źródłem jak w poprzednim eksperymencie |
+| zasoby | CPU1,2048MiB | $1$ | Tylko proces analizy, bez zmiany polityk runtime lub kontenerów |
+
+Cztery nowe regresje: stałeJ i objętość, niezerowy człon afiniczny,
+zmiana znaku/przesunięcie/skala geometrii oraz odmowa płaskich, ujemnie
+zorientowanych i niefinitywnych danych. Transformata pola reużywa
+scripts/reference_retained_rt0_spectrum.py + field_spectrum bez zmiany tego
+przypiętego pliku; ma uprzednie niezależne testy całki i pryzmatu.
+NativeHx porównujemy w20identycznych targetach po normalizacji signedIref.
+Per-A usuwa wyłącznie liniową amplitudę; nie zmienia rozkładu i powrotów.
+
+Mapowanie nowego prywatnego postprocessingu:
+scripts/compare_retained_antenna_meshes.py + integrated_current_squared,
+run_comparison; testy scripts/test_compare_retained_antenna_meshes.py +
+class RetainedMeshTests. Brak nowych klas publicznych, IR, planera, stage,
+formatu pola i bazy. Niezależne wskaźniki nie publikują kwalifikacji runtime.
+Dla FDM CPU/GPU i FEM CPU/GPU nowy etap nie jest wykonaniem solvera.
+Dane natywne są historycznymi wynikami FEM CPU; GPU nie uruchamiano.
+Prerejestracja i zastrzeżenie wersji:
+examples/sushruth_2020_closed_gsg/source_mesh_convergence_20261115/
+criteria-preregistered.json oraz provenance-addendum.json.
+Wykonanie15.11.2026 zakończyło się kodem0: SAVED_SOLUTION_STABILITY_PASS.
+Na61k względneL2 zespolonej amplitudy wyniosło3.126368411e-6,
+a na20 zapisanych targetach L2nativeHx/I3.031355594e-6.
+Względna zmianaC_J wyniosła1.249508498e-4; wszystkie trzy wartości
+mieszczą się w prerejestrowanym progu1e-3.
+Osobna kontrola kwadratury6→8 na7k daje max1.616166908e-8 dla40k
+oraz7.125379410e-8 dla86k, poniżej progu1e-6.
+Dokładna czteropunktowa kubatura stopnia2 całych obu źródeł niezależnie
+potwierdziła wzór normy. Cztery nowe regresje i focusedvalidator przeszły,
+a niezależny przegląd nie wykazał Critical/Important.
+CSV, PNG/SVG, processreceipt i raport są w
+examples/sushruth_2020_closed_gsg/source_mesh_convergence_20261115.
+Wynik ograniczony do stabilności tych zapisów. Pozostałe: kwalifikacja źródła, czysty mesh-only
+eksperyment, S/GS Fullmaga, gęste natywne pole/spectrum oraz Fig2,3,4,6.
+
+
+
+(sushruth-single-strip-return-and-aperture)=
+## Pojedynczy pasek S: powrót i obszar obserwacji
+
+To kontrola analityczna założeń porównania Fig1, nie nowy solver lub model
+pełnego obwodu. Publikacja Eq6 opisuje jeden nieskończenie długi cienki pasek;
+Eq7–8 zawierają przeciwne prądy. W Fig1 dla S moc jest mnożona przez4.
+Tutaj s=t=0 oznacza jednostronną granicę pola od dołu, nie siatkę FEM
+o zerowej grubości. Pomijamy ekranowanie, prądy wirowe i RF displacement.
+
+Dla dwóch nieskończonych w y pasków o prądach +I i−I oraz szerokościach L,W,
+przy szczelinie brzegowej g i środku powrotu d, własne całkowanie prostokątów
+według tej samej konwencji co Eq6 daje:
+```{math}
+:label: eq-sushruth-single-return-global
+
+a(x)=-2H_x(x)/I,\quad
+A_\mathrm{pair}(k)=\int_{-\infty}^{\infty}a(x)e^{ikx}\,dx
+=\operatorname{sinc}(kL/2)-e^{ikd}\operatorname{sinc}(kW/2),\quad
+d=g+(L+W)/2,\qquad A_\mathrm{pair}(0)=0,\quad A_S(0)=1,\quad P=4|A|^2.
+```
+Sinc jest nieznormalizowaną funkcją sin(u)/u z wartością1 w0.
+Jest to analityczny przekrój prądowo zbilansowany, nie wykonanie ani
+kwalifikacja skończonego zamkniętego obwodu3D.
+
+Osobno, dla zwartego stacjonarnego źródła3D bez dywergencji, którego pole
+zanika w nieskończoności, prąd netto przez pełną płaszczyznę y=y0 jest zerowy.
+Kontur Ampère'a z prostą poniżej całego źródła i półokręgiem domykającym
+ją od dołu nie obejmuje żadnego prądu. W granicy nieskończonego promienia
+całka po łuku znika i otrzymujemy:
+```{math}
+:label: eq-sushruth-closed-source-zero-mode
+
+\nabla\cdot\mathbf J=0,\quad
+I_\mathrm{net}(y_0)=\int_{\mathbb R^2}J_y(x,y_0,z)\,dx\,dz=0,\qquad
+\int_{-\infty}^{\infty}H_x(x,y_0,z_0)\,dx=0.
+```
+To własny wniosek z równania ciągłości i prawa Ampère'a
+[Feynman, rozdz.13](https://www.feynmanlectures.caltech.edu/II_13.html),
+przy z0 poniżej całego źródła. Nie dotyczy otwartego przewodnika z prądem
+doprowadzanym z nieskończoności, linii przecinającej źródło lub obszar
+obejmowany przez obwód, ani pełnego RF z prądem przesunięcia.
+Pierścień w płaszczyźnie yz obejmujący linię obserwacji x jest
+kontrprzykładem po usunięciu warunku położenia linii; całka może wynosić I.
+Nie orzekamy o dowolnej pojedynczej próbce Hx.
+
+Dlatego idealnego A_S(0)=1 nie wolno wymagać od pełnego globalnego widma
+zbilansowanego źródła i uznawać różnicy za błąd solvera. Szeroki powrót daje
+zbieżność w normie L2 amplitudy, ale nie jednostajną przyk0:
+```{math}
+:label: eq-sushruth-single-return-norm
+
+\frac{\|A_\mathrm{pair}-A_S\|_{L^2(\mathbb R)}}{\|A_S\|_{L^2(\mathbb R)}}
+=\sqrt{L/W},\quad
+|A_\mathrm{pair}(0)-A_S(0)|=1,\qquad
+\mathcal Q(w,K)=\int_0^K\operatorname{sinc}^2(kw/2)\,dk
+=\frac2w\left[\operatorname{Si}(Kw)-\frac{1-\cos(Kw)}{Kw}\right].
+```
+Relacja pełnej normy wynika z [Parsevala](https://dlmf.nist.gov/1.14.E8)
+dla dwóch prostokątów:
+norma kwadratu sygnału w x wynosi1/L, a różnicy1/W. Nie zależy od d.
+Dla skończonego pasma0…K odniesieniem względnegoL2 jest
+sqrt(Q(W,K)/Q(L,K)); kod używa stabilnej gałęzi szeregu przy małymKw.
+Si oznacza całkę0…x z sin(u)/u; definicja i implementacja:
+[SciPy sici](https://docs.scipy.org/doc/scipy/reference/generated/scipy.special.sici.html).
+
+Ograniczenie obserwacji do zadanego okna zmienia obserwabl:
+```{math}
+:label: eq-sushruth-single-return-aperture
+
+A_R(k)=\int_{-R}^{R}a(x)e^{ikx}\,dx.
+```
+Jeżeli w idealnej granicy s=t=0 okno zawiera cały pasek sygnałowy, a żaden
+fragment powrotu, A_R=A_S dla każdego k. Kod nie normalizuje ponownie
+przyciętego pola. Dla dodatniego s lub grubości pole ma ogony, więc ta
+dokładna równość nie jest deklarowana. Zbieżność okna i pomijanej części
+obwodu musi być wtedy sprawdzana oddzielnie; nie wolno dopasować okna po
+obejrzeniu krzywych ani schować pola powrotu w rendererze.
+
+| Symbol | Znaczenie | SI |
+|---|---|---|
+| $x,y_0,z_0,L,W,g,d,R,w,dx,dz$ | Współrzędne, szerokości, szczelina, położenie powrotu, rozmiar okna i miary długości | $\mathrm m$ |
+| $k,K$ | Wektor falowy i górna granica pasma | $\mathrm{rad\,m^{-1}}$ |
+| $\mathbf J,J_y$ | Gęstość prądu i jej składowa y | $\mathrm{A\,m^{-2}}$ |
+| $H_x$ | Pole Oersteda w linii obserwacji | $\mathrm{A\,m^{-1}}$ |
+| $I,I_\mathrm{net}$ | Prąd sygnału i prąd netto przez płaszczyznę | $\mathrm A$ |
+| $a(x)$ | Pole podzielone przez podpisany prąd i pomnożone przez minus dwa | $\mathrm{m^{-1}}$ |
+| $A_S,A_\mathrm{pair},A_R,P$ | Amplitudy widma i prezentowany kwadrat modułu | $1$ |
+| $\mathcal Q$ | Całka kwadratu sinc w paśmie k | $\mathrm{m^{-1}}$ |
+| $\operatorname{sinc},\operatorname{Si}$ | Funkcja sin(u)/u i całka sinusowa dla bezwymiarowego argumentu | $1$ |
+
+| Parametr / interfejs | Typ / default | SI | Walidacja / rola |
+|---|---|---|---|
+| width_m | float /200e-9 | $\mathrm m$ | Dodatnia skończona szerokość sygnału |
+| return_width_m | float /2,8,32,128e-6 | $\mathrm m$ | Dodatnia skończona szerokość powrotu; parametry własnej diagnostyki |
+| gap_m | float /16e-6 | $\mathrm m$ | Nieujemna szczelina krawędziowa, nie parametr Fig1 |
+| half_window_m | float or None /None | $\mathrm m$ | None: cała oś; dodatnie R: jawny obszar obserwacji |
+| k_rad_per_m | ndarray /0…30e6 | $\mathrm{rad\,m^{-1}}$ | Skończone k; brak zmiany2π |
+| maximum_k_rad_per_m | float /30e6 | $\mathrm{rad\,m^{-1}}$ | Nieujemna granica całki; zero daje zero |
+| interval_counts | list[int] /12000,24000,48000 | $1$ | Osobna zbieżność całkowania po k |
+| progi analityczne | float /1e-14,1e-12 | $1$ | Zero globalne i zgodność jawnej apertury |
+| progi całkowania | float /1e-8 | $1$ | Różnica z formułą Q i ostatni przyrost, nie tolerancja solvera |
+| spacing / thickness | float /0 | $\mathrm m$ | Tylko analityczna granica; brak generowania siatki |
+
+Pięć regresji obejmuje k0 i Hermitian, niezależną całkę prostokątnych
+prądów, jawne przycięcie bez renormalizacji, Q wobec adaptacyjnej kwadratury
+oraz odmowy niepoprawnych danych. Prerejestracja:
+examples/sushruth_2020_closed_gsg/figure1_single_strip_return_20261115/
+criteria-preregistered.json. Odbiór wykonano15.11.2026: cztery bramki
+analityczne przeszły na siatkach12000/24000/48000 przedziałów. WzględneL2
+amplitudy w paśmie0…30rad/µm wynosi33.10614%,16.61901%,8.31784%,4.15995%
+dla W=2,8,32,128µm. Max różnicy kwadratury ze wzorem to1.055e-12,
+a jawnej apertury zS:2.221e-16. Pięć regresji i niezależny review przeszły;
+daneNPZ/CSV, PNG/SVG, piny i raport są w tym samym katalogu.
+To zaliczenie analitycznego testu modelu; Fullmag nadal **NOT VERIFIED**.
+
+Prywatny moduł scripts/diagnose_sushruth_single_strip_return.py:
+pair_spectrum, strip_power_integral, run_diagnostic. Brak zmiany publicznego
+Python, ProblemIR, planera, stage, formatu wyniku lub źródłowej kwalifikacji.
+Nie powstaje drugi solver produkcyjny. Dla FEM/FDM CPU/GPU jest to
+reference-only analiza modelu i pola widzenia, a nie wykonanie danej lane.
+Pełny S/GS/GSG Fullmaga, dodatni odstęp/grubość, skończona długość,
+kwalifikacja źródła i późniejsze odpowiedzi magnetyczne pozostają otwarte.
+
+
 (scientific-bibliography)=
 ## Bibliografia
 
@@ -1177,3 +2169,1073 @@ Wynik4bd240539daf848e639c94c5068d52bfbee0466273d7e4be5d7f1351a1b867b4.
 | scripts/reference_sushruth_2020_table_one.py | audit_table_one | Raport literalnych parametrów i warunkowej spójności Table I; bez Solve. |
 | scripts/reference_sushruth_2020_table_one.py | _dispersion | Różniczkowanie istniejącej dyspersji; granica prawostronna k=0. |
 | scripts/test_sushruth_table_one_audit.py | class SushruthTableOneAuditTests | Niezależne różnice częstości, jednostki i zgodność z podatnością. |
+
+| scripts/verify_sushruth_2020_figure3_periods.py | audit_periods | Odtwarzalny pomiar odstępów z przypiętego rastra i wzorca, bez dopasowania. |
+| scripts/test_sushruth_figure3_periods.py | class Figure3PeriodTests | Znany okres, kierunki zer, przedziały i odmowy niejednoznacznego odczytu. |
+
+| examples/fdm_sushruth_2020_finite_k_images4.py | study | Kontrolna harmoniczna FDM CPU/double, 4 obrazy PBC XY. |
+| examples/fdm_sushruth_2020_finite_k_images8.py | study | Ta sama kontrola i 8 obrazów PBC XY. |
+
+| scripts/verify_sushruth_finite_k_control.py | analyze_trajectory | Pomiar harmonicznej, częstości, zaniku i czynników demag na pełnej trajektorii. |
+| scripts/verify_sushruth_finite_k_control.py | _linear_modes | Dokładne wartości własne liniowego LLG dla obu sztywności pola. |
+| scripts/verify_sushruth_finite_k_control.py | read_trajectory | Odczyt per-quantity czasu i odmowa brakujących chunków Zarr. |
+| scripts/test_sushruth_finite_k_analysis.py | class FiniteKAnalysisTests | Niezależne trajektorie i negatywne kontrole fizycznej analizy. |
+| packages/fullmag-py/tests/test_sushruth_finite_k_control.py | class SushruthFiniteKControlTests | Publiczne IR, tryb przestrzenny i bezstratny round-trip. |
+
+| scripts/antenna_metal_thickness_diagnostic.py | metal_thickness_factor | Średnia warstw po grubości, stabilne expm1 i jawna granica. |
+| scripts/antenna_metal_thickness_diagnostic.py | geometry_filter_report | Dwa położenia cienkiego paska przy zachowanej geometrii, bez korekty native H. |
+| scripts/test_antenna_metal_thickness_diagnostic.py | class MetalThicknessDiagnosticTests | Niezależna kwadratura, wysokość odniesienia, walidacja i wykonanie na zachowanych parametrach. |
+
+| scripts/plot_sushruth_2020_response_reference.py | measure_gray_annotation_pixels | Pełne pasmo adnotacji, odmowa braku/split i brak estymaty materiałowego FMR. |
+| examples/sushruth_2020_closed_gsg/figure3_raster_calibration_20261113/audit_calibration.py | affine_frequency | Niezależna kalibracja ticków według własnej ramki panelu. |
+| examples/sushruth_2020_closed_gsg/figure3_raster_calibration_20261113/audit_calibration.py | pixel_envelope | Wszystkie krańce piksela/ramek, bez interpretacji materiałowej. |
+| examples/sushruth_2020_closed_gsg/figure3_raster_calibration_20261113/audit_calibration.py | audit | Tożsamości obu obrazów, stare wartości i różnica okresów niezależna od kreski. |
+
+| docs/physics/0951-sushruth-2020-forward-volume-reference.md | DOC-ANCHOR:sushruth-figure3-axis-and-annotation-recheck | Zakres odczytu adnotacji, bez pomiaru materiałowego FMR i bez zmiany modelu. |
+
+
+
+| Path | Symbol | Odpowiedzialność |
+|---|---|---|
+| scripts/reproduce_sushruth_2020_figure1.py | reproduce | Wykonany odbiór analitycznej Fig1, osobno od Fullmaga. |
+| scripts/reproduce_sushruth_2020_figure1.py | extract_curves | Digitizacja RGB/connected components bez wyboru według modelu. |
+| scripts/reproduce_sushruth_2020_figure1.py | compare_curves | Jawne residuale i prerejestrowane progi rastra. |
+| scripts/reproduce_sushruth_2020_figure1.py | integrate_strips | Niezależna całka prądu prostokątnych pasków, nie solver Fullmaga. |
+| scripts/reproduce_sushruth_2020_figure1.py | sampling_convergence | Kontrola gęstości próbkowania widma. |
+| scripts/test_reproduce_sushruth_2020_figure1.py | class FigureOneTests | Siedem wykonanych testów odbioru i odmów. |
+
+
+
+| Path | Symbol | Odpowiedzialność |
+|---|---|---|
+| scripts/verify_sushruth_2020_field_fft.py | strip_field_per_ampere | Niezależne Hx/I z prawa Biota–Savarta dla nieskończonych pasków. |
+| scripts/verify_sushruth_2020_field_fft.py | fourier_minus | Całka DFT z fizycznym początkiem i ujemnym wykładnikiem. |
+| scripts/verify_sushruth_2020_field_fft.py | run_sampling | Osobne badanie okna i kroku przestrzennego, bez Solve. |
+| scripts/test_verify_sushruth_2020_field_fft.py | class FieldFftTests | Sześć regresji znaku, fazy, jednostek, origin i niepoprawnych profili. |
+| crates/fullmag-runner/src/antenna_spectrum.rs | compute_structured_antenna_source_spectrum_interruptible | Istniejąca produkcyjna transformata2D z ujemnym wykładnikiem; tylko audyt źródeł. |
+
+
+
+| Path | Symbol | Odpowiedzialność |
+|---|---|---|
+| scripts/reference_retained_rt0_spectrum.py | line_kernel | Niezależny postprocessing zachowanego RT0; bez wykonania native. |
+| scripts/reference_retained_rt0_spectrum.py | field_spectrum | Niezależny postprocessing zachowanego RT0; bez wykonania native. |
+| scripts/reference_retained_rt0_spectrum.py | rt0_sample_moment | Niezależny postprocessing zachowanego RT0; bez wykonania native. |
+| scripts/reference_retained_rt0_spectrum.py | tetra_rule | Niezależny postprocessing zachowanego RT0; bez wykonania native. |
+| scripts/test_reference_retained_rt0_spectrum.py | class RetainedSpectrumTests | Niezależny postprocessing zachowanego RT0; bez wykonania native. |
+| tools/gsg_surface_native_probe.py | pack_rt0 | Niezależny postprocessing zachowanego RT0; bez wykonania native. |
+
+
+| Path | Symbol | Odpowiedzialność |
+|---|---|---|
+| scripts/compare_retained_antenna_meshes.py | integrated_current_squared | Dokładna norma RT0, bez kwadratury pola. |
+| scripts/compare_retained_antenna_meshes.py | run_comparison | Stabilność zapisanych źródeł, bez nowegoSolve. |
+| scripts/test_compare_retained_antenna_meshes.py | class RetainedMeshTests | Cztery regresje momentu kwadratowego i odmów. |
+
+(sushruth-figure1-reproduction-protocol)=
+## Rysunek1: prerejestrowany odbiór modelu anten — 15.11.2026
+
+Celem jest analityczne odtworzenie wykresu, osobno od walidacji Fullmaga.
+Podpis Fig1 określa kwadrat modułu; napis „Amplitude” na osi nie zmienia tej
+definicji. Wprowadzamy bezwymiarowe amplitudy znormalizowane przez wartość
+pojedynczego paska dla zerowego wektora falowego:
+
+```{math}
+:label: eq-sushruth-figure1-spectra
+
+A_S(k)=\operatorname{sinc}(kL/2)e^{-|k|s},\qquad
+A_{GS}(k)=2i\sin[k(L+g)/2]A_S(k),\qquad
+A_{GSG}(k)=2\sin^2[k(L+g)/2]A_S(k),
+\qquad
+P_S=4|A_S|^2,\quad P_{GS}=|A_{GS}|^2,\quad P_{GSG}=|A_{GSG}|^2.
+```
+
+| Symbol | Znaczenie | SI |
+|---|---|---|
+| $k$ | Wektor falowy | $\mathrm{rad\,m^{-1}}$ |
+| $L$ | Szerokość paska | $\mathrm m$ |
+| $g$ | Szczelina | $\mathrm m$ |
+| $s$ | Odstęp | $\mathrm m$ |
+| $i$ | Jednostka urojona | $1$ |
+| $\operatorname{sinc}(u)$ | Znormalizowany sinus i jego argument | $1$ |
+| $u$ | Argument funkcji sinc | $1$ |
+| $A_S,A_{GS},A_{GSG}$ | Znormalizowane amplitudy | $1$ |
+| $P_S,P_{GS},P_{GSG}$ | Kwadrat modułu z caption scaling | $1$ |
+
+| Parametr / interfejs | Typ / default | SI | Walidacja i rola / ProblemIR |
+|---|---|---|---|---|
+| width_m / gap_m / spacing_m | float / wymagane Fig1 | $\mathrm m$ | Dokładnie200e-9 /200e-9 /0; bez dopasowania; brak nowego IR |
+| k_rad_per_m | float / wymagane | $\mathrm{rad\,m^{-1}}$ | Skończone signed; wykres0–30e6; bez nowego IR |
+| source page / criteria / output | Path / wymagane | $1$ | Piny PDF i PNG, calibration frame, wyjścia nie nadpisują cudzych plików; prywatny skrypt |
+| quad intervals | list[int] /256,512,1024 | $1$ | Całka prądu prostokątnego z exp(+ikx), niezależna od sinc; ostatnia redukcja błędu3.9–4.1, max amplitude error5e-6 |
+| plot sample intervals | list[int] /600,1200,2400,4800 | $1$ | Zmiana pozycji maksimum≤0.02rad/µm i mocy≤1e-5 między ostatnimi siatkami |
+| raster selection | RGB masks / wymagane | $1$ | Connected components, bez dopasowania do modelu;≥200kolumn/krzywą |
+| raster acceptance | float / p95=3,max=5 | $\mathrm{pixel}$ | Bezwzględne residuale osi; empiryczna tolerancja rasteryzacji, nie certyfikat błędu pola |
+
+Geometria: nieskończenie długie i cienkie paski, jednorodny prąd, bez
+shieldingu. S: jeden prąd+1; GS: +1/−1 w odległościach±(L+g)/2;
+GSG: +1 w środku i−1/2 przy±(L+g). Transformata używa exp(+ikx).
+Nie wyznacza to bezwzględnego H/I ani prądu w skończonej antenie3D.
+Dla każdej komórki kwadratury całkujemy zespolony exp(+ikx) w obrębie
+jednorodnego paska i sumujemy jawne prądy — bez użycia sinc i sinusa
+array factor jako referencji.
+
+Oryginał: zachowany PDF DOI10.1103/PhysRevResearch.2.043203, str.3,
+SHA2569e2249ec39543ae7e16dd1af43ad1756a7b4f704a62fd9b2e5972334e2e3ca1f.
+Render200dpi: osie x224.5–806.5, y383.5–619.5; wartości0–30rad/µm i0–4.
+Prerejestracja i pełne źródła są w
+`examples/sushruth_2020_closed_gsg/figure1_reproduction_20261115/criteria-preregistered.json`.
+Obraz i sample grid nie są oryginalnymi danymi autorów; digitizacja ma
+niepewność linii, antialiasingu, kalibracji i piksela. Nie dopasowujemy osi
+do wyników ani amplitudy/fazy modelu do obrazu.
+
+Mapowanie: `scripts/reference_sushruth_2020_antenna_spectrum.py + antenna_spectra`
+realizuje Eq6–8. Nowy prywatny odbiór
+`scripts/reproduce_sushruth_2020_figure1.py + reproduce` zapisze model,
+digitizację, residuale i obraz porównawczy. Odbiór wykonano15.11.2026:13/13testów, bezpośrednia kwadratura prostokątnych
+prądów i kontrola próbkowania przeszły. Porównano477/510/323kolumny S/GS/GSG;
+L2 względem digitizacji wynosi0.441%/0.681%/0.786%, P95≤1.391px i max≤2.093px
+przy uprzednio zapisanych progach3/5px. Dotyczy odczytanych fragmentów:
+GSG obejmuje1.469–22.5rad/µm. Luki nie są interpolowane, a kwadrat modułu
+nie potwierdza fazy. Pełny model zapisano w1201punktach0–30rad/µm.
+Dowody i ograniczenia:
+`examples/sushruth_2020_closed_gsg/figure1_reproduction_20261115/raport-rysunek1.md`
+oraz `reviewed-results/results.json` w tym katalogu. Fullmag **NOT VERIFIED**. Brak nowej publicznej klasy Python, IR, planera, runtime,
+formatu pola lub solvera. W czterech lane FEM CPU/GPU i FDM CPU/GPU jest
+to wyłącznie niezależny Python reference — nie dowód wykonania ani parytetu.
+Kwalifikacja źródła/pola/widma Fullmaga i dalsze figury pozostają osobne.
+
+
+| scripts/diagnose_sushruth_single_strip_return.py | pair_spectrum | Globalne lub jawnie przycięte widmo dwóch idealnych pasków, bez renormalizacji. |
+| scripts/diagnose_sushruth_single_strip_return.py | strip_power_integral | Zamknięta całka sinc² z całką sinusową, niezależne odniesienie kwadratury po k. |
+| scripts/diagnose_sushruth_single_strip_return.py | run_diagnostic | Prerejestrowana kontrola powrotu, apertury i zbieżności, bez native Solve. |
+| scripts/test_diagnose_sushruth_single_strip_return.py | class SingleReturnTests | Pięć niezależnych regresji całki, znaków, okna i odmów. |
+
+(sushruth-retained-current-closure-audit)=
+## Zachowany prąd RT0: bilans i niezależne przekroje
+
+Przed kolejnym widmem sprawdzamy zachowane źródło prądu pełnej GSG:
+bilans komórek, nieprzenikanie przez zewnętrzny brzeg, zgodność par
+sourcecut i trzy przekroje przez signal/return. Nie uruchamiamy nowego
+transportu, nie zmieniamy wyniku inspection_only ani kwalifikacji planera.
+
+RT0 jest elementem H(div) o ciągłym śladzie normalnym; definicja i stopnie
+swobody: [DefElement](https://defelement.org/elements/raviart-thomas.html),
+[MFEM Maxwell notes](https://mfem.org/maxwell-notes/). W reprezentacji
+kanonicznych momentów Fullmaga, po uwzględnieniu orientacji ściany:
+```{math}
+:label: eq-sushruth-current-closure-rt0
+
+D_T=6\lvert T\rvert>0,\quad F_{Ti}=\int_{\partial T_i}\mathbf J_T\cdot\mathbf n_i\,dS,
+\quad c_{Ti}=2F_{Ti},\qquad
+\mathbf J_T(\mathbf r)=D_T^{-1}\sum_{i=0}^{3}c_{Ti}(\mathbf r-\mathbf v_i).
+```
+Z tej reprezentacji, bez kwadratury, wynikają:
+```{math}
+:label: eq-sushruth-current-closure-moments
+
+R_T=\int_T\nabla\cdot\mathbf J_T\,dV=\frac12\sum_i c_{Ti},\qquad
+\mathbf M_T=\int_T\mathbf J_T\,dV
+=\frac16\sum_i c_{Ti}(\bar{\mathbf r}_T-\mathbf v_i).
+```
+Dla płaszczyzny y=y0 składowa Jy jest stała na przekroju każdej komórki.
+Dokładne przecięcie krawędzi wyznacza wielokąt w xz i jego pole:
+```{math}
+:label: eq-sushruth-current-closure-section
+
+\mathcal S_T=T\cap\{y=y_0\},\quad
+I_b(y_0)=\sum_T J_{T,y}(y_0)\,
+\operatorname{area}(\mathcal S_T\cap B_b),\qquad
+J_{T,y}(y_0)=D_T^{-1}\sum_i c_{Ti}(y_0-v_{i,y}).
+```
+Przekroje leżą w prostych odcinkach trzech rozłącznych pasków.
+B_b oznacza obszar przekroju paska b. Klasyfikacja wymaga, by cały
+wielokąt mieścił się w jednym jawnym zakresie x; brak takiej gałęzi lub
+przecięcie kilku gałęzi daje odmowę, bez przypisania według centroidu.
+Jeśli płaszczyzna pokrywa ścianę, reguła min(y)≤y0<max(y) przypisuje
+ją tylko do jednej strony; nie sumujemy obu sąsiednich śladów.
+Nie interpolujemy wygładzonego nodal J. Pole wielokąta otrzymujemy
+z uporządkowanych punktów przecięcia, a całka nie używa display J.
+
+Na geometrycznie odpowiadających sobie trójkątach sourcecut sumujemy
+podpisane strumienie obu stron. Tolerancja1e-18m służy wyłącznie
+identyfikacji współrzędnych; nie przesuwa siatki i nie koryguje prądu.
+Brzeg poza sourcecut powinien mieć zerowy strumień. Dla zwartego
+zachowawczego prądu, po zamknięciu obu stron cut, całka wektoraJ
+po całym źródle powinna zanikać. Sam ten warunek nie kwalifikuje pola
+ani pominiętego przewodnika i nie zastępuje dowodu geometrii.
+
+| Symbol | Znaczenie | SI |
+|---|---|---|
+| $T,\partial T_i,i,b$ | Komórka, jej ściana, indeks lokalny i indeks paska | $1$ |
+| $\mathbf r,\mathbf v_i,\bar{\mathbf r}_T,y_0,v_{i,y}$ | Położenie, wierzchołek, centroid i współrzędne y | $\mathrm m$ |
+| $D_T,\lvert T\rvert,dV$ | Dodatni sześciokrotny wolumen, wolumen i miara objętości | $\mathrm{m^3}$ |
+| $\mathbf J_T,J_{T,y}$ | Prąd RT0 i składowa normalna do przekroju | $\mathrm{A\,m^{-2}}$ |
+| $\mathbf n_i$ | Jednostkowa normalna zewnętrzna ściany | $1$ |
+| $F_{Ti},c_{Ti},R_T,I_b$ | Strumień ściany, współczynnik RT0, reszta bilansu i prąd paska | $\mathrm A$ |
+| $\mathbf M_T$ | Objętościowa całka wektora prądu | $\mathrm{A\,m}$ |
+| $\mathcal S_T,B_b,dS,\operatorname{area}$ | Przekrój komórki i paska, miara powierzchni i pole powierzchni | $\mathrm{m^2}$ |
+
+| Parametr / interfejs | Typ / default | SI | Walidacja i rola |
+|---|---|---|---|
+| vertices / coefficients | ndarray /wymagane | $\mathrm m$ / $\mathrm A$ | Tet4 dodatniej orientacji, skończone dane; cztery współczynniki |
+| planes_y_m | list[float] /-5e-6,0,+5e-6 | $\mathrm m$ | Trzy przekroje wewnątrz prostych pasków |
+| branches | dict /trzy zapisane przedziały | $\mathrm m$ | Rozłączne zakresy x; brak przypisania daje odmowę |
+| sourcecut | trzy zakresy /y=-11e-6,x±100e-9,z30…120e-9 | $\mathrm m$ | Tylko jawny przekrój źródła z zachowanego modelu |
+| matching tolerance | float /1e-18 | $\mathrm m$ | Identyfikacja par, bez edycji geometrii |
+| relative flux / area tolerance | float /1e-9 | $1$ | Reszty wobec podpisanego Iref i pól przekroju |
+| relative split tolerance | float /1e-6 | $1$ | Przewidywany podział+1,-1/2,-1/2; bez fitu |
+| integrated current length | float /24e-6 | $\mathrm m$ | Skala Iref×długość pełnego źródła |
+| integrated current tolerance | float /1e-9 | $1$ | Względna całka wektoraJ całego źródła |
+| bundle / digest | Path /wymagane | $1$ | Pełny hash i wszystkie payloady przed obliczeniem |
+
+Prywatny skrypt scripts/audit_retained_rt0_current.py, symbole
+current_moments, section_currents, boundary_ledger i run_audit, nie
+zmienia publicznego Python, ProblemIR, planera, formatu wyników, runtime
+ani interpolacji pola. Korzysta wyłącznie z pure read_bundle/pack_rt0
+z tools/gsg_surface_native_probe.py; nie wywołuje jego main/native.
+Dla FEM/FDM CPU/GPU jest to reference-only kontrola zachowanych danych;
+brak nowego wykonania backendu lub GPU. Pełna kwalifikacja źródła,
+gęste native H/spectrum, cienki/długi limit i odpowiedź magnetyczna
+pozostają otwarte.
+
+Walidacja: sześć analitycznych regresji pola stałego/liniowego,
+translacji, podziałuTet4, nieprzypisanego przekroju i błędnych danych;
+następnie obie pełne GSG, trzy przekroje, brzeg i moment globalny.
+Prerejestracja jest w current_closure_audit_20261116/criteria-preregistered.json.
+Odbiór wykonano16.11.2026: bilans, brzeg,18par sourcecut i całkaJ
+przechodzą dla obu źródeł. Starszy podział powrotów ma błąd2.4468e-6
+wobecIref i nie przechodzi progu1e-6; nowszy3.8263e-8 przechodzi.
+Ogólny wynik audytu pozostajeFAIL. Dane, CSV, PNG/SVG i raport są
+w current_closure_audit_20261116; źródła nadal inspection_only.
+
+| Path | Symbol | Odpowiedzialność |
+|---|---|---|
+| scripts/audit_retained_rt0_current.py | current_moments | Dokładny bilans i całkaJ zachowanych Tet4. |
+| scripts/audit_retained_rt0_current.py | section_currents | Niezależne geometryczne przecięcie i strumienie pasków. |
+| scripts/audit_retained_rt0_current.py | boundary_ledger | Bilans zewnętrznego brzegu i par sourcecut. |
+| scripts/audit_retained_rt0_current.py | run_audit | Wykonanie prerejestrowanej kontroli obu zapisanych źródeł. |
+| scripts/test_audit_retained_rt0_current.py | class RetainedCurrentAuditTests | Sześć analitycznych regresji i odmów. |
+
+
+(sushruth-return-asymmetry-spectrum-attribution)=
+## Asymetria powrotów a mała różnica zachowanych widm
+
+Audyt przekrojów ujawnił nierówny podział powrotów. Sprawdzamy własną,
+prerejestrowaną hipotezę: czy niezależnie zmierzone prądy wyjaśniają
+małą różnicę zespolonych widm obu zapisanych rozwiązań. To nie jest
+dopasowanie pola do widma publikacji ani nowa kwalifikacja Fullmaga.
+
+Superpozycja Eq6–8 dla fizycznych środków x=-d,0,+d daje:
+```{math}
+:label: eq-sushruth-return-asymmetry-spectrum
+
+d=L+g,\quad
+q_b=I_b/I_\mathrm{ref},\quad
+A(k)=S_t(k)\left[q_0+q_-e^{-ikd}+q_+e^{ikd}\right],\qquad
+S_t(k)=\operatorname{sinc}(kL/2)e^{-|k|s}
+\frac{1-e^{-|k|t}}{|k|t}.
+```
+Czynnik grubości przy k=0 lub t=0 ma granicę1. Jest to model
+nieskończonych prostych pasków, jednolitego prądu w przekroju i dodatniej
+skończonej grubości, nie zastępstwo pełnych połączeń3D. Dla q0=1
+oraz q-=-1/2+δ, q+=-1/2-δ:
+```{math}
+:label: eq-sushruth-return-asymmetry-imaginary
+
+A(k)-A_\mathrm{sym}(k)=-2i\delta\,S_t(k)\sin(kd).
+```
+Konwencja pozostaje exp(+ikx); znak nie jest wybierany z otrzymanej
+krzywej. Nie oceniamy fazy przez dzielenie w pobliżu zer amplitudy.
+Porównujemy bezpośrednio Re/Im różnicy obu widm. q jest odczytane
+z przekroju y=0, niezależnie od obliczonego wcześniej widmaRT0.
+
+| Symbol | Znaczenie | SI |
+|---|---|---|
+| $d,L,g,s,t$ | Odstęp środków, szerokość, szczelina, odstęp pionowy i grubość metalu | $\mathrm m$ |
+| $k$ | Podpisany wektor falowy | $\mathrm{rad\,m^{-1}}$ |
+| $I_b,I_\mathrm{ref}$ | Zmierzony prąd paska i podpisana normalizacja źródła | $\mathrm A$ |
+| $q_b,q_0,q_-,q_+,\delta$ | Podpisane udziały prądu i asymetria powrotów | $1$ |
+| $A,A_\mathrm{sym},S_t$ | Amplituda widma, symetryczne odniesienie i czynnik pojedynczego paska | $1$ |
+| $i,b$ | Jednostka urojona i indeks paska | $1$ |
+
+Parametry: L200nm,g250nm,s43.7nm,t90nm — zgodne z zachowaną geometrią,
+odmienne od idealnejFig1. Wejścia: jawnie zahashowany CSV prądów,61punktów
+kwadratury6 oraz7niezależnie zachowanych punktów kwadratury8.
+Pomiędzy pomiarami nie zmieniamy parametrów. Próg atrybucji: względna
+normaL2 reszty wobec mierzonej różnicy≤0.05; na kontroli8 maxreszta≤1e-7.
+To progi własnej hipotezy, nie nowe tolerancje solvera. Dane pozostają
+niezmienione, a reszta jest zapisana osobno od predykcji.
+
+| Parametr / interfejs | Typ / default | SI | Walidacja / rola |
+|---|---|---|---|
+| width_m / gap_m | float /200e-9,250e-9 | $\mathrm m$ | Dodatnia szerokość, nieujemna szczelina; istniejący antenna_spectra |
+| spacing_m / thickness_m | float /43.7e-9,90e-9 | $\mathrm m$ | Nieujemne, skończone; istniejące walidatory referencji |
+| q_left / q_signal / q_right | float /CSV wymagany | $1$ | Podpisane skończone prądy z jawnego y=0; bez renormalizacji |
+| k | ndarray /zapisane61 lub7 punktów | $\mathrm{rad\,m^{-1}}$ | Identyczne k obu rozwiązań; bez interpolacji |
+| input_sha256 | dict /wymagany | $1$ | Wszystkie cztery wejścia zgodne przed i po obliczeniu |
+| acceptance | float /0.05,1e-7 | $1$ | Prerejestrowane progi własnej hipotezy, bez wpływu na solver |
+| output | Path /results | $1$ | Nowy katalog; odmowa nadpisania |
+
+Prywatny skrypt current_closure_audit_20261116/return_asymmetry_hypothesis/
+hypothesis.py + weighted_spectrum/run_hypothesis używa istniejącego
+antenna_spectra i metal_thickness_factor. Nie zmienia PythonAPI,
+ProblemIR, planera, runtime, źródła lub publicznego widma. FEM/FDM CPU/GPU:
+wyłącznie niezależny postprocessing zachowanego prądu; nativeH/spectrum
+pozostaje niezweryfikowane. Nie wyjaśnia to automatycznie dawnej
+rozbieżności transmisji lub widm o różnych geometriach.
+
+Walidacja: trzy regresje symetrycznegoGSG, znaku części urojonej i
+liniowości bez renormalizacji. Osobno zapisane61punktów przy n=6 oraz siedem punktów kontrolnych
+przy n=8, CSV z resztą i wspólny wykres. Wykonanie16.11.2026 przechodzi:
+resztaL2 na61punktachn6 to0.03798137 normy różnicy (próg0.05);
+maxreszta w7punktachn8 to4.0355e-10 (próg1e-7). Próbnikowa względna
+norma tych7punktów wynosi0.0002099643; nie dowodzi pełnej krzywejn8.
+Dotyczy małej różnicy obu zachowanych rozwiązań, bez fitu lub promocji
+nativeH/spectrum.
+
+| Path | Symbol | Odpowiedzialność |
+|---|---|---|
+| examples/sushruth_2020_closed_gsg/current_closure_audit_20261116/return_asymmetry_hypothesis/hypothesis.py | weighted_spectrum | Predykcja z niezależnych udziałów prądu, bez fitu. |
+| examples/sushruth_2020_closed_gsg/current_closure_audit_20261116/return_asymmetry_hypothesis/hypothesis.py | run_hypothesis | Porównanie z zachowanymi zespolonymi widmami6/8. |
+| examples/sushruth_2020_closed_gsg/current_closure_audit_20261116/return_asymmetry_hypothesis/test_hypothesis.py | class ReturnAsymmetryTests | Trzy regresje modelu predykcji. |
+
+(sushruth-native-h-return-asymmetry)=
+## Predykcja różnicy zachowanego native Hx z prądów przekrojowych
+
+Cel: sprawdzić tę samą przyczynę małej różnicy dwóch zapisanych rozwiązań
+bez użycia zachowanego widma jako referencji. Referencją obserwacji jest
+20 dawnych wartości native $H_x/I_\mathrm{ref}$; współczynniki prądów
+pochodzą z niezależnego przekroju $y=0$. Nie dopasowujemy amplitudy,
+znaku, fazy ani położenia. Historyczne dane były już znane przed
+prerejestracją nowej analizy; nie jest to badanie ślepe.
+
+Dla prądu w kierunku $+y$ oraz punktu poniżej dolnej powierzchni metalu
+całkowanie Biota–Savarta po nieskończonym $y$ i szerokości paska daje:
+
+```{math}
+:label: eq-sushruth-native-h-strip-kernel
+K(x,s;L,t)=-\frac{1}{2\pi Lt}\int_0^t
+\left[\operatorname{atan2}(x+L/2,s+u)
+-\operatorname{atan2}(x-L/2,s+u)\right]\,\mathrm du,\qquad s=z_b-z>0.
+```
+
+Funkcja $K$ jest polem na amper. Używamy rzeczywistego $z$ każdej próbki;
+nie przenosimy wszystkich punktów na linię widmową $z=-13.7$ nm.
+Dla $t\to0$ pozostaje wyrażenie w nawiasie podzielone przez $-2\pi L$.
+Skończona grubość jest całkowana regułą Gaussa–Legendre'a:
+
+```{math}
+:label: eq-sushruth-native-h-asymmetry-prediction
+x_b\in\{-d,0,+d\},\quad d=L+g,\qquad
+\Delta h_i^\mathrm{pred}=\sum_b
+\left(q_b^\mathrm{old}-q_b^\mathrm{new}\right)
+K(x_i-x_b,z_b-z_i;L,t).
+```
+
+Nie wymuszamy idealnej symetrii prądów lub ich ponownego bilansowania.
+Współrzędna $y_i$ pozostaje w CSV i jest uwzględniona przy parowaniu
+punktów, chociaż model nieskończonych pasków nie zależy od $y$.
+Pomiar różnicy ma skończony obwód 3D; predykcja ma model długich,
+jednorodnie wypełnionych pasków. Pozostała reszta obejmuje ten błąd modelu,
+niejednorodność RT0 i błąd dawnych obliczeń pola. Bez osobnego eksperymentu
+nie rozdzielamy tych składników.
+
+```{math}
+:label: eq-sushruth-native-h-asymmetry-error
+r_i=(h_i^\mathrm{old}-h_i^\mathrm{new})-\Delta h_i^\mathrm{pred},\quad
+E_\Delta=\frac{\sqrt{\sum_i r_i^2}}
+{\sqrt{\sum_i(h_i^\mathrm{old}-h_i^\mathrm{new})^2}},\quad
+E_h=\frac{\sqrt{\sum_i r_i^2}}{\sqrt{\sum_i(h_i^\mathrm{new})^2}}.
+```
+
+| Dokładny token | Znaczenie | Jednostka SI |
+|---|---|---|
+| $x,s,u,L,t,d,g,x_b,z_b,z,x_i,y_i,z_i$ | Współrzędne, odstęp dodatni, zmienna grubości, rozmiary i położenia paska oraz próbki | $\mathrm m$ |
+| $K,h_i^\mathrm{old},h_i^\mathrm{new},\Delta h_i^\mathrm{pred},r_i$ | Pole H na amper, jego różnica i reszta w punktach | $\mathrm{m^{-1}}$ |
+| $q_b^\mathrm{old},q_b^\mathrm{new}$ | Zmierzone podpisane udziały prądów paska w prądzie sygnałowym | $1$ |
+| $i,b$ | Indeks próbki i paska | $1$ |
+| $E_\Delta,E_h$ | Próbnikowe względne normy reszty, odpowiednio względem różnicy i pełnego nowego pola | $1$ |
+
+Pełne parametry prywatnego eksperymentu, bez publicznego API lub nowego IR:
+
+| Parametr | Typ / wartość | SI | Walidacja i znaczenie |
+|---|---|---|---|
+| width_m, gap_m | float /200e-9,250e-9 | $\mathrm m$ | Skończone, szerokość >0, szczelina ≥0 |
+| source_bottom_z_m, thickness_m | float /30e-9,90e-9 | $\mathrm m$ | Skończone, grubość ≥0, wszystkie próbki poniżej metalu |
+| points | int /20 | $1$ | Dokładnie zachowany zbiór XYZ, bez interpolacji lub pomijania punktów |
+| layer_orders | list[int] /16,32,64 | $1$ | Kontrola dokładności całkowania grubości; wynik główny 64 |
+| branch_current_measurement_plane_y_m | float /0 | $\mathrm m$ | Jeden unikalny pomiar każdego paska i źródła |
+| acceptance | dict /0.10,1e-6,1e-8 | $1$, $1$, $\mathrm{m^{-1}}$ | Własne progi $E_\Delta$, $E_h$ i max zmiany predykcji 16/32/64; bez wpływu na solver |
+| input_sha256, reference_sha256 | dict /wymagane | $1$ | Zgodność wszystkich wejść i współdzielonej referencji przed i po analizie |
+| output | Path /native_h_asymmetry/results | $1$ | Nowy katalog; odmowa nadpisania historycznego wyniku |
+
+Prywatna funkcja predict_difference i driver run_prediction w
+examples/sushruth_2020_closed_gsg/current_closure_audit_20261116/native_h_asymmetry/
+field_prediction.py używają istniejącego strip_field_per_ampere.
+Python publiczny, ProblemIR, planner, runtime, status inspection_only
+i limity solvera pozostają bez zmian. FEM CPU: odczyt zapisanych próbek,
+bez nowego wykonania. FEM GPU, FDM CPU i FDM GPU: brak nowej kwalifikacji;
+niezależna predykcja nie jest ich implementacją.
+
+Odtworzenie: Python3.12 uruchamia field_prediction.py bez argumentów,
+ze świeżym katalogiem results, przypiętymi CSV i kontrolą hashy.
+Przed implementacją zapisano testy niezależnej kubatury Biota–Savarta,
+znaku, antysymetrii, skalowania SI, przesunięcia pionowego i odmów.
+Kryterium hipotezy: $E_\Delta\le0.10$, $E_h\le10^{-6}$ i maksymalna
+zmiana predykcji między regułami grubości $\le10^{-8}\,\mathrm{m^{-1}}$.
+Są to kryteria wyjaśnienia różnicy tych 20 punktów, nie pełnej krzywej.
+
+Wykonanie16.11.2026: cztery regresje przechodzą. Predykcja bez fitu daje
+$E_\Delta=0.05050445646$ oraz $E_h=1.530969666\times10^{-7}$.
+Największa reszta to $0.3070780169\,\mathrm{m^{-1}}$; zmiana16→32
+wynosi $1.491862189\times10^{-16}\,\mathrm{m^{-1}}$.
+Wszystkie trzy prerejestrowane bramki przechodzą. Nie oznacza to, że
+przypisano całą resztę konkretnej metodzie numerycznej.
+Otwarty pozostaje odbiór gęstego
+native H/spectrum oraz anten S/GS i zgodnego limitu Fig.1. Nie przechodzimy
+do odpowiedzi LLG na podstawie tego testu.
+
+| Path | Symbol | Odpowiedzialność |
+|---|---|---|
+| scripts/verify_sushruth_2020_field_fft.py | strip_field_per_ampere | Referencja Hx/I z właściwym znakiem Biota–Savarta |
+| examples/sushruth_2020_closed_gsg/current_closure_audit_20261116/native_h_asymmetry/field_prediction.py | predict_difference | Superpozycja zmierzonych prądów przy właściwym z każdej próbki |
+| examples/sushruth_2020_closed_gsg/current_closure_audit_20261116/native_h_asymmetry/field_prediction.py | run_prediction | Przypięcie danych, wszystkie 20 punktów, błędy, wykres |
+| examples/sushruth_2020_closed_gsg/current_closure_audit_20261116/native_h_asymmetry/test_field_prediction.py | class NativeFieldPredictionTests | Niezależne regresje modelu i jednostek |
+
+(sushruth-full-rt0-point-field)=
+## Oddzielenie modelu pasków od obliczania pola z pełnego RT0
+
+Przed oceną reszty wykonujemy niezależną całkę tego samego zachowanego
+prądu 3D, zamiast przypisywać ją od razu kernelowi. Nie uruchamiamy native
+ani nowego transportu. Dla punktów ściśle poniżej całego źródła:
+
+```{math}
+:label: eq-sushruth-full-rt0-point-field
+H_x(\mathbf r)=\frac{1}{4\pi}
+\sum_T\int_{\hat T}
+\frac{N_{T,y}(\boldsymbol\lambda)R_z-
+N_{T,z}(\boldsymbol\lambda)R_y}{\lvert\mathbf R\rvert^3}
+\,\mathrm d\hat V,\quad
+\mathbf R=\mathbf r-\mathbf r_T(\boldsymbol\lambda),\quad
+\mathbf N_T=\sum_{j=0}^3 c_{T,j}
+\left(\mathbf r_T-\mathbf v_{T,j}\right).
+```
+
+Zachowane $c_{T,j}$ są dwukrotnością podpisanego strumienia ściany,
+a $\mathbf J_T=\mathbf N_T/D_T$, gdzie $D_T=6V_T>0$.
+Jacobian $D_T$ skraca się z mianownikiem reprezentacji RT0.
+Reguła tetra_rule ma sumę wag $1/6$. Po całkowaniu dzielimy przez
+oryginalny podpisany $I_\mathrm{ref}$ każdego źródła, bez zmiany prądu.
+
+```{math}
+:label: eq-sushruth-full-rt0-field-decomposition
+\left(h^\mathrm{old}_\mathrm{native}-h^\mathrm{new}_\mathrm{native}\right)
+-\Delta h^\mathrm{pred}
+=
+\underbrace{\left(h^\mathrm{old}_\mathrm{ref}-h^\mathrm{new}_\mathrm{ref}\right)
+-\Delta h^\mathrm{pred}}_{r_\mathrm{model}}
++
+\underbrace{\left(h^\mathrm{old}_\mathrm{native}-h^\mathrm{old}_\mathrm{ref}\right)
+-\left(h^\mathrm{new}_\mathrm{native}-h^\mathrm{new}_\mathrm{ref}\right)}
+_{r_\mathrm{field}}.
+```
+
+To tożsamość rozdzielająca błąd przybliżenia długich pasków
+od różnicy native względem niezależnego całkowania tego samego RT0.
+Samo $r_\mathrm{field}$ nie wskazuje jeszcze linijki błędnego kodu;
+może mieścić się w deklarowanym błędzie obliczania pola.
+Referencja musi najpierw przejść własną kontrolę zbieżności.
+
+| Dokładny token | Znaczenie | Jednostka SI |
+|---|---|---|
+| $\mathbf r,\mathbf R,\mathbf r_T,\mathbf v_{T,j}$ | Target, wektor od źródła, punkt całkowania i wierzchołek Tet4 | $\mathrm m$ |
+| $c_{T,j},I_\mathrm{ref}$ | Współczynnik RT0 równy dwukrotności strumienia i oryginalny prąd źródła | $\mathrm A$ |
+| $\mathbf N_T$ | Licznik RT0 równy gęstości prądu razy Jacobian | $\mathrm{A\,m}$ |
+| $\mathbf J_T$ | Gęstość prądu w lokalnej komórce | $\mathrm{A\,m^{-2}}$ |
+| $D_T,V_T$ | Dodatni Jacobian i objętość Tet4 | $\mathrm{m^3}$ |
+| $H_x$ | Składowa pola źródłowego przed normalizacją prądem | $\mathrm{A\,m^{-1}}$ |
+| $h^\mathrm{old}_\mathrm{native},h^\mathrm{new}_\mathrm{native},h^\mathrm{old}_\mathrm{ref},h^\mathrm{new}_\mathrm{ref},\Delta h^\mathrm{pred},r_\mathrm{model},r_\mathrm{field}$ | Pola na amper, predykcja różnicy i składniki reszty | $\mathrm{m^{-1}}$ |
+| $T,j,\hat T,\boldsymbol\lambda,\mathrm d\hat V$ | Indeksy komórki/wierzchołka, tetraedr referencyjny, barycentryczne współrzędne i miara | $1$ |
+
+Prywatny eksperyment full_rt0_point_field/point_field_reference.py:
+point_field_x całkuje, run_reference przypina oba bundle i wszystkie payloady,
+sprawdza zgodność zamrożonego RT0 i dawnych nativeH z20XYZ, a następnie
+zapisuje oddzielne błędy modelu i pola. Współdzielone tetra_rule i
+rt0_sample_moment pozostają niezmienione.
+
+| Parametr | Typ / wartość | SI | Walidacja / przeznaczenie |
+|---|---|---|---|
+| sources | list /40728,85980komórek | $1$ | Właściwe bundle, wszystkie hashe payloadów, dodatnie Tet4 i identyczne zamrożone współczynniki |
+| points | ndarray /20×3 | $\mathrm m$ | Skończone oryginalne XYZ; targety poniżej całego źródła |
+| orders | list[int] /4,6,8,10,12 | $1$ | Minimum trzy reguły; dwie ostatnie zmiany muszą przejść oba progi, inaczej referencja nieodebrana |
+| quadrature_l2, quadrature_point | float /1e-9,1e-8 | $1$ | Zmiany normy próbnikowej i każdego punktu; mianownik punktowy max(1 m⁻¹,abs(h)) |
+| native_l2, native_point | float /1e-6,1e-6 | $1$ | Własne progi kontroli20punktów, bez zmiany tolerancji solvera |
+| cpu_threads, memory, time | int /1,2048,720 | $1$, $\mathrm{MiB}$, $\mathrm s$ | Lokalne ograniczenia niezależnego eksperymentu, bez zmiany kontenera |
+| output | Path /full_rt0_point_field/results | $1$ | Nowy katalog, odmowa nadpisania wyniku |
+
+PythonAPI/ProblemIR/planner/runtime: brak zmian i brak serializacji tej
+prywatnej referencji. FEM CPU dostarcza wyłącznie zapisane wejścia.
+FDM CPU, FDM GPU i FEM GPU nie otrzymują nowego wsparcia lub kwalifikacji.
+Nie zmieniamy inspection_only ani ograniczenia publicznego źródła.
+Każda odmowa zbieżności lub limitu jest zachowana jako nieodebrany wynik,
+bez podnoszenia tolerancji po porównaniu z native.
+
+Test samego bardzo grubego prostopadłościanu wymaga reguły16 dla
+niezmienionej tolerancji $10^{-10}$; reguła12 dała błąd około $1.8\times10^{-10}$.
+Prywatne point_rule odtwarza tę samą transformację Duffy'ego dla
+testowego16. Zapisano pierwotną odmowę. Reguły eksperymentu na zachowanych
+siatkach nadal wynoszą4/6/8/10/12, a ich progi pozostają bez zmian.
+
+Wykonanie zakończyło się kodem2: własna zbieżność nieodebrana dla obu
+źródeł. Zmiany10→12 L2: $8.03667\times10^{-9}$ i $9.80592\times10^{-9}$,
+punktowo $2.55826\times10^{-8}$ i $3.21357\times10^{-8}$.
+Norma zmiany różnicy źródeł10→12 to $0.0244318\,\mathrm{m^{-1}}$,
+większa od oszacowania $r_\mathrm{model}$ przy12. Nie opieramy na nim
+ilościowej atrybucji. Cztery testy i niezależny review przeszły,
+co nie zastępuje odmowy referencji. Zapisano343.8s i227.6MiB RSS.
+Referencja dotyczy tylko20targetów; brak interpolacji na całe Universe
+i brak gęstego FFT.
+
+| Path | Symbol | Odpowiedzialność |
+|---|---|---|
+| scripts/reference_retained_rt0_spectrum.py | tetra_rule | Reguła Gaussa na referencyjnym Tet4 |
+| scripts/reference_retained_rt0_spectrum.py | rt0_sample_moment | Stabilny licznik J razy Jacobian w lokalnej komórce |
+| examples/sushruth_2020_closed_gsg/current_closure_audit_20261116/full_rt0_point_field/point_field_reference.py | point_rule | Wspólna reguła do12 i dokładniejszy test prostopadłościanu16 |
+| examples/sushruth_2020_closed_gsg/current_closure_audit_20261116/full_rt0_point_field/point_field_reference.py | point_field_x | Niezależna całka Hx z całego zachowanego RT0 |
+| examples/sushruth_2020_closed_gsg/current_closure_audit_20261116/full_rt0_point_field/point_field_reference.py | run_reference | Audyt wejść, zbieżność i rozdzielenie reszty |
+| examples/sushruth_2020_closed_gsg/current_closure_audit_20261116/full_rt0_point_field/test_point_field_reference.py | class FullRT0PointFieldTests | Dokładny prostokątny prąd, jednostki, orientacje i podział Tet4 |
+
+(sushruth-analytic-rt0-face-reference)=
+## Analityczna referencja ścian RT0 dla 20 zachowanych targetów
+
+Reguły objętościowe4/6/8/10/12 nie przeszły uprzednich progów referencji:
+zmiana10→12 daje L2 $8.04\times10^{-9}$ i $9.81\times10^{-9}$,
+wobec progu $10^{-9}$. Nie uznajemy ich za odebrany wzorzec i nie
+zwiększamy tolerancji. Osobno sprawdzamy własną redukcję analityczną.
+
+Lokalne RT0 ma postać $\mathbf J_T(\mathbf r')=a_T\mathbf r'+\mathbf b_T$,
+gdzie nachylenie $a_T$ jest skalarem. W poniższej tożsamości
+$\mathbf J_T(\mathbf r)$ oznacza wyłącznie matematyczne przedłużenie
+tego wielomianu do targetu; nie jest fizycznym prądem poza przewodnikiem:
+
+```{math}
+:label: eq-sushruth-rt0-face-reduction
+\mathbf J_T(\mathbf r')\times(\mathbf r-\mathbf r')
+=\mathbf J_T(\mathbf r)\times(\mathbf r-\mathbf r'),\qquad
+\mathbf H_T(\mathbf r)=\frac{\mathbf J_T(\mathbf r)}{4\pi}
+\times\sum_f\mathbf n_f\Phi_f,\qquad
+\Phi_f=\int_f\frac{\mathrm dS'}{|\mathbf r-\mathbf r'|}.
+```
+
+Wykorzystano $\nabla'(1/|\mathbf r-\mathbf r'|)
+=(\mathbf r-\mathbf r')/|\mathbf r-\mathbf r'|^3$ i twierdzenie Gaussa.
+Dla trójkąta o wierzchołkach $\mathbf v_j$ oznaczamy
+$\boldsymbol\rho_j=\mathbf v_j-\mathbf r$, $R_j=|\boldsymbol\rho_j|$,
+$h=\boldsymbol\rho_0\cdot\mathbf n_f$ oraz
+$\mathbf m_j=((\mathbf v_{j+1}-\mathbf v_j)/\ell_j)\times\mathbf n_f$.
+Indeksy wierzchołków są cykliczne. Z dwuwymiarowej dywergencji
+$\nabla_2\cdot(\mathbf u/\sqrt{|\mathbf u|^2+h^2})
+=1/R+h^2/R^3$ otrzymujemy:
+
+```{math}
+:label: eq-sushruth-triangle-potential
+\Phi_f=
+\sum_{j=0}^2(\boldsymbol\rho_j\cdot\mathbf m_j)
+\,2\operatorname{atanh}\frac{\ell_j}{R_j+R_{j+1}}
+-|h|\,|\Omega_f|,\qquad
+\Omega_f=2\operatorname{atan2}
+\left(
+\det[\boldsymbol\rho_0,\boldsymbol\rho_1,\boldsymbol\rho_2],
+R_0R_1R_2+
+(\boldsymbol\rho_0\cdot\boldsymbol\rho_1)R_2+
+(\boldsymbol\rho_1\cdot\boldsymbol\rho_2)R_0+
+(\boldsymbol\rho_2\cdot\boldsymbol\rho_0)R_1
+\right).
+```
+
+Kąt bryłowy trójkąta: van Oosterom i Strackee,
+[IEEE TBME30(2),125–126(1983)](https://doi.org/10.1109/TBME.1983.325207).
+Redukcję RT0 i wzór potencjału wyprowadzono tutaj; nie kopiujemy
+nieodczytanego kodu innego solvera. Reguły Gaussa porównano z
+[NIST DLMF3.5](https://dlmf.nist.gov/3.5).
+Wektorowe prawo Biota–Savarta jest podstawą znaku;
+źródłowe H nie zawiera dodatkowego mnożnika $\mu_0$.
+
+| Dokładny token | Znaczenie | Jednostka SI |
+|---|---|---|
+| $\mathbf r,\mathbf r',\mathbf v_j,\boldsymbol\rho_j,\mathbf u,R,R_j,h,\ell_j$ | Target, źródło, współrzędne i odległości w geometrii trójkąta | $\mathrm m$ |
+| $\mathbf J_T,\mathbf b_T$ | Gęstość prądu i stała część lokalnego wielomianu RT0 | $\mathrm{A\,m^{-2}}$ |
+| $a_T$ | Skalarne nachylenie lokalnego RT0 | $\mathrm{A\,m^{-3}}$ |
+| $\mathbf H_T$ | Wkład komórki do pola H | $\mathrm{A\,m^{-1}}$ |
+| $\Phi_f$ | Potencjał skalarny powierzchni trójkąta | $\mathrm m$ |
+| $\mathrm dS'$ | Element powierzchni źródłowej | $\mathrm{m^2}$ |
+| $\mathbf n_f,\mathbf m_j,\Omega_f,T,f,j$ | Normalne jednostkowe, kąt bryłowy i indeksy | $1$ |
+| $\nabla_2$ | Operator różniczkowy po współrzędnych płaszczyzny | $\mathrm{m^{-1}}$ |
+
+Operator i wszystkie pola mają jawne jednostki SI.
+
+Prywatny analytic_rt0_face_reference/analytic_reference.py:
+triangle_potential i point_field_x, z osobnym run_reference.
+Parametry źródeł i20XYZ są identyczne z poprzednią kontrolą.
+Nie zmieniają publicznego PythonAPI, ProblemIR, planera lub runtime.
+FEM CPU: wyłącznie zapisane wejścia; FEM GPU/FDM CPU/FDM GPU:
+brak nowej implementacji lub kwalifikacji.
+
+| Parametr | Typ / wartość | SI | Walidacja / znaczenie |
+|---|---|---|---|
+| sources, points | list, ndarray /dwa źródła,20×3 | $1$, $\mathrm m$ | Całe bundle i frozen zgodne z przypiętymi hashami; skończone dodatnie Tet4 i targety poniżej źródła |
+| arithmetic | dtype /longdouble,float64 | $1$ | Oba warianty tego samego wzoru; zapis rzeczywistej liczby bitów mantysy |
+| precision_l2, precision_point | float /1e-9,1e-8 | $1$ | Zmiana między wariantami; mianownik punktowy max(1 m⁻¹,abs(h)) |
+| native_l2, native_point | float /1e-6,1e-6 | $1$ | Uprzednie progi kontroli20targetów, bez zmiany tolerancji native |
+| cpu_threads, memory, time | int /1,2048,720 | $1$, $\mathrm{MiB}$, $\mathrm s$ | Lokalne limity referencji, bez zmiany kontenera |
+| output | Path /analytic_rt0_face_reference/results | $1$ | Odmowa nadpisania historycznych wyników |
+
+Wariant float64 dotyczy geometrii i kernela; oba warianty akumulują
+wkłady w longdouble i zwracają float64. Pole mantissa_bits w JSON zapisuje
+np.finfo.nmant (52/63), bez ukrytego bitu wiodącego.
+Kontrola dwóch precyzji jest testem stabilności arytmetyki, nie
+certyfikatem przedziałowym. Konieczne są także niezależne analityczne
+i całkowe regresje, a następnie osobny przegląd. Zachowany inspection_only
+pozostaje bez zmian. Nawet zaliczenie wszystkich20punktów nie dowodzi
+gęstego native H/spectrum ani pozostałych anten Fig.1.
+
+| Path | Symbol | Odpowiedzialność |
+|---|---|---|
+| examples/sushruth_2020_closed_gsg/current_closure_audit_20261116/analytic_rt0_face_reference/analytic_reference.py | triangle_potential | Własna zamknięta całka potencjału trójkąta |
+| examples/sushruth_2020_closed_gsg/current_closure_audit_20261116/analytic_rt0_face_reference/analytic_reference.py | point_field_x | Redukcja pełnego lokalnego RT0 do czterech ścian |
+| examples/sushruth_2020_closed_gsg/current_closure_audit_20261116/analytic_rt0_face_reference/analytic_reference.py | run_reference | Piny, precyzja,20nativeH i rozdzielenie reszty |
+
+Wykonanie analitycznej referencji16.11.2026: sześć regresjiGREEN; wynik
+ANALYTIC_RT0_POINT_REFERENCE_PASS w20targetach. Błąd native/ref L2:
+coarse1.854521229e-7, fine1.153147502e-7; max punktowy5.419099806e-7
+oraz2.052493537e-7 przy progu1e-6. Zmiana float64/longdouble L2
+5.7823e-15/6.1287e-15; max punktowo1.24361e-11/9.70056e-12.
+Normy reszty: całkowita0.4853743228, modelu0.0001486290960,
+obliczania pola0.4853639235[1/m]. Te składowe nie są ortogonalne;
+nie dodajemy ich norm. Reszta modelu stanowi0.03062% normy reszty
+całkowitej, a nie procent błędu pełnego pola. Własna referencja trwała
+23.774s przy peakRSS181.02MiB. Nowa kwalifikacja dotyczy wyłącznie20Hx
+z dwóch zachowanych źródeł; nie pełnej Fig.1 lub gęstego nativeFFT.
+
+| Path | Symbol | Odpowiedzialność |
+|---|---|---|
+| examples/sushruth_2020_closed_gsg/current_closure_audit_20261116/analytic_rt0_face_reference/test_analytic_reference.py | class AnalyticFaceReferenceTests | Kubatura trójkąta, orientacja i jednostki oraz stały Jz/radialny RT0; osobno reużyte cztery oracley pryzmatu |
+
+
+(sushruth-analytic-rt0-vector-validation)=
+## Kontrola zachowanego pełnego wektora H — wykonany pomiar
+
+Rozszerzenie referencyjnego odbioru obejmuje wszystkie trzy składowe
+równania {eq}`eq-sushruth-rt0-face-reduction`, z tą samą geometrią,
+podpisanym prądem i fizycznymi współczynnikami RT0. Nie zmienia równania
+produkcji ani publicznego API. Osobny prywatny driver korzysta z istniejącej
+funkcji triangle_potential; zapisany Hx nie zostaje nadpisany.
+
+Kontrakt i kryteria zapisano przed nowym pomiarem. Wykonanie trwało
+57,858576 s na jednym CPU przy peak RSS 189,917969 MiB; exit 2 jest
+odmową odbioru: siedem z ośmiu bramek przechodzi.
+
+| Źródło | Wektorowe L2 [ppm] | Maksimum punktowe [ppm] | Próg maksimum 1 ppm |
+|---|---:|---:|---|
+| 40 728 Tet4 | 0.228373736 | 0.500627404 | PASS |
+| 85 980 Tet4 | 0.581565746 | 1.477436313 | FAIL |
+
+Odmowa dotyczy próbki #11 nowszego źródła: x=0, y=+50 nm, z=−22,4 nm.
+Różnica Hz wynosi 3,170331448e-5 A/m. Weryfikacja fizycznych źródeł i
+niezależny odczyt CSV potwierdziły wynik; błędu mapowania składowych,
+jednostek lub podpisanego prądu nie stwierdzono.
+
+Aktualny DirectTetraQuadratureOptions stosuje składnik bezwzględny
+1e-9 A/m i względny 1e-5. W tym punkcie bieżąca reguła budżetu daje
+około 2,146e-4 A/m, więcej niż zmierzona norma błędu 3,171e-5 A/m.
+Nie dowodzi to naruszenia natywnego kontraktu H; odrębna bramka
+1 ppm pozostaje niezaliczona. Manifest nie zachowuje historycznej
+decyzji estymatora. Przyczyny lokalnej różnicy numerycznej nie ustalono.
+
+Pełne dane, piny, wykresy, wykonanie i ograniczenia:
+examples/sushruth_2020_closed_gsg/current_closure_audit_20261116/vector_rt0_face_reference/raport-wektora-H.md.
+Pięć fizycznych regresji RED/GREEN i dwa odczytowe review są zachowane.
+Nie nadajemy źródłu durable_source_authentication i nie odbieramy gęstej
+mapy lub widma. Publiczny Python, ProblemIR, normalizacja, planner,
+runtime, status inspection_only i dane historyczne pozostają bez zmian.
+FEM CPU: porównanie wyłącznie zachowanych wyników; FEM GPU, FDM CPU
+i FDM GPU: brak nowej realizacji lub kwalifikacji.
+
+| Parametr prywatnej referencji | Typ / wartość | Jednostka SI | Walidacja i przeznaczenie |
+|---|---|---|---|
+| vertices | ndarray, wymagany | $\mathrm m$ | Skończone dodatnie Tet4, kształt liczba komórek ×4×3 |
+| coefficients | ndarray, wymagany | $\mathrm A$ | Cztery lokalne współczynniki RT0 na Tet4; zgodne z fizycznymi momentami ścian, bez nodal averaging |
+| points | ndarray, wymagany | $\mathrm m$ | Skończone 20×3, identyczne z dwoma bundle, ściśle poniżej przewodnika |
+| dtype | numpy dtype, domyślnie longdouble | $1$ | Osobna kontrola geometrii i kernela float64; obie akumulacje longdouble, wyjście float64 |
+| point denominator floor | float, 1 | $\mathrm{m^{-1}}$ | Mianownik punktowy max(podłoga, norma całego wektora pola podzielonego przez podpisany prąd) |
+| native vector L2 / max point | float, 1e-6 /1e-6 | $1$ | Kryteria zadane przed pomiarem; bez zmiany tolerancji natywnego solvera |
+| precision vector L2 / max point | float, 1e-9 /1e-8 | $1$ | Stabilność względem typu arytmetyki, nie certyfikat przedziałowy |
+| CPU / RSS / czas | int, 1 /2048 /720 | $1$, $\mathrm{MiB}$, $\mathrm s$ | Lokalne limity postprocessingu bez zmiany kontenera |
+| output | Path, nowy katalog results | $1$ | Odmowa nadpisania wcześniejszych wyników |
+
+Normy L2 są próbnikowe bez wag objętości. Dla składowych małych przez
+anulowanie zapisujemy również błędy bezwzględne w $\mathrm{m^{-1}}$;
+dobrej normy całego wektora nie nazywamy dowodem względnej dokładności
+każdej składowej bliskiej zeru. Wykres punktowy nie stanowi gęstego
+odtworzenia Fig.1. Regresje obejmują niezależną objętościową kwadraturę
+pryzmatu i afinicznego Tet4, jednostki przy zachowanych strumieniach,
+cykliczną permutację osi oraz odmowy. Wykorzystujemy pełne wektorowe
+prawo Biota–Savarta i bibliografię poprzedniej sekcji.
+
+| Path | Symbol | Odpowiedzialność |
+|---|---|---|
+| examples/sushruth_2020_closed_gsg/current_closure_audit_20261116/vector_rt0_face_reference/vector_reference.py | point_field_vector | Wszystkie składowe istniejącej analitycznej redukcji RT0 |
+| examples/sushruth_2020_closed_gsg/current_closure_audit_20261116/vector_rt0_face_reference/vector_reference.py | run_comparison | Jawne piny, dwie arytmetyki, normy wektorowe i zapis |
+| examples/sushruth_2020_closed_gsg/current_closure_audit_20261116/vector_rt0_face_reference/test_vector_reference.py | class VectorReferenceTests | Niezależne całki objętościowe i transformacje fizyczne |
+| examples/sushruth_2020_closed_gsg/current_closure_audit_20261116/vector_rt0_face_reference/render_vector_comparison.py | render_comparison | Wykres punktowego błędu wektora i trzech składowych z CSV, bez interpolacji mapy |
+
+
+
+(sushruth-native-field-fft-postprocessor)=
+## FFT z zachowanego natywnego H — prywatne przetwarzanie 18.11.2026
+
+Narzędzie scripts/native_antenna_field_fft.py łączy istniejący odczyt
+zachowanych pakietów z fourier_minus. Stosuje wyłącznie dyskretną sumę
+równania eq-sushruth-sampled-field-fourier-convention; nie oblicza nowego H.
+Normalizuje fizyczne Hx przez podpisany prąd źródła, zachowuje fizyczny
+początek osi, ujemny wykładnik transformaty i jawnie zapisuje także
+sprzężone A+ z mnożnikiem −2. Nie dopasowuje skali ani fazy i nie wykonuje
+interpolacji, paddingu, odejmowania średniej lub uzupełniania ogonów.
+
+Odczyt źródła jest ograniczony do antenna_field_solution.v2 ze statusem
+inspection_only; opcjonalne pole potomne do zachowanego
+antenna_retained_current_field_solution.v1. Hash pliku, ramkowanie,
+hashe payloadów, jednostki i layout są sprawdzane przed użyciem.
+Potomek musi wskazywać ten sam bundle źródła, pięć tożsamości źródła oraz
+te same liczby komórek i wierzchołków. Nie oznacza to kwalifikacji źródła.
+
+| Interfejs prywatnego CLI | Typ / domyślna wartość | SI | Reguła |
+|---|---|---|---|
+| source-bundle, source-sha256 | Path, str / wymagane | $1$ | Istniejący pełny bundle i jawny hash SHA256. |
+| field-bundle, field-sha256 | Path, str / brak | $1$ | Oba razem; brak oznacza H z pełnego bundle. |
+| y-m, z-m | float / wymagane | $\mathrm m$ | Skończone, dokładny wybór fizycznej linii; brak wyboru najbliższej warstwy. |
+| expected-count | int / wymagane | $1$ | Co najmniej cztery punkty jawnie zadanej linii. |
+| expected-x-first-m | float / wymagany | $\mathrm m$ | Skończony początek zaplanowanego profilu. |
+| expected-step-m | float / wymagany | $\mathrm m$ | Dodatni, skończony odstęp, bez odgadywania go z brakujących próbek. |
+| output-dir | Path / wymagany | $1$ | Nowy katalog, bez nadpisywania wyników. |
+
+Nie ma nowego publicznego API Python, ProblemIR, capabilities, etapu
+runtime ani formatu produkcyjnego. Wszystkie parametry należą do prywatnego
+postprocessingu, nie serializują się do ProblemIR. Requested profile,
+tożsamość wejść i zakres inspection_only pozostają w raporcie.
+
+Pozycje wybranej linii są sortowane razem z wartościami H. Narzędzie
+odrzuca powtórzenia, nieregularny lub niekompletny profil, niezgodne
+jednostki, niefinity oraz zerowy prąd. Kompletność sprawdza względem
+jawnych expected-count/x-first/step; inne warstwy nośnika mogą mieć
+inne pozycje x. Sprawdzenie równomierności dziedziczy rtol=1e−9;
+wartości wejściowe przekazywane do FFT nie są poprawiane.
+
+FFT_POSTPROCESSING_PASS oznacza jedynie, że wykonano transformację
+poprawnego wejścia. publication_agreement pozostaje NOT_VERIFIED,
+native_spectrum_executed=false, source_status=inspection_only. Wynik powstaje
+w NumPy z natywnego H; nie jest wykonaniem publicznego etapu
+antenna_spectrum ani potwierdzeniem zbieżności okna/próbkowania.
+
+Przy INPUT_REJECTED zapisujemy przyczynę i manifest wejść; nie powstaje
+spectrum.csv. Nie dodajemy automatycznie referencji nieskończonych pasków:
+dla pełnego obwodu różnica względem niej jest różnicą modeli, a nie samym
+błędem obliczania H. Warunki i odniesienie wymagają osobnego eksperymentu.
+
+FEM CPU: prywatny odczyt zachowanych danych inspekcyjnych i CPU NumPy;
+kwalifikacja natywnego widma pozostaje NOT VERIFIED. FEM GPU, FDM CPU
+i FDM GPU nie są wykonywane ani kwalifikowane tym narzędziem.
+Dodatnie testy syntetyczne są oddzielone od odmowy dla prawdziwego H92.
+W wykonaniu 18.11.2026 odczyt źródła i pola przeszedł kontrolę hashy,
+jednostek i relacji rodzic–potomek. Wybrana linia zawierała 23 próbki
+zamiast jawnie zadanych 81 punktów co 50 nm w ±2 µm; narzędzie zakończyło
+się oczekiwanym kodem 2 i INPUT_REJECTED. Nie powstało widmo ani nowy wynik H.
+Wszystkie 16 kontroli odbioru oraz 17 testów (11 nowych i 6 istniejących)
+przeszło. Przetwarzanie zajęło 0,558 s i maksymalnie 158,31 MiB RSS.
+Dokładne wejścia, komenda i wyniki pozostają w
+examples/sushruth_2020_closed_gsg/native_field_fft_20261118:
+criteria.json, edge92-verification.json oraz edge92-rejection/result.json.
+Ten test kontraktu nie definiuje nowej siatki solvera ani wystarczającego
+profilu do odtworzenia Fig.1. Zgodność natywnego widma pozostaje niepotwierdzona.
+
+| Ścieżka | Symbol | Odpowiedzialność |
+|---|---|---|
+| scripts/native_antenna_field_fft.py | load_native_field | Przypięte wejścia i relacja źródła oraz pola. |
+| scripts/native_antenna_field_fft.py | extract_line | Jawny fizyczny profil, kompletność i signed I. |
+| scripts/native_antenna_field_fft.py | compute_spectrum | Istniejąca konwencja DFT i A+. |
+| scripts/native_antenna_field_fft.py | run_postprocessor | Artefakty i ograniczony werdykt, bez Solve. |
+| scripts/test_native_antenna_field_fft.py | class NativeFieldFftTests | Syntetyczne regresje fazy, jednostek, kompletności i provenance. |
+
+
+(sushruth-edge92-same-current-reference)=
+## Kontrola H92 z dokładnie tego samego prądu — 18.11.2026
+
+Rozszerzono wyłącznie odczytowy postprocessing istniejącej metody
+{ref}`sushruth-analytic-rt0-face-reference` na wszystkie 92 zachowane targety.
+Wykorzystano źródło 40 728 Tet4, 14 194 wierzchołki i podpisany prąd
+$1.7549315667730878\times10^{-5}\ \mathrm A$. Wymiary pasków
+(szerokość/szczelina/grubość) to $200/250/90\ \mathrm{nm}$.
+Próbki: 23 niejednorodne pozycje $x$ od $-2$ do $2\ \mathrm{\mu m}$,
+$y=\pm50\ \mathrm{nm}$ oraz $z=-22.4,-5\ \mathrm{nm}$.
+Współczynniki RT0 odtworzono bajtowo z oryginalnych momentów ścian;
+sprawdzono pięć pinów tożsamości rodzica, wszystkie XYZ, jednostki i payloady.
+
+Wykonano tę samą analityczną całkę wektorową w longdouble oraz float64,
+z akumulacją longdouble i zapisem float64. Kryteria z poprzedniej kontroli
+zapisano przed wykonaniem: L2/max native $10^{-6}$, stabilność precyzji
+$10^{-9}/10^{-8}$; mianownik punktowy
+$\max(1\ \mathrm{m^{-1}},\|\mathbf H_{\mathrm{ref}}/I\|)$.
+Norma L2 obejmuje próbki, bez wag objętości. Nie zmieniono tolerancji solvera.
+
+| Kontrola wszystkich 92 wektorów | Wynik | Werdykt |
+|---|---:|---|
+| Native vs referencja, względne L2 | $7.861634347244416\times10^{-17}$ | PASS |
+| Native vs referencja, maksimum punktowe | $1.4591454319879294\times10^{-15}$ | PASS |
+| float64 vs longdouble, względne L2 | $8.291010921779853\times10^{-15}$ | PASS |
+| float64 vs longdouble, maksimum punktowe | $2.2385159420813517\times10^{-12}$ | PASS |
+
+Wykonanie: $60.105\ \mathrm s$, jeden CPU, szczyt RSS
+$116.961\ \mathrm{MiB}$; limity prywatnej referencji
+$720\ \mathrm s$ i $2048\ \mathrm{MiB}$. Największa obserwowana
+różnica surowych wektorów to
+$3.972057181878092\times10^{-15}\ \mathrm{A\,m^{-1}}$.
+Nie jest to certyfikat dokładności fizycznej ani przedziałowego błędu całki.
+
+Zgodność identycznego RT0 nie wskazuje na błąd operatora H jako źródło
+wcześniejszej różnicy od jednorodnych pasków (maksymalnie 0.110560831%,
+w 84 środkowych punktach 0.001049465%). Pozostaje różnica opisu źródła:
+pełna geometria i prąd 3D kontra jednorodne paski bez poprzeczek.
+Nie rozdzielono tu osobno wpływu geometrii i rozkładu prądu.
+
+Publiczne wykonanie H92 nadal ma Failed po błędzie publikacji;
+wynik pozostaje inspection_only/not_verified. Brak nowego native H,
+transportu, FFT lub LLG. Parametry różnią się od idealnego rysunku 1,
+więc ten odbiór nie zamyka zgodności widm S/GS/GSG z publikacją.
+Niejednorodne x nie są zwykłą siatką FFT. Wcześniejszy FAIL maksimum
+1.477 ppm dla 85 980 Tet4 pozostaje niezmieniony.
+FEM CPU: odczyt zachowanych danych i niezależny postprocessing;
+FEM GPU, FDM CPU, FDM GPU: bez nowych dowodów.
+Publiczny Python, ProblemIR, planner i runtime pozostają bez zmian.
+
+Wykonywalny adapter, prerejestracja, siedem regresji wejść, pełne 92 wektory,
+wykres i raport:
+examples/sushruth_2020_closed_gsg/edge92_same_current_reference_20261118/.
+Kryteria i piny są w criteria.json, wynik w results/results.json.
+
+| Path | Symbol | Odpowiedzialność |
+|---|---|---|
+| examples/sushruth_2020_closed_gsg/edge92_same_current_reference_20261118/compare.py | validate | Tożsamości rodzica, źródła i punktów |
+| examples/sushruth_2020_closed_gsg/edge92_same_current_reference_20261118/compare.py | main | Niezmieniona całka dla wszystkich 92 punktów i metryki |
+| examples/sushruth_2020_closed_gsg/edge92_same_current_reference_20261118/test_input_contract.py | class InputContract | Regresje obcego źródła, kolejności, liczności, prądu i niefinitywnego H |
+| examples/sushruth_2020_closed_gsg/edge92_same_current_reference_20261118/render.py | render | Pola i reszty; przycięcie poniżej $10^{-12}$ ppm wyłącznie na wykresie |
+
+
+(sushruth-longitudinal-gsg-spectrum)=
+## Wpływ położenia względem końców zamkniętej GSG — prerejestracja
+
+Pytanie: gdzie porównanie zachowanego prądu pełnej anteny z nieskończonymi
+paskami o zgodnym przekroju przestaje być użyteczne? Korzystamy z
+istniejącej redukcji liniowej transformaty prawa Biota–Savarta i tego
+samego lokalnego RT0 opisanych w sekcji
+{ref}`sushruth-retained-rt0-line-spectrum`. Zmieniamy tylko linię obserwacji
+$y$, przy stałym $z$, źródle i normalizacji. Dodatni i ujemny koniec
+pozostają osobnymi pomiarami; nie narzucamy symetrii źródła.
+
+Amplituda $A=-2\widehat H_x/I$ jest bezwymiarowa. Przy konwencji
+$\exp(+ikx)$ pole $\widehat H_x$ ma jednostkę $\mathrm A$, a podpisany
+prąd $I$ — $\mathrm A$. Dla nierównomiernego próbkowania stosujemy
+regułę trapezów $\mathcal T_k$ z fizycznymi szerokościami przedziałów:
+
+```{math}
+:label: eq-sushruth-longitudinal-error
+E_2(y)=
+\sqrt{\frac{\mathcal T_k\!\left[|A_y-A_\infty|^2\right]}
+{\mathcal T_k\!\left[|A_\infty|^2\right]}},
+\qquad
+E_{\max}(y)=\max_{k_j}|A_y(k_j)-A_\infty(k_j)|.
+```
+
+Obie miary są bezwymiarowe; mianownik musi być niezerowy. $A_\infty$
+oznacza referencję nieskończoną ze zgodnym przekrojem, $k_j$ ma jednostkę
+$\mathrm{rad\,m^{-1}}$, a $\mathcal T_k$ zwraca całkę po $k$.
+Sprawdzamy również różnicę kwadratów modułów, ale nie zastępuje ona
+kontroli zespolonego znaku i fazy. Nie wykonujemy dopasowania.
+
+
+| Symbol | Znaczenie | Jednostka SI |
+|---|---|---|
+| $A_y,A_\infty,E_2,E_{\max}$ | Amplitudy zespolone i normy błędu, bezwymiarowe | $1$ |
+| $k,k_j$ | Liczba falowa i jej próbki | $\mathrm{rad\,m^{-1}}$ |
+| $y$ | Współrzędna wzdłuż anteny | $\mathrm m$ |
+| $\mathcal T_k$ | Operator całki trapezowej po k | $\mathrm{rad\,m^{-1}}$ |
+
+
+| Parametr | Typ / ustawienie | Jednostka SI | Znaczenie, źródło i walidacja |
+|---|---|---|---|
+| Źródło | 85 980 Tet4, przypięty frozen RT0 i bundle | $1$ | Zachowane V/J/H corner12p5, SHA256 przed odczytem; brak nowego transportu |
+| Granice źródła | x=±550 nm, y=±12 µm, z=30…120 nm | $\mathrm m$ | Z wierzchołków zachowanej siatki |
+| y obserwacji | float: +8,+10,+11,5,−11,5 µm | $\mathrm m$ | Cztery nowe przekroje; odległości od zewnętrznego końca4,2,0,5µm |
+| z obserwacji | float: −13,7 nm | $\mathrm m$ | Płaszczyzna ściśle poniżej źródła |
+| y=0 | zachowane CSV rzędów4/6 | $\mathrm m$ | Środek ponownie odczytany, bez ponownego obliczenia |
+| L,g,s,t referencji | 200,250,43,7,90 nm | $\mathrm m$ | Zgodny przekrój: nie idealne parametry Fig.1 |
+| k | 73 wartości:0…2 co0,125;2,5…30 co0,5 | $\mathrm{rad\,\mu m^{-1}}$ | Rosnące skończone liczby; w pliku SI |
+| Kwadratury | int:4,6 oraz8 | $1$ | Istniejący Gauss–Duffy, bez zmiany implementacji |
+| Punkty kontroli n=8 | 0;0,5;1;2;6;15;30 | $\mathrm{rad\,\mu m^{-1}}$ | Siedem jawnie przypiętych punktów, nie cała krzywa |
+| max przyrost4→6 /6→8 | float:1e-4 /1e-5 | $1$ | Kryteria numeryczne zapisane przed obliczeniem; bez zmiany tolerancji produkcji |
+| E2 /Emax modelu | float:1e-3 /1e-3 | $1$ | Prywatny test użyteczności przybliżenia, nie próg publikacji |
+| CPU /RSS /czas | int:1 /2048 /1800 | $1$, $\mathrm{MiB}$, $\mathrm s$ | Postprocessing CPU; limit przestrzeni adresowej2GiB |
+| output | nowy katalog results | $1$ | Odmowa nadpisania wcześniejszych danych |
+
+Wynik testu modelu jest odrębny od odbioru kwadratury. FAIL modelu może
+być poprawnie zmierzonym wpływem końców; FAIL kwadratury blokuje taki
+wniosek ilościowy. Próba rozdziela położenie obserwacji, ale nie oddziela
+przyczynowo skończonej długości, geometrii połączeń i redystrybucji J.
+Wnioski dotyczą próbkowanych k i y, bez interpolowanej granicy ważności.
+Przypięta definicja: examples/sushruth_2020_closed_gsg/longitudinal_spectrum_20261117/criteria-preregistered.json.
+
+Publiczny Python, ProblemIR, planner, normalizacja, runtime i provenance
+produkcyjne nie zmieniają się. Prywatny Python czyta zachowany FEM CPU
+RT0 i liczy niezależną referencję; nie emituje ProblemIR ani nowego
+zaakceptowanego wyniku pola. FEM GPU, FDM CPU i FDM GPU nie są tutaj
+uruchamiane lub kwalifikowane. Source inspection_only pozostaje.
+Bibliografia i równania redukcji są wspólne z wcześniejszą sekcją widma.
+Nie kwalifikujemy natywnego H/FFT, S/GS, LLG ani następnych figur pracy.
+
+| Path | Symbol | Odpowiedzialność |
+|---|---|---|
+| examples/sushruth_2020_closed_gsg/longitudinal_spectrum_20261117/longitudinal_spectrum.py | spectrum_metrics | Zespolony błąd i norma z wagami nierównomiernego k |
+| examples/sushruth_2020_closed_gsg/longitudinal_spectrum_20261117/longitudinal_spectrum.py | run_experiment | Przypięty RT0, cztery położenia, trzy rzędy i osobne werdykty |
+| examples/sushruth_2020_closed_gsg/longitudinal_spectrum_20261117/test_longitudinal_spectrum.py | class SpectrumMetricsTests | Wagi, znak, faza oraz odmowy niepoprawnych norm |
+
+
+### Aneks odczytowy zaplanowany po starcie
+
+Niezależny przegląd ujawnił dwa ograniczenia: pierwotne piny objęły
+wrapper analityczny, ale nie dwie importowane definicje; zapisany środek
+ma61k, nowe przekroje73k. Pierwotna prerejestracja pozostaje bez zmian.
+Dodatkowy audyt porówna zespoloną zapisaną referencję z zamkniętym wzorem
+nieskończonych pasków ze skończoną grubością i policzy metryki na
+wspólnych61k bez interpolacji. Wykorzystuje równania już opisane w nocie;
+nie oblicza nowego pola.
+
+| Parametr audytu | Typ / ustawienie | Jednostka SI | Walidacja i znaczenie |
+|---|---|---|---|
+| reference_max_absolute_difference | float:2e-14 | $1$ | Zgodność zespolonego A∞ z jawnym wzorem, obejmuje znak i normalizację |
+| metric_max_absolute_readback_difference | float:5e-14 | $1$ | Zgodność metryk obliczonych niezależnie jawnymi wagami przedziałów |
+| common_grid | 61 wartości:0…30 co0,5 | $\mathrm{rad\,\mu m^{-1}}$ | Wyłącznie dokładnie obecne współrzędne; bez interpolacji |
+| late_dependency_pins | mapa path→SHA256 | $1$ | Hashe dwóch definicji wzorca od chwili dodatkowego planu; nie dowód wcześniejszego przypięcia |
+| output | readback-audit.json | $1$ | Osobny wynik, brak nadpisania pierwotnego results.json |
+
+Ten aneks nie odtwarza brakującej prerejestracji zależności i nie
+nadaje trwałego uwierzytelnienia źródłu produkcyjnemu. Renderer otrzymuje
+tylko zachowane CSV; zakres osi błędu wynika z danych. Przycięte
+zakresy k są jawnie nazwanymi powiększeniami, a pełne dane pozostają w CSV.
+
+| Path | Symbol | Odpowiedzialność |
+|---|---|---|
+| examples/sushruth_2020_closed_gsg/longitudinal_spectrum_20261117/audit_readback.py | closed_reference | Algebraiczny odczyt wzorca ze zgodnym przekrojem |
+| examples/sushruth_2020_closed_gsg/longitudinal_spectrum_20261117/audit_readback.py | independent_metrics | Jawne wagi przedziałów, wspólna siatka61k |
+| examples/sushruth_2020_closed_gsg/longitudinal_spectrum_20261117/audit_readback.py | audit_results | Odrębny audyt po starcie, bez zmiany pierwotnych wyników |
+| examples/sushruth_2020_closed_gsg/longitudinal_spectrum_20261117/render_longitudinal_spectrum.py | render_comparison | Wykres i raport z zachowanych CSV, brak nowego pola |
+
+
+### Odrębne uzupełnienie po limicie czasu
+
+Pierwotny proces zakończył się po 1800,007 s z TimeoutError i trzema
+kompletnymi przekrojami. Jego limit, kryteria i wynik wykonania pozostają
+bez zmian. Zachował również n4 dla y=−11,5 µm; n6 i n8 tego przekroju
+nie zostały zapisane. Warunkowy plan uzupełnienia powstał przed jego
+uruchomieniem, po zaobserwowaniu wzrostu kosztu kwadratury na hoście.
+
+Jeden osobny proces referencyjny odczyta wyłącznie brakujące n6/n8.
+Sprawdzi terminalny exit receipt, nieobecność pierwotnego PID, hashe
+drivera i kryteriów oraz wszystkie siedem pinów wejściowych. Zachowane
+CSV i podsumowania są kopiowane z kontrolą hashy do nowego katalogu;
+nie nadpisuje się pierwotnego failure ani wyników. Metryki i wzory
+pozostają te same.
+
+| Parametr uzupełnienia | Typ / ustawienie | Jednostka SI | Walidacja i znaczenie |
+|---|---|---|---|
+| position | int: 3; y=−11,5 µm | $1$, $\mathrm m$ | Wyłącznie ostatni przekrój; trzy wcześniejsze ukończone |
+| orders | int: 6 i 8 | $1$ | n4 pozostaje odczytem; te same 73/7 wartości k |
+| additional_time_limit | int: 900 | $\mathrm s$ | Odrębny limit, nie zmiana pierwotnego 1800 s |
+| CPU / address_space | int: 1 / 2147483648 | $1$, $\mathrm{byte}$ | Ten sam zakres zasobów; bez GPU i native Solve |
+| output | completion-results | $1$ | Nowy katalog; brak nadpisania starej próby |
+| primary_time_budget_pass | bool: false | $1$ | Trwały wynik pierwszej próby; PASS kwadratury go nie zmienia |
+
+Budżet dodatkowy ustalono na 900 s przed jego wykonaniem, ponieważ
+obserwowane czasy bloków kwadratury wzrosły z około42 do64s. Pierwszy
+projekt 600 s nie został wykonany. Ten eksperyment nie kwalifikuje
+wydajności pod stałym obciążeniem. W raporcie sumujemy czasy procesów
+obliczeniowych bez przerwy między nimi; RSS uzupełnienia dotyczy
+wyłącznie tego dodatkowego procesu.
+
+| Path | Symbol | Odpowiedzialność |
+|---|---|---|
+| examples/sushruth_2020_closed_gsg/longitudinal_spectrum_20261117/complete_negative_end.py | complete_negative_end | Jeden odczyt brakujących rzędów; osobny wynik czasu i kwadratury, zachowanie pierwszej próby |
+
+
+### Wynik pomiaru wpływu końców — 17.11.2026
+
+**Zgodność częściowa z modelem nieskończonych pasków o zgodnym przekroju;
+pełna walidacja natywnego pola i widma Fullmaga pozostaje niepotwierdzona.**
+Wszystkie cztery przekroje przeszły prerejestrowane kontrole kwadratury.
+Poniższa tabela używa wszystkich 73 wartości k dla każdego nowego przekroju.
+E2 podano w procentach; pozostałe miary amplitudy są bezwymiarowe.
+
+| y [µm] | Odległość od zewnętrznego końca [µm] | E2 [%] | Emax [1] | max zmiana n4→n6 [1] | max zmiana n6→n8 [1] | Przybliżenie nieskończone |
+|---:|---:|---:|---:|---:|---:|---|
+| +8 | 4 | 0.00054285106 | 1.68133484e-05 | 7.49531e-06 | 1.76105e-08 | PASS |
+| +10 | 2 | 0.00673577075 | 0.000147799011 | 5.65675e-07 | 8.63278e-10 | PASS |
+| +11.5 | 0.5 | 1.18531731 | 0.0147555169 | 4.30354e-07 | 7.92354e-10 | FAIL |
+| -11.5 | 0.5 | 1.18526074 | 0.0147550606 | 4.17755e-07 | 1.37631e-09 | FAIL |
+
+Przy y=+8 i +10 µm przybliżenie przechodzi prywatne kryteria.
+Przy y=±11,5 µm jest odrzucone z powodu zmierzonego wpływu skończonego
+obwodu: E2 około 1,19%, z podobnym wynikiem przy obu końcach.
+To odrzucenie modelu przybliżonego, nie błąd numeryczny kwadratury.
+Nie wyznaczamy ciągłej granicy ważności między odległościami 0,5 i 2 µm.
+Nie izolujemy osobno długości, geometrii połączeń i redystrybucji prądu.
+
+Dodatkowy audyt na dokładnie wspólnych 61 wartościach k, bez interpolacji,
+daje E2: środek 0,0000130958%, y=+8 µm 0,000543210%,
+y=+10 µm 0,00673456%, y=+11,5 µm 1,18656899%,
+y=−11,5 µm 1,18651244%. Wartości te służą porównaniu położeń na
+tej samej siatce. Nie zastępują pierwotnych metryk 73-punktowych.
+
+Jawny zamknięty wzór odtwarza zespoloną referencję z maksymalną różnicą
+2,220446049250313e-16. Niezależne jawne wagi przedziałów odtwarzają
+metryki z różnicą co najwyżej 3,469446951953614e-18.
+Oba odczyty przeszły swoje zapisane kryteria.
+Hashe dwóch importowanych definicji i porównanie wspólnych 61 k są
+audytem dodanym po starcie; nie przedstawiamy ich jako pierwotnej
+prerejestracji. Kontrola hashy łączy wynik, audyt i renderer.
+
+Wykonanie zachowuje werdykt **NUMERICAL_PASS_PRIMARY_TIME_BUDGET_FAIL**:
+pierwszy proces zakończył się po 1800,006705 s, odrębne uzupełnienie
+n6/n8 trwało 690,853156 s, łącznie 2490,859861 s pracy procesów.
+Pierwotny failure i wyniki są niezmienione. Szczytowy RSS 178,586 MiB
+dotyczy wyłącznie procesu uzupełnienia; nie jest maksimum całej serii.
+Użyto jednego CPU i limitu przestrzeni adresowej 2 GiB, bez GPU.
+
+Sześć regresji metryk, siedem istniejących regresji fizycznego kernela
+oraz 41 regresji kontraktu dokumentacji zakończyło się poprawnie.
+Nie kompilowano natywnego solvera. Obraz porównania sprawdzono wizualnie:
+legenda jest poza danymi, pełne pasmo różnicy widoczne, oba przybliżone
+końce pokazane osobno, a powiększenie głównego maksimum jawnie opisane.
+
+Zachowane wyniki znajdują się w
+examples/sushruth_2020_closed_gsg/longitudinal_spectrum_20261117/completion-results:
+results.json, CSV dla każdego rzędu i przekroju, readback-audit.json,
+longitudinal-spectrum.png, longitudinal-spectrum.svg i raport.md.
+Kryteria, pierwotny wynik czasu, polecenia wykonania i hashe pozostają
+w katalogu nadrzędnym. Skrypty odmawiają nadpisania wyników.
+
+To niezależne całkowanie zapisanej reprezentacji FEM RT0, a nie nowe
+publiczne H/FFT Fullmaga. Źródło nadal ma zakres inspection_only.
+Duże różnice wobec idealnej Fig.1 nie mogą być interpretowane bez
+uwzględnienia odmiennej szczeliny, odstępu próbki i grubości metalu;
+ich wcześniejszy kontrolowany test jest zestawiony w raporcie.
+Niniejszy pomiar dodaje ilościowy wpływ położenia w skończonym obwodzie.
+Nie potwierdza anten S/GS, zbieżności siatki prądu ani następnych figur.

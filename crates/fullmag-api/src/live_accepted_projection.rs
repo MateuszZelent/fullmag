@@ -951,6 +951,10 @@ fn load_durable_projection_with_journal(
                 })
                 .and_then(|cursor| cursor.live_magnetization_sequence);
             let observation_result = (|| {
+            if matches!(accepted.lowered.steps[order].kind,
+                fullmag_authoring::StudyStepKind::RetainedCurrentFieldInspection { .. }) {
+                return Err(ApiError::conflict("retained-current H-only requires its own operation progress binding; magnetic or closed-loop observations cannot be reused"));
+            }
             let observation = crate::accepted_study_worker::read_accepted_live_observation(
                 store_root,
                 &context.run_id,
@@ -1487,9 +1491,15 @@ fn build_stage_execution(
             fullmag_authoring::StudyStepKind::ClosedLoopInspection { stage_id, .. } => {
                 Some(stage_id.clone())
             }
+            fullmag_authoring::StudyStepKind::RetainedCurrentFieldInspection { stage_id, .. } => {
+                Some(stage_id.clone())
+            }
             fullmag_authoring::StudyStepKind::Primitive {
                 stage_kind: fullmag_authoring::StudyPrimitiveStageKind::AntennaFieldSolve,
             } => step.execution_plan.as_ref().and_then(|plan| match &plan.backend_plan {
+                fullmag_ir::BackendPlanIR::AntennaRetainedCurrentFieldInspection(antenna) => Some(antenna.stage.id.clone()),
+                fullmag_ir::BackendPlanIR::AntennaRetainedDirectFieldInspection(antenna) => Some(antenna.stage.id.clone()),
+        fullmag_ir::BackendPlanIR::AntennaRetainedPreparationFieldInspection(antenna) => Some(antenna.stage.id.clone()),
                 fullmag_ir::BackendPlanIR::AntennaFieldOnly(antenna) => Some(antenna.stage_id.clone()),
                 fullmag_ir::BackendPlanIR::AntennaExternalLeadInspection(antenna) => {
                     Some(antenna.input.stage.id.clone())
@@ -5924,6 +5934,15 @@ mod tests {
         assert_eq!(projected.stages[0].status, crate::types::StageLifecycleState::Completed);
         assert!(projected.stages[0].artifact_refs.is_empty());
         assert!(projected.stages[1].antenna_solve_stage_id.is_none());
+        accepted.lowered.steps[0].kind = fullmag_authoring::StudyStepKind::RetainedCurrentFieldInspection {
+            stage_id: "retained_h".into(), port_mode_id: "retained_port".into(), output_id: "retained_output".into(),
+        };
+        let retained = build_stage_execution(&accepted, &catalog.tasks, None, &[],
+            &std::collections::BTreeMap::new(), "completed").unwrap();
+        assert_eq!(retained.stages[0].stage_id.as_deref(), Some(runtime_id.as_str()));
+        assert_eq!(retained.stages[0].antenna_solve_stage_id.as_deref(), Some("retained_h"));
+        assert!(retained.stages[0].artifact_refs.is_empty());
+        assert!(retained.stages[0].antenna_progress.is_none());
     }
 
     #[test]

@@ -56,6 +56,25 @@ class Figure3PanelERasterTests(unittest.TestCase):
         self.assertEqual(result['published_FMR_marker_frequency_span_ghz'],
                          [6 + 3 * (745 - 588) / 415, 6 + 3 * (749 - 588) / 415])
         self.assertNotIn('published_FMR_marker_ghz', result)
+        self.assertFalse(result['annotation_is_measured_fmr'])
+
+    def test_default_panel_marker_reader_refuses_missing_or_split_annotations(self):
+        image = np.full((1524, 1015, 3), 255, dtype=np.uint8)
+        for pieces in ([], [(266, 269), (273, 276)]):
+            image[:] = 255
+            for left, right in pieces:
+                image[45:369, left:right] = 190
+            with self.assertRaisesRegex(ValueError, 'marker'):
+                plot.measure_gray_annotation_pixels(image, axes=(92, 534), row_bounds=(45, 369))
+
+    def test_two_panels_do_not_define_one_material_resonance(self):
+        image = fixture()
+        image[45:369, 267:273] = 190
+        left = plot.measure_gray_annotation_pixels(image, axes=(92, 534), row_bounds=(45, 369))
+        right = plot.measure_gray_annotation_pixels(image, axes=(588, 1003), row_bounds=(47, 367))
+        self.assertLess(right['frequency_span_ghz'][1], left['frequency_span_ghz'][0])
+        self.assertFalse(left['annotation_is_measured_fmr'])
+        self.assertFalse(right['annotation_is_measured_fmr'])
 
     def test_missing_axes_refuses_even_with_legends(self):
         image = fixture()

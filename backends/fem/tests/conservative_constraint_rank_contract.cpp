@@ -2,6 +2,7 @@
 
 #include <boost/multiprecision/cpp_int.hpp>
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstdint>
@@ -163,6 +164,93 @@ void generic_dependencies_are_certified_or_rejected_physically()
         "relative physical gate rejected a legal dependent RHS");
     require(std::abs(within_gate.omitted_rows[0].residual_a - 1.0e-12) < 1.0e-15,
         "accepted dependency did not persist its physical residual");
+}
+
+void disjoint_identity_reductions_preserve_nonzero_rhs()
+{
+    std::vector<ConservativeConstraintRankRow> rows{
+        generic_row("d", {40}, {1}, -4.0),
+        generic_row("b", {20}, {1}, 2.0),
+        generic_row("a", {10}, {1}, -1.0),
+        generic_row("c", {30}, {1}, 3.0),
+        generic_row("sum", {10, 20, 30, 40}, {1, 1, 1, 1}, 0.0),
+    };
+    const auto certificate = ConservativeConstraintRank::Analyze(rows, 0.0, 0.0);
+    require(certificate.rows_before == 5 && certificate.rank == 4 &&
+            certificate.omitted_rows.size() == 1 &&
+            certificate.omitted_rows[0].constraint_id == "sum" &&
+            certificate.omitted_rows[0].reason ==
+                ConstraintOmissionReason::ConsistentLinearDependency &&
+            certificate.omitted_rows[0].residual_a == 0.0,
+        "disjoint identity reductions changed the nonzero RHS sum");
+    rows.back().rhs_a = -0.5;
+    const auto error = require_throws<InconsistentDependentConstraint>([&] {
+        (void)ConservativeConstraintRank::Analyze(rows, 0.0, 0.0);
+    }, "disjoint identity reductions accepted an inconsistent sum");
+    require(error.constraint_id() == "sum" && error.residual_a() == -0.5,
+        "disjoint identity reductions changed the signed physical residual");
+}
+
+void repeated_signed_pivots_preserve_scaled_rhs_and_empty_rows()
+{
+    for (const std::int64_t pivot : {2, -2}) {
+        // The first reduction scales by pivot/1; subsequent disjoint
+        // reductions have equal pivots and must leave coefficients and RHS intact.
+        std::vector<ConservativeConstraintRankRow> rows{
+            generic_row("a", {1}, {pivot}, 2.0),
+            generic_row("b", {2}, {1}, 3.0),
+            generic_row("c", {3}, {1}, 4.0),
+            generic_row("sum", {1, 2, 3}, {pivot, 1, 1}, 9.0),
+        };
+        const auto certificate = ConservativeConstraintRank::Analyze(rows, 0.0, 0.0);
+        require(certificate.rank == 3 && certificate.omitted_rows.size() == 1 &&
+                certificate.omitted_rows[0].constraint_id == "sum" &&
+                certificate.omitted_rows[0].residual_a == 0.0,
+            "repeated signed pivots changed a consistent scaled sum");
+        rows.back().rhs_a = 8.5;
+        const auto sum_error = require_throws<InconsistentDependentConstraint>([&] {
+            (void)ConservativeConstraintRank::Analyze(rows, 0.0, 0.0);
+        }, "repeated signed pivots accepted an inconsistent scaled sum");
+        require(sum_error.constraint_id() == "sum" &&
+                sum_error.residual_a() == -0.5,
+            "repeated signed pivots changed the normalized sum residual");
+
+        rows.back() = generic_row("zero", {}, {}, 0.5);
+        const auto empty_error = require_throws<InconsistentDependentConstraint>([&] {
+            (void)ConservativeConstraintRank::Analyze(rows, 0.0, 0.0);
+        }, "identity reduction accepted an empty row with nonzero RHS");
+        require(empty_error.constraint_id() == "zero" &&
+                empty_error.residual_a() == 0.5,
+            "identity reduction changed the normalized empty-row residual");
+    }
+}
+
+void disjoint_identity_reductions_preserve_bounded_work_accounting()
+{
+    std::vector<ConservativeConstraintRankRow> rows;
+    for (std::uint64_t column = 1; column <= 8; ++column) {
+        rows.push_back(generic_row("unit-" + std::to_string(column),
+            {column}, {1}, static_cast<double>(column)));
+    }
+    auto limits = default_analyze_resource_limits();
+    // 8 column mappings + 8 order entries + 32 sort work + 8 row entries
+    // + 16 row measurements + 2 * (0 + ... + 7) basis lookups = 128.
+    // The exact-incidence eligibility check rejects the first nonzero RHS: +1.
+    limits.bareiss_work_units = 129;
+    {
+        ScopedAnalyzeResourceLimits scoped(limits);
+        const auto certificate = ConservativeConstraintRank::Analyze(rows);
+        require(certificate.rows_before == 8 && certificate.rank == 8 &&
+                certificate.omitted_rows.empty(),
+            "identity reductions exceeded the exact independent-row work budget");
+    }
+    limits.bareiss_work_units = 128;
+    {
+        ScopedAnalyzeResourceLimits scoped(limits);
+        require_throws<ConstraintRankResourceLimitExceeded>([&] {
+            (void)ConservativeConstraintRank::Analyze(rows);
+        }, "identity reductions stopped charging required basis lookups");
+    }
 }
 
 void negative_intermediate_pivots_preserve_independent_rank()
@@ -464,9 +552,15 @@ void every_resource_limit_accepts_the_limit_and_rejects_limit_plus_one()
     auto expect_excess = [&](auto member, const std::string &name) {
         ResourceCounts excess = limits;
         excess.*member += 1;
-        require_throws<ConstraintRankResourceLimitExceeded>([&] {
+        const auto error = require_throws<ConstraintRankResourceLimitExceeded>([&] {
             ConservativeConstraintRank::ValidateResourceCounts(excess);
         }, name + " limit+1 was accepted");
+        const std::string expected =
+            "constraint-rank resource budget exceeded: " + name + "=" +
+            std::to_string(excess.*member) + "; limit=" +
+            std::to_string(limits.*member);
+        require(std::string(error.what()) == expected,
+            name + " diagnostic omitted the actual count or limit");
     };
     expect_excess(&ResourceCounts::rows, "rows");
     expect_excess(&ResourceCounts::distinct_columns, "distinct columns");
@@ -586,6 +680,43 @@ void analyze_accounts_for_transient_exact_state_and_work()
     }
 }
 
+void balanced_incidence_chain_fits_bounded_work()
+{
+    constexpr std::uint64_t count = 2048;
+    std::vector<ConservativeConstraintRankRow> rows;
+    std::string last_id;
+    for (std::uint64_t i = 0; i < count; ++i) {
+        std::vector<std::uint64_t> columns;
+        std::vector<std::int64_t> coefficients;
+        if (i != 0) { columns.push_back(i); coefficients.push_back(-1); }
+        if (i + 1 != count) { columns.push_back(i + 1); coefficients.push_back(1); }
+        const auto id = "chain-" + std::to_string(i);
+        last_id = std::max(last_id, id);
+        rows.push_back(generic_row(id, columns, coefficients, 0.0));
+    }
+    auto limits = default_analyze_resource_limits();
+    limits.bareiss_work_units = 1'000'000;
+    ScopedAnalyzeResourceLimits scoped(limits);
+    const auto result = ConservativeConstraintRank::Analyze(rows);
+    require(result.rows_before == count && result.rank == count - 1,
+        "balanced incidence chain has an incorrect exact rank");
+    require(result.omitted_rows.size() == 1 &&
+            result.omitted_rows[0].constraint_id == last_id &&
+            result.omitted_rows[0].residual_a == 0.0,
+        "balanced incidence chain changed the frozen omission");
+}
+
+void unbalanced_signed_cycle_retains_exact_general_rank()
+{
+    const auto result = ConservativeConstraintRank::Analyze({
+        generic_row("a", {1, 3}, {1, 1}, 0.0),
+        generic_row("b", {1, 2}, {1, 1}, 0.0),
+        generic_row("c", {2, 3}, {1, 1}, 0.0),
+    });
+    require(result.rank == 3 && result.omitted_rows.empty(),
+        "unbalanced signed cycle was treated as a balanced incidence graph");
+}
+
 void wide_exact_determinant_cannot_overflow_or_change_rank()
 {
     using boost::multiprecision::cpp_int;
@@ -613,6 +744,9 @@ int main()
 {
     try {
         generic_dependencies_are_certified_or_rejected_physically();
+        disjoint_identity_reductions_preserve_nonzero_rhs();
+        repeated_signed_pivots_preserve_scaled_rhs_and_empty_rows();
+        disjoint_identity_reductions_preserve_bounded_work_accounting();
         negative_intermediate_pivots_preserve_independent_rank();
         negative_final_pivots_preserve_signed_physical_residuals();
         physical_gate_boundaries_are_exact_and_inclusive();
@@ -622,6 +756,8 @@ int main()
         malformed_rows_and_component_metadata_are_rejected();
         every_resource_limit_accepts_the_limit_and_rejects_limit_plus_one();
         analyze_accounts_for_transient_exact_state_and_work();
+        balanced_incidence_chain_fits_bounded_work();
+        unbalanced_signed_cycle_retains_exact_general_rank();
         wide_exact_determinant_cannot_overflow_or_change_rank();
         std::cout << "conservative constraint rank contract passed\n";
         return 0;

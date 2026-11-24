@@ -404,6 +404,86 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v2/persistence/projects/{project_id}/runs/{run_id}/solution-sets/{solution_set_id}/revisions/{revision}/members/{member_id}/artifacts/{artifact_id}/saved-planar/meta": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["persistence_get_persistence_projects_project_id_runs_run_id_solution_sets_solution_set_id_revisions_revision_members_member_id_artifacts_artifact_id_saved_planar_meta"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/persistence/projects/{project_id}/runs/{run_id}/solution-sets/{solution_set_id}/revisions/{revision}/members/{member_id}/artifacts/{artifact_id}/saved-planar/occupancy": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["persistence_get_persistence_projects_project_id_runs_run_id_solution_sets_solution_set_id_revisions_revision_members_member_id_artifacts_artifact_id_saved_planar_occupancy"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/persistence/projects/{project_id}/runs/{run_id}/solution-sets/{solution_set_id}/revisions/{revision}/members/{member_id}/artifacts/{artifact_id}/saved-planar/probe": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["persistence_get_persistence_projects_project_id_runs_run_id_solution_sets_solution_set_id_revisions_revision_members_member_id_artifacts_artifact_id_saved_planar_probe"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/persistence/projects/{project_id}/runs/{run_id}/solution-sets/{solution_set_id}/revisions/{revision}/members/{member_id}/artifacts/{artifact_id}/saved-planar/scalar": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["persistence_get_persistence_projects_project_id_runs_run_id_solution_sets_solution_set_id_revisions_revision_members_member_id_artifacts_artifact_id_saved_planar_scalar"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/persistence/projects/{project_id}/runs/{run_id}/solution-sets/{solution_set_id}/revisions/{revision}/members/{member_id}/artifacts/{artifact_id}/saved-planar/vectors": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["persistence_get_persistence_projects_project_id_runs_run_id_solution_sets_solution_set_id_revisions_revision_members_member_id_artifacts_artifact_id_saved_planar_vectors"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v2/persistence/projects/{project_id}/runs/{run_id}/solution-sets/{solution_set_id}/revisions/{revision}/members/{member_id}/artifacts/{artifact_id}/scalar": {
         parameters: {
             query?: never;
@@ -5407,7 +5487,7 @@ export interface components {
             study_step_id: string;
             task_id: string;
         };
-        AcceptedAntennaInspectionResource: components["schemas"]["AcceptedExternalLeadInspectionResource"] | components["schemas"]["AcceptedClosedLoopInspectionResource"];
+        AcceptedAntennaInspectionResource: components["schemas"]["AcceptedExternalLeadInspectionResource"] | components["schemas"]["AcceptedClosedLoopInspectionResource"] | components["schemas"]["AcceptedRetainedCurrentInspectionResource"];
         AcceptedClosedLoopInspectionResource: {
             capabilities: components["schemas"]["AntennaInspectionDisplayCapabilities"];
             /** @description Existing verified, bounded closed-loop descriptors; numerical arrays stay binary. */
@@ -5449,6 +5529,47 @@ export interface components {
             /** Format: double */
             source_time_seconds?: number | null;
             topology_revision: string;
+        };
+        AcceptedRetainedCurrentInspectionResource: {
+            capabilities: components["schemas"]["AntennaInspectionDisplayCapabilities"];
+            content_digest: string;
+            current_transport_id: string;
+            normalization: string;
+            output_id: string;
+            owner: components["schemas"]["AcceptedAntennaInspectionIdentity"];
+            /** @description Detached parent owner, five source pins and evidence reference; no parent arrays or live authority. */
+            parent: unknown;
+            payloads: components["schemas"]["AcceptedRetainedCurrentPayloadsResource"];
+            port_mode_id: string;
+            project_id: string;
+            qualification: string;
+            resource_id: string;
+            sample_carrier: unknown;
+            /** Format: int64 */
+            sample_cell_count: number;
+            schema_version: string;
+            /** Format: int64 */
+            source_cell_count: number;
+            source_object_id: string;
+            /** Format: int64 */
+            source_vertex_count: number;
+            status: string;
+            /** Format: int64 */
+            target_count: number;
+        };
+        /** @description Exact verified references; this response never carries numerical arrays. */
+        AcceptedRetainedCurrentPayloadResource: {
+            /** Format: int64 */
+            byte_count: number;
+            layout: string;
+            sha256: string;
+            unit: string;
+        };
+        AcceptedRetainedCurrentPayloadsResource: {
+            evidence: components["schemas"]["AcceptedRetainedCurrentPayloadResource"];
+            h_raw: components["schemas"]["AcceptedRetainedCurrentPayloadResource"];
+            sample_cells: components["schemas"]["AcceptedRetainedCurrentPayloadResource"];
+            sample_xyz: components["schemas"]["AcceptedRetainedCurrentPayloadResource"];
         };
         AcceptedRunExportSource: {
             /** Format: int64 */
@@ -12170,6 +12291,8 @@ export interface components {
             capabilities: components["schemas"]["ModelAuthoringCapabilities"];
             checks: components["schemas"]["ModelReadinessCheck"][];
             initial_state_pending?: null | components["schemas"]["MagnetizationApplyReceiptResource"];
+            /** @description Compute prepares the source mesh for this current field-only scene. */
+            preparation_owns_mesh?: boolean | null;
             prepared_initial_state?: null | components["schemas"]["PreparedInitialStateResource"];
             ready_to_export: boolean;
             ready_to_run: boolean;
@@ -13662,7 +13785,7 @@ export interface components {
             };
         };
         ProjectRunListQuery: {
-            /** @description Last RunId returned on the previous page. */
+            /** @description Opaque next_cursor returned on the previous page. */
             cursor?: string | null;
             /**
              * Format: int32
@@ -14619,6 +14742,28 @@ export interface components {
          * @enum {string}
          */
         SaveProfile: "compact" | "solved" | "resume" | "archive" | "recovery";
+        /** @description Minimum immutable owner needed to locate the conductor through Saved Results. */
+        SavedAntennaGeometryParentResource: {
+            artifact_id: string;
+            attempt_id: string;
+            /** @description Canonical positive decimal u64. */
+            ownership_epoch: string;
+            /** @description Canonical positive decimal u64. */
+            package_byte_length: string;
+            package_object_ref: string;
+            project_id: string;
+            run_id: string;
+            study_step_id: string;
+            task_id: string;
+        };
+        /** @description Historical display provenance, never execution, current-source, basis or LLG authority. */
+        SavedAntennaGeometrySourceContextResource: {
+            parent: components["schemas"]["SavedAntennaGeometryParentResource"];
+            purpose: components["schemas"]["SavedAntennaGeometrySourcePurposeResource"];
+            source_package: components["schemas"]["SavedFieldGeometryArtifactResource"];
+        };
+        /** @enum {string} */
+        SavedAntennaGeometrySourcePurposeResource: "historical_geometry_only";
         SavedFieldGeometryArtifactResource: {
             accepted_state?: null | components["schemas"]["SolutionAcceptedStateIdResource"];
             artifact_id: string;
@@ -14660,10 +14805,16 @@ export interface components {
             tensor_artifact_id: string;
             tensor_object_ref: string;
         };
+        /** @description Opt-in source provenance read; ordinary geometry never loads parent evidence. */
+        SavedFieldGeometryQuery: {
+            /** @description Default false. May stream-hash historical CAS dependencies; display context only. */
+            include_antenna_source_context?: boolean | null;
+        };
         /** @enum {string} */
         SavedFieldGeometryRepresentationEvidenceResource: "not_verified";
         SavedFieldGeometryResource: {
             active_node_count: string;
+            antenna_source_context?: null | components["schemas"]["SavedAntennaGeometrySourceContextResource"];
             cell_count: string;
             /** @description Revision selected by the containing route. */
             containing_solution_revision: string;
@@ -14706,6 +14857,113 @@ export interface components {
             /** @description SHA-256 of the complete FMMT v2 body, when it fits the bounded transport. */
             topology_binary_sha256?: string | null;
             topology_fingerprint: string;
+        };
+        SavedPlanarProbeQuery: {
+            /** @description magnitude, x, y, z, u, v or normal; derived after interpolation. */
+            component: string;
+            expected_dataset_manifest_object_ref: string;
+            expected_geometry_manifest_object_ref: string;
+            expected_geometry_object_ref: string;
+            /** Format: int32 */
+            height: number;
+            /** @description Canonical positive decimal byte budget, including the binary header. */
+            max_response_bytes: string;
+            /**
+             * Format: int32
+             * @description Exact raster column and row, not a nearest-node probe.
+             */
+            pixel_x: number;
+            /** Format: int32 */
+            pixel_y: number;
+            /** @description xy, xz or yz. Coordinates and bounds are in metres. */
+            plane: string;
+            /** Format: double */
+            position_m: number;
+            /** Format: double */
+            u_max_m: number;
+            /** Format: double */
+            u_min_m: number;
+            /** Format: double */
+            v_max_m: number;
+            /** Format: double */
+            v_min_m: number;
+            /**
+             * Format: int32
+             * @description Positive raster dimensions, at most 1048576 points in total.
+             */
+            width: number;
+        };
+        SavedPlanarProbeResource: {
+            /** Format: int32 */
+            occupancy: number;
+            pixel: number[];
+            point_m: number[];
+            request_identity: string;
+            /** Format: double */
+            scalar?: number | null;
+            /**
+             * Format: int32
+             * @description Saved mesh cell ordinal containing the raster centre.
+             */
+            source_entity_ordinal?: number | null;
+            vector?: number[] | null;
+        };
+        SavedPlanarQuery: {
+            /** @description magnitude, x, y, z, u, v or normal; derived after interpolation. */
+            component: string;
+            expected_dataset_manifest_object_ref: string;
+            expected_geometry_manifest_object_ref: string;
+            expected_geometry_object_ref: string;
+            /** Format: int32 */
+            height: number;
+            /** @description Canonical positive decimal byte budget, including the binary header. */
+            max_response_bytes: string;
+            /** @description xy, xz or yz. Coordinates and bounds are in metres. */
+            plane: string;
+            /** Format: double */
+            position_m: number;
+            /** Format: double */
+            u_max_m: number;
+            /** Format: double */
+            u_min_m: number;
+            /** Format: double */
+            v_max_m: number;
+            /** Format: double */
+            v_min_m: number;
+            /**
+             * Format: int32
+             * @description Positive raster dimensions, at most 1048576 points in total.
+             */
+            width: number;
+        };
+        SavedPlanarResource: {
+            bounds_uv_m: number[];
+            component: string;
+            /** Format: int32 */
+            empty_count: number;
+            frame_normal: number[];
+            frame_origin_m: number[];
+            frame_u_axis: number[];
+            frame_v_axis: number[];
+            /** @description 0 occupied, 1 empty, 2 partial, 3 undefined orientation, 4 ambiguous. */
+            occupancy_encoding: string;
+            /** Format: int32 */
+            occupied_count: number;
+            operator: string;
+            qualification: string;
+            reconstruction: string;
+            request_identity: string;
+            resolution: number[];
+            sampler_version: string;
+            sampling_method: string;
+            /** Format: double */
+            scalar_max?: number | null;
+            /** Format: double */
+            scalar_min?: number | null;
+            schema_version: string;
+            source: components["schemas"]["SavedFieldGeometryResource"];
+            /** @description World xyz vectors; scalar and vector binaries use FMVP v2. */
+            vector_components: string[];
         };
         /** @description Bounded, JSON-only metadata for a saved FEM P1 playback mesh. */
         SavedPlaybackFemMesh: {
@@ -18842,7 +19100,7 @@ export interface operations {
             query?: {
                 /** @description Page size, from 1 to 100; defaults to 50. */
                 limit?: number | null;
-                /** @description Last RunId returned on the previous page. */
+                /** @description Opaque next_cursor returned on the previous page. */
                 cursor?: string | null;
             };
             header?: never;
@@ -19126,7 +19384,7 @@ export interface operations {
                 run_id: string;
                 /** @description Exact accepted Study step ID, not the native stage ID */
                 step_id: string;
-                /** @description Same verified V/J/H and geometry payload kinds as the Live inspection API */
+                /** @description Verified payload kind for the accepted family; H-only permits sample_xyz, sample_cells, h_raw and evidence */
                 payload_kind: string;
             };
             cookie?: never;
@@ -19571,7 +19829,10 @@ export interface operations {
     };
     persistence_get_persistence_projects_project_id_runs_run_id_solution_sets_solution_set_id_revisions_revision_members_member_id_artifacts_artifact_id_saved_field_geometry: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Default false. May stream-hash historical CAS dependencies; display context only. */
+                include_antenna_source_context?: boolean;
+            };
             header?: never;
             path: {
                 project_id: string;
@@ -19796,6 +20057,369 @@ export interface operations {
                 content?: never;
             };
             /** @description FMMT v2 body exceeds the bounded geometry transport budget */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    persistence_get_persistence_projects_project_id_runs_run_id_solution_sets_solution_set_id_revisions_revision_members_member_id_artifacts_artifact_id_saved_planar_meta: {
+        parameters: {
+            query: {
+                expected_dataset_manifest_object_ref: string;
+                expected_geometry_manifest_object_ref: string;
+                expected_geometry_object_ref: string;
+                /** @description xy, xz or yz. Coordinates and bounds are in metres. */
+                plane: string;
+                position_m: number;
+                u_min_m: number;
+                u_max_m: number;
+                v_min_m: number;
+                v_max_m: number;
+                /** @description Positive raster dimensions, at most 1048576 points in total. */
+                width: number;
+                height: number;
+                /** @description magnitude, x, y, z, u, v or normal; derived after interpolation. */
+                component: string;
+                /** @description Canonical positive decimal byte budget, including the binary header. */
+                max_response_bytes: string;
+            };
+            header?: never;
+            path: {
+                project_id: string;
+                run_id: string;
+                solution_set_id: string;
+                revision: string;
+                member_id: string;
+                artifact_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SavedPlanarResource"];
+                };
+            };
+            /** @description Invalid bounded query */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Missing pinned source */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Identity mismatch */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Unsupported carrier or budget */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    persistence_get_persistence_projects_project_id_runs_run_id_solution_sets_solution_set_id_revisions_revision_members_member_id_artifacts_artifact_id_saved_planar_occupancy: {
+        parameters: {
+            query: {
+                expected_dataset_manifest_object_ref: string;
+                expected_geometry_manifest_object_ref: string;
+                expected_geometry_object_ref: string;
+                /** @description xy, xz or yz. Coordinates and bounds are in metres. */
+                plane: string;
+                position_m: number;
+                u_min_m: number;
+                u_max_m: number;
+                v_min_m: number;
+                v_max_m: number;
+                /** @description Positive raster dimensions, at most 1048576 points in total. */
+                width: number;
+                height: number;
+                /** @description magnitude, x, y, z, u, v or normal; derived after interpolation. */
+                component: string;
+                /** @description Canonical positive decimal byte budget, including the binary header. */
+                max_response_bytes: string;
+            };
+            header?: never;
+            path: {
+                project_id: string;
+                run_id: string;
+                solution_set_id: string;
+                revision: string;
+                member_id: string;
+                artifact_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/octet-stream": unknown;
+                };
+            };
+            /** @description Invalid bounded query */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Missing pinned source */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Identity mismatch */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Unsupported carrier or budget */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    persistence_get_persistence_projects_project_id_runs_run_id_solution_sets_solution_set_id_revisions_revision_members_member_id_artifacts_artifact_id_saved_planar_probe: {
+        parameters: {
+            query: {
+                expected_dataset_manifest_object_ref: string;
+                expected_geometry_manifest_object_ref: string;
+                expected_geometry_object_ref: string;
+                /** @description xy, xz or yz. Coordinates and bounds are in metres. */
+                plane: string;
+                position_m: number;
+                u_min_m: number;
+                u_max_m: number;
+                v_min_m: number;
+                v_max_m: number;
+                /** @description Positive raster dimensions, at most 1048576 points in total. */
+                width: number;
+                height: number;
+                /** @description magnitude, x, y, z, u, v or normal; derived after interpolation. */
+                component: string;
+                /** @description Canonical positive decimal byte budget, including the binary header. */
+                max_response_bytes: string;
+                /** @description Exact raster column and row, not a nearest-node probe. */
+                pixel_x: number;
+                pixel_y: number;
+            };
+            header?: never;
+            path: {
+                project_id: string;
+                run_id: string;
+                solution_set_id: string;
+                revision: string;
+                member_id: string;
+                artifact_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SavedPlanarProbeResource"];
+                };
+            };
+            /** @description Invalid bounded query */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Missing pinned source */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Identity mismatch */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Unsupported carrier or budget */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    persistence_get_persistence_projects_project_id_runs_run_id_solution_sets_solution_set_id_revisions_revision_members_member_id_artifacts_artifact_id_saved_planar_scalar: {
+        parameters: {
+            query: {
+                expected_dataset_manifest_object_ref: string;
+                expected_geometry_manifest_object_ref: string;
+                expected_geometry_object_ref: string;
+                /** @description xy, xz or yz. Coordinates and bounds are in metres. */
+                plane: string;
+                position_m: number;
+                u_min_m: number;
+                u_max_m: number;
+                v_min_m: number;
+                v_max_m: number;
+                /** @description Positive raster dimensions, at most 1048576 points in total. */
+                width: number;
+                height: number;
+                /** @description magnitude, x, y, z, u, v or normal; derived after interpolation. */
+                component: string;
+                /** @description Canonical positive decimal byte budget, including the binary header. */
+                max_response_bytes: string;
+            };
+            header?: never;
+            path: {
+                project_id: string;
+                run_id: string;
+                solution_set_id: string;
+                revision: string;
+                member_id: string;
+                artifact_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/octet-stream": unknown;
+                };
+            };
+            /** @description Invalid bounded query */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Missing pinned source */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Identity mismatch */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Unsupported carrier or budget */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    persistence_get_persistence_projects_project_id_runs_run_id_solution_sets_solution_set_id_revisions_revision_members_member_id_artifacts_artifact_id_saved_planar_vectors: {
+        parameters: {
+            query: {
+                expected_dataset_manifest_object_ref: string;
+                expected_geometry_manifest_object_ref: string;
+                expected_geometry_object_ref: string;
+                /** @description xy, xz or yz. Coordinates and bounds are in metres. */
+                plane: string;
+                position_m: number;
+                u_min_m: number;
+                u_max_m: number;
+                v_min_m: number;
+                v_max_m: number;
+                /** @description Positive raster dimensions, at most 1048576 points in total. */
+                width: number;
+                height: number;
+                /** @description magnitude, x, y, z, u, v or normal; derived after interpolation. */
+                component: string;
+                /** @description Canonical positive decimal byte budget, including the binary header. */
+                max_response_bytes: string;
+            };
+            header?: never;
+            path: {
+                project_id: string;
+                run_id: string;
+                solution_set_id: string;
+                revision: string;
+                member_id: string;
+                artifact_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/octet-stream": unknown;
+                };
+            };
+            /** @description Invalid bounded query */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Missing pinned source */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Identity mismatch */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Unsupported carrier or budget */
             422: {
                 headers: {
                     [name: string]: unknown;

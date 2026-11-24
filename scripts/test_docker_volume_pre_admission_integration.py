@@ -318,7 +318,7 @@ class RetainedPreAdmissionIntegrationTests(unittest.TestCase):
             "FULLMAG_CUDA_BASE_IMAGE": "sha256:" + "e" * 64,
         }}}}}
         identity = harness.identity
-        started = mock.Mock(return_value={"started": True})
+        started = mock.create_autospec(dev.start, return_value={"started": True})
         patches = [
             # The retained recreation cases in this harness have no cancelled
             # activation recovery record; model that optional helper read as
@@ -541,6 +541,78 @@ class RetainedPreAdmissionIntegrationTests(unittest.TestCase):
         self.assertEqual(helper.calls["count"], 0)
         self.assertNotIn("post_build_generation", started.call_args.kwargs)
         self.assertIsNotNone(started.call_args.kwargs["reuse_state"])
+
+    def test_api_start_drained_stop_uses_native_restart_not_failed_owner_continuation(self):
+        import docker_volume_post_build_generation as generation
+        harness = _Harness()
+        self.addCleanup(harness.close)
+        harness.certificate["restart_verified"] = True
+        metadata = {
+            "schema": "fullmag.docker-native-failed-stop-recreate.v1",
+            "failure_kind": "native-start-failure",
+            "failure_mode": "api-start-failure",
+            "container_id": BACKEND_ID, "image_id": IMAGE, "claim_pending": False,
+        }
+        context = {
+            "native_restart_metadata": metadata,
+            "previous_config_sha256": "a" * 64,
+            "api_start_with_drained_owner": True,
+        }
+        original_read = harness.control.read
+        def read(relative, *, optional=False):
+            if relative == "verification/stop-failed-" + BACKEND_ID + ".json":
+                return {"state": "stopped-confirmed"}
+            return original_read(relative, optional=optional)
+        harness.control.read = read
+        with mock.patch("docker_volume_dev._post_build_certificate_evidence", return_value={}), \
+             mock.patch("docker_volume_dev._read_runtime_config_digest", return_value="a" * 64), \
+             mock.patch.object(generation, "build_failed_owner_continuation",
+                               side_effect=BuildControlError("wrong failed-owner continuation")) as continuation:
+            result, started = self._run(
+                harness, helper=_helper_module(harness), recovery_context=context
+            )
+        self.assertEqual(result, {"started": True})
+        self.assertNotIn("api_start_with_drained_owner", started.call_args.kwargs)
+        self.assertEqual(started.call_args.kwargs["native_restart_metadata"], metadata)
+        continuation.assert_not_called()
+
+    def test_api_start_stop_does_not_skip_failed_owner_continuation_without_exact_context(self):
+        import docker_volume_post_build_generation as generation
+        for changes in (
+            {"api_start_with_drained_owner": False},
+            {"container_id": "f" * 64},
+            {"image_id": "sha256:" + "f" * 64},
+            {"failure_mode": None},
+            {"claim_pending": True},
+        ):
+            with self.subTest(changes=changes):
+                harness = _Harness()
+                self.addCleanup(harness.close)
+                harness.certificate["restart_verified"] = True
+                metadata = {
+                    "schema": "fullmag.docker-native-failed-stop-recreate.v1",
+                    "failure_kind": "native-start-failure", "failure_mode": "api-start-failure",
+                    "container_id": BACKEND_ID, "image_id": IMAGE, "claim_pending": False,
+                }
+                context = {
+                    "native_restart_metadata": metadata, "previous_config_sha256": "a" * 64,
+                    "api_start_with_drained_owner": True,
+                }
+                for key, value in changes.items():
+                    (context if key == "api_start_with_drained_owner" else metadata)[key] = value
+                original_read = harness.control.read
+                def read(relative, *, optional=False):
+                    if relative == "verification/stop-failed-" + BACKEND_ID + ".json":
+                        return {"state": "stopped-confirmed"}
+                    return original_read(relative, optional=optional)
+                harness.control.read = read
+                with mock.patch("docker_volume_dev._post_build_certificate_evidence", return_value={}), \
+                     mock.patch("docker_volume_dev._read_runtime_config_digest", return_value="a" * 64), \
+                     mock.patch.object(generation, "build_failed_owner_continuation",
+                                       side_effect=BuildControlError("failed-owner continuation")) as continuation:
+                    with self.assertRaisesRegex(BuildControlError, "failed-owner continuation"):
+                        self._run(harness, helper=_helper_module(harness), recovery_context=context)
+                    continuation.assert_called_once()
 
     def _after_ready_route(self, *, backend_id=BACKEND_ID,
                            failure_kind="native-after-ready-failure", historical_only=False):

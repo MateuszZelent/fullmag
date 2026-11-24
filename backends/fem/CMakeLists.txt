@@ -44,6 +44,8 @@ set(FEM_SOURCES
     core/fem_plan_fields.cpp
     core/fem_state.cpp
     cpu/mfem/transport/steady_transport_c_api.cpp
+    cpu/mfem/workflows/antenna_field_solve/frozen_surface_rt0.cpp
+    cpu/mfem/workflows/antenna_field_solve/frozen_direct_rt0.cpp
     gpu/cuda/exchange/exchange_plan.cpp
     gpu/cuda/exchange/exchange_operator.cpp
     gpu/cuda/exchange/exchange_upload.cpp
@@ -278,6 +280,7 @@ if(FULLMAG_USE_MFEM_STACK)
         cpu/mfem/workflows/antenna_field_solve/charge_terminal_current_constraints.cpp
         cpu/mfem/workflows/antenna_field_solve/accepted_terminal_charge_source.cpp
         cpu/mfem/workflows/antenna_field_solve/accepted_surface_rt0.cpp
+        cpu/mfem/workflows/antenna_field_solve/surface_rt0_io.cpp
           cpu/mfem/workflows/antenna_field_solve/accepted_external_lead_source.cpp
         cpu/mfem/interactions/oersted/direct_tetra_quadrature.cpp
         cpu/mfem/interactions/oersted/surface_rt0.cpp
@@ -707,8 +710,11 @@ if(FULLMAG_USE_MFEM_STACK)
             cpu/mfem/workflows/antenna_field_solve/accepted_terminal_charge_source.cpp
             cpu/mfem/workflows/antenna_field_solve/accepted_external_lead_source.cpp
             cpu/mfem/interactions/oersted/direct_tetra_quadrature.cpp
+            cpu/mfem/workflows/antenna_field_solve/frozen_direct_rt0.cpp
             src/frequency_domain/canonical_digest.cpp)
     endif()
+    target_compile_definitions(fem_conservative_current_view_contract PRIVATE
+        FULLMAG_HAS_MFEM_STACK=1)
     find_package(Threads REQUIRED)
     if(TARGET MFEM::mfem)
         target_link_libraries(fem_conservative_current_view_contract PRIVATE
@@ -720,6 +726,7 @@ if(FULLMAG_USE_MFEM_STACK)
     target_include_directories(fem_conservative_current_view_contract PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}
         ${CMAKE_CURRENT_SOURCE_DIR}/include
+        ${CMAKE_SOURCE_DIR}/include
     )
     if(FULLMAG_OET0_TSAN)
         target_compile_definitions(fem_conservative_current_view_contract PRIVATE

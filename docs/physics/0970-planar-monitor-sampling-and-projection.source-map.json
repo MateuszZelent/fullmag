@@ -44,17 +44,25 @@
     },
     {
       "path": "crates/fullmag-api/src/schemas/planar_monitors.rs",
-      "symbols": ["PlanarMonitorSchema"],
+      "symbols": [
+        "PlanarMonitorSchema"
+      ],
       "responsibility": "OpenAPI authoring schema for the canonical planar monitor resource."
     },
     {
       "path": "crates/fullmag-api/src/schemas/planar_fields.rs",
-      "symbols": ["PlanarFieldQuery", "PlanarFieldMetaResource", "PlanarMeshOverlayDescriptor"],
+      "symbols": [
+        "PlanarFieldQuery",
+        "PlanarFieldMetaResource",
+        "PlanarMeshOverlayDescriptor"
+      ],
       "responsibility": "OpenAPI query, metadata and geometry-source descriptor schemas for sampled planar fields."
     },
     {
       "path": "crates/fullmag-api/src/schemas/visualization_state.rs",
-      "symbols": ["PlanarVisualizationState"],
+      "symbols": [
+        "PlanarVisualizationState"
+      ],
       "responsibility": "Session-scoped planar presentation range and raster opacity, outside ProblemIR."
     }
   ],
@@ -163,93 +171,271 @@
       "id": "PM-N31",
       "status": "planned",
       "requirement": "Nearest node: FEM returns the closest vertex of the containing element with its nodal, non-interpolated value and the lower-index tie rule; FDM returns the containing cell centre; the signed normal offset is reported; not_requested, empty and unsupported_operator statuses and the invalid_planar_probe rejection hold. The Rust tests of plan Task 4 are written but NOT RUN while unit-test compilation is banned."
+    },
+    {
+      "id": "PM-S01",
+      "status": "NotVerified",
+      "requirement": "Stały/afiniczny wektor Tet4 i norma po interpolacji komponentów."
+    },
+    {
+      "id": "PM-S02",
+      "status": "NotVerified",
+      "requirement": "Occupancy odróżnia zero od braku pola i wyklucza puste punkty z ekstremów."
+    },
+    {
+      "id": "PM-S03",
+      "status": "NotVerified",
+      "requirement": "Historyczny owner i hash/layout; brak zależności od sesji."
+    },
+    {
+      "id": "PM-S04",
+      "status": "NotVerified",
+      "requirement": "Zapis Universe H przez UI bez Solve, zmiany wyników i kwalifikacji."
+    },
+    {
+      "id": "PM-S05",
+      "status": "NotVerified",
+      "requirement": "Cache, budżet, stale responses i bezczynność UI."
     }
   ],
   "equations": [
     {
       "id": "eq-planar-default-position",
-      "symbols": ["phi", "pn", "normal_bounds"],
-      "sources": ["default-planar-source-contract"]
+      "symbols": [
+        "phi",
+        "pn",
+        "normal_bounds"
+      ],
+      "sources": [
+        "default-planar-source-contract"
+      ]
     },
     {
       "id": "eq-planar-frame",
-      "symbols": ["x", "o", "eu", "ev", "n", "uvs"],
-      "sources": ["python-monitor", "frame-resolver"]
+      "symbols": [
+        "x",
+        "o",
+        "eu",
+        "ev",
+        "n",
+        "uvs"
+      ],
+      "sources": [
+        "python-monitor",
+        "frame-resolver"
+      ]
     },
     {
       "id": "eq-planar-pixel",
-      "symbols": ["Pij", "bounds", "NuNv", "ij", "duv"],
-      "sources": ["frame-resolver", "api-build"]
+      "symbols": [
+        "Pij",
+        "bounds",
+        "NuNv",
+        "ij",
+        "duv"
+      ],
+      "sources": [
+        "frame-resolver",
+        "api-build"
+      ]
     },
     {
       "id": "eq-planar-plane-support",
-      "symbols": ["Splane", "x", "Pij", "OmegaT"],
-      "sources": ["fdm-sample", "fem-sample"]
+      "symbols": [
+        "Splane",
+        "x",
+        "Pij",
+        "OmegaT"
+      ],
+      "sources": [
+        "fdm-sample",
+        "fem-sample"
+      ]
     },
     {
       "id": "eq-planar-slab-support",
-      "symbols": ["Sslab", "x", "OmegaT", "Pij", "t"],
-      "sources": ["fdm-sample", "fem-sample", "clipped-tetra"]
+      "symbols": [
+        "Sslab",
+        "x",
+        "OmegaT",
+        "Pij",
+        "t"
+      ],
+      "sources": [
+        "fdm-sample",
+        "fem-sample",
+        "clipped-tetra"
+      ]
     },
     {
       "id": "eq-planar-depth-support",
-      "symbols": ["Sdepth", "x", "OmegaT", "Pij"],
-      "sources": ["fdm-sample", "fem-sample", "clipped-tetra"]
+      "symbols": [
+        "Sdepth",
+        "x",
+        "OmegaT",
+        "Pij"
+      ],
+      "sources": [
+        "fdm-sample",
+        "fem-sample",
+        "clipped-tetra"
+      ]
     },
     {
       "id": "eq-planar-surface-support",
-      "symbols": ["Ssurface", "GammaT", "x", "o", "eu", "ev", "Pij"],
-      "sources": ["fem-surface"]
+      "symbols": [
+        "Ssurface",
+        "GammaT",
+        "x",
+        "o",
+        "eu",
+        "ev",
+        "Pij"
+      ],
+      "sources": [
+        "fem-surface"
+      ]
     },
     {
       "id": "eq-planar-volume-mean",
-      "symbols": ["Mij", "Sij", "q", "qbar", "dV"],
-      "sources": ["weighted-reduction", "fdm-sample", "fem-sample"]
+      "symbols": [
+        "Mij",
+        "Sij",
+        "q",
+        "qbar",
+        "dV"
+      ],
+      "sources": [
+        "weighted-reduction",
+        "fdm-sample",
+        "fem-sample"
+      ]
     },
     {
       "id": "eq-planar-thickness-integral",
-      "symbols": ["Iij", "duv", "Sdepth", "q", "dV"],
-      "sources": ["weighted-reduction"]
+      "symbols": [
+        "Iij",
+        "duv",
+        "Sdepth",
+        "q",
+        "dV"
+      ],
+      "sources": [
+        "weighted-reduction"
+      ]
     },
     {
       "id": "eq-planar-rms",
-      "symbols": ["qrms", "Mij", "Sdepth", "q", "dV"],
-      "sources": ["weighted-reduction"]
+      "symbols": [
+        "qrms",
+        "Mij",
+        "Sdepth",
+        "q",
+        "dV"
+      ],
+      "sources": [
+        "weighted-reduction"
+      ]
     },
     {
       "id": "eq-planar-vector-mean",
-      "symbols": ["qvecbar", "Mij", "Sij", "qvec", "dmu"],
-      "sources": ["weighted-reduction", "component-projection"]
+      "symbols": [
+        "qvecbar",
+        "Mij",
+        "Sij",
+        "qvec",
+        "dmu"
+      ],
+      "sources": [
+        "weighted-reduction",
+        "component-projection"
+      ]
     },
     {
       "id": "eq-planar-components",
-      "symbols": ["quvn", "qparallel", "qvecbar", "eu", "ev", "n"],
-      "sources": ["component-projection"]
+      "symbols": [
+        "quvn",
+        "qparallel",
+        "qvecbar",
+        "eu",
+        "ev",
+        "n"
+      ],
+      "sources": [
+        "component-projection"
+      ]
     },
     {
       "id": "eq-planar-fdm-discrete",
-      "symbols": ["qbar", "qc", "Vcij", "c"],
-      "sources": ["fdm-sample", "clipped-tetra", "weighted-reduction"]
+      "symbols": [
+        "qbar",
+        "qc",
+        "Vcij",
+        "c"
+      ],
+      "sources": [
+        "fdm-sample",
+        "clipped-tetra",
+        "weighted-reduction"
+      ]
     },
     {
       "id": "eq-planar-fdm-plane-area",
-      "symbols": ["qbar", "qc", "Acij", "c"],
-      "sources": ["fdm-sample", "sampling-tests"]
+      "symbols": [
+        "qbar",
+        "qc",
+        "Acij",
+        "c"
+      ],
+      "sources": [
+        "fdm-sample",
+        "sampling-tests"
+      ]
     },
     {
       "id": "eq-planar-fem-p1",
-      "symbols": ["q", "Na", "qa", "a"],
-      "sources": ["fem-sample", "clipped-tetra"]
+      "symbols": [
+        "q",
+        "Na",
+        "qa",
+        "a"
+      ],
+      "sources": [
+        "fem-sample",
+        "clipped-tetra"
+      ]
     },
     {
       "id": "eq-planar-fem-prism6",
-      "symbols": ["q", "Na", "qa", "a", "r", "s", "zeta", "x"],
-      "sources": ["fem-sample", "fem-element-contract", "clipped-convex-element", "sampling-tests"]
+      "symbols": [
+        "q",
+        "Na",
+        "qa",
+        "a",
+        "r",
+        "s",
+        "zeta",
+        "x"
+      ],
+      "sources": [
+        "fem-sample",
+        "fem-element-contract",
+        "clipped-convex-element",
+        "sampling-tests"
+      ]
     },
     {
       "id": "eq-planar-node-average",
-      "symbols": ["qnodes", "N", "qa", "a"],
-      "sources": ["fem-sample", "sampling-tests"]
+      "symbols": [
+        "qnodes",
+        "N",
+        "qa",
+        "a"
+      ],
+      "sources": [
+        "fem-sample",
+        "sampling-tests"
+      ]
     },
     {
       "id": "eq-planar-sampling-operator",
@@ -393,57 +579,312 @@
         "planar-nearest-node-contract",
         "point-probe"
       ]
+    },
+    {
+      "id": "eq-planar-saved-owned-vector",
+      "symbols": [
+        "saved_Ha",
+        "saved_Hhat",
+        "saved_Hnorm",
+        "saved_K",
+        "saved_mesh"
+      ],
+      "sources": [
+        "saved-owned-inspection-contract",
+        "saved-planar-reuse",
+        "saved-planar-adapter"
+      ]
     }
   ],
   "symbols": [
-    {"id": "F", "latex": "\\mathcal F", "meaning": "Oriented monitor frame", "si_unit": "1"},
-    {"id": "x", "latex": "\\mathbf x", "meaning": "World-space position", "si_unit": "\\mathrm{m}"},
-    {"id": "o", "latex": "\\mathbf o", "meaning": "Monitor origin", "si_unit": "\\mathrm{m}"},
-    {"id": "eu", "latex": "\\mathbf e_u", "meaning": "First in-plane unit vector", "si_unit": "1"},
-    {"id": "ev", "latex": "\\mathbf e_v", "meaning": "Second in-plane unit vector", "si_unit": "1"},
-    {"id": "n", "latex": "\\mathbf n", "meaning": "Monitor normal unit vector", "si_unit": "1"},
-    {"id": "uvs", "latex": "u,v,s", "meaning": "Coordinates in the monitor frame", "si_unit": "\\mathrm{m}"},
-    {"id": "bounds", "latex": "u_0,u_1,v_0,v_1", "meaning": "Resolved planar bounds", "si_unit": "\\mathrm{m}"},
-    {"id": "NuNv", "latex": "N_u,N_v", "meaning": "Raster dimensions", "si_unit": "1"},
-    {"id": "ij", "latex": "i,j", "meaning": "Raster indices", "si_unit": "1"},
-    {"id": "Pij", "latex": "P_{ij}", "meaning": "Physical pixel footprint in the monitor plane", "si_unit": "\\mathrm{m^2}"},
-    {"id": "duv", "latex": "\\Delta u,\\Delta v", "meaning": "Physical pixel side lengths", "si_unit": "\\mathrm{m}"},
-    {"id": "OmegaT", "latex": "\\Omega_T", "meaning": "Resolved target volume", "si_unit": "\\mathrm{m^3}"},
-    {"id": "GammaT", "latex": "\\Gamma_T", "meaning": "Selected target boundary", "si_unit": "\\mathrm{m^2}"},
-    {"id": "Sij", "latex": "S_{ij}", "meaning": "Operator-specific occupied support", "si_unit": "\\mathrm{m^3}\\ \\text{or}\\ \\mathrm{m^2}"},
-    {"id": "Splane", "latex": "S^{\\mathrm{plane}}_{ij}", "meaning": "Point support for plane sampling", "si_unit": "1"},
-    {"id": "Sslab", "latex": "S^{\\mathrm{slab}}_{ij}", "meaning": "Finite-thickness pixel-prism support", "si_unit": "\\mathrm{m^3}"},
-    {"id": "Sdepth", "latex": "S^{\\mathrm{depth}}_{ij}", "meaning": "Full-depth pixel-prism support", "si_unit": "\\mathrm{m^3}"},
-    {"id": "Ssurface", "latex": "S^{\\mathrm{surface}}_{ij}", "meaning": "Selected boundary support projected into a pixel", "si_unit": "\\mathrm{m^2}"},
-    {"id": "t", "latex": "t", "meaning": "Full slab thickness", "si_unit": "\\mathrm{m}"},
-    {"id": "Mij", "latex": "M_{ij}", "meaning": "Occupied volume or area", "si_unit": "\\mathrm{m^3}\\ \\text{or}\\ \\mathrm{m^2}"},
-    {"id": "q", "latex": "q", "meaning": "Scalar source quantity", "si_unit": "[q]"},
-    {"id": "qvec", "latex": "\\mathbf q", "meaning": "Vector source quantity", "si_unit": "[q]"},
-    {"id": "qbar", "latex": "\\bar q_{ij}", "meaning": "Occupied-measure scalar mean", "si_unit": "[q]"},
-    {"id": "qvecbar", "latex": "\\bar{\\mathbf q}_{ij}", "meaning": "Occupied-measure vector mean", "si_unit": "[q]"},
-    {"id": "Iij", "latex": "I_{ij}", "meaning": "Thickness integral per projected area", "si_unit": "[q]\\,\\mathrm{m}"},
-    {"id": "qrms", "latex": "q_{\\mathrm{rms},ij}", "meaning": "Occupied-measure RMS", "si_unit": "[q]"},
-    {"id": "dV", "latex": "dV", "meaning": "Physical volume element", "si_unit": "\\mathrm{m^3}"},
-    {"id": "dA", "latex": "dA", "meaning": "Physical surface element", "si_unit": "\\mathrm{m^2}"},
-    {"id": "dmu", "latex": "d\\mu", "meaning": "Operator-selected physical measure", "si_unit": "\\mathrm{m^3}\\ \\text{or}\\ \\mathrm{m^2}"},
-    {"id": "quvn", "latex": "q_u,q_v,q_n", "meaning": "Components in the resolved monitor frame", "si_unit": "[q]"},
-    {"id": "qparallel", "latex": "q_{\\parallel}", "meaning": "In-plane vector magnitude", "si_unit": "[q]"},
-    {"id": "c", "latex": "c", "meaning": "FDM cell index", "si_unit": "1"},
-    {"id": "qc", "latex": "q_c", "meaning": "Cell-constant FDM value", "si_unit": "[q]"},
-    {"id": "Vcij", "latex": "V_{c,ij}", "meaning": "Cell/pixel-support intersection volume", "si_unit": "\\mathrm{m^3}"},
-    {"id": "Acij", "latex": "A_{c,ij}", "meaning": "Area of the cell section inside the pixel footprint", "si_unit": "\\mathrm{m^2}"},
-    {"id": "a", "latex": "a", "meaning": "Local FEM node index", "si_unit": "1"},
-    {"id": "Na", "latex": "N_a", "meaning": "Tet4 barycentric or Prism6 triangle-P1 tensor-product interval-P1 basis function", "si_unit": "1"},
-    {"id": "qa", "latex": "q_a", "meaning": "Nodal P1 value", "si_unit": "[q]"},
-    {"id": "r", "latex": "r", "meaning": "First Prism6 triangle reference coordinate", "si_unit": "1"},
-    {"id": "s", "latex": "s", "meaning": "Second Prism6 triangle reference coordinate", "si_unit": "1"},
-    {"id": "zeta", "latex": "\\zeta", "meaning": "Prism6 interval reference coordinate", "si_unit": "1"},
-    {"id": "N", "latex": "N", "meaning": "Number of nodes in an arithmetic average", "si_unit": "1"},
-    {"id": "qnodes", "latex": "q_{\\mathrm{nodes}}", "meaning": "Illegal unweighted nodal mean", "si_unit": "[q]"},
-    {"id": "pi", "latex": "\\pi", "meaning": "Circle constant", "si_unit": "1"},
-    {"id": "phi", "latex": "\\phi", "meaning": "Validated default-source position fraction", "si_unit": "1"},
-    {"id": "pn", "latex": "p_n", "meaning": "Resolved physical coordinate along the selected normal", "si_unit": "\\mathrm{m}"},
-    {"id": "normal_bounds", "latex": "b_{\\min},b_{\\max}", "meaning": "Published domain bounds along the selected normal", "si_unit": "\\mathrm{m}"},
+    {
+      "id": "F",
+      "latex": "\\mathcal F",
+      "meaning": "Oriented monitor frame",
+      "si_unit": "1"
+    },
+    {
+      "id": "x",
+      "latex": "\\mathbf x",
+      "meaning": "World-space position",
+      "si_unit": "\\mathrm{m}"
+    },
+    {
+      "id": "o",
+      "latex": "\\mathbf o",
+      "meaning": "Monitor origin",
+      "si_unit": "\\mathrm{m}"
+    },
+    {
+      "id": "eu",
+      "latex": "\\mathbf e_u",
+      "meaning": "First in-plane unit vector",
+      "si_unit": "1"
+    },
+    {
+      "id": "ev",
+      "latex": "\\mathbf e_v",
+      "meaning": "Second in-plane unit vector",
+      "si_unit": "1"
+    },
+    {
+      "id": "n",
+      "latex": "\\mathbf n",
+      "meaning": "Monitor normal unit vector",
+      "si_unit": "1"
+    },
+    {
+      "id": "uvs",
+      "latex": "u,v,s",
+      "meaning": "Coordinates in the monitor frame",
+      "si_unit": "\\mathrm{m}"
+    },
+    {
+      "id": "bounds",
+      "latex": "u_0,u_1,v_0,v_1",
+      "meaning": "Resolved planar bounds",
+      "si_unit": "\\mathrm{m}"
+    },
+    {
+      "id": "NuNv",
+      "latex": "N_u,N_v",
+      "meaning": "Raster dimensions",
+      "si_unit": "1"
+    },
+    {
+      "id": "ij",
+      "latex": "i,j",
+      "meaning": "Raster indices",
+      "si_unit": "1"
+    },
+    {
+      "id": "Pij",
+      "latex": "P_{ij}",
+      "meaning": "Physical pixel footprint in the monitor plane",
+      "si_unit": "\\mathrm{m^2}"
+    },
+    {
+      "id": "duv",
+      "latex": "\\Delta u,\\Delta v",
+      "meaning": "Physical pixel side lengths",
+      "si_unit": "\\mathrm{m}"
+    },
+    {
+      "id": "OmegaT",
+      "latex": "\\Omega_T",
+      "meaning": "Resolved target volume",
+      "si_unit": "\\mathrm{m^3}"
+    },
+    {
+      "id": "GammaT",
+      "latex": "\\Gamma_T",
+      "meaning": "Selected target boundary",
+      "si_unit": "\\mathrm{m^2}"
+    },
+    {
+      "id": "Sij",
+      "latex": "S_{ij}",
+      "meaning": "Operator-specific occupied support",
+      "si_unit": "\\mathrm{m^3}\\ \\text{or}\\ \\mathrm{m^2}"
+    },
+    {
+      "id": "Splane",
+      "latex": "S^{\\mathrm{plane}}_{ij}",
+      "meaning": "Point support for plane sampling",
+      "si_unit": "1"
+    },
+    {
+      "id": "Sslab",
+      "latex": "S^{\\mathrm{slab}}_{ij}",
+      "meaning": "Finite-thickness pixel-prism support",
+      "si_unit": "\\mathrm{m^3}"
+    },
+    {
+      "id": "Sdepth",
+      "latex": "S^{\\mathrm{depth}}_{ij}",
+      "meaning": "Full-depth pixel-prism support",
+      "si_unit": "\\mathrm{m^3}"
+    },
+    {
+      "id": "Ssurface",
+      "latex": "S^{\\mathrm{surface}}_{ij}",
+      "meaning": "Selected boundary support projected into a pixel",
+      "si_unit": "\\mathrm{m^2}"
+    },
+    {
+      "id": "t",
+      "latex": "t",
+      "meaning": "Full slab thickness",
+      "si_unit": "\\mathrm{m}"
+    },
+    {
+      "id": "Mij",
+      "latex": "M_{ij}",
+      "meaning": "Occupied volume or area",
+      "si_unit": "\\mathrm{m^3}\\ \\text{or}\\ \\mathrm{m^2}"
+    },
+    {
+      "id": "q",
+      "latex": "q",
+      "meaning": "Scalar source quantity",
+      "si_unit": "[q]"
+    },
+    {
+      "id": "qvec",
+      "latex": "\\mathbf q",
+      "meaning": "Vector source quantity",
+      "si_unit": "[q]"
+    },
+    {
+      "id": "qbar",
+      "latex": "\\bar q_{ij}",
+      "meaning": "Occupied-measure scalar mean",
+      "si_unit": "[q]"
+    },
+    {
+      "id": "qvecbar",
+      "latex": "\\bar{\\mathbf q}_{ij}",
+      "meaning": "Occupied-measure vector mean",
+      "si_unit": "[q]"
+    },
+    {
+      "id": "Iij",
+      "latex": "I_{ij}",
+      "meaning": "Thickness integral per projected area",
+      "si_unit": "[q]\\,\\mathrm{m}"
+    },
+    {
+      "id": "qrms",
+      "latex": "q_{\\mathrm{rms},ij}",
+      "meaning": "Occupied-measure RMS",
+      "si_unit": "[q]"
+    },
+    {
+      "id": "dV",
+      "latex": "dV",
+      "meaning": "Physical volume element",
+      "si_unit": "\\mathrm{m^3}"
+    },
+    {
+      "id": "dA",
+      "latex": "dA",
+      "meaning": "Physical surface element",
+      "si_unit": "\\mathrm{m^2}"
+    },
+    {
+      "id": "dmu",
+      "latex": "d\\mu",
+      "meaning": "Operator-selected physical measure",
+      "si_unit": "\\mathrm{m^3}\\ \\text{or}\\ \\mathrm{m^2}"
+    },
+    {
+      "id": "quvn",
+      "latex": "q_u,q_v,q_n",
+      "meaning": "Components in the resolved monitor frame",
+      "si_unit": "[q]"
+    },
+    {
+      "id": "qparallel",
+      "latex": "q_{\\parallel}",
+      "meaning": "In-plane vector magnitude",
+      "si_unit": "[q]"
+    },
+    {
+      "id": "c",
+      "latex": "c",
+      "meaning": "FDM cell index",
+      "si_unit": "1"
+    },
+    {
+      "id": "qc",
+      "latex": "q_c",
+      "meaning": "Cell-constant FDM value",
+      "si_unit": "[q]"
+    },
+    {
+      "id": "Vcij",
+      "latex": "V_{c,ij}",
+      "meaning": "Cell/pixel-support intersection volume",
+      "si_unit": "\\mathrm{m^3}"
+    },
+    {
+      "id": "Acij",
+      "latex": "A_{c,ij}",
+      "meaning": "Area of the cell section inside the pixel footprint",
+      "si_unit": "\\mathrm{m^2}"
+    },
+    {
+      "id": "a",
+      "latex": "a",
+      "meaning": "Local FEM node index",
+      "si_unit": "1"
+    },
+    {
+      "id": "Na",
+      "latex": "N_a",
+      "meaning": "Tet4 barycentric or Prism6 triangle-P1 tensor-product interval-P1 basis function",
+      "si_unit": "1"
+    },
+    {
+      "id": "qa",
+      "latex": "q_a",
+      "meaning": "Nodal P1 value",
+      "si_unit": "[q]"
+    },
+    {
+      "id": "r",
+      "latex": "r",
+      "meaning": "First Prism6 triangle reference coordinate",
+      "si_unit": "1"
+    },
+    {
+      "id": "s",
+      "latex": "s",
+      "meaning": "Second Prism6 triangle reference coordinate",
+      "si_unit": "1"
+    },
+    {
+      "id": "zeta",
+      "latex": "\\zeta",
+      "meaning": "Prism6 interval reference coordinate",
+      "si_unit": "1"
+    },
+    {
+      "id": "N",
+      "latex": "N",
+      "meaning": "Number of nodes in an arithmetic average",
+      "si_unit": "1"
+    },
+    {
+      "id": "qnodes",
+      "latex": "q_{\\mathrm{nodes}}",
+      "meaning": "Illegal unweighted nodal mean",
+      "si_unit": "[q]"
+    },
+    {
+      "id": "pi",
+      "latex": "\\pi",
+      "meaning": "Circle constant",
+      "si_unit": "1"
+    },
+    {
+      "id": "phi",
+      "latex": "\\phi",
+      "meaning": "Validated default-source position fraction",
+      "si_unit": "1"
+    },
+    {
+      "id": "pn",
+      "latex": "p_n",
+      "meaning": "Resolved physical coordinate along the selected normal",
+      "si_unit": "\\mathrm{m}"
+    },
+    {
+      "id": "normal_bounds",
+      "latex": "b_{\\min},b_{\\max}",
+      "meaning": "Published domain bounds along the selected normal",
+      "si_unit": "\\mathrm{m}"
+    },
     {
       "id": "W_pa",
       "latex": "W_{pa}",
@@ -564,23 +1005,138 @@
       "meaning": "Composite cells covered by a native multilayer cell",
       "si_unit": "1"
     },
-    {"id": "B_full", "latex": "B", "meaning": "Full resolved frame bounds rectangle", "si_unit": "\\mathrm{m^2}"},
-    {"id": "W_req", "latex": "W^{\\mathrm{req}}", "meaning": "Requested sampling window rectangle", "si_unit": "\\mathrm{m^2}"},
-    {"id": "window_req_bounds", "latex": "\\tilde u_0,\\tilde u_1,\\tilde v_0,\\tilde v_1", "meaning": "Requested sampling-window bounds", "si_unit": "\\mathrm{m}"},
-    {"id": "W_res", "latex": "W", "meaning": "Resolved sampling window, intersection of the request with the frame bounds", "si_unit": "\\mathrm{m^2}"},
-    {"id": "window_res_bounds", "latex": "\\hat u_0,\\hat u_1,\\hat v_0,\\hat v_1", "meaning": "Resolved sampling-window bounds", "si_unit": "\\mathrm{m}"},
-    {"id": "e_star", "latex": "e_\\star", "meaning": "FEM element assigned to the probe point by the locator", "si_unit": "1"},
-    {"id": "N_e_star", "latex": "\\mathcal N(e_\\star)", "meaning": "Global mesh node indices of the vertices of the probe element", "si_unit": "1"},
-    {"id": "nu_mu", "latex": "\\nu,\\mu", "meaning": "Global mesh node indices", "si_unit": "1"},
-    {"id": "nu_star", "latex": "\\nu_\\star", "meaning": "Selected nearest global node index", "si_unit": "1"},
-    {"id": "x_nu", "latex": "\\mathbf x_\\nu", "meaning": "World position of mesh node $\\nu$", "si_unit": "\\mathrm{m}"},
-    {"id": "q_nu_star", "latex": "q_{\\nu_\\star}", "meaning": "Nodal degree-of-freedom value at the selected node", "si_unit": "[q]"},
-    {"id": "q_node", "latex": "q_{\\mathrm{node}}", "meaning": "Nearest-node reading reported by the probe", "si_unit": "[q]"},
-    {"id": "uv_nu", "latex": "u_\\nu,v_\\nu", "meaning": "Projection of the selected node or cell centre on the frame", "si_unit": "\\mathrm{m}"},
-    {"id": "delta_par", "latex": "\\delta_\\parallel", "meaning": "In-plane distance between the probe point and the projected node", "si_unit": "\\mathrm{m}"},
-    {"id": "delta_n", "latex": "\\delta_n", "meaning": "Signed offset of the node or cell centre along the frame normal", "si_unit": "\\mathrm{m}"},
-    {"id": "c_star", "latex": "c_\\star", "meaning": "FDM cell containing the probe point", "si_unit": "1"},
-    {"id": "x_c", "latex": "\\mathbf x_c", "meaning": "World position of the centre of FDM cell $c$", "si_unit": "\\mathrm{m}"}
+    {
+      "id": "B_full",
+      "latex": "B",
+      "meaning": "Full resolved frame bounds rectangle",
+      "si_unit": "\\mathrm{m^2}"
+    },
+    {
+      "id": "W_req",
+      "latex": "W^{\\mathrm{req}}",
+      "meaning": "Requested sampling window rectangle",
+      "si_unit": "\\mathrm{m^2}"
+    },
+    {
+      "id": "window_req_bounds",
+      "latex": "\\tilde u_0,\\tilde u_1,\\tilde v_0,\\tilde v_1",
+      "meaning": "Requested sampling-window bounds",
+      "si_unit": "\\mathrm{m}"
+    },
+    {
+      "id": "W_res",
+      "latex": "W",
+      "meaning": "Resolved sampling window, intersection of the request with the frame bounds",
+      "si_unit": "\\mathrm{m^2}"
+    },
+    {
+      "id": "window_res_bounds",
+      "latex": "\\hat u_0,\\hat u_1,\\hat v_0,\\hat v_1",
+      "meaning": "Resolved sampling-window bounds",
+      "si_unit": "\\mathrm{m}"
+    },
+    {
+      "id": "e_star",
+      "latex": "e_\\star",
+      "meaning": "FEM element assigned to the probe point by the locator",
+      "si_unit": "1"
+    },
+    {
+      "id": "N_e_star",
+      "latex": "\\mathcal N(e_\\star)",
+      "meaning": "Global mesh node indices of the vertices of the probe element",
+      "si_unit": "1"
+    },
+    {
+      "id": "nu_mu",
+      "latex": "\\nu,\\mu",
+      "meaning": "Global mesh node indices",
+      "si_unit": "1"
+    },
+    {
+      "id": "nu_star",
+      "latex": "\\nu_\\star",
+      "meaning": "Selected nearest global node index",
+      "si_unit": "1"
+    },
+    {
+      "id": "x_nu",
+      "latex": "\\mathbf x_\\nu",
+      "meaning": "World position of mesh node $\\nu$",
+      "si_unit": "\\mathrm{m}"
+    },
+    {
+      "id": "q_nu_star",
+      "latex": "q_{\\nu_\\star}",
+      "meaning": "Nodal degree-of-freedom value at the selected node",
+      "si_unit": "[q]"
+    },
+    {
+      "id": "q_node",
+      "latex": "q_{\\mathrm{node}}",
+      "meaning": "Nearest-node reading reported by the probe",
+      "si_unit": "[q]"
+    },
+    {
+      "id": "uv_nu",
+      "latex": "u_\\nu,v_\\nu",
+      "meaning": "Projection of the selected node or cell centre on the frame",
+      "si_unit": "\\mathrm{m}"
+    },
+    {
+      "id": "delta_par",
+      "latex": "\\delta_\\parallel",
+      "meaning": "In-plane distance between the probe point and the projected node",
+      "si_unit": "\\mathrm{m}"
+    },
+    {
+      "id": "delta_n",
+      "latex": "\\delta_n",
+      "meaning": "Signed offset of the node or cell centre along the frame normal",
+      "si_unit": "\\mathrm{m}"
+    },
+    {
+      "id": "c_star",
+      "latex": "c_\\star",
+      "meaning": "FDM cell containing the probe point",
+      "si_unit": "1"
+    },
+    {
+      "id": "x_c",
+      "latex": "\\mathbf x_c",
+      "meaning": "World position of the centre of FDM cell $c$",
+      "si_unit": "\\mathrm{m}"
+    },
+    {
+      "id": "saved_Ha",
+      "latex": "\\mathbf H_a",
+      "meaning": "Zapisana próbka wektorowa pola",
+      "si_unit": "\\mathrm{A\\,m^{-1}}"
+    },
+    {
+      "id": "saved_Hhat",
+      "latex": "\\widehat{\\mathbf H}",
+      "meaning": "Rekonstrukcja wektora do inspekcji",
+      "si_unit": "\\mathrm{A\\,m^{-1}}"
+    },
+    {
+      "id": "saved_Hnorm",
+      "latex": "\\widehat H_{\\mathrm{mag}}",
+      "meaning": "Norma zrekonstruowanego wektora",
+      "si_unit": "\\mathrm{A\\,m^{-1}}"
+    },
+    {
+      "id": "saved_K",
+      "latex": "K",
+      "meaning": "Komórka Tet4 zapisanej siatki obserwacji",
+      "si_unit": "\\mathrm{m^3}"
+    },
+    {
+      "id": "saved_mesh",
+      "latex": "\\mathcal T_s",
+      "meaning": "Zapisana topologia komórek obserwacji",
+      "si_unit": "1"
+    }
   ],
   "sources": [
     {
@@ -937,6 +1493,34 @@
       "symbol": "DOC-ANCHOR:planar-monitor-nearest-node",
       "responsibility": "Define the nearest-node probe reading (FEM nearest vertex of the containing element with the lower-index tie rule and nodal value, FDM containing cell centre and value), its statuses, and the plane_sample-only restriction before implementation (ADR 0080).",
       "evidence_status": "planned_contract"
+    },
+    {
+      "id": "saved-owned-inspection-contract",
+      "path": "docs/physics/0970-planar-monitor-sampling-and-projection.md",
+      "symbol": "DOC-ANCHOR:planar-monitor-saved-owned-sample-contract",
+      "responsibility": "Rekonstrukcja zapisanych próbek H do inspekcji; nie zmienia kwalifikacji źródła.",
+      "evidence_status": "planned_contract"
+    },
+    {
+      "id": "saved-geometry-owner",
+      "path": "crates/fullmag-api/src/router_v2/handlers/persistence/solutions/saved_geometry.rs",
+      "symbol": "resolve_saved_geometry",
+      "responsibility": "Kontrola historycznego właściciela geometrii, datasetu i tensora w adapterze saved-planar.",
+      "evidence_status": "runtime-http-two-saved-datasets"
+    },
+    {
+      "id": "saved-planar-reuse",
+      "path": "crates/fullmag-api/src/planar_sampling/contract.rs",
+      "symbol": "sample_fem_cached",
+      "responsibility": "Istniejący wspólny sampler; wykorzystanie do zapisanych próbek wymaga nowego adaptera z jawną semantyką rekonstrukcji.",
+      "evidence_status": "source-reviewed-adapter-NotImplemented"
+    },
+    {
+      "id": "saved-planar-adapter",
+      "path": "crates/fullmag-api/src/router_v2/handlers/persistence/solutions/saved_planar.rs",
+      "symbol": "build_saved_planar",
+      "responsibility": "Przypięcie źródła i rekonstrukcja inspekcyjna; budżety i maska, bez Solve.",
+      "evidence_status": "production-build-and-132-http-requests-science-NotVerified"
     }
   ],
   "public_api": {

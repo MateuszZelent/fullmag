@@ -3,7 +3,6 @@ use super::closed_loop_v2::ClosedLoopAcceptedSourceInputV2;
 use crate::types::RunError;
 use fullmag_ir::ConservativeCurrentClosureIR;
 use num_bigint::BigInt;
-use num_rational::BigRational;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
@@ -152,44 +151,36 @@ fn provenance_integer(value:&Value,name:&str,expected:u64)->Result<(),RunError> 
 // Exact dyadic arithmetic prevents a large constant component from corrupting
 // a shared slope inferred from the difference of rounded samples.
 fn verify_rt0_sample_affinity(points: &[[f64; 3]; 4], currents: &[f64; 12]) -> Result<(), RunError> {
-    let zero = BigRational::from_integer(BigInt::from(0));
-    let budget = BigRational::new(BigInt::from(64), BigInt::from(1) << 52_usize);
-    let mut coordinates: [[BigRational; 3]; 4] =
-        std::array::from_fn(|_| std::array::from_fn(|_| zero.clone()));
-    let mut samples: [[BigRational; 3]; 4] =
-        std::array::from_fn(|_| std::array::from_fn(|_| zero.clone()));
-    let mut errors: [[BigRational; 3]; 4] =
-        std::array::from_fn(|_| std::array::from_fn(|_| zero.clone()));
-    for local in 0..4 {
-        for axis in 0..3 {
-            coordinates[local][axis] = BigRational::from_float(points[local][axis])
-                .ok_or_else(|| invalid("nonfinite RT0 sample coordinate"))?;
-            let sample = BigRational::from_float(currents[3 * local + axis])
-                .ok_or_else(|| invalid("nonfinite RT0 current sample"))?;
-            let magnitude = if sample < zero { -sample.clone() } else { sample.clone() };
-            errors[local][axis] = &budget * magnitude;
-            samples[local][axis] = sample;
-        }
-    }
-    let mut slope_interval: Option<(BigRational, BigRational)> = None;
+    let zero = BigInt::from(0);
+    let flat: [f64; 12] = std::array::from_fn(|i| points[i / 3][i % 3]);
+    let (coordinates, _) = exact_integer_lattice(&flat, "nonfinite RT0 sample coordinate")?;
+    let (samples, _) = exact_integer_lattice(currents, "nonfinite RT0 current sample")?;
+    let magnitudes: [BigInt; 12] = std::array::from_fn(|i|
+        if samples[i] < zero { -samples[i].clone() } else { samples[i].clone() });
+    // All slope bounds share one positive scale. Keep unreduced numerator /
+    // positive denominator pairs; cross-products preserve exact comparisons.
+    let mut slope_interval: Option<((BigInt, BigInt), (BigInt, BigInt))> = None;
     for axis in 0..3 {
         for first in 0..4 {
             for second in 0..first {
-                let distance = &coordinates[first][axis] - &coordinates[second][axis];
-                let delta = &samples[first][axis] - &samples[second][axis];
-                let width = &errors[first][axis] + &errors[second][axis];
+                let a = 3 * first + axis;
+                let b = 3 * second + axis;
+                let mut distance = &coordinates[a] - &coordinates[b];
+                let mut delta = (&samples[a] - &samples[b]) << 46_usize;
+                let width = &magnitudes[a] + &magnitudes[b];
                 if distance == zero {
                     require(delta >= -width.clone() && delta <= width,
                         "J samples are not one affine RT0 field")?;
                     continue;
                 }
-                let mut lower = (&delta - &width) / &distance;
-                let mut upper = (&delta + &width) / &distance;
-                if lower > upper { std::mem::swap(&mut lower, &mut upper); }
+                if distance < zero { distance = -distance; delta = -delta; }
+                let lower = (&delta - &width, distance.clone());
+                let upper = (&delta + &width, distance);
                 if let Some((minimum, maximum)) = slope_interval.as_mut() {
-                    if lower > *minimum { *minimum = lower; }
-                    if upper < *maximum { *maximum = upper; }
-                    require(*minimum <= *maximum, "J samples are not one affine RT0 field")?;
+                    if &lower.0 * &minimum.1 > &minimum.0 * &lower.1 { *minimum = lower; }
+                    if &upper.0 * &maximum.1 < &maximum.0 * &upper.1 { *maximum = upper; }
+                    require(&minimum.0 * &maximum.1 <= &maximum.0 * &minimum.1,
+                        "J samples are not one affine RT0 field")?;
                 } else {
                     slope_interval = Some((lower, upper));
                 }
@@ -200,8 +191,6 @@ fn verify_rt0_sample_affinity(points: &[[f64; 3]; 4], currents: &[f64; 12]) -> R
 }
 
 
-// Canonical face moments retain the RT0 DOFs; rounded display traces do not.
-// Reconstruct the exact field before applying the existing per-sample budget.
 // Represent finite binary64 values exactly on one power-of-two lattice.
 // The largest shift is bounded by the binary64 exponent range, not the data size.
 fn exact_integer_lattice<const N: usize>(values: &[f64; N], reason: &str)
@@ -365,6 +354,11 @@ fn verify_center_current(
 fn verify_owned_geometry(source: &ClosedLoopAcceptedSourceInputV2,
     by_id: &BTreeMap<u64,usize>, faces: &BTreeMap<[u64;3],f64>, owners: &BTreeMap<[u64;3],Vec<usize>>,
     cut_pairs: &[([u64;3],[u64;3])]) -> Result<(),RunError> {
+    let profile = std::env::var_os("FULLMAG_ANTENNA_COLD_READ_PROFILE")
+        .is_some_and(|value| value == "1");
+    let geometry_started = profile.then(std::time::Instant::now);
+    let mut affinity_time = std::time::Duration::ZERO;
+    let mut moments_time = std::time::Duration::ZERO;
     let mut edge_scale=0.0_f64;
     for cell in &source.cells {
         for local in 1..4 { for axis in 0..3 { edge_scale=edge_scale.max((cell.vertex_xyz_m[3*local+axis]-cell.vertex_xyz_m[axis]).abs()); } }
@@ -384,9 +378,13 @@ fn verify_owned_geometry(source: &ClosedLoopAcceptedSourceInputV2,
             require(cell.center_xyz_m[axis].is_finite() && (center-cell.center_xyz_m[axis]).abs()<=128.0*f64::EPSILON*xyz_scale,"sampled center geometry mismatch")?;
             verify_center_current(cell, &points, axis, faces, &mut moment_context)?;
         }
+        let affinity_started = profile.then(std::time::Instant::now);
         verify_rt0_sample_affinity(&points, &cell.vertex_current_xyz_apm2)?;
+        if let Some(started) = affinity_started { affinity_time += started.elapsed(); }
+        let moments_started = profile.then(std::time::Instant::now);
         moment_context.as_ref().ok_or_else(||invalid("missing RT0 moment context"))?
             .verify_vertex_samples(&cell.vertex_current_xyz_apm2)?;
+        if let Some(started) = moments_started { moments_time += started.elapsed(); }
         let mut outward_fluxes=Vec::new();
         for opposite in 0..4 {
             let mut ids=cell.vertex_ids.iter().enumerate().filter_map(|(i,id)|(i!=opposite).then_some(*id)).collect::<Vec<_>>(); ids.sort_unstable();
@@ -431,6 +429,10 @@ fn verify_owned_geometry(source: &ClosedLoopAcceptedSourceInputV2,
     let current=compensated_sum(minus_fluxes.into_iter())?;
     let gate=128.0*f64::EPSILON*scale;
     require((source.metadata.source_current_a-current).abs()<=gate && (source.metadata.source_absolute_flux_a-scale).abs()<=gate,"signed source current/absolute flux mismatch")?;
+    if let Some(started) = geometry_started {
+        eprintln!("antenna_cold_read phase=owned_geometry cells={} wall_ns={} affinity_ns={} moments_ns={}",
+            source.cells.len(), started.elapsed().as_nanos(), affinity_time.as_nanos(), moments_time.as_nanos());
+    }
     Ok(())
 }
 

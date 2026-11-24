@@ -31,9 +31,22 @@ pub(crate) fn load_accepted_inspection_bytes(problem:&ProblemIR, step:&StudyStep
     })
 }
 
+/// Same immutable accepted-operation binding, retaining full verified RT0 source once.
+pub(crate) fn load_accepted_retained_current_source_bytes(
+    problem: &ProblemIR, step: &StudyStep, bytes: &[u8], max_bytes: usize,
+) -> Result<fullmag_runner::VerifiedRetainedCurrentSourceContent> {
+    with_accepted_inspection_bytes(problem, step, bytes, max_bytes, |manifest, artifacts, stage, output, port, digest| {
+        fullmag_runner::verify_retained_current_source_content(manifest, &artifacts, stage, output, port, digest, max_bytes)
+            .map_err(|error| anyhow::anyhow!(error.to_string()))
+    })
+}
+
 fn with_accepted_inspection_bytes<T>(problem:&ProblemIR, step:&StudyStep, bytes:&[u8], max_bytes:usize,
     build: impl FnOnce(&[u8], Vec<fullmag_runner::AuxiliaryArtifact>, &str, &str, &str, &str) -> Result<T>,
 ) -> Result<T> {
+    if matches!(step.kind, StudyStepKind::RetainedCurrentFieldInspection { .. }) {
+        bail!("retained-current H-only child cannot be used as a full current source or decoded as a closed-loop inspection");
+    }
     let StudyStepKind::ClosedLoopInspection { stage_id, port_mode_id, output_id }=&step.kind else { bail!("inspection output cannot belong to a legacy solver step"); };
     let operation=fullmag_plan::validate_closed_loop_operation(problem,stage_id,port_mode_id,output_id)?;
     let fullmag_plan::AntennaFieldSolveExecutionPlan::ClosedLoopInspection { input, .. }=operation else { bail!("inspection output operation mismatch"); };

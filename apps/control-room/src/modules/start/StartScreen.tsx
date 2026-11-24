@@ -21,6 +21,7 @@ import {
   SheetTrigger,
 } from "@/shared/ui/Sheet";
 
+import { OpenSavedRunForm } from "./OpenSavedRunForm";
 import { HomeSection } from "./home/HomeSection";
 import { LAUNCH_TILES } from "./home/LaunchTiles.model";
 import { ProjectInspector } from "./inspector/ProjectInspector";
@@ -563,6 +564,7 @@ export function StartScreen({ kernel }: ModuleProps) {
           </div>
         ) : null}
         <div className="fm-start__content-inner">
+          {section === "home" ? <OpenSavedRunForm kernel={kernel} /> : null}
           {section === "home" ? (
             <HomeSection
               browseDisabledReason={browseDisabledReason}

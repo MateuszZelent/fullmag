@@ -130,6 +130,8 @@ pub(crate) struct AppState {
     pub repo_root: PathBuf,
     /// Managed, project-owned run storage resolved before this API starts.
     pub submit_store_root: Option<PathBuf>,
+    /// Immutable read authority only; never consulted by submission or execution.
+    pub readonly_result_archive: Option<crate::readonly_result_archive::ReadonlyResultArchive>,
     /// Global durable bound for accepted runs that have not reached a terminal
     /// task catalog. Replays do not consume another backlog slot.
     pub submit_backlog_limit: NonZeroUsize,

@@ -13,6 +13,7 @@ pub use time_expression::TimeExpressionIR;
 pub mod antenna;
 pub mod bb_pipeline;
 pub mod antenna_current_source;
+pub mod antenna_source_preparation;
 pub mod constraint;
 pub mod compute_resources;
 pub mod eigen_contract;
@@ -63,6 +64,7 @@ mod floating_point_guard;
 mod validation;
 pub use antenna::*;
 pub use antenna_current_source::*;
+pub use antenna_source_preparation::*;
 pub use constraint::*;
 pub use compute_resources::*;
 pub use eigen_contract::*;
@@ -1304,6 +1306,7 @@ impl ProblemIR {
                 },
                 GeometryEntryIR::CpwAntenna {
                     name,
+                    r#loop,
                     length_m,
                     thickness_m,
                     conductivity_s_per_m,
@@ -1311,7 +1314,15 @@ impl ProblemIR {
                     stations,
                     conductors,
                     terminal_faces,
-                } => antenna::validate_cpw_geometry(
+                } => {
+                    if let Some(loop_geometry) = r#loop {
+                        errors.extend(loop_geometry.validation_errors());
+                        if conductors.iter().any(|part| part.id == loop_geometry.inlet_connection_part_id
+                            || part.id == loop_geometry.outlet_connection_part_id) {
+                            errors.push("CPW connection IDs must be distinct from every conductor".into());
+                        }
+                    }
+                    antenna::validate_cpw_geometry(
                     name,
                     *length_m,
                     *thickness_m,
@@ -1321,7 +1332,8 @@ impl ProblemIR {
                     conductors,
                     terminal_faces,
                     &mut errors,
-                ),
+                );
+                },
                 GeometryEntryIR::Difference { name, base, tool } => {
                     if name.trim().is_empty() {
                         errors.push("difference geometry name must not be empty".to_string());

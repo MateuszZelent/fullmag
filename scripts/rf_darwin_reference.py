@@ -66,12 +66,12 @@ def _relative_residual(residual, scale):
     return float(np.max(np.divide(absolute, scale, out=absolute.copy(), where=scale > 0)))
 
 
-def solve_darwin_ece(system, terminals, voltages_v, loads_ohm):
+def solve_darwin_ece(system, terminals, voltages_v, loads_ohm, *, floating_load=None):
     """Solve with peak phasors, exp(+i omega t) and currents into the domain."""
     vertex_count = len(system.points_m)
     trace = terminal_trace(
         vertex_count, system.edges, system.boundary_faces,
-        terminals, voltages_v, loads_ohm,
+        terminals, voltages_v, loads_ohm, floating_load=floating_load,
     )
     boundary_vertices = np.unique(system.boundary_faces)
     inside_vertices = np.setdiff1d(np.arange(vertex_count), boundary_vertices)
@@ -96,13 +96,9 @@ def solve_darwin_ece(system, terminals, voltages_v, loads_ohm):
     lift_flux = complex_conductance @ grad_lift
     curl_inside = system.curl_matrix[inside_edges, :][:, inside_edges]
     gauge = (system.mass_matrix @ grad_test)[inside_edges, :]
-    load_stamp = np.zeros(potential_count, dtype=complex)
-    for name, column in trace.load_columns.items():
-        load_stamp[column] += 1.0 / loads_ohm[name]
-
-    continuity = grad_free.T @ potential_flux
-    if trace.load_columns:
-        continuity += sparse.diags(load_stamp, format="csr")
+    load_stamp = sparse.block_diag(
+        (trace.load_admittance_s, sparse.csr_matrix((len(inside_vertices),) * 2)), format="csr")
+    continuity = grad_free.T @ potential_flux + load_stamp
     mixed_matrix = sparse.bmat(
         [
             [curl_inside + frequency_factor * sigma_inside[inside_edges, :],

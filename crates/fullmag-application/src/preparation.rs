@@ -383,7 +383,9 @@ impl PreparationBinding {
     }
 
     pub fn validate(&self) -> Result<(), PreparationReceiptError> {
-        if self.schema_version != PREPARATION_BINDING_SCHEMA && self.schema_version != crate::closed_loop_preparation::CLOSED_LOOP_PREPARATION_BINDING_SCHEMA {
+        if self.schema_version != PREPARATION_BINDING_SCHEMA && self.schema_version != crate::closed_loop_preparation::CLOSED_LOOP_PREPARATION_BINDING_SCHEMA
+            && self.schema_version != crate::retained_current_preparation::RETAINED_CURRENT_PREPARATION_BINDING_SCHEMA
+            && self.schema_version != crate::retained_asset_field_preparation::RETAINED_ASSET_FIELD_PREPARATION_BINDING_SCHEMA {
             return Err(PreparationReceiptError::Contract(format!(
                 "schema_version must be {PREPARATION_BINDING_SCHEMA}"
             )));

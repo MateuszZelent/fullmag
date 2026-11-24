@@ -1519,7 +1519,9 @@ pub(crate) fn resolve_with_registry_for_plan(
 ) -> Result<DispatchEngineResolution, RunError> {
     match registry {
         Some(registry) => match &plan.backend_plan {
-            BackendPlanIR::AntennaFieldOnly(_) => Err(crate::field_only_plan_not_executable_as_llg()),
+            BackendPlanIR::AntennaFieldOnly(_)
+            | BackendPlanIR::AntennaRetainedCurrentFieldInspection(_)
+            | BackendPlanIR::AntennaRetainedDirectFieldInspection(_) | BackendPlanIR::AntennaRetainedPreparationFieldInspection(_) => Err(crate::field_only_plan_not_executable_as_llg()),
             BackendPlanIR::Fdm(fdm) => resolve_fdm_engine_with_registry(
                 problem,
                 registry,
@@ -1565,7 +1567,9 @@ pub(crate) fn resolve_with_registry_for_plan(
             }
         },
         None => match &plan.backend_plan {
-            BackendPlanIR::AntennaFieldOnly(_) => Err(crate::field_only_plan_not_executable_as_llg()),
+            BackendPlanIR::AntennaFieldOnly(_)
+            | BackendPlanIR::AntennaRetainedCurrentFieldInspection(_)
+            | BackendPlanIR::AntennaRetainedDirectFieldInspection(_) | BackendPlanIR::AntennaRetainedPreparationFieldInspection(_) => Err(crate::field_only_plan_not_executable_as_llg()),
             BackendPlanIR::Fdm(fdm) => {
                 let resolution = resolve_fdm_engine_for_plan_with_trail(problem, fdm)?;
                 Ok(DispatchEngineResolution {
@@ -1854,7 +1858,9 @@ pub fn stage_step_time_frame(
     plan: &ExecutionPlanIR,
 ) -> Result<StageStepTimeFrame, RunError> {
     let frame = match &plan.backend_plan {
-        BackendPlanIR::AntennaFieldOnly(_) => {
+        BackendPlanIR::AntennaFieldOnly(_)
+        | BackendPlanIR::AntennaRetainedCurrentFieldInspection(_)
+        | BackendPlanIR::AntennaRetainedDirectFieldInspection(_) | BackendPlanIR::AntennaRetainedPreparationFieldInspection(_) => {
             return Err(crate::field_only_plan_not_executable_as_llg())
         }
         BackendPlanIR::Fdm(_) => {

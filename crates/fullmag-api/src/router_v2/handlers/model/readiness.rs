@@ -49,6 +49,9 @@ pub struct ModelReadinessResource {
     pub scene_revision: u64,
     pub ready_to_run: bool,
     pub ready_to_export: bool,
+    /// Compute prepares the source mesh for this current field-only scene.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preparation_owns_mesh: Option<bool>,
     pub checks: Vec<ModelReadinessCheck>,
     pub blockers: Vec<String>,
     pub capabilities: ModelAuthoringCapabilities,
@@ -206,16 +209,40 @@ fn build_model_readiness(
     let validation_error = fullmag_authoring::validate_scene_document(scene)
         .err()
         .map(|error| error.to_string());
-    if validation_error.is_none() && solve_objects.is_empty() && prepared_field_only_scene(snapshot, scene) {
+    let preparation_owns_mesh = validation_error.is_none()
+        && solve_objects.is_empty()
+        && scene.study.requested_backend == "fem"
+        && snapshot.fem_mesh.is_none()
+        && snapshot.mesh_workspace.is_none()
+        && snapshot.simulation_preparation.is_none()
+        && snapshot
+            .metadata
+            .as_ref()
+            .and_then(|metadata| metadata.get("execution_plan"))
+            .is_none()
+        && authored_closed_loop_field_only_scene(scene);
+    if validation_error.is_none()
+        && solve_objects.is_empty()
+        && (preparation_owns_mesh || prepared_field_only_scene(snapshot, scene))
+    {
         for check in &mut checks {
             let reason = match check.id.as_str() {
+                "geometry" if preparation_owns_mesh => "The closed-loop antenna source geometry is authored; Compute prepares its conductor mesh.",
                 "geometry" => "The prepared field-only operation owns the source conductor geometry.",
                 "material" => "The authored current transport supplies the conductor material requirements.",
-                "texture" | "interactions" => "This prepared antenna field-only operation has no magnetic state.",
+                "texture" | "interactions" => "This antenna field-only operation has no magnetic state.",
+                "discretization" if preparation_owns_mesh => "Compute prepares the antenna conductor and field sampling meshes before solving.",
                 _ => continue,
             };
             check.state = ModelReadinessCheckState::Complete;
-            check.target_resource = Some("model/scene".into());
+            check.target_resource = Some(
+                if check.id == "discretization" {
+                    "simulation/preparation"
+                } else {
+                    "model/scene"
+                }
+                .into(),
+            );
             check.reason = Some(reason.into());
         }
     }
@@ -246,6 +273,7 @@ fn build_model_readiness(
             .map(|pending| pending.receipt.clone()),
         ready_to_run,
         ready_to_export: export_checks_complete && validation_error.is_none(),
+        preparation_owns_mesh: preparation_owns_mesh.then_some(true),
         checks,
         blockers,
         capabilities: ModelAuthoringCapabilities {
@@ -259,6 +287,55 @@ fn build_model_readiness(
     }
 }
 
+fn authored_closed_loop_field_only_scene(scene: &fullmag_authoring::SceneDocument) -> bool {
+    fn enabled_fields(
+        scene: &fullmag_authoring::SceneDocument,
+        nodes: &[fullmag_authoring::StudyPipelineNode],
+        seen: &mut bool,
+    ) -> bool {
+        nodes.iter().all(|node| match node {
+            fullmag_authoring::StudyPipelineNode::Primitive(node) if !node.enabled => true,
+            fullmag_authoring::StudyPipelineNode::Primitive(node) => {
+                if node.stage_kind != fullmag_authoring::StudyPrimitiveStageKind::AntennaFieldSolve {
+                    return false;
+                }
+                let Some(id) = node.payload.get("stage_id").and_then(serde_json::Value::as_str)
+                else {
+                    return false;
+                };
+                let Some(stage) = scene.antenna_field_solve_stages.iter().find(|stage| stage.id == id)
+                else {
+                    return false;
+                };
+                if !field_only_stage_has_source(scene, stage) {
+                    return false;
+                }
+                let closed = scene.current_transports.iter().any(|module| {
+                    module.known().is_some_and(|module| {
+                        module.name == stage.current_transport_id
+                            && matches!(
+                                &module.structured_current_closure,
+                                Some(fullmag_authoring::SceneStructuredCurrentClosure::ClosedGeometry {
+                                    schema_version, ..
+                                }) if schema_version == "structured_current_closure.v2"
+                            )
+                    })
+                });
+                *seen |= closed;
+                closed
+            }
+            fullmag_authoring::StudyPipelineNode::Group(node) => {
+                !node.enabled || enabled_fields(scene, &node.children, seen)
+            }
+            fullmag_authoring::StudyPipelineNode::Macro(node) => !node.enabled,
+        })
+    }
+    let Some(pipeline) = scene.study.study_pipeline.as_ref() else {
+        return false;
+    };
+    let mut seen = false;
+    enabled_fields(scene, &pipeline.nodes, &mut seen) && seen
+}
 
 fn prepared_field_only_scene(
     snapshot: &SessionStateResponse,
@@ -652,5 +729,60 @@ mod tests {
         let mut snapshot=prepared_snapshot(&scene);
         snapshot.simulation_preparation.as_mut().unwrap().status="failed".into();
         assert_eq!(crate::router_v2::handlers::meshing::mesh::mesh_source_scene_revision(&snapshot),None);
+    }
+
+    fn unprepared_snapshot(scene: &fullmag_authoring::SceneDocument) -> SessionStateResponse {
+        let request = serde_json::from_value(json!({"session_id":"readiness-unprepared-field-only"})).unwrap();
+        let mut snapshot = crate::session::default_current_live_state(&request);
+        snapshot.scene_document = Some(scene.clone());
+        snapshot.fem_mesh = None;
+        snapshot.mesh_workspace = None;
+        snapshot.metadata = None;
+        snapshot.simulation_preparation = None;
+        snapshot
+    }
+
+    #[test]
+    fn fresh_closed_loop_antenna_compute_owns_mesh_preparation() {
+        let scene = field_only_scene();
+        let snapshot = unprepared_snapshot(&scene);
+        let readiness = build_model_readiness(&snapshot, &scene);
+        assert!(readiness.ready_to_run, "{:?}", readiness.blockers);
+        assert!(readiness.ready_to_export);
+        assert_eq!(readiness.preparation_owns_mesh, Some(true));
+        let mesh = readiness.checks.iter().find(|check| check.id == "discretization").unwrap();
+        assert_eq!(mesh.state, ModelReadinessCheckState::Complete);
+        assert_eq!(mesh.target_resource.as_deref(), Some("simulation/preparation"));
+        assert!(snapshot.fem_mesh.is_none() && snapshot.simulation_preparation.is_none());
+    }
+
+    #[test]
+    fn unprepared_field_readiness_preserves_magnetic_and_stale_preparation_guards() {
+        for kind in ["run", "relax", "disabled", "no-pipeline", "broken-port", "magnet", "preparation", "mesh-workspace", "mesh", "metadata-plan"] {
+            let mut scene = field_only_scene();
+            let mut snapshot = unprepared_snapshot(&scene);
+            match kind {
+                "run" | "relax" | "disabled" => {
+                    let mut pipeline = serde_json::to_value(scene.study.study_pipeline.as_ref().unwrap()).unwrap();
+                    if kind == "disabled" { pipeline["nodes"][0]["enabled"] = json!(false); }
+                    else { pipeline["nodes"].as_array_mut().unwrap().push(json!({"node_kind":"primitive","id":"magnetic","label":"Magnetic","enabled":true,"stage_kind":kind})); }
+                    scene.study.study_pipeline = Some(serde_json::from_value(pipeline).unwrap());
+                }
+                "no-pipeline" => scene.study.study_pipeline = None,
+                "broken-port" => scene.antenna_port_modes.clear(),
+                "magnet" => {
+                    let mut object = scene.objects[0].clone();
+                    object.id = "magnet".into(); object.role = "magnet".into();
+                    scene.objects.push(object);
+                }
+                "preparation" => snapshot.simulation_preparation = prepared_snapshot(&scene).simulation_preparation,
+                "mesh-workspace" => snapshot.mesh_workspace = prepared_snapshot(&scene).mesh_workspace,
+                "mesh" => snapshot.fem_mesh = prepared_snapshot(&scene).fem_mesh,
+                _ => snapshot.metadata = prepared_snapshot(&scene).metadata,
+            }
+            let readiness = build_model_readiness(&snapshot, &scene);
+            assert!(!readiness.ready_to_run, "{kind}");
+            assert_eq!(readiness.preparation_owns_mesh, None, "{kind}");
+        }
     }
 }

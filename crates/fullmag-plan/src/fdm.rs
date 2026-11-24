@@ -3192,9 +3192,10 @@ pub(crate) fn plan_fdm(
         resolve_prescribed_zeeman_masks(problem, &point_coords, active_mask.as_deref())?;
 
     // Resolve Ms field
-    let ms_field_resolved = crate::material::resolve_spatial_parameter(
+    let ms_field_resolved = crate::material::resolve_spatial_parameter_for_owners(
         problem,
         magnet.name.as_str(),
+        &owner_names,
         fullmag_ir::MaterialParameterNameIR::Ms,
         material.saturation_magnetisation,
         &point_coords,
@@ -3219,9 +3220,10 @@ pub(crate) fn plan_fdm(
     };
 
     // Resolve Aex field
-    let aex_field_resolved = crate::material::resolve_spatial_parameter(
+    let aex_field_resolved = crate::material::resolve_spatial_parameter_for_owners(
         problem,
         magnet.name.as_str(),
+        &owner_names,
         fullmag_ir::MaterialParameterNameIR::Aex,
         material.exchange_stiffness,
         &point_coords,
@@ -3264,9 +3266,10 @@ pub(crate) fn plan_fdm(
     }
 
     // Resolve alpha field
-    let alpha_field_resolved = crate::material::resolve_spatial_parameter(
+    let alpha_field_resolved = crate::material::resolve_spatial_parameter_for_owners(
         problem,
         magnet.name.as_str(),
+        &owner_names,
         fullmag_ir::MaterialParameterNameIR::Alpha,
         material.damping,
         &point_coords,
@@ -3288,9 +3291,10 @@ pub(crate) fn plan_fdm(
         }
     };
 
-    let material_field_plans = crate::material::build_material_field_plans(
+    let material_field_plans = crate::material::build_material_field_plans_for_owners(
         problem,
-        magnet.name.as_str(),
+        magnet.object_id.as_deref().unwrap_or(&magnet.name),
+        &owner_names,
         fullmag_ir::MaterialFieldLocationIR::Cell,
     );
 
@@ -4697,6 +4701,7 @@ pub(crate) fn plan_fdm_multilayer(
         .collect();
 
     let mut lowered_bodies = Vec::with_capacity(problem.magnets.len());
+    let mut material_field_plans = Vec::new();
     for magnet in &problem.magnets {
         let Some(geometry_name) = region_to_geometry.get(magnet.region.as_str()).copied() else {
             errors.push(format!(
@@ -4817,9 +4822,10 @@ pub(crate) fn plan_fdm_multilayer(
             .collect::<Vec<_>>();
         let material_sampling = fdm_material_sampling(cell_size, active_mask.as_deref());
         let resolve_material_field = |parameter, base_value, label: &str| {
-            let values = crate::material::resolve_spatial_parameter(
+            let values = crate::material::resolve_spatial_parameter_for_owners(
                 problem,
                 magnet.name.as_str(),
+                &owner_names,
                 parameter,
                 base_value,
                 &point_coords,
@@ -4990,6 +4996,12 @@ pub(crate) fn plan_fdm_multilayer(
             &mut errors,
         );
 
+        material_field_plans.extend(crate::material::build_material_field_plans_for_owners(
+            problem,
+            magnet.object_id.as_deref().unwrap_or(&magnet.name),
+            &owner_names,
+            fullmag_ir::MaterialFieldLocationIR::Cell,
+        ));
         lowered_bodies.push(LoweredBody {
             magnet_name: magnet.name.clone(),
             overlap_geometry: placed,
@@ -5277,17 +5289,6 @@ pub(crate) fn plan_fdm_multilayer(
             }
             origin
         });
-    let material_field_plans = problem
-        .magnets
-        .iter()
-        .flat_map(|magnet| {
-            crate::material::build_material_field_plans(
-                problem,
-                magnet.name.as_str(),
-                fullmag_ir::MaterialFieldLocationIR::Cell,
-            )
-        })
-        .collect::<Vec<_>>();
     let layers = lowered_bodies
         .into_iter()
         .map(|body| {

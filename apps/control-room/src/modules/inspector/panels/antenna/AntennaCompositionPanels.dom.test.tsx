@@ -1096,7 +1096,7 @@ describe("AntennaCompositionPanel runtime results", () => {
         transform: { rotation_matrix: [[0, -1, 0], [1, 0, 0], [0, 0, 1]] },
       },
     };
-    mocks.scene.data = { revision: 4, objects: [{ id: "antenna-1", geometry }] } as unknown as SceneResource;
+    mocks.scene.data = { scene: { id: "scene-1" }, revision: 4, objects: [{ id: "antenna-1", geometry }] } as unknown as SceneResource;
     let acknowledge: ((value: unknown) => void) | undefined;
     mocks.commitTransaction.mockImplementation(() => new Promise((resolve) => { acknowledge = resolve; }));
     const dom = installSimulationPreparationTestDom();
@@ -1146,7 +1146,7 @@ describe("AntennaCompositionPanel runtime results", () => {
         stations: [{ s: 0, signal_width_m: 50e-9 }, { s: 1, signal_width_m: 25e-9 }],
       },
     };
-    mocks.scene.data = { revision: 4, objects: [{ id: "antenna-1", geometry }] } as unknown as SceneResource;
+    mocks.scene.data = { scene: { id: "scene-1" }, revision: 4, objects: [{ id: "antenna-1", geometry }] } as unknown as SceneResource;
     const dom = installSimulationPreparationTestDom();
     const container = dom.document.createElement("div");
     const root = createRoot(container as unknown as Element);
@@ -1166,7 +1166,7 @@ describe("AntennaCompositionPanel runtime results", () => {
       const input = find("INPUT", "Station 1 signal width");
       Object.getOwnPropertyDescriptor(TestElement.prototype, "value")?.set?.call(input, "60e-9");
       await act(async () => input.dispatchEvent(new TestEvent("input", { bubbles: true })));
-      mocks.scene.data = { revision: 5, objects: [{ id: "antenna-1", geometry: {
+      mocks.scene.data = { scene: { id: "scene-1" }, revision: 5, objects: [{ id: "antenna-1", geometry: {
         ...geometry, geometry_params: { ...geometry.geometry_params, return_width_m: 400e-9 },
       } }] } as unknown as SceneResource;
       await act(async () => root.render(<AntennaGeometryPanel selection={{ ...conductorSelection(), kind: "object.antenna.geometry" }} />));

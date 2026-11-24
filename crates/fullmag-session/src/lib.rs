@@ -19,6 +19,9 @@ mod archive_capacity;
 mod archive_document;
 mod archive_source;
 mod docker_desktop_storage;
+mod recovery_candidate_storage;
+#[doc(hidden)]
+pub use recovery_candidate_storage::{SucceededRecoveryCandidateStorage, SucceededRecoveryCandidateStoragePins};
 #[doc(hidden)]
 pub use docker_desktop_storage::initialize_attested_docker_accepted_store;
 pub mod capture;
@@ -34,6 +37,7 @@ pub mod execution_profiles;
 pub mod fms;
 pub mod frequency_domain_artifact_generation;
 pub mod host_resource_ledger;
+pub use host_resource_ledger::{SucceededWorkerNamespaceTeardownRequest, SucceededWorkerNamespaceTeardownIntent, SucceededWorkerNamespaceTeardownAttestation, SucceededWorkerNamespaceTeardownReleaseProof};
 mod host_ledger_registry;
 pub mod materialized_dataset;
 pub mod mesh_operation;

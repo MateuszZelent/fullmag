@@ -194,6 +194,17 @@ export const MICROSTRIP_LOOP_FIELDS = (["inlet", "outlet"] as const).flatMap((en
   { key: `${end}_connection_conductivity_s_per_m`, label: `${end} bridge conductivity`, unit: "S/m", numeric: true },
 ]);
 
+const CPW_LOOP_FIELDS = (["inlet", "outlet"] as const).flatMap((end) => [
+  { key: `${end}_connection_length_m`, label: `${end} connection length`, unit: "m", numeric: true },
+  { key: `${end}_crossbar_length_m`, label: `${end} crossbar length`, unit: "m", numeric: true },
+  { key: `${end}_connection_part_id`, label: `${end} connection part ID`, unit: undefined, numeric: false },
+  { key: `${end}_connection_conductivity_s_per_m`, label: `${end} connection conductivity`, unit: "S/m", numeric: true },
+]);
+
+export function antennaCircuitFields(geometry: JsonObject) {
+  return geometry.geometry_kind === "CPWAntennaLayout" ? CPW_LOOP_FIELDS : MICROSTRIP_LOOP_FIELDS;
+}
+
 export interface MicrostripCircuitDraft {
   enabled: boolean;
   parameters: Record<string, string>;
@@ -215,9 +226,11 @@ export function microstripCircuitDraft(geometry: JsonObject, scene: SceneResourc
   const drive = record(cut?.drive);
   const plane = record(cut?.plane);
   const params = record(geometry.geometry_params);
-  const midpoint = -(Number(params?.thickness_m) + Number(params?.return_offset_m)) / 2;
+  const midpoint = geometry.geometry_kind === "CPWAntennaLayout"
+    ? loop ? (-Number(loop.inlet_connection_length_m) + Number(loop.inlet_crossbar_length_m)) / 2 : ""
+    : -(Number(params?.thickness_m) + Number(params?.return_offset_m)) / 2;
   return { enabled: loop?.enabled === true,
-    parameters: Object.fromEntries(MICROSTRIP_LOOP_FIELDS.map(({ key }) => [key, String(loop?.[key] ?? "")])),
+    parameters: Object.fromEntries(antennaCircuitFields(geometry).map(({ key }) => [key, String(loop?.[key] ?? "")])),
     potentialJumpV: String(drive?.potential_jump_V ?? ""),
     sourceCutOffsetM: plane ? String(plane.offset_m ?? "") : String(midpoint),
     sourceCutNormal: String(plane?.normal ?? "positive_axis") };
@@ -225,8 +238,9 @@ export function microstripCircuitDraft(geometry: JsonObject, scene: SceneResourc
 
 export function microstripCircuitEqual(left: MicrostripCircuitDraft, right: MicrostripCircuitDraft): boolean {
   return left.enabled === right.enabled && (!left.enabled || (
-    MICROSTRIP_LOOP_FIELDS.every(({ key, numeric }) => numeric
-      ? sameNumber(left.parameters[key], right.parameters[key]) : (left.parameters[key] ?? "").trim() === (right.parameters[key] ?? "").trim())
+    Object.keys(left.parameters).length === Object.keys(right.parameters).length
+    && Object.keys(left.parameters).every((key) => right.parameters[key] !== undefined && (key.endsWith("part_id")
+      ? left.parameters[key].trim() === right.parameters[key].trim() : sameNumber(left.parameters[key], right.parameters[key])))
     && sameNumber(left.potentialJumpV, right.potentialJumpV)
     && sameNumber(left.sourceCutOffsetM, right.sourceCutOffsetM)
     && left.sourceCutNormal === right.sourceCutNormal));
@@ -236,8 +250,9 @@ export function microstripCircuitEqual(left: MicrostripCircuitDraft, right: Micr
 export function buildMicrostripCircuitPatch(scene: SceneResource, objectId: string, geometry: JsonObject, draft: MicrostripCircuitDraft): JsonObject {
   const object = scene.objects?.find((candidate) => candidate.id === objectId);
   const params = record(geometry.geometry_params);
-  if (!object || geometry.geometry_kind !== "MicrostripAntennaLayout" || !params || !draft.enabled) {
-    throw new Error("An explicitly enabled canonical microstrip circuit is required.");
+  const isCpw = geometry.geometry_kind === "CPWAntennaLayout";
+  if (!object || (!isCpw && geometry.geometry_kind !== "MicrostripAntennaLayout") || !params || !draft.enabled) {
+    throw new Error("An explicitly enabled canonical microstrip or GSG circuit is required.");
   }
   if (object.locked) throw new Error("Unlock this object before changing circuit geometry or actuation.");
   const outer = record(object.transform);
@@ -256,27 +271,38 @@ export function buildMicrostripCircuitPatch(scene: SceneResource, objectId: stri
     return Number(text);
   };
   const loop: JsonObject = { enabled: true };
-  for (const { key, numeric, label, unit } of MICROSTRIP_LOOP_FIELDS) {
+  for (const { key, numeric, label, unit } of antennaCircuitFields(geometry)) {
     const text = draft.parameters[key];
     if (!numeric && !text?.trim()) throw new Error(`${label} must be a non-empty part ID.`);
     loop[key] = numeric ? finite(text, `${label}${unit ? ` (${unit})` : ""}`, !key.endsWith("offset_v_m")) : text.trim();
   }
   const thickness = finite(String(params.thickness_m ?? ""), "thickness_m", true);
-  const gap = finite(String(params.return_offset_m ?? ""), "return_offset_m", true);
+  const gap = isCpw ? 0 : finite(String(params.return_offset_m ?? ""), "return_offset_m", true);
   const sigma = finite(String(params.conductivity_s_per_m ?? ""), "conductivity_s_per_m", true);
   const conductors = Array.isArray(params.conductors) ? params.conductors.map(record) : [];
-  const signal = conductors.find((part) => part?.kind === "signal")?.id;
-  const returnPart = conductors.find((part) => part?.kind === "return")?.id;
-  if (typeof signal !== "string" || typeof returnPart !== "string") throw new Error("Explicit signal and return part IDs are required.");
-  const ids = [signal, returnPart, loop.inlet_connection_part_id, loop.outlet_connection_part_id];
-  if (new Set(ids).size !== 4) throw new Error("All four circuit part IDs must differ.");
+  const kinds = isCpw ? ["signal", "ground_left", "ground_right"] : ["signal", "return"];
+  const conductorIds = kinds.map((kind) => {
+    const matches = conductors.filter((part) => part?.kind === kind);
+    if (matches.length !== 1 || typeof matches[0]?.id !== "string" || !matches[0].id.trim()) {
+      throw new Error(`An explicit unique ${kind} conductor part ID is required.`);
+    }
+    return matches[0].id;
+  });
+  const ids = [...conductorIds, loop.inlet_connection_part_id, loop.outlet_connection_part_id];
+  if (new Set(ids).size !== ids.length) throw new Error(`All ${ids.length} circuit part IDs must differ.`);
   const stations = Array.isArray(params.stations) ? params.stations.map(record) : [];
   for (const [end, station] of [["inlet", stations[0]], ["outlet", stations.at(-1)]] as const) {
-    const offset = Number(loop[`${end}_connection_offset_v_m`]);
-    const width = Number(loop[`${end}_connection_width_m`]);
-    for (const conductorWidth of [Number(station?.signal_width_m), Number(params.return_width_m)]) {
-      if (!(Math.min(offset + width / 2, conductorWidth / 2) > Math.max(offset - width / 2, -conductorWidth / 2))) {
-        throw new Error(`${end} bridge must contact signal and return with positive area.`);
+    if (isCpw) {
+      if (Number(loop[`${end}_crossbar_length_m`]) >= Number(loop[`${end}_connection_length_m`])) {
+        throw new Error(`${end} crossbar must leave a positive-length feed neck.`);
+      }
+    } else {
+      const offset = Number(loop[`${end}_connection_offset_v_m`]);
+      const width = Number(loop[`${end}_connection_width_m`]);
+      for (const conductorWidth of [Number(station?.signal_width_m), Number(params.return_width_m)]) {
+        if (!(Math.min(offset + width / 2, conductorWidth / 2) > Math.max(offset - width / 2, -conductorWidth / 2))) {
+          throw new Error(`${end} bridge must contact signal and return with positive area.`);
+        }
       }
     }
   }
@@ -303,17 +329,17 @@ export function buildMicrostripCircuitPatch(scene: SceneResource, objectId: stri
   const port = matchingPorts[0]!;
   const branches = Array.isArray(port.branches) ? port.branches.map(record) : [];
   const refs = branches.flatMap((branch) => [branch?.inlet_terminal_ref, branch?.outlet_terminal_ref]);
-  if (branches.length !== 2 || branches.some((branch) => ![signal, returnPart].includes(String(branch?.id)))
-    || new Set(branches.map((branch) => branch?.id)).size !== 2
-    || refs.some((ref) => typeof ref !== "string" || !ref.trim()) || new Set(refs).size !== 4) {
-    throw new Error("The port must retain two explicit conductor branches and four distinct observation IDs.");
+  if (branches.length !== conductorIds.length || branches.some((branch) => !conductorIds.includes(String(branch?.id)))
+    || new Set(branches.map((branch) => branch?.id)).size !== conductorIds.length
+    || refs.some((ref) => typeof ref !== "string" || !ref.trim()) || new Set(refs).size !== 2 * conductorIds.length) {
+    throw new Error(`The port must retain ${conductorIds.length} explicit conductor branches and ${2 * conductorIds.length} distinct observation IDs.`);
   }
   const assignments = Array.isArray(current.materials) ? current.materials.map(record) : [];
-  const mainMaterials = [signal, returnPart].map((id) => {
+  const mainMaterials = conductorIds.map((id) => {
     const matching = assignments.filter((assignment) => record(assignment?.region)?.object_id === objectId
       && (record(assignment?.region)?.region_id === undefined || record(assignment?.region)?.region_id === id));
     if (matching.length !== 1 || record(matching[0]?.material)?.sigma_Spm !== sigma) {
-      throw new Error("Signal/return charge conductivity must agree with authored geometry, with exactly one assignment per part. Resolve materials explicitly first.");
+      throw new Error("Conductor charge conductivity must agree with authored geometry, with exactly one assignment per part. Resolve materials explicitly first.");
     }
     return record(matching[0]?.material)!;
   });
@@ -328,20 +354,25 @@ export function buildMicrostripCircuitPatch(scene: SceneResource, objectId: stri
   const cutId = String(oldCut?.source_cut_id ?? `${objectId}:source-cut:inlet`);
   const driveId = String(record(oldCut?.drive)?.drive_id ?? `${objectId}:source-drive`);
   const oldPlane = record(oldCut?.plane);
-  if (oldPlane && (oldPlane.coordinate_frame !== "object" || oldPlane.axis !== "z"
+  const axis = isCpw ? "x" : "z";
+  if (oldPlane && (oldPlane.coordinate_frame !== "object" || oldPlane.axis !== axis
     || !["positive_axis", "negative_axis"].includes(String(oldPlane.normal)))) {
-    throw new Error("The existing source cut must explicitly use object-local z and an axis normal.");
+    throw new Error(`The existing source cut must explicitly use object-local ${axis} and an axis normal.`);
   }
   const cutOffset = finite(draft.sourceCutOffsetM, "Source-cut offset");
   if (!["positive_axis", "negative_axis"].includes(draft.sourceCutNormal)) throw new Error("The source-cut normal must be positive_axis or negative_axis.");
-  if (!(cutOffset > -thickness / 2 - gap && cutOffset < -thickness / 2)) throw new Error("The source cut must lie strictly inside the signal/return clearance.");
+  if (isCpw ? !(cutOffset > -Number(loop.inlet_connection_length_m) + Number(loop.inlet_crossbar_length_m) && cutOffset < 0)
+    : !(cutOffset > -thickness / 2 - gap && cutOffset < -thickness / 2)) {
+    throw new Error(isCpw ? "The source cut must lie strictly inside the central inlet neck."
+      : "The source cut must lie strictly inside the signal/return clearance.");
+  }
   const closure: JsonObject = { schema_version: "structured_current_closure.v2", closure_id: String(oldClosure?.closure_id ?? `${objectId}:closed-loop`), kind: "closed_geometry",
     source_cuts: [{ source_cut_id: cutId, circuit_id: String(oldCut?.circuit_id ?? `${objectId}:circuit`),
       region: { object_id: objectId, region_id: loop.inlet_connection_part_id },
-      plane: { coordinate_frame: "object", axis: "z", offset_m: cutOffset, normal: draft.sourceCutNormal },
+      plane: { coordinate_frame: "object", axis, offset_m: cutOffset, normal: draft.sourceCutNormal },
       drive: { schema_version: "impressed_potential_jump.v1", kind: "impressed_potential_jump", drive_id: driveId, potential_jump_V: potential } }] };
   const patchedCurrent: JsonObject = { ...current, boundaries: [], gauge: "zero_mean",
-    materials: ids.map((id, index) => ({ region: { object_id: objectId, region_id: id }, material: index < 2 ? mainMaterials[index] : { sigma_Spm: loop[`${index === 2 ? "inlet" : "outlet"}_connection_conductivity_s_per_m`] } })),
+    materials: ids.map((id, index) => ({ region: { object_id: objectId, region_id: id }, material: index < conductorIds.length ? mainMaterials[index] : { sigma_Spm: loop[`${index === conductorIds.length ? "inlet" : "outlet"}_connection_conductivity_s_per_m`] } })),
     structured_current_closure: closure,
     solver: { ...record(current.solver), engine: "cg", linear: { relative_tolerance: 1e-12, absolute_tolerance: 0, max_iterations: 10000 },
       operator_version: "fem_charge_conforming_h1_p1.transparent.v1", physical_residual_version: "charge_balance_integrated_l2.v1" } } as JsonObject;

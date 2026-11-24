@@ -4,7 +4,17 @@ use anyhow::{bail, Context, Result};
 pub mod accepted_store;
 pub mod study_inspection;
 mod study_inspection_integrity;
-pub use study_inspection_integrity::{load_imported_study_evidence, load_imported_inspection, ImportedStudyEvidence, load_saved_inspection, verify_saved_inspection};
+mod study_retained_current;
+mod study_source_preparation_binding;
+pub use study_source_preparation_binding::{load_retained_source_preparation_binding, validate_retained_source_preparation_binding};
+mod study_source_preparation;
+pub use study_source_preparation::{encode_saved_antenna_source_preparation,
+    load_saved_retained_current_source_preparation_with_store_evidence,
+    load_saved_retained_current_source_preparation_with_pinned_evidence,
+    AntennaSourcePreparationExport, AntennaSourcePreparationExportReceipt};
+pub use study_retained_current::{load_saved_retained_current, load_saved_retained_current_with_evidence,
+    load_saved_retained_current_with_pinned_evidence, load_saved_retained_current_with_store_evidence, LoadedSavedRetainedCurrent, LoadedSavedRetainedCurrentEvidence};
+pub use study_inspection_integrity::{load_imported_study_evidence, load_imported_inspection, load_imported_retained_current_field_inspection, load_imported_study_evidence_for_inspection, ImportedStudyEvidence, load_saved_inspection, verify_saved_inspection};
 pub mod application_attach;
 pub mod application_service_status;
 pub mod compute_node_probe;
@@ -866,6 +876,7 @@ pub use scheduler::{
 };
 
 mod solution_set;
+pub use solution_set::retained_current_tensor::{read_saved_retained_current_geometry_parent, SavedRetainedCurrentGeometryParent};
 pub use solution_set::publish_recovered_inspection_solution;
 mod study_field_tensor;
 pub use study_field_tensor::{
@@ -1254,3 +1265,6 @@ mod tests {
         assert_eq!(std::fs::read(store.root().join(format!("runs/{}/run_catalog.json", claim.run_id.as_str()))).unwrap(), catalog_before);
     }
 }
+
+mod study_retained_current_field;
+pub use study_retained_current_field::{validate_retained_current_field_output, validate_retained_preparation_field_bundle, validate_retained_direct_field_bundle, load_saved_retained_current_field_inspection};

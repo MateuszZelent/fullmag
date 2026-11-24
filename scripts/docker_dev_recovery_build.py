@@ -391,7 +391,163 @@ def pending_build_evidence(pin, paths, ledger, owner):
     return hashes
 
 
-def diagnostic_api_evidence(process, owner, paths, claimed_pin=None):
+def succeeded_worker_build_evidence(request, paths, reservations):
+    """Read-only admission for a candidate, never authority to release or promote."""
+    require(request.get('diagnostic_api_only') is True, 'Succeeded proof requires diagnostic build-only mode')
+    proof_path = Path(request['succeeded_worker_proof'])
+    require(proof_path.is_absolute() and '..' not in proof_path.parts
+            and proof_path.is_relative_to(Path('/opt/fullmag/control/verification')),
+            'Succeeded proof must be retained in the control verification volume')
+    raw = read(proof_path)
+    require(hashlib.sha256(raw).hexdigest() == request['succeeded_worker_proof_sha256'], 'Succeeded proof digest differs')
+    proof = json.loads(raw)
+    require(set(proof) == {'schema','run_id','task_id','attempt_id','ownership_epoch','lease_token',
+                           'lease_heartbeat_sequence','store_id','documents'}
+            and proof.get('schema') == 'fullmag.succeeded-worker-build-proof.v1', 'Unsupported succeeded build proof')
+    claim_keys = ('run_id', 'task_id', 'attempt_id', 'ownership_epoch', 'lease_token')
+    claim = {key: proof[key] for key in claim_keys}
+    for key in ('run_id', 'task_id', 'attempt_id', 'lease_token'):
+        require(isinstance(claim[key], str) and re.fullmatch(r'[A-Za-z0-9_-]+', claim[key]), 'Invalid succeeded identity')
+    require(type(claim['ownership_epoch']) is int and claim['ownership_epoch'] > 0
+            and type(proof.get('lease_heartbeat_sequence')) is int and proof['lease_heartbeat_sequence'] >= 0,
+            'Invalid epoch or heartbeat')
+    pins = proof.get('documents')
+    require(isinstance(pins, dict) and pins and len(pins) <= 10000, 'Bounded document pins required')
+    observed = {str(proof_path): hashlib.sha256(raw).hexdigest()}
+    def document(path, binary=False):
+        path = Path(path)
+        expected = pins.get(str(path))
+        require(isinstance(expected, str) and re.fullmatch(r'[0-9a-f]{64}', expected), 'Missing document pin: '+str(path))
+        if binary:
+            backend._assert_no_links(path, 'succeeded build artifact')
+            fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+            with os.fdopen(fd, 'rb') as stream:
+                metadata = os.fstat(stream.fileno())
+                require(stat.S_ISREG(metadata.st_mode) and metadata.st_nlink == 1, 'Artifact must be a regular unlinked file')
+                digest = hashlib.sha256()
+                for block in iter(lambda: stream.read(1024*1024), b''):
+                    digest.update(block)
+                after = os.fstat(stream.fileno())
+                require((after.st_ino,after.st_dev,after.st_size,after.st_mtime_ns,after.st_ctime_ns)
+                        == (metadata.st_ino,metadata.st_dev,metadata.st_size,metadata.st_mtime_ns,metadata.st_ctime_ns),
+                        'Artifact changed while hashing')
+            actual = digest.hexdigest()
+            result = None
+        else:
+            content = read(path)
+            actual = hashlib.sha256(content).hexdigest()
+            result = json.loads(content)
+        require(actual == expected, 'Succeeded evidence changed: '+str(path))
+        observed[str(path)] = actual
+        return result
+    def identity(value, keys=claim_keys):
+        require(isinstance(value, dict) and all(value.get(k) == claim[k] for k in keys), 'Succeeded evidence identity differs')
+    def payload(value):
+        body = value['payload']
+        digest = hashlib.sha256(json.dumps(body, sort_keys=True, separators=(',', ':'), ensure_ascii=False).encode()).hexdigest()
+        require(digest == value.get('payload_sha256'), 'Journal/inbox payload integrity differs')
+        return body
+    root = paths.store/'runs'/claim['run_id']
+    outstanding = [row for row in reservations if row.get('state') != 'released']
+    require(len(outstanding) == 1 and outstanding[0].get('state') == 'quarantined', 'Only one quarantined reservation is eligible')
+    reservation = outstanding[0]
+    host = reservation['identity']
+    require(host.get('store_id') == proof.get('store_id') and host['owner'] == {
+        'kind': 'solver', 'attempt_id': claim['attempt_id'], 'ownership_epoch': claim['ownership_epoch']}, 'Host reservation owner differs')
+    identity(host, ('run_id', 'task_id', 'lease_token'))
+    resource = host['resource_id']
+    require(isinstance(resource, str) and re.fullmatch(r'[A-Za-z0-9_.-]+', resource), 'Invalid resource identity')
+    lease = document(root/'resource_leases'/resource/(claim['lease_token']+'.json'))
+    identity(lease)
+    require(lease.get('schema_version') == 'resource_lease.v1' and lease.get('state') == 'active'
+            and lease.get('resource_id') == resource and lease.get('heartbeat_sequence') == proof['lease_heartbeat_sequence']
+            and lease.get('budget') == reservation.get('budget')
+            and lease.get('host_launch_binding', {}).get('runtime_generation_sha256') == reservation.get('runtime_generation_sha256')
+            and reservation.get('worker_launch_gate', {}).get('state') == 'consumed', 'Lease or consumed launch binding differs')
+    catalog = document(root/'run_catalog.json')
+    require(catalog.get('schema_version') == 'run_catalog.v1' and catalog.get('run_id') == claim['run_id']
+            and len(catalog.get('tasks', [])) == 1, 'Single succeeded task catalog required')
+    task = catalog['tasks'][0]
+    identity(task, ('task_id', 'attempt_id', 'ownership_epoch'))
+    require(task.get('lifecycle') == 'succeeded' and task.get('resource_id') == resource, 'Task is not terminal Succeeded')
+    exits = [document(path) for path in (root/'worker_process_exit_receipts').glob('*.json')]
+    require(len(exits) == 1, 'Exactly one exit receipt is required')
+    exit_receipt = exits[0]
+    identity(exit_receipt)
+    require(exit_receipt.get('schema_version') == 'worker_process_exit_receipt.v1'
+            and exit_receipt.get('status_success') is True and type(exit_receipt.get('exit_code')) is int
+            and exit_receipt['exit_code'] == 0 and exit_receipt.get('timed_out') is False
+            and exit_receipt.get('stop_requested') is False and exit_receipt.get('resource_id') == resource
+            and exit_receipt.get('lease_heartbeat_sequence') == proof['lease_heartbeat_sequence']
+            and isinstance(exit_receipt.get('process_start_token'), str)
+            and re.fullmatch(r'linux-starttime-[0-9]+', exit_receipt['process_start_token'])
+            and type(exit_receipt.get('process_id')) is int and exit_receipt['process_id'] > 0
+            and not Path('/proc', str(exit_receipt['process_id'])).exists(), 'Successful reaped worker proof differs')
+    inboxes = [payload(document(path)) for path in (root/'worker_inbox').glob('*.json')]
+    require(len(inboxes) == 1, 'Exactly one worker inbox is required')
+    inbox = inboxes[0]
+    identity(inbox['claim'])
+    require(inbox.get('schema_version') == 'worker_inbox.v1' and inbox.get('pending') is None, 'Inbox is not settled')
+    streams = {}
+    for direction in ('command', 'event'):
+        rows = [document(path) for path in (root/'coordinator_journal'/direction).glob('*.json')]
+        rows.sort(key=lambda row: row['sequence'])
+        require(rows and [row['sequence'] for row in rows] == list(range(1,len(rows)+1)), 'Journal sequence gap or duplicate')
+        streams[direction] = rows
+        for row in rows:
+            identity(row)
+            require(row.get('schema_version') == 'coordinator_journal.v1' and row.get('direction') == direction, 'Journal direction/schema differs')
+            body = payload(row)
+            envelope = body['message']['envelope']
+            identity(envelope['claim'])
+            require(body['message']['direction'] == direction and envelope['sequence'] == row['sequence']
+                    and envelope['message_id'] == row['entry_id'], 'Journal envelope differs')
+    commands, events = streams['command'], streams['event']
+    applied = [row['payload']['message']['envelope'] for row in commands]
+    require(inbox.get('applied') == applied and [item['command']['kind'] for item in applied[:2]] == ['prepare','start']
+            and all(item['command']['kind'] == 'heartbeat' for item in applied[2:])
+            and [item['command']['lease_heartbeat_sequence'] for item in applied[2:]] == list(range(1,proof['lease_heartbeat_sequence']+1)),
+            'Applied Start/heartbeat history differs')
+    terminal = events[-1]
+    checkpoint = terminal['payload']['checkpoint']
+    require(terminal.get('terminal') is True and not any(row.get('terminal') for row in events[:-1])
+            and terminal['payload']['message']['envelope']['event']['kind'] == 'completed'
+            and checkpoint['task']['lifecycle'] == 'succeeded'
+            and checkpoint['claim']['lease']['heartbeat_sequence'] == proof['lease_heartbeat_sequence']
+            and task['coordinator_watermark'] == {'command_sequence':len(commands),'event_sequence':len(events)}
+            and checkpoint['command_sequence'] == len(commands) and checkpoint['event_sequence'] == len(events),
+            'Terminal Completed checkpoint differs')
+    artifacts = document(root/'artifact_catalog.json')
+    require(artifacts.get('schema_version') == 'artifact_catalog.v1' and artifacts.get('run_id') == claim['run_id'], 'Artifact catalog differs')
+    entries = artifacts['entries']
+    require(len(entries) == 2 and {item['artifact_id'] for item in entries} == set(task['artifact_ids']), 'Complete artifact publication required')
+    manifests = [item for item in entries if item['artifact_type'] == 'study_output_manifest']
+    require(len(manifests) == 1, 'Exactly one output manifest required')
+    for item in entries:
+        identity(item, ('task_id', 'attempt_id', 'ownership_epoch'))
+        digest = item['content_sha256']
+        require(re.fullmatch(r'[0-9a-f]{64}', digest) and item['object_ref'] == digest
+                and item['status'] == 'published' and item['required'] is True, 'Published artifact CAS differs')
+        obj = paths.store/'objects/sha256'/digest
+        if item is manifests[0]:
+            manifest = document(obj)
+        else:
+            document(obj, binary=True)
+    identity(manifest, ('run_id','task_id','attempt_id','ownership_epoch'))
+    outputs = manifest.get('outputs', [])
+    other = next(item for item in entries if item is not manifests[0])
+    require(manifest.get('schema_version') == 'study_output_manifest.v3' and len(outputs) == 1
+            and all(outputs[0].get(k) == other.get(k) for k in ('artifact_id','object_ref','content_sha256'))
+            and outputs[0].get('codec_id') == 'fullmag.antenna.closed_loop_bundle' and outputs[0].get('codec_version') == 'v1',
+            'Complete closed-loop output manifest differs')
+    require(set(observed)-{str(proof_path)} == set(pins), 'Proof contains unvalidated or missing document pins')
+    return observed
+
+
+def diagnostic_api_evidence(process, owner, paths, claimed_pin=None, request=None):
+    request = request or {}
+    require(not (claimed_pin is not None and request.get('succeeded_worker_proof')),
+            'Claimed and succeeded build authorities cannot be combined')
     import urllib.request
     runtime._validate_terminal_owner(process['service_owner'], state='ready', name='diagnostic build Ready pin')
     runtime._validate_terminal_owner(owner, state=owner['state'], name='diagnostic build retained owner',
@@ -500,15 +656,17 @@ def diagnostic_api_evidence(process, owner, paths, claimed_pin=None):
     ledger = Path(os.environ.get('FULLMAG_HOST_LEDGER_ROOT', '/host-ledger/ledger'))/'HOST_RESOURCE_LEDGER.json'
     ledger_raw = read(ledger)
     reservations = json.loads(ledger_raw).get('reservations')
+    require(isinstance(reservations, list) and all(isinstance(row, dict) for row in reservations), 'Invalid host reservations')
     extra = {}
     if owner['state']=='failed':
         require(isinstance(claimed_pin,dict) and claimed_pin.get('schema_version')=='fullmag.pending-admission-build-pin.v1', 'Failed diagnostic build requires an exact unused admission pin')
-    if claimed_pin is None:
-        require(isinstance(reservations, list)
-                and all(isinstance(row, dict) and row.get('state') == 'released' for row in reservations),
-                'Diagnostic build requires every retained host reservation to be released')
-    else:
+    if claimed_pin is not None:
         extra = claimed_build_evidence(claimed_pin, paths, json.loads(ledger_raw), owner)
+    elif request.get('succeeded_worker_proof'):
+        extra = succeeded_worker_build_evidence(request, paths, reservations)
+    else:
+        require(all(row.get('state') == 'released' for row in reservations),
+                'Diagnostic build requires every retained host reservation to be released')
     return {**extra, str(fence): hashlib.sha256(raw).hexdigest(), str(ledger): hashlib.sha256(ledger_raw).hexdigest()}
 
 
@@ -520,10 +678,19 @@ def pinned_evidence(request, paths):
             'Pinned process receipt or Failed owner changed')
     process, owner = json.loads(process_raw), json.loads(owner_raw)
     diagnostic = request.get('diagnostic_api_only', False)
+    require(not request.get('succeeded_worker_proof') or diagnostic, 'Succeeded proof requires diagnostic build-only mode')
     extra = {}
-    if diagnostic:
+    namespace = False
+    if request.get('succeeded_worker_proof'):
+        namespace = json.loads(read(Path(request['succeeded_worker_proof']))).get('schema') == 'fullmag.succeeded-namespace-build-proof.v1'
+    if namespace:
+        require(diagnostic, 'Namespace recovery can only build without starting a runtime')
+        sys.path.insert(0, '/opt/fullmag/source/scripts')
+        import docker_volume_succeeded_namespace_recovery as namespace_recovery
+        extra = namespace_recovery.namespace_build_evidence(request, paths, process, owner)
+    elif diagnostic:
         validate_diagnostic_build(process, owner)
-        extra = diagnostic_api_evidence(process, owner, paths, request.get('claimed_interruption_build'))
+        extra = diagnostic_api_evidence(process, owner, paths, request.get('claimed_interruption_build'), request)
     else:
         validate_terminal(process, owner)
     if not diagnostic:
@@ -544,7 +711,7 @@ def retained_unknown():
 
 
 @contextlib.contextmanager
-def runtime_locks(build_lock=True):
+def runtime_locks(build_lock=True, namespace_request=None):
     paths = runtime.canonical_paths()
     with contextlib.ExitStack() as locks:
         for name in ('STARTUP-GATE.lock', 'LAUNCH.lock', 'OWNER.lock'):
@@ -557,6 +724,13 @@ def runtime_locks(build_lock=True):
             fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
             require(path.stat().st_ino == metadata.st_ino and path.stat().st_dev == metadata.st_dev,
                     'Runtime lock inode changed')
+        if namespace_request and namespace_request.get('succeeded_worker_proof'):
+            proof = json.loads(read(Path(namespace_request['succeeded_worker_proof'])))
+            if proof.get('schema') == 'fullmag.succeeded-namespace-build-proof.v1':
+                sys.path.insert(0, '/opt/fullmag/source/scripts')
+                import docker_volume_succeeded_namespace_recovery as namespace_recovery
+                locks.enter_context(namespace_recovery.kernel_lock(
+                    Path(os.environ['FULLMAG_HOST_LEDGER_ROOT'])/'WRITER.lock'))
         if build_lock:
             locks.enter_context(backend._runtime_build_lock(Path('/build')))
         yield paths
@@ -661,7 +835,9 @@ def archive_failed_make(request, result, paths, before, current):
 
 
 def guard(request, ready_fd, decision_fd):
-    with runtime_locks(build_lock=False) as paths, claimed_build_locks(request, paths):
+    locks = (runtime_locks(build_lock=False, namespace_request=request)
+             if request.get('succeeded_worker_proof') else runtime_locks(build_lock=False))
+    with locks as paths, claimed_build_locks(request, paths):
         before = pinned_evidence(request, paths)
         current = backend._validated_package(backend.PACKAGE_ROOT, 'current repair source package',
                                             exclude_development_control=True)
@@ -876,6 +1052,7 @@ def inside_promote(request):
     require(not request.get('diagnostic_api_only', False)
             or isinstance(request.get('claimed_interruption_build'), dict),
             'Diagnostic promotion requires the exact dead consumed claim authority')
+    require(not request.get('succeeded_worker_proof'), 'Succeeded diagnostic build cannot promote a candidate')
     status = {'mutated': False}
     try:
         require(os.environ.get('FULLMAG_COMPOSE_PROJECT') == request['compose_project'], 'Compose project differs')
@@ -896,7 +1073,7 @@ def inside_promote(request):
 def backend_control_path(path):
     require(path.startswith('/control/') and '..' not in Path(path).parts,
             'Expected a validated BuildControl path')
-    return '/opt/fullmag/control/' + path.removeprefix('/control/')
+    return '/opt/fullmag/control/' + path[len('/control/') :]
 
 
 def inside_code(promote=False):
@@ -985,6 +1162,49 @@ def recovery_authority(control, args, selected):
         'documents': pins}
 
 
+def validate_repair_cache_consumers(rows, profile, backend_id, frontend_id, project):
+    import docker_backend_volume_cache as cache
+    protected = {profile['volume_names'][role] for role in ('build', 'package')}
+    roots = cache._selected_volume_mountpoints(profile)
+    group_name = profile['volume_names']['build']
+    group_root = profile['volume_documents']['build']['Mountpoint']
+    for row in rows:
+        if row['Id'] == backend_id:
+            continue
+        aliases = [mount for mount in row.get('Mounts', []) if mount.get('Name') in protected]
+        if aliases:
+            labels = row.get('Config', {}).get('Labels', {})
+            expected = {'/state/development': ('private/frontend', True),
+                        '/opt/fullmag/control': ('frontend', False)}
+            require(profile.get('group_volume') is True and profile.get('build_subpath') == 'private/backend'
+                    and group_name == profile['volume_names']['control'] and row['Id'] == frontend_id
+                    and labels.get('com.docker.compose.project') == project
+                    and labels.get('com.docker.compose.service') == 'frontend'
+                    and row.get('State', {}).get('Running') is True
+                    and not row.get('HostConfig', {}).get('Binds')
+                    and len(aliases) == 2 and {mount.get('Destination') for mount in aliases} == set(expected),
+                    'Another running container consumes the backend build/package cache')
+            host_aliases = [mount for mount in row.get('HostConfig', {}).get('Mounts', [])
+                            if mount.get('Source') == group_name]
+            require(len(host_aliases) == 2 and {mount.get('Target') for mount in host_aliases} == set(expected),
+                    'Frontend group-volume declaration is incomplete or ambiguous')
+            for mount in aliases:
+                target = mount['Destination']
+                subpath, writable = expected[target]
+                require(mount.get('Type') == 'volume' and mount.get('Name') == group_name
+                        and mount.get('RW') is writable
+                        and cache._observed_volume_subpath(row, mount, target, group_name, group_root) == subpath,
+                        'Frontend aliases protected backend, package, control or ledger state')
+        for mount in row.get('Mounts', []):
+            if mount in aliases:
+                continue
+            source = mount.get('Source')
+            if source is not None:
+                source_path = cache._linux_bind_source(source)
+                require(source_path is None or not any(cache._daemon_paths_overlap(source_path, root) for root in roots),
+                        'Another running container bind aliases the backend build/package cache')
+
+
 def run(args):
     from docker_dev import _select_source, _compose_identity
     import docker_backend_volume_cache as cache
@@ -999,6 +1219,14 @@ def run(args):
     diagnostic = bool(getattr(args, 'diagnostic_api_only', False))
     require(not (promote and diagnostic) or bool(getattr(args, 'claimed_build_pin', None)),
             'Diagnostic promotion requires the exact dead consumed claim authority')
+    succeeded_path = getattr(args, 'succeeded_worker_proof', None)
+    succeeded_sha = getattr(args, 'succeeded_worker_proof_sha256', None)
+    require(bool(succeeded_path) == bool(succeeded_sha), 'Both succeeded worker proof pins are required')
+    if succeeded_path:
+        require(diagnostic and not promote and re.fullmatch(r'[0-9a-f]{64}', succeeded_sha),
+                'Succeeded proof requires diagnostic unpublished build mode and exact digest')
+    require(not (succeeded_path and getattr(args, 'claimed_build_pin', None)),
+            'Claimed and succeeded build authorities cannot be combined')
     promotion_pins = ('candidate_basename', 'candidate_receipt_sha256', 'current_receipt_sha256', 'provenance_sha256')
     if promote:
         require(re.fullmatch(r'\.backend-package-candidate-[A-Za-z0-9._-]+', args.candidate_basename or ''),
@@ -1072,6 +1300,10 @@ def run(args):
         require(isinstance(claimed_pin, dict), 'Claimed build pin must be an object')
         inputs.update(claimed_build_pin=claimed_relative, claimed_build_pin_sha256=claimed_sha,
                       claimed_interruption_build=claimed_pin)
+    if succeeded_path:
+        inputs.update(succeeded_worker_proof=succeeded_path, succeeded_worker_proof_sha256=succeeded_sha)
+        inputs['namespace_controller_sha256'] = hashlib.sha256(
+            (selected/'scripts/docker_volume_succeeded_namespace_recovery.py').read_bytes()).hexdigest()
     if authority_pins:
         inputs['retained_authority'] = authority_pins
     if promote:
@@ -1139,6 +1371,8 @@ def main():
     parser.add_argument('--diagnostic-api-only', action='store_true')
     parser.add_argument('--claimed-build-pin')
     parser.add_argument('--claimed-build-pin-sha256')
+    parser.add_argument('--succeeded-worker-proof')
+    parser.add_argument('--succeeded-worker-proof-sha256')
     parser.add_argument('--promote', action='store_true')
     parser.add_argument('--candidate-basename')
     parser.add_argument('--candidate-receipt-sha256')

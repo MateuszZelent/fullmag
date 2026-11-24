@@ -32,6 +32,7 @@ from docker_build_control import (
 )
 
 SCHEMA = "fullmag.docker-offline-control-reconciliation.v1"
+READY_OWNER_SCHEMA = "fullmag.docker-offline-control-reconciliation.v2"
 OPERATION_SCHEMA = "fullmag.docker-build-operation.v1"
 CURRENT = "offline-reconciliation/current.json"
 MAX_CONTROL_RECORD_BYTES = min(MAX_DOCUMENT_BYTES, 2 * 1024 * 1024)
@@ -240,10 +241,14 @@ def _confirm_control_file_absent(control, relative: str) -> None:
                     + result.stderr.decode("utf-8", "replace")[-512:])
 
 
-def _validate_operation_phase(record: object) -> str:
+def _validate_operation_phase(record: object, *, stopped_ready_owner: bool = False) -> str:
     if not isinstance(record, Mapping):
         raise _fail("Active operation receipt is not an object")
     phase, state = record.get("phase"), record.get("state")
+    if stopped_ready_owner:
+        if phase == "iteration" and state == "restarting-idle-backend":
+            return "iteration"
+        raise _fail("Stopped Ready owner repair requires an interrupted idle iteration")
     if phase == "activation" and state == "outcome-unknown-resources-retained":
         return "activation"
     # An idle restart can persist this state before observation is interrupted
@@ -314,6 +319,58 @@ def _validate_owner_process(owner: object, process: object) -> dict[str, Any]:
         "terminal_children": {key: by_role[key] for key in sorted(by_role)},
     }
 
+
+
+def _validate_stopped_ready_owner(owner: Mapping[str, Any], process: Mapping[str, Any],
+                                  abrupt_proof: Mapping[str, Any]) -> dict[str, Any]:
+    """Retain a historical Ready owner; the caller authenticates abrupt-stop evidence."""
+    from docker_volume_container_recovery import ABRUPT_PROOF_SCHEMA, _owner_for_native
+    if (not isinstance(owner, Mapping) or not isinstance(process, Mapping)
+            or not isinstance(abrupt_proof, Mapping)
+            or abrupt_proof.get("schema") != ABRUPT_PROOF_SCHEMA
+            or owner.get("state") != "ready" or process.get("state") != "ready"
+            or process.get("schema") != "fullmag.docker-process-tree.v1"
+            or process.get("runtime_pid") is not None):
+        raise _fail("Stopped Ready owner/process evidence is malformed")
+    _owner_for_native(owner)
+    children = owner.get("children")
+    if (not isinstance(children, list) or len(children) != 2
+            or {child.get("role") for child in children if isinstance(child, Mapping)}
+               != {"compute", "preparation"}
+            or any(not isinstance(child, Mapping) or child.get("status") != "running"
+                   for child in children)):
+        raise _fail("Stopped Ready owner has no exact historical running child pair")
+    historical = process.get("service_owner")
+    if (not isinstance(historical, Mapping)
+            or any(historical.get(field) != owner.get(field) for field in _OWNER_IDENTITY_FIELDS)
+            or historical.get("children") != children):
+        raise _fail("Stopped Ready owner differs from its historical process identity")
+    pins, records, containers = (abrupt_proof.get(key)
+                                  for key in ("authorization_pins", "raw_records", "containers"))
+    if not all(isinstance(value, Mapping) for value in (pins, records, containers)):
+        raise _fail("Stopped Ready owner has no bounded abrupt proof")
+    for key, expected, pin in (("owner", owner, "owner_sha256"),
+                               ("process_receipt", process, "process_receipt_sha256")):
+        record = records.get(key)
+        if not isinstance(record, Mapping) or not isinstance(record.get("raw_utf8"), str):
+            raise _fail("Abrupt proof raw owner/process record is missing")
+        raw = record["raw_utf8"].encode("utf-8")
+        digest = _hash(pins.get(pin), "abrupt owner/process digest")
+        if (len(raw) > MAX_CONTROL_RECORD_BYTES or _sha256(raw) != digest
+                or record.get("sha256") != digest or _strict_json(raw, key) != expected):
+            raise _fail("Abrupt proof owner/process bytes differ")
+    _validate_stopped_pair(
+        containers,
+        expected_ids={"backend": pins.get("backend_container_id"),
+                      "frontend": pins.get("frontend_container_id")},
+        project=pins.get("compose_project"), image_id=pins.get("old_image_id"),
+    )
+    backend_config = containers["backend"].get("Config")
+    if not isinstance(backend_config, Mapping) or backend_config.get("Hostname") != owner.get("host"):
+        raise _fail("Stopped Ready owner host differs from the pinned backend")
+    return {"owner_state": "ready", "process_state": "ready",
+            "owner_identity": {field: owner[field] for field in _OWNER_IDENTITY_FIELDS},
+            "retained_children": children, "namespace_status": "stopped"}
 
 def _validate_container(row: object, *, container_id: str, service: str,
                         project: str, image_id: str) -> dict[str, Any]:
@@ -811,7 +868,7 @@ def _record_sha(raw: bytes | None) -> str | None:
 
 def _read_operation(control, active_raw: bytes, *, development_attempt: str,
                     selected_source: str, config_sha256: str,
-                    image_id: str, backend_id: str) -> tuple[str, str, dict[str, Any], str, bytes | None, dict[str, Any]]:
+                    image_id: str, backend_id: str, stopped_ready_owner: bool = False) -> tuple[str, str, dict[str, Any], str, bytes | None, dict[str, Any]]:
     if not active_raw.endswith(b"\n") or active_raw.count(b"\n") != 1:
         raise _fail("Active control marker is not one exact operation token")
     try:
@@ -829,7 +886,7 @@ def _read_operation(control, active_raw: bytes, *, development_attempt: str,
         raise _fail("Active token does not name exactly one eligible activation/iteration receipt")
     phase, path, raw = candidates[0]
     record = _strict_json(raw, "Original " + phase + " operation receipt")
-    if _validate_operation_phase(record) != phase:
+    if _validate_operation_phase(record, stopped_ready_owner=stopped_ready_owner) != phase:
         raise _fail("Original operation phase/state differs")
     if (record.get("schema") != OPERATION_SCHEMA or record.get("attempt") != token
             or record.get("compose_project") != control.project
@@ -851,6 +908,8 @@ def _read_operation(control, active_raw: bytes, *, development_attempt: str,
                 or not isinstance(record.get("backend_started_at"), str)
                 or not record["backend_started_at"]):
             raise _fail("Interrupted idle restart has no exact backend incarnation")
+    elif record.get("state") != "starting":
+        raise _fail("Only an interrupted iteration start receipt is eligible")
     terminal_path = f"{phase}/attempts/{token}/terminal.json"
     terminal_raw = _control_raw(control, terminal_path, optional=True)
     if terminal_raw is not None:
@@ -1116,7 +1175,7 @@ def _collection_shared_cache_mode(control, operation_attempt: str, original_toke
             return True
         intent = _strict_json(intent_raw, "Partial offline intent")
         proof = intent.get("proof")
-        if (not isinstance(proof, Mapping) or proof.get("schema") != SCHEMA
+        if (not isinstance(proof, Mapping) or proof.get("schema") not in (SCHEMA, READY_OWNER_SCHEMA)
                 or proof.get("state") != "planned" or proof.get("operation_attempt") != operation_attempt
                 or proof.get("original_operation_attempt") != original_token
                 or proof.get("phase") not in ("activation", "iteration")
@@ -1138,9 +1197,60 @@ def _collection_shared_cache_mode(control, operation_attempt: str, original_toke
                              allow_active_token=original_token, active_pin_matches=True)
     return "shared_cache" in current["proof"].get("stopped_pair", {})
 
+def _retained_terminal_pins(store_root: Path, store_snapshot: Mapping[str, Any]) -> list[dict[str, Any]]:
+    runs = store_snapshot.get("runs")
+    if not isinstance(runs, list) or not 1 <= len(runs) <= 128:
+        raise _fail("Stopped Ready repair requires 1..128 terminal run pins")
+    pins = []
+    for run in runs:
+        run_id = run.get("run_id") if isinstance(run, Mapping) else None
+        if not isinstance(run_id, str) or re.fullmatch(r"[A-Za-z0-9_-][A-Za-z0-9_.-]{0,127}", run_id) is None or run_id.endswith("."):
+            raise _fail("Stopped Ready repair run identity is unsafe")
+        pin = {"run_id": run_id}
+        for name, key in (("run_intent.json", "run_intent_sha256"),
+                          ("run_catalog.json", "run_catalog_sha256"),
+                          ("artifact_catalog.json", "artifact_catalog_sha256")):
+            relative = "runs/" + run_id + "/" + name
+            if name == "artifact_catalog.json" and not os.path.lexists(store_root / relative):
+                pin[key] = None
+            else:
+                raw, _ = _read_store_file(store_root, relative)
+                pin[key] = _sha256(raw)
+        pins.append(pin)
+    return sorted(pins, key=lambda item: item["run_id"])
+
+
+def _capture_stopped_ready_proof(control, document, development, operation_attempt,
+                                 pair_rows, store_root, store_snapshot):
+    import docker_volume_container_recovery as recovery
+    import uuid
+    pins = {
+        "request_id": str(uuid.UUID(hex=operation_attempt)),
+        "source_root": development["inputs"]["source_root"],
+        "compose_project": control.project,
+        "development_attempt": development["attempt"],
+        "compose_config_sha256": development["config_sha256"],
+        "backend_container_id": pair_rows["backend"]["Id"],
+        "frontend_container_id": pair_rows["frontend"]["Id"],
+        "old_image_id": development["inputs"]["image_id"],
+    }
+    for key, relative in (
+        ("process_receipt", "runtime-control/runtime-service/process-tree.json"),
+        ("owner", "runtime-control/runtime-services/OWNER.json"),
+        ("launch", "runtime-control/runtime-services/LAUNCH.json"),
+        ("config", "runtime-control/runtime-service/docker-all.json"),
+    ):
+        pins[key + "_sha256"] = _sha256(_control_raw(control, relative))
+    return recovery.prepare_abrupt_stop_proof(
+        control, pins, document,
+        retained_terminal_runs=_retained_terminal_pins(store_root, store_snapshot),
+    )
 
 def _collect_context(args) -> dict[str, Any]:
     repo_root, selected, layout, identity, control = _select_context(args)
+    stopped_ready_owner = getattr(args, "stopped_ready_owner", False)
+    if type(stopped_ready_owner) is not bool:
+        raise _fail("Stopped Ready owner opt-in must be boolean")
     development_attempt = _attempt(getattr(args, "attempt", None), "development attempt")
     operation_attempt = _attempt(getattr(args, "operation_attempt", None), "offline operation attempt")
     config_sha256 = _hash(getattr(args, "config_sha256", None), "selected Compose config digest")
@@ -1186,7 +1296,7 @@ def _collect_context(args) -> dict[str, Any]:
     phase, original_token, original, original_path, original_terminal_raw, helper = _read_operation(
         control, active_raw, development_attempt=development_attempt,
         selected_source=str(selected), config_sha256=config_sha256,
-        image_id=image_id, backend_id=backend_id,
+        image_id=image_id, backend_id=backend_id, stopped_ready_owner=stopped_ready_owner,
     )
     phase_terminal_path = f"{phase}/attempts/{original_token}/terminal.json"
     if original_terminal_raw is not None:
@@ -1199,7 +1309,7 @@ def _collect_context(args) -> dict[str, Any]:
     owner_raw = _control_raw(control, "runtime-control/runtime-services/OWNER.json")
     process = _strict_json(process_raw, "Runtime process tree")
     owner = _strict_json(owner_raw, "Runtime service owner")
-    owner_evidence = _validate_owner_process(owner, process)
+    owner_evidence = None if stopped_ready_owner else _validate_owner_process(owner, process)
 
     state_root = _resolve_state_root(development_terminal.get("state_root"), selected)
     process_store = process.get("accepted_store")
@@ -1240,8 +1350,17 @@ def _collect_context(args) -> dict[str, Any]:
     if "shared_cache" in pair:
         shared = pair["shared_cache"]
         pins[shared["profile_relative"]] = shared["profile_sha256"]
+    abrupt_proof = None
+    if stopped_ready_owner:
+        abrupt_proof = _capture_stopped_ready_proof(
+            control, document, development_terminal, operation_attempt,
+            pair_rows, store_root, store_snapshot,
+        )
+        owner_evidence = _validate_stopped_ready_owner(owner, process, abrupt_proof)
+        for record in abrupt_proof["raw_records"].values():
+            pins[record["path"]] = record["sha256"]
     plan = {
-        "schema": SCHEMA,
+        "schema": READY_OWNER_SCHEMA if stopped_ready_owner else SCHEMA,
         "state": "planned",
         "operation_attempt": operation_attempt,
         "phase": phase,
@@ -1280,6 +1399,8 @@ def _collect_context(args) -> dict[str, Any]:
         "allow_old_request_replay": False,
         "repair_scope": "control-lease-only",
     }
+    if abrupt_proof is not None:
+        plan["abrupt_stop_proof"] = abrupt_proof
     plan_sha256 = _sha256(canonical(plan))
     plan["plan_sha256"] = plan_sha256
     if len(canonical(plan)) > MAX_OPERATION_RECORD_BYTES:
@@ -1318,8 +1439,11 @@ def collect(args) -> dict[str, Any]:
 
 def _operation_records(plan: Mapping[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
     proof = dict(plan)
+    schema = plan.get("schema")
+    if schema not in {SCHEMA, READY_OWNER_SCHEMA}:
+        raise _fail("Offline reconciliation plan schema is unsupported")
     intent = {
-        "schema": SCHEMA,
+        "schema": schema,
         "kind": "intent",
         "state": "prepared",
         "operation_attempt": plan["operation_attempt"],
@@ -1329,7 +1453,7 @@ def _operation_records(plan: Mapping[str, Any]) -> tuple[dict[str, Any], dict[st
     }
     intent_raw = canonical(intent) + b"\n"
     receipt = {
-        "schema": SCHEMA,
+        "schema": schema,
         "kind": "receipt",
         "state": "completed",
         "operation_attempt": plan["operation_attempt"],
@@ -1522,7 +1646,8 @@ def _transaction_mounts(args: list[str], *, store_root: Path, ledger_volume: str
 
 
 def _inspect_transaction_helper(control, helper_name: str, script: str,
-                                store_root: Path, ledger_volume: str, ledger_subpath: str = "") -> str:
+                                store_root: Path, ledger_volume: str, ledger_subpath: str = "",
+                                *, allow_wsl_alias: bool = False) -> str:
     from run_managed_browser import host_path
 
     def store_source_matches(value: object) -> bool:
@@ -1530,6 +1655,10 @@ def _inspect_transaction_helper(control, helper_name: str, script: str,
             return False
         if host_path(value) == store_root.resolve():
             return True
+        if allow_wsl_alias is True:
+            from docker_dev_codegen import _source_mount_matches_selected
+            if _source_mount_matches_selected(value, store_root):
+                return True
         from docker_dev_browser_qa import DESKTOP_WSL_BIND_ALIAS_RE, LOCAL_WSL_BIND_MOUNT_ROOT
         match = DESKTOP_WSL_BIND_ALIAS_RE.fullmatch(value)
         if match is None:
@@ -1625,10 +1754,65 @@ def _line(process: subprocess.Popen, timeout: float = 120) -> str:
     return raw.decode("utf-8", "replace").strip()
 
 
-def _current_live_plan(context: Mapping[str, Any], helper_name: str, helper_id: str) -> dict[str, Any]:
+
+def _authenticate_snapshot_observer(control, observer: Mapping[str, Any]) -> None:
+    """Allow a shared snapshot only for the same authenticated LOCKED v2 client."""
+    if not isinstance(observer, Mapping) or set(observer) != {"context", "process", "helper_id"}:
+        raise _fail("Offline snapshot observer identity is incomplete")
+    context, process = observer["context"], observer["process"]
+    plan = context["plan"]
+    if (context["control"] is not control or plan.get("schema") != READY_OWNER_SCHEMA
+            or process.stdin is None or process.poll() is not None):
+        raise _fail("Offline snapshot requires its live stopped-Ready transaction client")
+    name = "fullmag-control-offline-" + plan["operation_attempt"]
+    intent, receipt = _operation_records(plan)
+    script, _ = _transaction_script(
+        control_root="/control", active_token=plan["original_operation_attempt"],
+        active_sha256=plan["control_pins"]["active"], pins=plan["control_pins"],
+        intent=intent, receipt=receipt, lock_external=True,
+    )
+    subpath = "private/ledger" if context["ledger_mount"].endswith(",volume-subpath=private/ledger") else ""
+    expected_argv = control.helper_args(script, name=name)
+    _transaction_mounts(expected_argv, store_root=context["store_root"],
+                        ledger_volume=context["ledger_volume"], ledger_subpath=subpath)
+    if process.args != expected_argv:
+        raise _fail("Offline snapshot transaction client command differs")
+    actual_id = _inspect_transaction_helper(
+        control, name, script, context["store_root"], context["ledger_volume"], ledger_subpath=subpath,
+        allow_wsl_alias=True,
+    )
+    if actual_id != observer["helper_id"] or process.poll() is not None:
+        raise _fail("Offline snapshot transaction helper changed or exited")
+
+
+def _revalidate_stopped_ready_proof(context: Mapping[str, Any], pair_rows: Mapping[str, Any],
+                                   *, observer=None) -> None:
+    """Rebuild abrupt evidence while the authenticated helper owns the writer locks."""
+    import docker_volume_container_recovery as recovery
+    original = context["plan"]["abrupt_stop_proof"]
+    current = dict(original)
+    current["containers"] = {service: recovery._stable_container_observation(pair_rows[service])
+                             for service in ("backend", "frontend")}
+    current["docker_engine_id_sha256"] = recovery._docker_engine_sha()
+    current["raw_records"] = {}
+    for key, record in original["raw_records"].items():
+        raw = _control_raw(context["control"], record["path"])
+        current["raw_records"][key] = {
+            "path": record["path"], "raw_utf8": raw.decode("utf-8", "strict"), "sha256": _sha256(raw),
+        }
+    current["storage_proof"] = recovery._ledger_and_store_snapshot(
+        context["control"], pair_rows["backend"], compose=context["document"],
+        retained_terminal_runs=original["retained_terminal_runs"],
+        offline_control_observer=observer,
+    )
+    if canonical(current) != canonical(original):
+        raise _fail("Abrupt stopped Ready proof changed under the offline control lock")
+    _validate_stopped_ready_owner(context["owner"], context["process"], current)
+
+def _current_live_plan(context: Mapping[str, Any], helper_name: str, helper_id: str, *, locked_process=None) -> dict[str, Any]:
     plan = context["plan"]
     development = context["development"]
-    pair, _, inventory_ids = _compose_pair(
+    pair, pair_rows, inventory_ids = _compose_pair(
         context["document"], context["identity"], context["control"], development,
         state_root=context["state_root"], ledger_volume=context["ledger_volume"],
         helper_name=helper_name, helper_id=helper_id,
@@ -1652,6 +1836,11 @@ def _current_live_plan(context: Mapping[str, Any], helper_name: str, helper_id: 
     absence_sha = _probe_helper_absence(plan["original_helper_name"])
     if absence_sha != plan["original_helper_absence_sha256"]:
         raise _fail("Original operation helper reappeared during offline control repair")
+    if plan.get("schema") == READY_OWNER_SCHEMA:
+        _revalidate_stopped_ready_proof(
+            context, pair_rows,
+            observer={"context": context, "process": locked_process, "helper_id": helper_id},
+        )
     return {"pair": pair, "inventory_ids": inventory_without_helper,
             "store_snapshot": store_snapshot, "ledger_snapshot": ledger_snapshot,
             "ledger_raw": ledger_raw}
@@ -1662,14 +1851,18 @@ def _verify_completed_record(control, receipt: object, receipt_raw: bytes,
                              *, verify_all_pins: bool = True,
                              allow_active_token: str | None = None,
                              active_pin_matches: bool = True,
-                             mutable_pins: frozenset[str] = frozenset()) -> dict[str, Any]:
+                             mutable_pins: frozenset[str] = frozenset(),
+                             stopped_ready_owner: bool = False) -> dict[str, Any]:
+    if type(stopped_ready_owner) is not bool:
+        raise _fail("Stopped Ready owner opt-in must be boolean")
+    schema = READY_OWNER_SCHEMA if stopped_ready_owner else SCHEMA
     if not isinstance(receipt, Mapping):
         raise _fail("Offline reconciliation current pointer is malformed")
     token = _attempt(receipt.get("operation_attempt"), "offline reconciliation pointer")
     if expected_operation_attempt is not None and token != _attempt(
             expected_operation_attempt, "expected offline reconciliation attempt"):
         raise _fail("Current offline reconciliation proof belongs to another operation attempt")
-    if (receipt.get("schema") != SCHEMA or receipt.get("kind") != "receipt"
+    if (receipt.get("schema") != schema or receipt.get("kind") != "receipt"
             or receipt.get("state") != "completed" or receipt.get("active_released") is not True
             or receipt.get("phase") not in {"activation", "iteration"}):
         raise _fail("Offline reconciliation receipt is not complete")
@@ -1682,7 +1875,7 @@ def _verify_completed_record(control, receipt: object, receipt_raw: bytes,
     plan_sha = plan_without_sha.pop("plan_sha256", None)
     if _hash(plan_sha, "offline plan digest") != _sha256(canonical(plan_without_sha)):
         raise _fail("Offline reconciliation plan digest is invalid")
-    if (proof.get("schema") != SCHEMA or proof.get("state") != "planned"
+    if (proof.get("schema") != schema or proof.get("state") != "planned"
             or proof.get("operation_attempt") != token
             or proof.get("phase") != receipt.get("phase")
             or proof.get("control_volume") != control.volume
@@ -1695,7 +1888,7 @@ def _verify_completed_record(control, receipt: object, receipt_raw: bytes,
     if final_raw != receipt_raw:
         raise _fail("Current pointer differs from its immutable operation receipt")
     intent = _strict_json(intent_raw, "Offline reconciliation intent")
-    if (intent_raw != canonical(intent) + b"\n" or intent.get("schema") != SCHEMA
+    if (intent_raw != canonical(intent) + b"\n" or intent.get("schema") != schema
             or intent.get("kind") != "intent" or intent.get("state") != "prepared"
             or intent.get("operation_attempt") != token
             or intent.get("plan_sha256") != plan_sha
@@ -1757,17 +1950,23 @@ def _verify_completed_record(control, receipt: object, receipt_raw: bytes,
     if original_terminal is not None or proof.get("original_operation_terminal_absent") is not True:
         raise _fail("Original operation terminal record was changed or appeared")
     original = _strict_json(original_raw, "Original operation receipt")
-    if (_validate_operation_phase(original) != receipt["phase"]
+    if (_validate_operation_phase(original, stopped_ready_owner=stopped_ready_owner) != receipt["phase"]
             or original.get("attempt") != original_token):
         raise _fail("Original operation outcome is no longer the retained eligible outcome")
     expected_outcome = "unknown-retained" if receipt["phase"] == "activation" else "interrupted-retained"
     if (receipt["phase"] == "activation" and proof.get("activation_outcome") != expected_outcome
             or receipt["phase"] == "iteration" and proof.get("iteration_outcome") != expected_outcome):
         raise _fail("Offline reconciliation does not preserve its original outcome")
+    if stopped_ready_owner:
+        _validate_stopped_ready_owner(
+            _strict_json(_control_raw(control, "runtime-control/runtime-services/OWNER.json"), "Ready owner"),
+            _strict_json(_control_raw(control, "runtime-control/runtime-service/process-tree.json"), "Ready process"),
+            proof.get("abrupt_stop_proof"),
+        )
     return dict(receipt)
 
 
-def read_completed(control, expected_operation_attempt: str) -> dict[str, Any] | None:
+def read_completed(control, expected_operation_attempt: str, *, stopped_ready_owner: bool = False) -> dict[str, Any] | None:
     """Read the completed current proof and verify every immutable control pin."""
     expected_operation_attempt = _attempt(expected_operation_attempt, "expected offline reconciliation attempt")
     current_raw = _control_raw(control, CURRENT, optional=True)
@@ -1776,7 +1975,8 @@ def read_completed(control, expected_operation_attempt: str) -> dict[str, Any] |
     current = _strict_json(current_raw, "Offline reconciliation current pointer")
     if current.get("operation_attempt") != expected_operation_attempt:
         raise _fail("Current offline reconciliation proof belongs to another operation attempt")
-    return _verify_completed_record(control, current, current_raw, expected_operation_attempt)
+    return _verify_completed_record(control, current, current_raw, expected_operation_attempt,
+                                    stopped_ready_owner=stopped_ready_owner)
 
 
 def _read_completed_recreation_chain(control, expected_operation_attempt: str) -> dict[str, Any]:
@@ -1866,7 +2066,7 @@ def validate_recreate_resume(control, operation, expected_offline_attempt: str) 
 
 
 def _read_completed_or_prepared_retry(control, expected_operation_attempt: str,
-                                      expected_plan_sha256: object) -> dict[str, Any] | None:
+                                      expected_plan_sha256: object, *, stopped_ready_owner: bool = False) -> dict[str, Any] | None:
     """Return durable completion or validate the exact publish-before-unlink crash state."""
     current_raw = _control_raw(control, CURRENT, optional=True)
     if current_raw is None:
@@ -1879,6 +2079,7 @@ def _read_completed_or_prepared_retry(control, expected_operation_attempt: str,
     if active is None:
         completed = _verify_completed_record(
             control, current, current_raw, expected_operation_attempt,
+            stopped_ready_owner=stopped_ready_owner,
         )
         _require_plan_sha(expected_plan_sha256, completed.get("plan_sha256"))
         return completed
@@ -1888,6 +2089,7 @@ def _read_completed_or_prepared_retry(control, expected_operation_attempt: str,
     original_token = _attempt(proof.get("original_operation_attempt"), "original operation attempt")
     prepared = _verify_completed_record(
         control, current, current_raw, expected_operation_attempt,
+            stopped_ready_owner=stopped_ready_owner,
         allow_active_token=original_token, active_pin_matches=True,
     )
     _require_plan_sha(expected_plan_sha256, prepared.get("plan_sha256"))
@@ -2184,9 +2386,9 @@ def _run_transaction(context: Mapping[str, Any], args) -> dict[str, Any]:
         _read_locked_helper(process, "LOCKED")
         helper_id = _inspect_transaction_helper(
             control, helper_name, script, context["store_root"], context["ledger_volume"],
-            ledger_subpath=ledger_subpath,
+            ledger_subpath=ledger_subpath, allow_wsl_alias=plan.get("schema") == READY_OWNER_SCHEMA,
         )
-        _current_live_plan(context, helper_name, helper_id)
+        _current_live_plan(context, helper_name, helper_id, locked_process=process)
         line, code = _release_helper(process, commit=True)
         committed = True
         if code != 0 or line not in {"COMPLETED", "ALREADY-COMPLETE"}:
@@ -2198,7 +2400,8 @@ def _run_transaction(context: Mapping[str, Any], args) -> dict[str, Any]:
             except BaseException:
                 pass
         raise
-    completed = read_completed(control, operation_attempt)
+    completed = read_completed(control, operation_attempt,
+                               stopped_ready_owner=getattr(args, "stopped_ready_owner", False))
     if completed is None or completed.get("plan_sha256") != plan["plan_sha256"]:
         raise _fail("Offline repair helper exited without the expected completed proof")
     return completed
@@ -2211,6 +2414,7 @@ def _read_existing_completed_for_apply(args) -> dict[str, Any] | None:
         expected = _attempt(getattr(args, "operation_attempt", None), "offline operation attempt")
         return _read_completed_or_prepared_retry(
             control, expected, getattr(args, "expected_plan_sha256", None),
+            stopped_ready_owner=getattr(args, "stopped_ready_owner", False),
         )
     except BuildControlError:
         raise

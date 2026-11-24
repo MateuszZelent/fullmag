@@ -3284,12 +3284,20 @@ async fn explicit_project_run_submit_is_durable_and_replays_without_live_session
             summary
         }
         (None, None) => {
+            let execution_entries_before =
+                crate::accepted_study_worker::accepted_start_execution_entries_for_test();
             let process_outcome = crate::accepted_study_worker::run_pending_accepted_start(
                 &store,
                 accepted_run_id.as_str(),
                 claim.task_id.as_str(),
             )
             .expect("one-shot worker process executes the exact durable accepted Start");
+            assert_eq!(
+                crate::accepted_study_worker::accepted_start_execution_entries_for_test()
+                    - execution_entries_before,
+                1,
+                "publication must read Completed without entering the accepted launcher again"
+            );
             let crate::accepted_study_worker::AcceptedWorkerProcessOutcome::Completed(
                 process_result,
             ) = process_outcome

@@ -38,7 +38,9 @@ impl PhysicsGraphExecutionContext {
         #[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
         let mut steady_transport = BTreeSet::new();
         match backend_plan {
-            BackendPlanIR::AntennaFieldOnly(_) => {}
+            BackendPlanIR::AntennaFieldOnly(_)
+            | BackendPlanIR::AntennaRetainedCurrentFieldInspection(_)
+            | BackendPlanIR::AntennaRetainedDirectFieldInspection(_) | BackendPlanIR::AntennaRetainedPreparationFieldInspection(_) => {}
             BackendPlanIR::Fdm(fdm) => {
                 if fdm.zhang_li_formula_version.is_some()
                     || fdm.slonczewski_formula_version.is_some()

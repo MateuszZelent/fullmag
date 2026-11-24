@@ -390,6 +390,34 @@ class DevelopmentRecoveryShellTests(unittest.TestCase):
 
 
 
+    def test_pending_recovery_successor_dispatches_exact_pair(self):
+        source = '/selected/$(printf injected);worktree'
+        recipe = ('python "/ignored/scripts/docker_dev.py" --repo-root "/ignored" '
+                  "recreate-volume --attempt '" + 'a' * 32 + "' --config-sha256 '" + 'b' * 64
+                  + "' --source-root '" + source + "' --port '3203'")
+        proof = 'runtime-services/container-recovery/3ffba5a9-75a4-48a2-af9f-0ebdb2c028f3/successor.json'
+        pair = " --pending-recovery-successor '" + proof + "' --pending-recovery-successor-sha256 '" + 'c' * 64 + "'"
+        result = self.dispatch(recipe + pair, marker='  *"scripts/docker_dev.py"*)\n')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.split(b'\0')[:-1], [
+            b'/recorded/python', b'/registered/checkout/scripts/docker_dev.py',
+            b'--repo-root', b'/registered/checkout', b'recreate-volume',
+            b'--attempt', b'a' * 32, b'--config-sha256', b'b' * 64,
+            b'--source-root', source.encode(), b'--port', b'3203',
+            b'--pending-recovery-successor', proof.encode(),
+            b'--pending-recovery-successor-sha256', b'c' * 64])
+        for tail in (" --pending-recovery-successor '" + proof + "'",
+                     " --pending-recovery-successor-sha256 '" + 'c' * 64 + "'",
+                     pair.replace('c' * 64, 'short'), pair.replace('c' * 64, 'C' * 64),
+                     pair.replace(proof, '$(printf injected)'), pair + pair,
+                     pair + ' --fresh-state', pair + " --recovery-authorization 'other.json'",
+                     pair + '; printf injected', pair + ' && printf injected',
+                     pair + '\nprintf injected'):
+            with self.subTest(tail=tail):
+                result = self.dispatch(recipe + tail, marker='  *"scripts/docker_dev.py"*)\n')
+                self.assertEqual(result.returncode, 2, result.stderr)
+                self.assertFalse(result.stdout)
+
     def test_frontend_frozen_refresh_uses_exact_structured_arguments(self):
         source = "/selected/$(printf injected);worktree"
         recipe = ('python "/ignored/scripts/docker_dev.py" --repo-root "/ignored" '
@@ -504,6 +532,36 @@ class DevelopmentRecoveryShellTests(unittest.TestCase):
                 )
                 self.assertEqual(dry.returncode, 0, dry.stderr)
                 result = self.dispatch(dry.stderr.strip(), marker='  *"scripts/docker_dev.py"*)\n')
+                self.assertEqual(result.returncode, 2, result.stderr)
+                self.assertFalse(result.stdout)
+
+    def test_succeeded_worker_build_proof_requires_diagnostic_pair(self):
+        marker = '  *"scripts/docker_dev_recovery_build.py"*)\n'
+        recipe = ('python "/ignored/scripts/docker_dev_recovery_build.py" '
+                  "--source-root '/selected/worktree' --backend-container-id '" + 'a' * 64
+                  + "' --image-id 'sha256:" + 'b' * 64
+                  + "' --process-receipt-sha256 '" + 'c' * 64
+                  + "' --owner-sha256 '" + 'd' * 64 + "'")
+        proof = '/opt/fullmag/control/verification/gsg/proof.json'
+        pair = (" --succeeded-worker-proof '" + proof
+                + "' --succeeded-worker-proof-sha256 '" + 'e' * 64 + "'")
+        result = self.dispatch(recipe + ' --diagnostic-api-only' + pair, marker)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.split(b'\0')[-6:-1], [
+            b'--diagnostic-api-only', b'--succeeded-worker-proof', proof.encode(),
+            b'--succeeded-worker-proof-sha256', b'e' * 64])
+        promotion = (" --promote --candidate-basename '.backend-package-candidate-test'"
+                     " --candidate-receipt-sha256 '" + 'f' * 64
+                     + "' --current-receipt-sha256 '" + '1' * 64
+                     + "' --provenance-sha256 '" + '2' * 64 + "'")
+        for suffix in (pair, ' --diagnostic-api-only' + pair + pair,
+                       ' --diagnostic-api-only' + pair.replace('e' * 64, 'short'),
+                       ' --diagnostic-api-only' + pair.replace(proof, '$(printf injected)'),
+                       ' --diagnostic-api-only' + pair + '; printf injected',
+                       ' --diagnostic-api-only' + pair.split(' --succeeded-worker-proof-sha256')[0],
+                       promotion + ' --diagnostic-api-only' + pair):
+            with self.subTest(suffix=suffix):
+                result = self.dispatch(recipe + suffix, marker)
                 self.assertEqual(result.returncode, 2, result.stderr)
                 self.assertFalse(result.stdout)
 

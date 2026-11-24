@@ -3030,3 +3030,18 @@
     background: var(--fm-bg-app);
   }
 }
+
+/* Explicit read-only entry for durable runs without a project archive. */
+.fm-saved-run-open {
+  display: grid;
+  gap: var(--fm-space-2);
+  padding: var(--fm-space-4);
+  margin-bottom: var(--fm-space-4);
+  border: 1px solid var(--fm-border-subtle);
+  border-radius: var(--fm-radius-md);
+  background: var(--fm-bg-panel);
+}
+.fm-saved-run-open h2, .fm-saved-run-open p { margin: 0; }
+.fm-saved-run-open p { color: var(--fm-text-muted); }
+.fm-saved-run-open [role="alert"] { color: var(--fm-danger); }
+.fm-saved-run-open button { justify-self: start; }

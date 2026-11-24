@@ -10,6 +10,13 @@
 
 **Spec:** `.superpowers/brainstorm/2026-11-02-antenna-magnetic-domains/design.md`, zatwierdzony przez użytkownika 02.11.2026; commit projektu `476dff6b993d436b2f3daeaf18b10bf495a8b13f`.
 
+## Częściowy dowód istniejącego meshera — 04.11.2026
+
+Dwa otoczenia nanometrowej próbki z jawną optymalizacją Gmsh zachowały rdzeń
+190 węzłów/481 Tet4. Naprawiono brak końcowej walidacji; siedem kontroli PASS,
+bez nowego pakietu, katalogu domen lub H→LLG. Nie zaznaczamy T1–T10 jako
+ukończonych. [Raport i ograniczenia](2026-11-04-shared-core-mesher-validation.md).
+
 ## Global Constraints
 
 - Wspólnym rdzeniem ma być siatka ferromagnetyka, a nie oba Airboxy.
@@ -68,7 +75,7 @@ Nazwy w tym rozdziale są zarezerwowaną propozycją planu; implementacja nie mo
 - `StudyDomainIR`: `domain_id: String`, `name: String`, `role: StudyDomainRoleIR`, `members: Vec<FieldTargetIR>`, `core_domain_id: Option<String>`, `bounds: Option<StudyDomainBoundsIR>`, `mesh_policy: Option<FemMeshPolicyIR>`. `StudyDomainBoundsIR` ma `center_m: [f64;3]`, `size_m: [f64;3]` we wspólnym układzie sceny; finite, rozmiary > 0. Dla pierwszej realizacji tylko pudełko; inne kształty jawnie unsupported.
 - `StudyDomainStageBindingIR`: `stage_id: String`, `conductor_domain_id: Option<String>`, `magnetic_domain_id: Option<String>`, `demag_domain_id: Option<String>`, `observation_domain_ids: Vec<String>`. To przypisanie istniejących etapów, nie nowy rodzaj dynamiki.
 - `StudyDomainCatalogIR`: `schema_version: "study_domains.v1"`, `domains: Vec<StudyDomainIR>`, `stage_bindings: Vec<StudyDomainStageBindingIR>`. W ProblemIR pole `study_domains: Option<StudyDomainCatalogIR>`; brak zachowuje stary przepływ.
-- Izolacja wersji: opt-in wire `ir_version="0.3.0+study-domains.1"` **tylko** dla dokumentów z katalogiem. Zwykłe dokumenty zachowują `0.3.0`. Nowy parser dodaje dokładny wariant do dozwolonego odczytu i walidacji metadata; stary parser odmawia nieznanej wersji zamiast ignorować domeny. Nie promować stagingowego `ProblemIRV04` ani nie zmieniać jego znaczenia. Wymagany test odrzucenia przez przypięty parser sprzed rozszerzenia. Ten wariant wymaga akceptacji w przeglądzie planu przed zmianą formatów.
+- Izolacja wersji: opt-in wire `ir_version="0.3.0+study-domains.1"` **tylko** dla dokumentów z katalogiem. Zwykłe dokumenty zachowują `0.3.0`. Nowy parser dodaje dokładny wariant do dozwolonego odczytu. Python zapisuje ten sam wariant w `ir_version`, `problem_meta.script_api_version` i `problem_meta.serializer_version`; nie zmienia globalnych stałych dla dokumentów legacy. Obecny `lib.rs::validate_public_metadata_versions` wymaga zgodności tych pól, jeśli występują. Stary parser odmawia dokładnie nowej wersji zamiast ignorować domeny; nie gwarantuje to odrzucenia niewersjonowanego dodatkowego pola przez stare binarium. Nie promować stagingowego `ProblemIRV04` ani nie zmieniać jego znaczenia. Wymagany test odrzucenia przez przypięty parser sprzed rozszerzenia. Ten wariant wymaga akceptacji w przeglądzie planu przed zmianą formatów.
 - `SharedMagneticCoreBindingIR`: `domain_id`, `mesh_asset_id`, `mesh_revision`, `geometry_digest`, `topology_digest`, `dof_layout_digest`, `transform_digest` — niepuste String; digests pełne SHA256. Jednostki współrzędnych m, położenie `node`, reprezentacja Tet4/P1 wektor XYZ; bez domyślnego przejścia na centra.
 - `SharedCoreIndexMapIR`: `core_to_domain_nodes: Vec<u64>`, `core_to_domain_cells: Vec<u64>`, `core_binding: SharedMagneticCoreBindingIR`. Musi być iniektywna i odtwarzać oryginalne połączenia, orientację i współrzędne; mapa odwrotna jest wyprowadzana, nie dopasowywana najbliższym punktem.
 - `ResolvedStudyDomainIR`: `domain_id: String`, `mesh_asset_id: String`, `core_binding: Option<SharedMagneticCoreBindingIR>`, `core_map: Option<SharedCoreIndexMapIR>`. Żądanie i realizacja są osobne; resolved nie nadpisuje recepty użytkownika.
@@ -99,9 +106,10 @@ Typy `SharedMagneticCoreBindingIR`, `SharedCoreIndexMapIR` i `ResolvedStudyDomai
 
 **Test command:** `python3 -B -m pytest -p no:cacheprovider packages/fullmag-py/tests/test_study_domains.py scripts/test_study_domains_wire.py`; uruchomienie w kontenerze zgodnie ze wspólną procedurą. Dla nowego testu przed implementacją oczekiwany RED, po implementacji exit 0 i wszystkie przypadki PASS.
 
+- [ ] Napisać `test_domains_wire_presence_and_metadata`: nowe wire bez katalogu, katalog (także null) pod wersją legacy oraz mieszane znaczniki metadata odmawiają przed deserializacją do typu i przed mutacją w explicit migration. Brak katalogu w zwykłym legacy zachowuje dotychczasowe zachowanie. Nowy writer emituje katalog i trzy zgodne znaczniki wersji razem.
 - [ ] Napisać `test_catalog_roundtrip_and_role_validation`: dwie domeny o nazwie `Airbox` zachowują różne ID; duplicate ID, dangling core, cykl, niezgodna rola bindingu, NaN bounds i nieznana wersja są błędami. Powietrze nie tworzy m/Ms/σ. Test `legacy_reader_rejects_domains_wire` używa dokładnego starego parsera w CI.
 - [ ] Uruchomić nowy test Python/wire przed zmianą; oczekiwany RED: brak modułu/obsługi wersji. Rust testy dopisać, uruchomić wyłącznie w zatwierdzonym CI.
-- [ ] Wdrożyć powyższe DTO/lowering i parser wersji opt-in, z `deny_unknown_fields`, bez zmiany bezdomenowych dokumentów. Domyślnie brak katalogu; dla demag/observation bounds wymagane, dla core/source zabronione; core_id tylko na demag/observation. Members muszą rozwiązywać istniejące stabilne selektory; nie tworzą regionów materiałowych.
+- [ ] Wdrożyć powyższe DTO/lowering i parser wersji opt-in. Nowe typy katalogu mają `deny_unknown_fields`; nie dodawać go globalnie do istniejącego `ProblemIRWire`, bo zmieniłoby to zgodność wszystkich dokumentów. W obu istniejących ścieżkach odczytu/migracji sprawdzić obecność `study_domains` na surowym Value, analogicznie do `reject_unversioned_spatial_representation`, przed możliwością zgubienia pola. Odrzucać null, brakujący katalog nowego wire i niezgodne metadata, bez zmiany bezdomenowych dokumentów. Domyślnie brak katalogu; dla demag/observation bounds wymagane, dla core/source zabronione; core_id tylko na demag/observation. Members muszą rozwiązywać istniejące stabilne selektory; nie tworzą regionów materiałowych.
 - [ ] Uruchomić testy Python/wire; GREEN wymaga semantycznego round-trip i zachowania istniejącego `FieldTarget.object(...).to_ir()`. Zaktualizować notę 0100 i jej source-map według scientific-documentation-contract, bez claimu runtime.
 - [ ] Commit `feat(ir): define explicit study domain catalog` po oddzielnej kontroli indeksu.
 
@@ -125,13 +133,14 @@ Testy natywnego parsera w CI: `cargo test -p fullmag-ir study_domains::tests`; s
 
 **Files:** właściciele T3; nowy `packages/fullmag-py/tests/test_shared_core_identity.py`.
 
-**Interfaces:** consumes `SharedMagneticCoreBindingIR`; produces w nowym helperze `validate_shared_core_map(core: MeshData, extended: MeshData, node_map: Sequence[int], cell_map: Sequence[int]) -> None`, zgłaszający ValueError. `MeshData` pochodzi z istniejącego `_gmsh_types.py`. Mapy powstają podczas rozszerzania, a nie z wyszukiwania najbliższych punktów.
+**Interfaces:** consumes `SharedMagneticCoreBindingIR`; produces w nowym helperze `validate_shared_core_map(core: MeshData, extended: MeshData, node_map: Sequence[int], cell_map: Sequence[int]) -> None`, zgłaszający ValueError. `MeshData` pochodzi z istniejącego `_gmsh_types.py`. Mapy powstają podczas ekstrakcji/rozszerzania, a nie z wyszukiwania najbliższych punktów. Istniejące `used_nodes`, `node_remap` i `magnetic_ordinals` z `_extract_frozen_magnetic_submesh` mają być źródłem trwałych map, nie zrekonstruowaną heurystyką. Producent bindingu należy do `crates/fullmag-plan/src/study_domains.rs`: konsumuje wynik mapowania, canonical `MeshIR`, nadane przez istniejący asset pipeline mesh ID/revision, transformację oraz sprawdzone `NativeFemMeshSpaceEvidence` i `FunctionSpaceDescriptor`. Brak natywnego dowodu przestrzeni oznacza brak resolved bindingu DOF, a nie zastąpienie go sygnaturą geometrii.
 
 **Test command:** `python3 -B -m pytest -p no:cacheprovider packages/fullmag-py/tests/test_shared_core_identity.py`; uruchomienie w kontenerze zgodnie ze wspólną procedurą. Dla nowego testu przed implementacją oczekiwany RED, po implementacji exit 0 i wszystkie przypadki PASS.
 
 - [ ] Napisać `test_permuted_core_requires_explicit_map`, `test_airbox_change_preserves_core_and_current` oraz przypadki dwóch bliskich, różnych węzłów, nieiniektywnej mapy, obróconej komórki i nieaktualnej transformacji. Porównanie rdzenia obejmuje bajty współrzędnych/connectivity i jawne permutacje, nie sam bounding box.
 - [ ] Uruchomić test: RED dla brakującego kontraktu/raportu map.
-- [ ] Wyodrębnić zamrożony mesh próbki raz; rozszerzać go istniejącą ścieżką meshing. Obecne kwantowanie współrzędnych 1e-12 m w merge nie jest dowodem tożsamości: nowa ścieżka wymaga dokładnych map i odmawia kolizji. Zapisać core_binding/map w build report; nie zmieniać pozostałych generatorów bez potrzeby.
+- [ ] Wyodrębnić zamrożony mesh próbki raz; rozszerzać go istniejącą ścieżką meshing. Obecne kwantowanie współrzędnych 1e-12 m w merge nie jest dowodem tożsamości: także bucket z jednym kandydatem może scalać różne współrzędne. Nowa ścieżka wymaga dokładnej zgodności interfejsu i jawnych map; odmawia niejednoznaczności/niezgodności zamiast snapować. Stary `FemMagneticSubmeshSignatureIR.digest` sortuje/kwantuje dane i nie może zastąpić bitowej tożsamości rdzenia ani `dof_layout_digest`. Zapisać core_binding/map w build report; nie zmieniać pozostałych generatorów bez potrzeby.
+- [ ] Powiązać nowy binding z `NativeFemMeshSpaceEvidence::validate_for_mesh`, canonical `MeshIR::topology_fingerprint_v6` oraz istniejącym `mesh_space_preparation.cpp::{collect_element_dofs,digest_space}`. Nie tworzyć drugiego scalar-space fingerprintu. `dof_layout_digest` ma obejmować zweryfikowany `space_fingerprint` i jawny `FunctionSpaceDescriptor` (H1, order 1, vector dimension 3, ordering), z mapą przy `NativeWithMapping`. W T3 dopisać do noty 0102 kanoniczny format kodowania digestów i wspólny golden vector Python/Rust; dopóki bajtowy format nie jest określony i sprawdzony, nie publikować bindingu.
 - [ ] GREEN wymaga dwóch różnych otoczeń z identycznym rdzeniem, dodatniej orientacji, zgodnych interfejsów i zachowania markerów. Test wykonuje realne Gmsh w kontenerze; fixture samego helpera nie zalicza budowy.
 - [ ] Commit `feat(mesh): preserve immutable magnetic core bindings`.
 
@@ -169,13 +178,13 @@ Testy Rust planera w zatwierdzonym CI: `cargo test -p fullmag-plan study_domains
 
 **Files:** właściciele T6; nowe `scripts/test_antenna_domain_field_binding.py` i testy modułu runnera.
 
-**Interfaces:** consumes `AntennaDomainFieldBindingIR`, source verified przez `study_inspection_integrity::load_saved_inspection`; produces `validate_antenna_domain_binding(field: &AntennaDomainFieldBindingIR, target: &SharedMagneticCoreBindingIR) -> Result<(), String>` w nowym `domain_binding.rs`. Nowe obliczenie H używa zatwierdzanego osobno dodatku retained-current H-only; nie tworzyć drugiego integratora.
+**Interfaces:** consumes `AntennaDomainFieldBindingIR`; inspection czyta zachowane dane przez `study_inspection_integrity::load_saved_inspection`, a konsument LLG przechodzi istniejący `antenna_field_solution::load_solved_antenna_drive_basis_projected` i jego kontrole kwalifikacji. Produces `validate_antenna_domain_binding(field: &AntennaDomainFieldBindingIR, target: &SharedMagneticCoreBindingIR) -> Result<(), String>` w nowym `domain_binding.rs`. Ten validator sprawdza zgodność domeny/nośnika po uwierzytelnieniu artefaktu; nie nadaje kwalifikacji na podstawie samych stringów. Nowe obliczenie H używa zatwierdzonego dodatku retained-current H-only; nie tworzyć drugiego integratora. Odczyt raw H275 działa, ale nie dowodzi nowego bindingu H→LLG.
 
 **Test command:** `python3 -B -m pytest -p no:cacheprovider scripts/test_antenna_domain_field_binding.py`; uruchomienie w kontenerze zgodnie ze wspólną procedurą. Dla nowego testu przed implementacją oczekiwany RED, po implementacji exit 0 i wszystkie przypadki PASS.
 
-- [ ] Dodać testy foreign accepted-state, raw-H-as-basis, Iref=0, zmiany samego I(t), zmiany targetu i zmiany σ. Liczniki transport/H muszą pokazywać: waveform nie przelicza obu; nowy ROI przelicza tylko jego H; zmiana przewodnika unieważnia J i zależne H.
+- [ ] Dodać testy podrobionych zgodnych stringów bindingu przy zmienionym payloadzie, niegotowego manifestu, foreign accepted-state, raw-H-as-basis, Iref=0, zmiany samego I(t), zmiany targetu i zmiany σ. Liczniki transport/H muszą pokazywać: waveform nie przelicza obu; nowy ROI przelicza tylko jego H; zmiana przewodnika unieważnia J i zależne H.
 - [ ] RED: nowy binding nie istnieje albo obecny globalny cache nie rozróżnia domen. Dla testów natywnych najpierw CI; nie kompilować ich lokalnie.
-- [ ] Zintegrować przygotowany H-only dopiero po kontroli zgodności jego manifestów z bieżącym HEAD, wspólnym canonical source loaderem i pełnym przepływem publicznym. Native wrapper zwraca `SurfaceRt0Snapshot` bez niepotrzebnego prywatnego typu; zachować profile/observer, budżety i zakazy niekwalifikowanego źródła.
+- [ ] Zintegrować H-only z nowym bindingiem po kontroli zgodności jego manifestów z bieżącym HEAD i pełnym przepływem publicznym. Zachować w canonical loaderze sprawdzenie content digest, payload hash, source/solution ID, carrier i status ready oraz odmowę niekwalifikowanego źródła. Istniejąca baza ma normalizację do 1 A i wire unit `A/m/A` (fizycznie 1/m); nie zmieniać tego wire tylko dla etykiety jednostki ani omijać kontroli przez zwykły odczyt inspection. Native wrapper zwraca `SurfaceRt0Snapshot` bez niepotrzebnego prywatnego typu; zachować profile/observer, budżety i zakazy niekwalifikowanego źródła.
 - [ ] Publikować H próbki i opcjonalne H ROI jako oddzielnie przypięte wyniki tego samego accepted J. Osobne zależności cache: source J; core H; ROI H; operator demag. Nie zamieniać direct-volume na surface operator bez jawnego provenance i dowodu zgodności.
 - [ ] GREEN: publiczny H-only z zachowanego zaakceptowanego J, zero nowego transportu i zero LLG dla inspection-only. Kwalifikowane fixture źródła sprawdza zero/sign/2×/superpozycję, waveform w podkrokach wszystkich wspieranych integratorów i DC Relax; raw GSG nadal ma blokadę. Nie odblokowywać realnego GSG LLG tym commitem.
 - [ ] Commit `feat(antenna): bind retained fields to explicit domains`.
@@ -250,3 +259,12 @@ Self-review 02.11.2026: sekcje projektu 1–6 → T1/T2; meshing 7 → T3/T4; re
 Do przeglądu przed wykonaniem: kompletność planu, proponowany opt-in wire i metoda wykonania. Rekomendowana metoda: **subagent-driven**, zadania kolejno po granicach kontraktów, z oddzielnym review każdego; bez równoległych edycji tych samych ownerów. Koszt błędu mapy meshu/normalizacji jest naukowy, dlatego niezależne review ma tu większą wartość niż dla zmian czysto wizualnych.
 
 Przygotowanie planu nie uruchamia Solve, migracji danych ani nowego buildu. Bieżące testy wcześniejszych poprawek UI mają własny receipt i nie są dowodem implementacji T1–T10.
+
+
+## Ponowny self-review — 06.11.2026
+
+Baza odczytu: `4c14ea4e5328629dbc7b1a7a5903514611a23eae` wraz z lokalnymi zmianami. Root wykonał checklistę skilla `writing-plans`; niezależne rozpoznanie dotyczyło wyłącznie istniejących map meshu i producentów DOF, nie zastąpiło self-review.
+
+Skorygowano cztery luki: zgodne trzy znaczniki wersji, ochronę przed zgubieniem katalogu przed typed read/migration, źródło trwałych map i dowód przestrzeni DOF oraz rozdzielenie odczytu inspection od kwalifikowanego loadera bazy. Pozostałe pięć Review Focus nadal ma nazwane przypadki w T3/T5/T6/T7/T8/T9. Pokrycie zatwierdzonego projektu, nazwy typów i kolejność zależności T1–T10 zachowano; brak implementacji katalogu lub nowego wire. Szczegółowy format nowych digestów jest obowiązkowym wynikiem T3, a nie już istniejącym kontraktem.
+
+Obecna kontrola dziewięciu punktów GSG i jej zamrożone pliki pozostają niezależne od planu. Żadne PASS w punktach referencyjnych nie zmienia FAIL zbieżności prądu (eta50/eta75 około 0,913 przy wymaganym <=0,8), nie kwalifikuje bazy ani nie odblokowuje LLG. Zatwierdzona geometria i współdzielony rdzeń pozostają celem; nowe formaty i ich implementacja oczekują przeglądu tego planu.

@@ -49,6 +49,8 @@ class CpwCase:
     voltages_v: dict[str, complex]
     loads_ohm: dict[str, complex]
     frequency_hz: float
+    output_return: str
+    floating_load: tuple[str, tuple[str, ...], complex] | None
 
 
 def _divide_axis(knots_nm, subdivisions, refined_range=None):
@@ -92,8 +94,10 @@ def _axes(signal_width_nm, half_length_nm, box_half_width_nm, refinement, axial_
 def make_case(
     cpw=2, refinement=0, half_length_nm=1000.0, box_half_width_nm=3000.0,
     yig_epsilon_r=14.7, frequency_hz=FREQUENCY_HZ, load_ohm=50.0,
-    axial_refinement=0,
+    axial_refinement=0, output_return="reference",
 ):
+    if output_return not in ("reference", "local-gsg"):
+        raise ValueError("Output return must be reference or local-gsg")
     if cpw not in (1, 2):
         raise ValueError("CPW geometry must be 1 or 2")
     if refinement not in (0, 1, 2) or axial_refinement not in (0, 1, 2):
@@ -138,11 +142,18 @@ def make_case(
             )
     voltages = {name: 0j for name in terminals if name != "signal_output"}
     voltages["signal_input"] = 1 + 0j
+    loads = {"signal_output": complex(load_ohm)}
+    floating_load = None
+    if output_return == "local-gsg":
+        returns = ("left_ground_output", "right_ground_output")
+        for terminal in returns:
+            del voltages[terminal]
+        floating_load = ("signal_output", returns, loads.pop("signal_output"))
     return CpwCase(
         cpw, refinement, axial_refinement, axes_m, points, tetrahedra, material_id,
         np.where(material_id == 1, SIGMA_COPPER, 0.0),
         np.array([1.0, 1.0, 14.7, yig_epsilon_r, 14.7])[material_id],
-        strips_m, terminals, voltages, {"signal_output": complex(load_ohm)}, frequency_hz,
+        strips_m, terminals, voltages, loads, frequency_hz, output_return, floating_load,
     )
 
 
@@ -201,6 +212,11 @@ def preflight(case):
         }
         for i, name in enumerate(MATERIAL_NAMES)
     }
+    floating_load = None
+    if case.floating_load is not None:
+        signal, returns, impedance = case.floating_load
+        floating_load = {"signal_terminal": signal, "return_terminals": list(returns),
+                         "impedance_ohm": _phasor(impedance)}
     return {
         "cpw": case.cpw,
         "refinement": case.refinement,
@@ -208,6 +224,8 @@ def preflight(case):
         "frequency_hz": case.frequency_hz,
         "phasor_convention": "peak, exp(+i omega t)",
         "boundary_model": "ECE terminal patches",
+        "output_return": case.output_return,
+        "floating_load": floating_load,
         "port_settings_origin": "declared reference assumptions; CST ports unavailable",
         "copper_strips_y_m": case.strips_m,
         "terminal_voltages_v": {name: _phasor(value) for name, value in case.voltages_v.items()},
@@ -310,12 +328,13 @@ def _solve(case, output, step_nm, model):
         case.relative_permittivity, case.frequency_hz,
     )
     assembled = perf_counter()
+    circuit = (case.terminals, case.voltages_v, case.loads_ohm)
     if model == "maxwell":
-        solution = system.solve_ece(case.terminals, case.voltages_v, case.loads_ohm)
+        solution = system.solve_ece(*circuit, floating_load=case.floating_load)
     else:
         from rf_darwin_reference import solve_darwin_ece
 
-        solution = solve_darwin_ece(system, case.terminals, case.voltages_v, case.loads_ohm)
+        solution = solve_darwin_ece(system, *circuit, floating_load=case.floating_load)
     solved = perf_counter()
     line = _observation_line(step_nm)
     line_cells = locate_points(case, line)
@@ -339,6 +358,21 @@ def _solve(case, output, step_nm, model):
     if model == "darwin":
         power_terms += solution.power_mix_w
     current_ref = currents["signal_input"]
+    load_residual = {name: float(abs(currents[name] + voltages[name]/impedance))
+                     for name, impedance in case.loads_ohm.items()}
+    floating_load_result = None
+    if case.floating_load is not None:
+        signal, returns, impedance = case.floating_load
+        load_voltage = voltages[signal] - voltages[returns[0]]
+        load_current = load_voltage / impedance
+        load_residual[signal] = float(abs(currents[signal] + load_current))
+        load_residual["tied_output_grounds"] = float(
+            abs(sum(currents[name] for name in returns) - load_current))
+        floating_load_result = {
+            "voltage_v": _phasor(load_voltage),
+            "signal_to_return_current_a": _phasor(load_current),
+            "absorbed_power_w": float(0.5 * (load_voltage * np.conj(load_current)).real),
+        }
     imbalance = abs(sum(currents.values()))
     reference_error_proxy = imbalance + solution.relative_residual*sum(map(abs, currents.values()))
     fields = {
@@ -395,10 +429,8 @@ def _solve(case, output, step_nm, model):
         "power_net_ece_input_w": float(input_power),
         "power_joule_w": float(solution.power_joule_w),
         "power_balance_residual_w": float(abs(input_power-power_terms)),
-        "load_law_residual_a": {
-            name: float(abs(currents[name] + voltages[name]/load))
-            for name, load in case.loads_ohm.items()
-        },
+        "load_law_residual_a": load_residual,
+        "floating_load_result": floating_load_result,
         "reference_current_a": _phasor(current_ref),
         "reference_current_error_proxy_a": float(reference_error_proxy),
         "normalized_basis_status": "provisional" if basis_provisional else "unresolved",
@@ -433,6 +465,8 @@ def main():
     parser.add_argument("--yig-epsilon-r", type=float, default=14.7)
     parser.add_argument("--frequency-hz", type=float, default=FREQUENCY_HZ)
     parser.add_argument("--load-ohm", type=complex, default=50)
+    parser.add_argument("--output-return", choices=("reference", "local-gsg"), default="reference",
+                        help="Connect the load to global reference or the tied output ground strips")
     parser.add_argument("--sample-step-nm", choices=(20, 5, 2.5), type=float, default=20)
     parser.add_argument("--solve", action="store_true", help="Execute the electromagnetic solve")
     parser.add_argument("--output", type=Path, help="New directory for the solve artifacts")
@@ -441,7 +475,8 @@ def main():
     if args.solve != (args.output is not None):
         parser.error("--solve and --output must be supplied together")
     case = make_case(args.cpw, args.refinement, args.half_length_nm, args.box_half_width_nm,
-                     args.yig_epsilon_r, args.frequency_hz, args.load_ohm, args.axial_refinement)
+                     args.yig_epsilon_r, args.frequency_hz, args.load_ohm, args.axial_refinement,
+                     args.output_return)
     if args.solve:
         _solve(case, args.output, args.sample_step_nm, args.model)
     else:

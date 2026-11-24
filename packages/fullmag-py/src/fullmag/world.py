@@ -4701,8 +4701,14 @@ class StudyStagesBuilder:
             for module in _state._current_modules
         )
         problem_before_action = _build_problem(
-            study_kind="time_evolution" if closed_loop else "antenna_field_solve"
+            study_kind=("field_only" if normalized_definition.retained_source_preparation is not None
+                        else "time_evolution" if closed_loop else "antenna_field_solve")
         )
+        if normalized_definition.retained_source_preparation is not None:
+            # The input-only source is needed while materializing this action's
+            # own snapshot, before its later execution transition is applied.
+            problem_before_action = replace(problem_before_action,
+                antenna_field_solve_stages=(*problem_before_action.antenna_field_solve_stages, normalized_definition))
         _state._antenna_field_solve_stages.append(normalized_definition)
         _state._declared_stages.append(
             CapturedStage(
@@ -4710,7 +4716,7 @@ class StudyStagesBuilder:
                 entrypoint_kind="flat_antenna_field_solve",
                 action={
                     "kind": "antenna_field_solve",
-                    "definition": normalized_definition.to_ir(),
+                    "definition": normalized_definition.to_ir(source_root=_mesh_source_root()),
                 },
                 stage_id=stage_id,
             )

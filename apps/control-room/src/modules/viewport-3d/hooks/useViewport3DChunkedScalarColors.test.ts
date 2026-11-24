@@ -1101,7 +1101,8 @@ describe("chunked scalar color build settling", () => {
     const source = readSource(sourceUrl);
     const compatibilityEffect = source.slice(
       source.indexOf("// Only displayed colors can be stale."),
-      source.indexOf('dispatchChunkedColorState({ type: "reset" });'),
+      source.indexOf('dispatchChunkedColorState({ type: "reset" });',
+        source.indexOf("// Only displayed colors can be stale.")),
     );
     expect(compatibilityEffect).toContain("!chunkedColorState.chunkedState ||");
   });

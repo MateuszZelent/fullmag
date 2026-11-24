@@ -1,4 +1,4 @@
-import type { JsonObject, SceneResource } from "@/kernel/api/apiTypes";
+import type { AuthoringTransactionResponse, JsonObject, SceneResource } from "@/kernel/api/apiTypes";
 
 function record(value: unknown): Record<string, unknown> | null {
   return value !== null && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : null;
@@ -71,4 +71,24 @@ export function antennaGeometryAcknowledgementError(
     }
   }
   return null;
+}
+
+/** Validate scene identity/revision before publication or semantic history. */
+export function committedAntennaGeometryScene(
+  response: AuthoringTransactionResponse,
+  previous: SceneResource,
+  objectId: string,
+  geometry: JsonObject,
+  circuitPatch?: JsonObject,
+): SceneResource {
+  const revision = response.scene_revision;
+  const scene = response.committed_scene;
+  if (!previous.scene?.id || !scene || scene.scene?.id !== previous.scene.id
+    || !Number.isSafeInteger(revision) || typeof previous.revision !== "number" || revision <= previous.revision
+    || scene.revision !== revision || scene.scene_revision !== undefined && scene.scene_revision !== revision) {
+    throw new Error("Geometry ACK omitted the current scene or did not advance its matching revision. Refetch before saving again.");
+  }
+  const error = antennaGeometryAcknowledgementError(scene, objectId, geometry, circuitPatch);
+  if (error) throw new Error(error);
+  return scene;
 }

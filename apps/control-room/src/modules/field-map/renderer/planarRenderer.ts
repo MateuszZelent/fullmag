@@ -27,6 +27,7 @@ export interface PlanarOverlayLayers {
     values: ArrayLike<number>;
     budget: number;
     lengthMode: string;
+    verticalExaggeration?: number;
     mask?: ArrayLike<number> | null;
     scale: number;
     /** Physical sample bounds [uMin, uMax, vMin, vMax]. */
@@ -160,6 +161,7 @@ export function drawPlanarOverlays(
       gridHeight: layers.gridHeight ?? layers.gridWidth,
       gridWidth: layers.gridWidth,
       lengthMode: field.lengthMode,
+      verticalExaggeration: field.verticalExaggeration,
       mask: field.mask,
       scale: field.scale,
       spacingPx: glyphSpacingForBudget(canvasWidth, canvasHeight, field.budget),

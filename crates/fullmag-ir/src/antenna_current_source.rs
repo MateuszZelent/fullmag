@@ -184,12 +184,12 @@ impl PreparedAntennaClosedLoopSourceIR {
         if self.stable_vertex_ids.is_empty() || self.stable_vertex_ids.len()>4*LIMIT
             || self.stable_vertex_ids.iter().any(|id| *id==0)
             || self.stable_vertex_ids.iter().copied().collect::<std::collections::BTreeSet<_>>().len()!=self.stable_vertex_ids.len()
-            || self.material_parts.len()!=4 || self.terminal_observations.len()!=4
+            || !matches!((self.material_parts.len(), self.terminal_observations.len()), (4, 4) | (5, 6))
             || self.material_parts.iter().any(|part| !text(&part.part_id) || part.element_ordinals.is_empty() || part.element_ordinals.len()>LIMIT
                 || part.element_ordinals.windows(2).any(|pair| pair[0]>=pair[1]))
             || self.terminal_observations.iter().any(|obs| !text(&obs.id) || !text(&obs.part_id) || !matches!(obs.selector.as_str(), "local_u_min"|"local_u_max")
                 || obs.normal_convention!="outward_from_part" || obs.faces.is_empty() || obs.faces.len()>4*LIMIT) {
-            errors.push(format!("{path} requires bounded unique carrier, four ordered material parts and four internal observations"));
+            errors.push(format!("{path} requires bounded unique carrier, microstrip 4/4 or GSG 5/6 material parts/internal observations"));
         }
         match &self.closure {
             crate::ConservativeCurrentClosureIR::ClosedGeometry {operator_version, revision, digest, source_cuts} if operator_version=="fem_closed_current_geometry.v2"

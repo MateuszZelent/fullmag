@@ -45,6 +45,12 @@ docker-dev-reconcile-completed-cache registry volume recovery_id apply="false" e
 
 # Start or reconcile the selected two-service group; reuse matching sources and caches.
 # The source parameter selects the main checkout or a registered worktree.
+docker-dev-prepare-readonly-result-archive source_root review review_sha256 preview="true":
+    @{{storage_python}} "{{repo_root}}/scripts/docker_readonly_result_archive.py" --source-root {{quote(source_root)}} --review {{quote(review)}} --review-sha256 {{quote(review_sha256)}}{{if preview == "true" { " --preview" } else if preview == "false" { "" } else { error("preview must be true or false") } }}
+
+docker-dev-recreate-readonly-results attempt config_sha256 source_root archive_request archive_request_sha256 port="3197":
+    @{{storage_python}} "{{repo_root}}/scripts/docker_dev.py" --repo-root "{{repo_root}}" recreate-volume --attempt {{quote(attempt)}} --config-sha256 {{quote(config_sha256)}} --source-root {{quote(source_root)}} --port {{quote(port)}} --readonly-result-archive-request {{quote(archive_request)}} --readonly-result-archive-request-sha256 {{quote(archive_request_sha256)}}
+
 docker-dev source_root="" port="" script="" gpu_access="auto" native_contract="" network_subnet="":
     @{{storage_python}} "{{repo_root}}/scripts/docker_dev.py" --repo-root "{{repo_root}}" up {{if port == "" { "" } else { "--port " + quote(port) } }} --gpu-access {{quote(gpu_access)}} {{if source_root == "" { "" } else { "--source-root " + quote(source_root) } }} {{if script == "" { "" } else { "--script " + quote(script) } }} {{if native_contract == "" { "" } else { "--native-contract " + quote(native_contract) } }} {{if network_subnet == "" { "" } else { "--network-subnet " + quote(network_subnet) } }}
 
@@ -67,8 +73,51 @@ docker-dev-stop-preowner-probe attempt resume_attempt config_sha256 source_root 
     @{{storage_python}} "{{repo_root}}/scripts/docker_dev.py" --repo-root "{{repo_root}}" stop-preowner-probe-volume --attempt {{quote(attempt)}} --resume-attempt {{quote(resume_attempt)}} --config-sha256 {{quote(config_sha256)}} --source-root {{quote(source_root)}} --image-id {{quote(image_id)}} --port {{quote(port)}}{{if apply == "true" { " --apply --expected-plan-sha256 " + quote(expected_plan_sha256) } else if apply == "false" { "" } else { error("apply must be true or false") } }}
 
 # Stop only a pinned supervisor whose failed admission already reaped the API.
-docker-dev-stop-failed source_root container_id image_id process_receipt_sha256 terminal_only="false":
-    @{{storage_python}} "{{repo_root}}/scripts/docker_volume_stop_failed.py" --source-root {{quote(source_root)}} --container-id {{quote(container_id)}} --image-id {{quote(image_id)}} --process-receipt-sha256 {{quote(process_receipt_sha256)}}{{if terminal_only == "true" { " --terminal-only" } else if terminal_only == "false" { "" } else { error("terminal_only must be true or false") } }}
+docker-dev-stop-failed source_root container_id image_id process_receipt_sha256 terminal_only="false" preservation_profile="v1":
+    @{{storage_python}} "{{repo_root}}/scripts/docker_volume_stop_failed.py" --source-root {{quote(source_root)}} --container-id {{quote(container_id)}} --image-id {{quote(image_id)}} --process-receipt-sha256 {{quote(process_receipt_sha256)}}{{if terminal_only == "true" { " --terminal-only" } else if terminal_only == "false" { "" } else { error("terminal_only must be true or false") } }}{{if preservation_profile == "v1" { "" } else if preservation_profile == "retained-scientific-preservation.v2" { " --preservation-profile retained-scientific-preservation.v2" } else { error("unknown preservation profile") } }}
+
+# Preserve the exact old backend writable layer in the group's control volume.
+docker-dev-succeeded-namespace-layer source_root image_id request request_sha256:
+    @{{storage_python}} "{{repo_root}}/scripts/docker_volume_succeeded_namespace_recovery.py" --source-root {{quote(source_root)}} --image-id {{quote(image_id)}} --request {{quote(request)}} --request-sha256 {{quote(request_sha256)}} --layer-snapshot
+
+# Retire one kernel-fenced old namespace after the qualified candidate's native preflight.
+docker-dev-succeeded-namespace-retire source_root image_id request request_sha256:
+    @{{storage_python}} "{{repo_root}}/scripts/docker_volume_succeeded_namespace_recovery.py" --source-root {{quote(source_root)}} --image-id {{quote(image_id)}} --request {{quote(request)}} --request-sha256 {{quote(request_sha256)}} --retire
+
+# Prepare a pinned succeeded-worker recovery snapshot without stopping or running work.
+docker-dev-succeeded-namespace-snapshot source_root image_id seed seed_sha256:
+    @{{storage_python}} "{{repo_root}}/scripts/docker_volume_succeeded_namespace_recovery.py" --source-root {{quote(source_root)}} --image-id {{quote(image_id)}} --request {{quote(seed)}} --request-sha256 {{quote(seed_sha256)}} --snapshot
+
+# Abandon a diagnostic-only guest before an explicitly pinned fresh-state archive.
+docker-dev-abandon-diagnostic source_root image_id request request_sha256 apply="false":
+    @{{storage_python}} "{{repo_root}}/scripts/docker_volume_succeeded_guest_abandon.py" --source-root {{quote(source_root)}} --image-id {{quote(image_id)}} --request {{quote(request)}} --request-sha256 {{quote(request_sha256)}}{{if apply == "true" { " --apply" } else if apply == "false" { "" } else { error("apply must be true or false") } }}
+
+# Observe the exact already removed namespace and finalize only its original helper.
+docker-dev-succeeded-namespace-finish-failed-recreate source_root image_id request request_sha256 apply="false":
+    @{{storage_python}} "{{repo_root}}/scripts/docker_volume_succeeded_namespace_recovery.py" --source-root {{quote(source_root)}} --image-id {{quote(image_id)}} --request {{quote(request)}} --request-sha256 {{quote(request_sha256)}} --finish-failed-recreate{{if apply == "true" { " --apply" } else if apply == "false" { "" } else { error("apply must be true or false") } }}
+
+docker-dev-succeeded-namespace-finish-retirement source_root image_id request request_sha256 apply="false":
+    @{{storage_python}} "{{repo_root}}/scripts/docker_volume_succeeded_namespace_recovery.py" --source-root {{quote(source_root)}} --image-id {{quote(image_id)}} --request {{quote(request)}} --request-sha256 {{quote(request_sha256)}} --finish-retirement{{if apply == "true" { " --apply" } else if apply == "false" { "" } else { error("apply must be true or false") } }}
+
+# Finish only the exact partially completed stop through its retained original helper.
+docker-dev-succeeded-namespace-finish-stop source_root image_id request request_sha256 apply="false":
+    @{{storage_python}} "{{repo_root}}/scripts/docker_volume_succeeded_namespace_recovery.py" --source-root {{quote(source_root)}} --image-id {{quote(image_id)}} --request {{quote(request)}} --request-sha256 {{quote(request_sha256)}} --finish-stop{{if apply == "true" { " --apply" } else if apply == "false" { "" } else { error("apply must be true or false") } }}
+
+# Managed succeeded namespace recreate; never invokes Solve.
+docker-dev-succeeded-namespace-recreate source_root image_id request request_sha256:
+    @{{storage_python}} "{{repo_root}}/scripts/docker_volume_succeeded_namespace_recovery.py" --source-root {{quote(source_root)}} --image-id {{quote(image_id)}} --request {{quote(request)}} --request-sha256 {{quote(request_sha256)}} --recreate
+
+# Managed succeeded namespace native; never invokes Solve.
+docker-dev-succeeded-namespace-native source_root image_id request request_sha256:
+    @{{storage_python}} "{{repo_root}}/scripts/docker_volume_succeeded_namespace_recovery.py" --source-root {{quote(source_root)}} --image-id {{quote(image_id)}} --request {{quote(request)}} --request-sha256 {{quote(request_sha256)}} --native
+
+# Managed succeeded namespace resume; never invokes Solve.
+docker-dev-succeeded-namespace-resume source_root image_id request request_sha256:
+    @{{storage_python}} "{{repo_root}}/scripts/docker_volume_succeeded_namespace_recovery.py" --source-root {{quote(source_root)}} --image-id {{quote(image_id)}} --request {{quote(request)}} --request-sha256 {{quote(request_sha256)}} --resume
+
+# Preview/apply only the separately pinned succeeded-worker native-process stop.
+docker-dev-succeeded-namespace-stop source_root image_id request request_sha256 apply="false":
+    @{{storage_python}} "{{repo_root}}/scripts/docker_volume_succeeded_namespace_recovery.py" --source-root {{quote(source_root)}} --image-id {{quote(image_id)}} --request {{quote(request)}} --request-sha256 {{quote(request_sha256)}}{{if apply == "true" { " --apply" } else if apply == "false" { "" } else { error("apply must be true or false") } }}
 
 # Explicit preview by default; --apply requires the reviewed plan SHA and resume additionally its intent SHA.
 docker-dev-stop-prepared-unclaimed source_root container_id image_id process_receipt_sha256 activation_attempt target target_sha256 apply="false" expected_plan_sha256="" continue_intent_sha256="":
@@ -78,6 +127,10 @@ docker-dev-stop-prepared-unclaimed source_root container_id image_id process_rec
 # Preview is read-only; apply preserves all run data and never repeats Solve.
 docker-dev-cancel-failed-no-spawn source_root container_id image_id process_receipt_sha256 request request_sha256 apply="false" reconcile_attempt="" failed_receipt_sha256="":
     @{{storage_python}} "{{repo_root}}/scripts/docker_volume_no_spawn_cancellation.py" --source-root {{quote(source_root)}} --backend-container-id {{quote(container_id)}} --image-id {{quote(image_id)}} --process-receipt-sha256 {{quote(process_receipt_sha256)}} --request {{quote(request)}} --request-sha256 {{quote(request_sha256)}}{{if apply == "true" { " --apply" } else if apply == "false" { "" } else { error("apply must be true or false") } }}{{if reconcile_attempt == "" { if failed_receipt_sha256 == "" { "" } else { error("both loader reconciliation pins are required") } } else { if failed_receipt_sha256 == "" { error("both loader reconciliation pins are required") } else { " --reconcile-loader-failure " + quote(reconcile_attempt) + " --failed-receipt-sha256 " + quote(failed_receipt_sha256) } } }}
+
+# Same native operator with its request read from the selected control volume.
+docker-dev-cancel-failed-no-spawn-control source_root container_id image_id process_receipt_sha256 request_relative request_sha256 apply="false":
+    @{{storage_python}} "{{repo_root}}/scripts/docker_volume_no_spawn_cancellation.py" --source-root {{quote(source_root)}} --backend-container-id {{quote(container_id)}} --image-id {{quote(image_id)}} --process-receipt-sha256 {{quote(process_receipt_sha256)}} --control-request-relative-path {{quote(request_relative)}} --request-sha256 {{quote(request_sha256)}}{{if apply == "true" { " --apply" } else if apply == "false" { "" } else { error("apply must be true or false") } }}
 
 # Release one unknown activation whose recorded HTTP 500 precedes any API mutation,
 # after the backend stopped gracefully with an empty accepted-run store. Never retries the script.
@@ -107,8 +160,8 @@ docker-dev-offline-check source_root module:
     @{{storage_python}} "{{repo_root}}/scripts/docker_volume_checks.py" --source-root {{quote(source_root)}} --offline --modules {{quote(module)}}
 
 # Build a repair candidate in the existing Failed backend; never restart or promote it.
-docker-dev-recovery-build source_root backend_container_id image_id process_receipt_sha256 owner_sha256 superseded_candidate_basename="" superseded_marker_sha256="" superseded_receipt_sha256="" superseded_make_attempt_sha256="" resume_attempt="" resume_terminal_sha256="" diagnostic_api_only="false" claimed_build_pin="" claimed_build_pin_sha256="":
-    @{{storage_python}} "{{repo_root}}/scripts/docker_dev_recovery_build.py" --source-root {{quote(source_root)}} --backend-container-id {{quote(backend_container_id)}} --image-id {{quote(image_id)}} --process-receipt-sha256 {{quote(process_receipt_sha256)}} --owner-sha256 {{quote(owner_sha256)}}{{if (superseded_candidate_basename + superseded_marker_sha256 + superseded_receipt_sha256 + superseded_make_attempt_sha256) == "" { "" } else { " --superseded-candidate-basename " + quote(superseded_candidate_basename) + " --superseded-marker-sha256 " + quote(superseded_marker_sha256) + " --superseded-receipt-sha256 " + quote(superseded_receipt_sha256) + " --superseded-make-attempt-sha256 " + quote(superseded_make_attempt_sha256) } }}{{if (resume_attempt + resume_terminal_sha256) == "" { "" } else if resume_attempt == "" { error("resume authority requires both pins") } else if resume_terminal_sha256 == "" { error("resume authority requires both pins") } else { " --resume-attempt " + quote(resume_attempt) + " --resume-terminal-sha256 " + quote(resume_terminal_sha256) } }}{{if diagnostic_api_only == "true" { " --diagnostic-api-only" } else if diagnostic_api_only == "false" { "" } else { error("diagnostic_api_only must be true or false") } }}{{if (claimed_build_pin + claimed_build_pin_sha256) == "" { "" } else if claimed_build_pin == "" { error("claimed build requires both pin arguments") } else if claimed_build_pin_sha256 == "" { error("claimed build requires both pin arguments") } else { " --claimed-build-pin " + quote(claimed_build_pin) + " --claimed-build-pin-sha256 " + quote(claimed_build_pin_sha256) } }}
+docker-dev-recovery-build source_root backend_container_id image_id process_receipt_sha256 owner_sha256 superseded_candidate_basename="" superseded_marker_sha256="" superseded_receipt_sha256="" superseded_make_attempt_sha256="" resume_attempt="" resume_terminal_sha256="" diagnostic_api_only="false" claimed_build_pin="" claimed_build_pin_sha256="" succeeded_worker_proof="" succeeded_worker_proof_sha256="":
+    @{{storage_python}} "{{repo_root}}/scripts/docker_dev_recovery_build.py" --source-root {{quote(source_root)}} --backend-container-id {{quote(backend_container_id)}} --image-id {{quote(image_id)}} --process-receipt-sha256 {{quote(process_receipt_sha256)}} --owner-sha256 {{quote(owner_sha256)}}{{if (superseded_candidate_basename + superseded_marker_sha256 + superseded_receipt_sha256 + superseded_make_attempt_sha256) == "" { "" } else { " --superseded-candidate-basename " + quote(superseded_candidate_basename) + " --superseded-marker-sha256 " + quote(superseded_marker_sha256) + " --superseded-receipt-sha256 " + quote(superseded_receipt_sha256) + " --superseded-make-attempt-sha256 " + quote(superseded_make_attempt_sha256) } }}{{if (resume_attempt + resume_terminal_sha256) == "" { "" } else if resume_attempt == "" { error("resume authority requires both pins") } else if resume_terminal_sha256 == "" { error("resume authority requires both pins") } else { " --resume-attempt " + quote(resume_attempt) + " --resume-terminal-sha256 " + quote(resume_terminal_sha256) } }}{{if diagnostic_api_only == "true" { " --diagnostic-api-only" } else if diagnostic_api_only == "false" { "" } else { error("diagnostic_api_only must be true or false") } }}{{if (claimed_build_pin + claimed_build_pin_sha256) == "" { "" } else if claimed_build_pin == "" { error("claimed build requires both pin arguments") } else if claimed_build_pin_sha256 == "" { error("claimed build requires both pin arguments") } else { " --claimed-build-pin " + quote(claimed_build_pin) + " --claimed-build-pin-sha256 " + quote(claimed_build_pin_sha256) } }}{{if (claimed_build_pin + claimed_build_pin_sha256) == "" { "" } else if (succeeded_worker_proof + succeeded_worker_proof_sha256) == "" { "" } else { error("claimed and succeeded build authorities cannot be combined") } }}{{if (succeeded_worker_proof + succeeded_worker_proof_sha256) == "" { "" } else if succeeded_worker_proof == "" { error("succeeded proof requires both pins") } else if succeeded_worker_proof_sha256 == "" { error("succeeded proof requires both pins") } else { " --succeeded-worker-proof " + quote(succeeded_worker_proof) + " --succeeded-worker-proof-sha256 " + quote(succeeded_worker_proof_sha256) } }}
 
 # Inspect one ready candidate through a private canonical package/provenance view.
 docker-dev-candidate-history source_root backend_container_id image_id build_attempt candidate_receipt_sha256:
@@ -142,8 +195,12 @@ docker-dev-build-for-recovery attempt config_sha256 source_root request request_
     @{{storage_python}} "{{repo_root}}/scripts/docker_dev.py" --repo-root "{{repo_root}}" resume-volume --attempt {{quote(attempt)}} --config-sha256 {{quote(config_sha256)}} --source-root {{quote(source_root)}} --port {{quote(port)}} --restart-backend --build-for-recovery {{quote(request)}} --build-for-recovery-sha256 {{quote(request_sha256)}}
 
 # Reconcile only the existing unknown iteration; no backend/frontend lifecycle.
-docker-dev-reconcile-iteration request request_sha256 source_root port="3197" preview="false":
-    @{{storage_python}} "{{repo_root}}/scripts/docker_volume_reconcile.py" --request {{quote(request)}} --request-sha256 {{quote(request_sha256)}} --source-root {{quote(source_root)}} --port {{quote(port)}}{{if preview == "true" { " --preview" } else if preview == "false" { "" } else { error("preview must be true or false") } }}
+docker-dev-reconcile-iteration request request_sha256 source_root port="3197" preview="false" preview_sha256="":
+    @{{storage_python}} "{{repo_root}}/scripts/docker_volume_reconcile.py" --request {{quote(request)}} --request-sha256 {{quote(request_sha256)}} --source-root {{quote(source_root)}} --port {{quote(port)}}{{if preview == "true" { " --preview" } else if preview == "false" { "" } else { error("preview must be true or false") } }}{{if preview_sha256 == "" { "" } else { " --preview-sha256 " + quote(preview_sha256) } }}
+
+# Preview or release one orphan control lease without starting either service.
+docker-dev-reconcile-offline attempt config_sha256 source_root operation_attempt port="3197" stopped_ready_owner="false" apply="false" expected_plan_sha256="":
+    @{{storage_python}} "{{repo_root}}/scripts/docker_dev.py" --repo-root "{{repo_root}}" reconcile-offline-volume --source-root {{quote(source_root)}} --attempt {{quote(attempt)}} --config-sha256 {{quote(config_sha256)}} --operation-attempt {{quote(operation_attempt)}} --port {{quote(port)}}{{if stopped_ready_owner == "true" { " --stopped-ready-owner" } else if stopped_ready_owner == "false" { "" } else { error("stopped_ready_owner must be true or false") } }}{{if apply == "true" { if expected_plan_sha256 == "" { error("apply requires expected_plan_sha256") } else { " --apply --expected-plan-sha256 " + quote(expected_plan_sha256) } } else if apply == "false" { if expected_plan_sha256 == "" { "" } else { error("preview cannot include expected_plan_sha256") } } else { error("apply must be true or false") } }}
 
 # Close only an orphaned pre-owner source-verification lease; preserve every log and verified receipt.
 docker-dev-reconcile-interrupted-verification source_root attempt receipt_sha256 active_sha256 development_attempt development_terminal_sha256 compose_sha256 engine_id boot_id apply="false" expected_plan_sha256="":
@@ -156,6 +213,10 @@ docker-dev-reconcile-development request request_sha256 source_root apply="false
 # Failure-only recovery for an initial Compose rejection before either service exists.
 docker-dev-reconcile-network-failure source_root attempt receipt_sha256 compose_sha256 engine_id apply="false" recover_absent_helper="false":
     @{{storage_python}} "{{repo_root}}/scripts/docker_volume_network_failure_reconcile.py" --source-root {{quote(source_root)}} --attempt {{quote(attempt)}} --receipt-sha256 {{quote(receipt_sha256)}} --compose-sha256 {{quote(compose_sha256)}} --engine-id {{quote(engine_id)}}{{if apply == "true" { " --apply" } else if apply == "false" { "" } else { error("apply must be true or false") } }}{{if recover_absent_helper == "true" { " --recover-absent-helper" } else if recover_absent_helper == "false" { "" } else { error("recover_absent_helper must be true or false") } }}
+
+# Confirm only the pinned pre-daemon resume refusal; preview is read-only.
+docker-dev-reconcile-resume-preflight request request_sha256 source_root apply="false":
+    @{{storage_python}} "{{repo_root}}/scripts/docker_volume_resume_preflight_recovery.py" --request {{quote(request)}} --request-sha256 {{quote(request_sha256)}} --source-root {{quote(source_root)}}{{if apply == "true" { " --apply" } else if apply == "false" { "" } else { error("apply must be true or false") } }}
 
 # Confirm one exact post-reboot resume failure; never start services or change native ownership.
 docker-dev-reconcile-resume request request_sha256 source_root apply="false":
@@ -220,6 +281,22 @@ docker-dev-stop-startup-diagnostic source_root image_id request request_sha256 a
 docker-dev-stop-diagnostic attempt config_sha256 source_root port="3197" resume_attempt="" preview="true":
     @{{storage_python}} "{{repo_root}}/scripts/docker_dev.py" --repo-root "{{repo_root}}" stop-diagnostic-volume --attempt {{quote(attempt)}} --config-sha256 {{quote(config_sha256)}} --source-root {{quote(source_root)}} --port {{quote(port)}}{{if resume_attempt == "" { "" } else { " --resume-attempt " + quote(resume_attempt) } }}{{if preview == "true" { " --preview" } else if preview == "false" { "" } else { error("preview must be true or false") } }}
 
+# Preview/apply one drained-group candidate bootstrap without promoting or serving it.
+docker-dev-ledger-bootstrap attempt config_sha256 source_root image_id port="3203" apply="false" allow_prepared_session="false":
+    @{{storage_python}} "{{repo_root}}/scripts/docker_group_ledger_bootstrap_host.py" --repo-root "{{repo_root}}" --attempt {{quote(attempt)}} --config-sha256 {{quote(config_sha256)}} --source-root {{quote(source_root)}} --image-id {{quote(image_id)}} --port {{quote(port)}}{{if apply == "true" { " --apply" } else if apply == "false" { "" } else { error("apply must be true or false") } }}{{if allow_prepared_session == "true" { " --allow-prepared-session" } else if allow_prepared_session == "false" { "" } else { error("allow_prepared_session must be true or false") } }}
+
+# Inspect or transfer a pinned stopped group's native-validated ledger.
+docker-dev-ledger-relocate bootstrap_attempt bootstrap_sha256 source_root image_id mode="inspect" request="" request_sha256="":
+    @{{storage_python}} "{{repo_root}}/scripts/docker_group_ledger_relocation_host.py" --repo-root "{{repo_root}}" --source-root {{quote(source_root)}} --bootstrap-attempt {{quote(bootstrap_attempt)}} --bootstrap-sha256 {{quote(bootstrap_sha256)}} --image-id {{quote(image_id)}} --mode {{if mode == "inspect" { quote(mode) } else if mode == "transfer" { quote(mode) } else { error("mode must be inspect or transfer") } }}{{if request == "" { if request_sha256 == "" { "" } else { error("request requires both pins") } } else if request_sha256 == "" { error("request requires both pins") } else { " --request " + quote(request) + " --request-sha256 " + quote(request_sha256) } }}
+
+# Publish the verified relocated candidate; API/runtime remain stopped.
+docker-dev-ledger-promote bootstrap_attempt bootstrap_sha256 source_root image_id relocation_receipt relocation_receipt_sha256 apply="false":
+    @{{storage_python}} "{{repo_root}}/scripts/docker_group_ledger_promote_host.py" --repo-root "{{repo_root}}" --source-root {{quote(source_root)}} --bootstrap-attempt {{quote(bootstrap_attempt)}} --bootstrap-sha256 {{quote(bootstrap_sha256)}} --image-id {{quote(image_id)}} --relocation-receipt {{quote(relocation_receipt)}} --relocation-receipt-sha256 {{quote(relocation_receipt_sha256)}}{{if apply == "true" { " --apply" } else if apply == "false" { "" } else { error("apply must be true or false") } }}
+
+# Finish the verified group migration and reuse the canonical retained storage start.
+docker-dev-ledger-finish promotion_attempt promotion_sha256 source_root image_id apply="false" completed_finish="" completed_finish_sha256="" failed_development="" failed_development_sha256="":
+    @{{storage_python}} "{{repo_root}}/scripts/docker_group_ledger_finish_host.py" --repo-root "{{repo_root}}" --source-root {{quote(source_root)}} --promotion-attempt {{quote(promotion_attempt)}} --promotion-sha256 {{quote(promotion_sha256)}} --image-id {{quote(image_id)}} --completed-finish {{quote(completed_finish)}} --completed-finish-sha256 {{quote(completed_finish_sha256)}} --failed-development {{quote(failed_development)}} --failed-development-sha256 {{quote(failed_development_sha256)}}{{if apply == "true" { " --apply" } else if apply == "false" { "" } else { error("apply must be true or false") } }}
+
 # Drain an idle backend without starting it again; retain all data and cache.
 docker-dev-stop-idle attempt config_sha256 source_root port="3197" allow_prepared_session="false":
     @{{storage_python}} "{{repo_root}}/scripts/docker_dev.py" --repo-root "{{repo_root}}" restart-idle-volume --attempt {{quote(attempt)}} --config-sha256 {{quote(config_sha256)}} --source-root {{quote(source_root)}} --port {{quote(port)}} --stop-only{{if allow_prepared_session == "true" { " --allow-prepared-session" } else if allow_prepared_session == "false" { "" } else { error("allow_prepared_session must be true or false") } }}
@@ -253,8 +330,11 @@ docker-dev-restart-saved-authoring attempt config_sha256 source_root checkpoint 
     @{{storage_python}} "{{repo_root}}/scripts/docker_dev.py" --repo-root "{{repo_root}}" restart-idle-volume --attempt {{quote(attempt)}} --config-sha256 {{quote(config_sha256)}} --source-root {{quote(source_root)}} --port {{quote(port)}} --saved-authoring-checkpoint {{quote(checkpoint)}} --saved-authoring-checkpoint-sha256 {{quote(checkpoint_sha256)}}
 
 # Replace exact retained volume DEV services, preserving caches and Windows state.
-docker-dev-recreate-volume attempt config_sha256 source_root port="3197" fresh_state="false" recovery_authorization="" completed_recreation_attempt="" completed_recreation_sha256="" drained_successor_proof="" drained_successor_proof_sha256="" terminal_observation_proof="" terminal_observation_proof_sha256="" prepared_quarantine_sha256="":
-    @{{storage_python}} "{{repo_root}}/scripts/docker_dev.py" --repo-root "{{repo_root}}" recreate-volume --attempt {{quote(attempt)}} --config-sha256 {{quote(config_sha256)}} --source-root {{quote(source_root)}} --port {{quote(port)}}{{if recovery_authorization == "" { "" } else { " --recovery-authorization " + quote(recovery_authorization) } }}{{if fresh_state == "true" { " --fresh-state" } else if fresh_state == "false" { "" } else { error("fresh_state must be true or false") } }}{{if completed_recreation_attempt == "" { if completed_recreation_sha256 == "" { "" } else { error("completed recreation requires both attempt and SHA-256") } } else if completed_recreation_sha256 == "" { error("completed recreation requires both attempt and SHA-256") } else { " --completed-recreation-attempt " + quote(completed_recreation_attempt) + " --completed-recreation-sha256 " + quote(completed_recreation_sha256) } }}{{if drained_successor_proof == "" { if drained_successor_proof_sha256 == "" { "" } else { error("drained successor requires both proof and SHA-256") } } else if drained_successor_proof_sha256 == "" { error("drained successor requires both proof and SHA-256") } else { " --drained-successor-proof " + quote(drained_successor_proof) + " --drained-successor-proof-sha256 " + quote(drained_successor_proof_sha256) } }}{{if terminal_observation_proof == "" { if terminal_observation_proof_sha256 == "" { "" } else { error("terminal observation requires both proof and SHA-256") } } else if terminal_observation_proof_sha256 == "" { error("terminal observation requires both proof and SHA-256") } else { " --terminal-observation-proof " + quote(terminal_observation_proof) + " --terminal-observation-proof-sha256 " + quote(terminal_observation_proof_sha256) } }}{{if prepared_quarantine_sha256 == "" { "" } else if fresh_state == "true" { " --prepared-quarantine-sha256 " + quote(prepared_quarantine_sha256) } else { error("prepared quarantine requires fresh_state=true") } }}
+# Explicit v6 successor authority; the launcher validates the published binding again under its lease.
+docker-dev-recreate-pending-recovery attempt config_sha256 source_root successor successor_sha256 port="3197":
+    @{{storage_python}} "{{repo_root}}/scripts/docker_dev.py" --repo-root "{{repo_root}}" recreate-volume --attempt {{quote(attempt)}} --config-sha256 {{quote(config_sha256)}} --source-root {{quote(source_root)}} --port {{quote(port)}} --pending-recovery-successor {{quote(successor)}} --pending-recovery-successor-sha256 {{quote(successor_sha256)}}
+docker-dev-recreate-volume attempt config_sha256 source_root port="3197" fresh_state="false" recovery_authorization="" completed_recreation_attempt="" completed_recreation_sha256="" drained_successor_proof="" drained_successor_proof_sha256="" terminal_observation_proof="" terminal_observation_proof_sha256="" prepared_quarantine_sha256="" abandoned_diagnostic_proof="" abandoned_diagnostic_proof_sha256="":
+    @{{storage_python}} "{{repo_root}}/scripts/docker_dev.py" --repo-root "{{repo_root}}" recreate-volume --attempt {{quote(attempt)}} --config-sha256 {{quote(config_sha256)}} --source-root {{quote(source_root)}} --port {{quote(port)}}{{if recovery_authorization == "" { "" } else { " --recovery-authorization " + quote(recovery_authorization) } }}{{if fresh_state == "true" { " --fresh-state" } else if fresh_state == "false" { "" } else { error("fresh_state must be true or false") } }}{{if completed_recreation_attempt == "" { if completed_recreation_sha256 == "" { "" } else { error("completed recreation requires both attempt and SHA-256") } } else if completed_recreation_sha256 == "" { error("completed recreation requires both attempt and SHA-256") } else { " --completed-recreation-attempt " + quote(completed_recreation_attempt) + " --completed-recreation-sha256 " + quote(completed_recreation_sha256) } }}{{if drained_successor_proof == "" { if drained_successor_proof_sha256 == "" { "" } else { error("drained successor requires both proof and SHA-256") } } else if drained_successor_proof_sha256 == "" { error("drained successor requires both proof and SHA-256") } else { " --drained-successor-proof " + quote(drained_successor_proof) + " --drained-successor-proof-sha256 " + quote(drained_successor_proof_sha256) } }}{{if terminal_observation_proof == "" { if terminal_observation_proof_sha256 == "" { "" } else { error("terminal observation requires both proof and SHA-256") } } else if terminal_observation_proof_sha256 == "" { error("terminal observation requires both proof and SHA-256") } else { " --terminal-observation-proof " + quote(terminal_observation_proof) + " --terminal-observation-proof-sha256 " + quote(terminal_observation_proof_sha256) } }}{{if prepared_quarantine_sha256 == "" { "" } else if fresh_state == "true" { " --prepared-quarantine-sha256 " + quote(prepared_quarantine_sha256) } else { error("prepared quarantine requires fresh_state=true") } }}{{if prepared_quarantine_sha256 == "" { "" } else if (abandoned_diagnostic_proof + abandoned_diagnostic_proof_sha256) == "" { "" } else { error("prepared quarantine and abandoned diagnostic authorities cannot be combined") } }}{{if abandoned_diagnostic_proof == "" { if abandoned_diagnostic_proof_sha256 == "" { "" } else { error("abandoned diagnostic requires both proof and SHA-256") } } else if abandoned_diagnostic_proof_sha256 == "" { error("abandoned diagnostic requires both proof and SHA-256") } else { " --abandoned-diagnostic-proof " + quote(abandoned_diagnostic_proof) + " --abandoned-diagnostic-proof-sha256 " + quote(abandoned_diagnostic_proof_sha256) } }}
 
 # Archive the exact failed master incarnation after verified Linux host-state loss.
 docker-dev-recreate-lost-state attempt config_sha256 source_root stop_pin port:
@@ -2390,6 +2470,10 @@ verify-fem-oersted-oet0-tsan-cpu-contract:
 verify-fem-oersted-oef1-cpu-contract:
     docker compose build fem-cpu
     docker compose run --rm --no-deps fem-cpu ./scripts/run_fem_cpu_only_contract.sh oersted-oef1
+
+# Reuse the audited OE-F1 CPU build for the retained DTQ Rust/FFI gate.
+verify-fem-retained-dtq-rust-cpu-contract:
+    docker compose run --rm --no-deps fem-cpu bash ./scripts/ci/run_retained_dtq_rust_contract.sh
 
 verify-fem-oersted-oef2-cpu-contract:
     docker compose build fem-cpu
@@ -7803,3 +7887,15 @@ docker-dev-cancel-preclaim source_root backend_container_id image_id candidate_b
 # Explicit maintenance outside startup, bound to the successful DEV receipt.
 docker-dev-maintain-cache attempt config_sha256 source_root:
     @{{storage_python}} "{{repo_root}}/scripts/docker_dev.py" --repo-root "{{repo_root}}" maintain-cache --attempt {{quote(attempt)}} --config-sha256 {{quote(config_sha256)}} --source-root {{quote(source_root)}}
+
+# Prepare one frozen junction-refinement input through the public CLI; no Submit or Solve.
+docker-dev-gsg-mesh-prepare source_root attempt config_sha256 level:
+    @{{storage_python}} "{{repo_root}}/scripts/docker_gsg_mesh_preparation.py" --source-root {{quote(source_root)}} --attempt {{quote(attempt)}} --config-sha256 {{quote(config_sha256)}} --level {{quote(level)}}
+
+# Close only the audited GSG input-preflight failure; default invocation is preview-only.
+docker-dev-gsg-prestart-close source_root attempt config_sha256 preview_sha256="":
+    @{{storage_python}} "{{repo_root}}/scripts/docker_gsg_mesh_preparation.py" --source-root {{quote(source_root)}} --attempt {{quote(attempt)}} --config-sha256 {{quote(config_sha256)}} --level 'retained-corner12p5' --close-prestart {{if preview_sha256 == "" { "" } else { "--preview-sha256 " + quote(preview_sha256) } }}
+
+# One approved postprocessing series over retained GSG current/field results; no Solve.
+docker-dev-gsg-reference source_root attempt config_sha256 mode request_sha256="" work_profile="":
+    @{{storage_python}} "{{repo_root}}/scripts/docker_gsg_reference.py" --source-root {{quote(source_root)}} --attempt {{quote(attempt)}} --config-sha256 {{quote(config_sha256)}} --mode {{quote(mode)}} {{if request_sha256 == "" { "" } else { "--request-sha256 " + quote(request_sha256) } }} {{if work_profile == "" { "" } else { "--work-profile " + quote(work_profile) } }}

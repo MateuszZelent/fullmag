@@ -33,6 +33,25 @@ def terminal(req):
                               "compose_project": req["compose_project"]}}
 
 
+def ready_request():
+    value = request()
+    value.update(schema=stop.READY_REQUEST_SCHEMA, development_terminal_sha256="5" * 64)
+    del value["resume_attempt"]
+    del value["resume_terminal_sha256"]
+    return value
+
+
+def development(req):
+    return {"schema": "fullmag.docker-build-operation.v1", "phase": "development", "state": "failed-confirmed",
+            "attempt": req["development_attempt"], "compose_project": req["compose_project"], "control_volume": "volume",
+            "inputs": {"source_root": req["source_root"], "image_id": req["backend_image_id"]},
+            "config_sha256": req["compose_config_sha256"], "backend_started_at": req["backend_started_at"],
+            "backend_container": req["backend_container_id"],
+            "worker_cgroup": {"schema": "fullmag.worker-cgroup-ready.v1", "state": "ready",
+                             "container_id": req["backend_container_id"], "image_id": req["backend_image_id"],
+                             "compose_project": req["compose_project"], "pid": 7, "process_start_token": "777"}}
+
+
 class StopRequestTests(unittest.TestCase):
     def test_complete_request_is_accepted(self):
         self.assertEqual(stop.validate_request(request()), request())
@@ -68,6 +87,54 @@ class StopRequestTests(unittest.TestCase):
             req = request(); req["request_id"] = value
             with self.subTest(value=value), self.assertRaises(stop.BuildControlError):
                 stop.validate_request(req)
+
+
+class ReadyDevelopmentRequestTests(unittest.TestCase):
+    def test_ready_development_start_has_its_own_terminal_pin(self):
+        req = request()
+        req.update(schema="fullmag.docker-startup-diagnostic-stop-request.v2",
+                   development_terminal_sha256="5" * 64)
+        del req["resume_attempt"]
+        del req["resume_terminal_sha256"]
+        self.assertEqual(stop.validate_request(req), req)
+
+
+class ReadyDevelopmentTerminalTests(unittest.TestCase):
+    def test_exact_failed_development_is_accepted(self):
+        req = ready_request()
+        stop.validate_development_start(development(req), req, req["compose_project"], "volume")
+
+    def test_ready_variant_rejects_missing_and_legacy_fields(self):
+        for field in stop.READY_FIELDS:
+            req = ready_request(); req.pop(field)
+            with self.subTest(field=field), self.assertRaises(stop.BuildControlError):
+                stop.validate_request(req)
+        req = ready_request(); req["resume_attempt"] = "a" * 32
+        with self.assertRaises(stop.BuildControlError):
+            stop.validate_request(req)
+        req = request(); req["schema"] = stop.READY_REQUEST_SCHEMA
+        with self.assertRaises(stop.BuildControlError):
+            stop.validate_request(req)
+
+    def test_foreign_or_nonterminal_development_is_rejected(self):
+        req = ready_request()
+        for field, changed in (("phase", "resume"), ("state", "succeeded"), ("state", "starting"),
+                               ("attempt", "0" * 32), ("compose_project", "foreign"), ("control_volume", "foreign"),
+                               ("backend_container", "0" * 64), ("backend_started_at", "other"),
+                               ("config_sha256", "0" * 64)):
+            value = development(req); value[field] = changed
+            with self.subTest(field=field, changed=changed), self.assertRaises(stop.BuildControlError):
+                stop.validate_development_start(value, req, req["compose_project"], "volume")
+
+    def test_changed_cgroup_or_image_is_rejected(self):
+        req = ready_request()
+        for field in ("schema", "state", "container_id", "image_id", "compose_project"):
+            value = development(req); value["worker_cgroup"][field] = "foreign"
+            with self.subTest(field=field), self.assertRaises(stop.BuildControlError):
+                stop.validate_development_start(value, req, req["compose_project"], "volume")
+        value = development(req); value["inputs"]["image_id"] = "foreign"
+        with self.assertRaises(stop.BuildControlError):
+            stop.validate_development_start(value, req, req["compose_project"], "volume")
 
 
 class ResumeTerminalTests(unittest.TestCase):
@@ -153,11 +220,14 @@ class PinnedJsonTests(unittest.TestCase):
 
 
 class StopWorkflowTests(unittest.TestCase):
-    def invoke(self, *, apply=False, preview_valid=True, evidence_changed=False, stop_confirmed=True):
-        req = request(); source = Path(req["source_root"])
+    def invoke(self, *, apply=False, preview_valid=True, evidence_changed=False, stop_confirmed=True, ready=False):
+        req = ready_request() if ready else request()
+        source = Path(req["source_root"])
         inputs = {"request_sha256": "9" * 64, "source_root": str(source),
                   "controller_sha256": stop.sha(Path(stop.__file__).read_bytes()),
                   "probe_sha256": stop.sha(stop.inspection.PROBE.encode())}
+        if ready:
+            inputs.update(stop.ready_source_pins())
         preview = {"phase": "startup-diagnostic-stop-preview", "state": "succeeded",
                    "attempt": "5" * 32, "inputs": inputs,
                    "result": {"state": "preview-passed"}}
@@ -174,6 +244,7 @@ class StopWorkflowTests(unittest.TestCase):
         def record(c, path, expected=None):
             if path == "verification/request.json": return stop.canonical(req) + b"\n", req
             if path.startswith("resume/"): return b"resume", terminal(req)
+            if path.startswith("development/"): return b"development", development(req)
             if path.startswith("startup-diagnostic-stop-preview/"): return b"preview", preview
             raise AssertionError(path)
         def actual(service, running):
@@ -194,6 +265,7 @@ class StopWorkflowTests(unittest.TestCase):
         with ExitStack() as stack:
             for target, kwargs in [
                 ("sys.argv", {"new": argv}),
+                ("docker_volume_stop_startup_diagnostic.time.monotonic", {"side_effect": [0.0, 61.0]}),
                 ("docker_dev._select_source", {"return_value": (source, {})}),
                 ("docker_dev._compose_identity", {"return_value": {}}),
                 ("docker_volume_stop_startup_diagnostic.BuildControl", {"return_value": control}),
@@ -232,7 +304,7 @@ class StopWorkflowTests(unittest.TestCase):
 
     def test_apply_sends_one_stop_and_authenticates_immutable_journal(self):
         req, operation = self.invoke(apply=True)
-        self.daemon.assert_called_once_with("stop", "--time", "60", req["backend_container_id"], timeout=90)
+        self.daemon.assert_called_once_with("kill", "--signal", "SIGTERM", req["backend_container_id"], timeout=20)
         writes = self.control.write.call_args_list
         journals = [call.args[1] for call in writes if call.args[0].endswith("/stop-journal.json")]
         self.assertEqual(len(journals), 1)
@@ -248,6 +320,28 @@ class StopWorkflowTests(unittest.TestCase):
         self.daemon.assert_called_once()
         self.assertTrue(self.operation["daemon_pending"])
         self.assertTrue(any(call.args[1].get("state") == "stop-planned" for call in self.control.write.call_args_list))
+        self.assertFalse(any(call.args[0].endswith("/stop-journal.json") for call in self.control.write.call_args_list))
+
+
+class ReadyStopWorkflowTests(StopWorkflowTests):
+    def test_ready_apply_uses_one_sigterm_and_a_distinct_journal(self):
+        req, operation = self.invoke(apply=True, ready=True)
+        self.daemon.assert_called_once_with("kill", "--signal", "SIGTERM", req["backend_container_id"], timeout=20)
+        journal = next(call.args[1] for call in self.control.write.call_args_list if call.args[0].endswith("/stop-journal.json"))
+        self.assertEqual(journal["schema"], stop.READY_JOURNAL_SCHEMA)
+        self.assertEqual(operation["receipt"]["state"], "succeeded")
+
+    def test_ready_changed_proof_sends_no_signal(self):
+        with self.assertRaisesRegex(stop.BuildControlError, "changed under"):
+            self.invoke(apply=True, ready=True, evidence_changed=True)
+        self.daemon.assert_not_called()
+
+    def test_ready_timeout_retains_one_intent_without_escalation(self):
+        with self.assertRaisesRegex(stop.BuildControlError, "not confirmed"):
+            self.invoke(apply=True, ready=True, stop_confirmed=False)
+        self.daemon.assert_called_once()
+        self.assertEqual(self.daemon.call_args.args[:3], ("kill", "--signal", "SIGTERM"))
+        self.assertTrue(self.operation["daemon_pending"])
         self.assertFalse(any(call.args[0].endswith("/stop-journal.json") for call in self.control.write.call_args_list))
 
 

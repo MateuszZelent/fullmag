@@ -1,7 +1,7 @@
 "use client";
 
 import type { MaterializedDatasetResource } from "@/kernel/api/apiTypes";
-import { useProjectDocumentSnapshot } from "@/kernel/persistence/ProjectDocumentStatus";
+import { useSavedResultScope } from "@/kernel/saved-results/useSavedRun";
 import { useMaterializedDatasetResource } from "@/kernel/resources/solutionSetResources";
 
 import { useSavedFieldPresentation } from "@/kernel/visualization/useObjectVisualization";
@@ -12,17 +12,19 @@ import { savedFieldPresentationForDataset } from "./SavedFieldVisualizationPanel
 import { Badge } from "@/shared/ui/Badge";
 
 import { InspectorGroup } from "../primitives/InspectorGroup";
+import { useInspectorActiveTab } from "../InspectorTabState";
 import type { InspectorPanelProps } from "../inspectorTypes";
 import { MaterializedDatasetValues } from "./MaterializedDatasetValues";
 import { materializedDatasetSelection, materializedDatasetSelectionMatchesProject } from "./MaterializedDatasetInspectorPanel.model";
 
 export function MaterializedDatasetInspectorPanel({ selection }: InspectorPanelProps) {
+  const activeTab = useInspectorActiveTab();
   const ref = materializedDatasetSelection(selection);
-  const project = useProjectDocumentSnapshot();
+  const scope = useSavedResultScope();
   const { presentation } = useSavedFieldPresentation();
-  const activeProjectId = project.state === "ready" ? project.resource.project_id : null;
+  const activeProjectId = scope.projectId;
   const projectMatchesSelection =
-    ref !== null && materializedDatasetSelectionMatchesProject(ref, activeProjectId);
+    scope.matches(ref);
   const resource = useMaterializedDatasetResource(
     ref?.projectId,
     ref?.runId,
@@ -69,8 +71,9 @@ export function MaterializedDatasetInspectorPanel({ selection }: InspectorPanelP
   const savedPresentation = savedFieldPresentationForDataset(presentation, ref);
   return (
     <div className="grid min-w-0 gap-3" data-materialized-dataset-inspector="readonly">
-      {savedPresentation ? <SavedFieldVisualizationPanel presentation={savedPresentation} dataset={data}
+      {activeTab === "overview" && savedPresentation ? <SavedFieldVisualizationPanel presentation={savedPresentation} dataset={data}
         refreshWarning={resource.refreshError?.message ?? null} /> : null}
+      {activeTab === "provenance" ? (
       <InspectorGroup title="Pinned identity">
         <ReadonlyGrid
           rows={[
@@ -84,12 +87,14 @@ export function MaterializedDatasetInspectorPanel({ selection }: InspectorPanelP
           ]}
         />
       </InspectorGroup>
+      ) : null}
 
+      {activeTab === "diagnostics" ? (
       <InspectorGroup title="Dataset status">
         <div className="flex flex-wrap items-center gap-2">
           <Badge variant="success">Integrity {data.integrity}</Badge>
           <Badge variant="secondary">Availability {data.dataset.status.availability}</Badge>
-          <Badge variant="secondary">Execution {data.owner_execution_status}</Badge>
+          <Badge variant="secondary">Owner revision execution {data.owner_execution_status}</Badge>
           <Badge variant="secondary">Assessment {data.owner_scientific_assessment.status}</Badge>
         </div>
         <ReadonlyGrid
@@ -101,7 +106,9 @@ export function MaterializedDatasetInspectorPanel({ selection }: InspectorPanelP
           ]}
         />
       </InspectorGroup>
+      ) : null}
 
+      {activeTab === "overview" ? (
       <InspectorGroup title="Field semantics">
         <ReadonlyGrid
           rows={[
@@ -117,7 +124,9 @@ export function MaterializedDatasetInspectorPanel({ selection }: InspectorPanelP
           ]}
         />
       </InspectorGroup>
+      ) : null}
 
+      {activeTab === "provenance" ? (
       <InspectorGroup title="Coverage and provenance">
         <ReadonlyGrid
           rows={[
@@ -132,8 +141,9 @@ export function MaterializedDatasetInspectorPanel({ selection }: InspectorPanelP
           ]}
         />
       </InspectorGroup>
+      ) : null}
 
-      <MaterializedDatasetValues key={JSON.stringify(ref)} dataset={data} />
+      {activeTab === "data" ? <MaterializedDatasetValues key={JSON.stringify(ref)} dataset={data} /> : null}
     </div>
   );
 }

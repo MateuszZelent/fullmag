@@ -6,6 +6,8 @@ from .vector_mask import VectorMask
 from .output_storage import OutputStorage
 from .antenna import (
     AntennaFieldSolveStage,
+    AntennaRetainedCurrentSource,
+    AntennaSourcePreparationAsset,
     AntennaSurfaceFieldPolicy,
     AntennaFieldSolutionRef,
     AntennaStageOutputRef,

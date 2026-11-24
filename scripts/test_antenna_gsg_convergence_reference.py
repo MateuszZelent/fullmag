@@ -12,6 +12,28 @@ from antenna_gsg_convergence_reference import (
 
 
 class GsgConvergenceBudgetTests(unittest.TestCase):
+    def test_corner12p5_cell_limit_profile_is_closed_and_preserves_completeness(self):
+        from antenna_gsg_convergence_reference import evaluate_retained_field
+        from antenna_gsg_current_correction import SOURCE_CELL_LIMITS as correction_limits
+        from antenna_gsg_convergence_reference import SOURCE_CELL_LIMITS as reference_limits
+        self.assertEqual(dict(correction_limits), dict(reference_limits))
+        fine = "gsg_junction_refinement_80k.v1"
+        for profile, count in (("legacy72911", 72912), (fine, 80001), ("unknown", 1), (None, 1)):
+            with self.subTest(profile=profile, count=count):
+                with self.assertRaisesRegex(triangle.Refusal, "profile|cell count"):
+                    evaluate_retained_field([], TARGETS_M[0], count, self.active(),
+                                            cell_limit_profile=profile)
+        for profile, count in (("legacy72911", 72911), (fine, 80000)):
+            # No cell reaches arithmetic: isolate admission from the optional
+            # high-precision dependency while exercising the real count guard.
+            with patch.object(triangle, "Arithmetic") as arithmetic:
+                with self.assertRaisesRegex(triangle.Refusal, "incomplete"):
+                    evaluate_retained_field([], TARGETS_M[0], count, self.active(),
+                                            cell_limit_profile=profile)
+                arithmetic.assert_called_once()
+        with self.assertRaisesRegex(triangle.Refusal, "cell count"):
+            evaluate_retained_field([], TARGETS_M[0], 72912, self.active())
+
     def active(self):
         budget = GsgSourceConvergenceBudget()
         budget.activate_source(SOURCE_IR_SHA256S[0])
@@ -135,3 +157,111 @@ class GsgConvergenceBudgetTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class GsgJunctionFineBudgetTests(unittest.TestCase):
+    def test_86k_work_profile_changes_only_target_pair_budget(self):
+        from antenna_gsg_convergence_reference import GsgJunctionFineBudget
+        profile = "gsg_junction_fine_reference_86k_v1"
+        budget = GsgJunctionFineBudget("a"*64,work_profile=profile)
+        self.assertEqual(dict(budget.limits),dict(PROFILE_LIMITS,pairs_target=1032000))
+        self.assertEqual(budget.report()["profile_id"],profile)
+        self.assertEqual(budget.report()["cell_limit_profile"],"gsg_junction_refinement_86k.v1")
+        self.assertEqual(dict(GsgJunctionFineBudget("a"*64).limits),dict(PROFILE_LIMITS))
+        with self.assertRaises(TypeError):
+            budget.limits["pairs_target"]=1
+        for invalid in ("unknown",None,True):
+            with self.subTest(invalid=invalid),self.assertRaises(triangle.Refusal):
+                GsgJunctionFineBudget("a"*64,work_profile=invalid)
+
+    def test_86k_profile_preserves_three_target_lifetime_and_local_refusal(self):
+        from antenna_gsg_convergence_reference import GsgJunctionFineBudget
+        budget=GsgJunctionFineBudget("a"*64,work_profile="gsg_junction_fine_reference_86k_v1")
+        started=budget.started
+        for target in TARGETS_M:
+            budget.activate(struct.pack("<3d",*target).hex())
+            budget.charge("pairs")
+        self.assertEqual(budget.counts["pairs"],3)
+        self.assertEqual(budget.started,started)
+        self.assertEqual(len(budget.by_target),3)
+        budget.by_target[budget.target]["pairs"]=1032000
+        with self.assertRaisesRegex(triangle.Refusal,"pair limit"):
+            budget.charge("pairs")
+        self.assertEqual(budget.by_target[budget.target]["pairs"],1032001)
+
+    def test_86k_cell_profile_keeps_complete_source_and_old_limits(self):
+        from antenna_gsg_current_correction import (
+            SOURCE_CELL_LIMITS as a,weighted_rt0_h1_correction,
+            partitioned_weighted_rt0_h1_correction)
+        from antenna_gsg_convergence_reference import SOURCE_CELL_LIMITS as b,evaluate_retained_field,GsgJunctionFineBudget
+        fine="gsg_junction_refinement_86k.v1"
+        self.assertEqual(dict(a),dict(b))
+        self.assertEqual(a[fine],86000)
+        from test_antenna_gsg_current_correction import sample
+        row,potential=sample(correction=(.1,0.,0.))
+        self.assertAlmostEqual(weighted_rt0_h1_correction([row],potential,[2.],1,cell_limit_profile=fine)["eta"],.05)
+        self.assertAlmostEqual(partitioned_weighted_rt0_h1_correction(
+            [row],potential,[2.],1,{"all":[0]},cell_limit_profile=fine)["eta"],.05)
+        for profile,count in ((fine,86001),(fine,True),(fine,86000.),("legacy72911",72912),
+                              ("gsg_junction_refinement_80k.v1",80001),("unknown",1)):
+            with self.subTest(profile=profile,count=count):
+                with self.assertRaisesRegex(ValueError,"profile|cell count"):
+                    weighted_rt0_h1_correction([],potential,[],count,cell_limit_profile=profile)
+                with self.assertRaisesRegex(ValueError,"profile|cell count"):
+                    partitioned_weighted_rt0_h1_correction([],potential,[],count,{"all":[]},cell_limit_profile=profile)
+                with self.assertRaisesRegex(triangle.Refusal,"profile|cell count"):
+                    evaluate_retained_field([],TARGETS_M[0],count,
+                        GsgSourceConvergenceBudget(),cell_limit_profile=profile)
+        with self.assertRaisesRegex(ValueError,"incomplete"):
+            weighted_rt0_h1_correction([],potential,[],86000,cell_limit_profile=fine)
+        with self.assertRaisesRegex(ValueError,"source cell or conductivity count differs"):
+            partitioned_weighted_rt0_h1_correction([],potential,[],86000,{"all":[]},cell_limit_profile=fine)
+        with patch.object(triangle,"Arithmetic"):
+            with self.assertRaisesRegex(triangle.Refusal,"incomplete"):
+                evaluate_retained_field([],TARGETS_M[0],86000,GsgJunctionFineBudget(
+                    "a"*64,work_profile="gsg_junction_fine_reference_86k_v1"),cell_limit_profile=fine)
+
+    def test_one_source_three_exact_targets_keep_the_existing_limits(self):
+        from antenna_gsg_convergence_reference import GsgJunctionFineBudget
+        old = dict(PROFILE_LIMITS)
+        budget = GsgJunctionFineBudget("a"*64)
+        self.assertEqual(dict(budget.limits), old)
+        with self.assertRaises(TypeError):
+            budget.limits["ram_bytes"] = 1
+        for target in TARGETS_M:
+            budget.activate(struct.pack("<3d", *target).hex())
+            budget.charge("pairs", 120)
+        self.assertEqual(budget.counts["pairs"], 3)
+        self.assertEqual(len(budget.by_target), 3)
+        self.assertEqual(budget.report()["source_ir_sha256"], "a"*64)
+        self.assertEqual(dict(PROFILE_LIMITS), old)
+
+    def test_foreign_source_target_and_invalid_digest_are_refused(self):
+        from antenna_gsg_convergence_reference import GsgJunctionFineBudget
+        for digest in ("a"*63, "A"*64, "../source", None, True):
+            with self.assertRaises(triangle.Refusal):
+                GsgJunctionFineBudget(digest)
+        budget = GsgJunctionFineBudget("a"*64)
+        with self.assertRaisesRegex(triangle.Refusal, "source"):
+            budget.activate_source("b"*64)
+        with self.assertRaisesRegex(triangle.Refusal, "target"):
+            budget.activate(struct.pack("<3d", 0., 0., 0.).hex())
+        with self.assertRaisesRegex(triangle.Refusal, "activate"):
+            budget.charge("pairs")
+        self.assertEqual(dict(budget.counts), {})
+
+    def test_switching_targets_never_resets_counts_or_the_case_clock(self):
+        from antenna_gsg_convergence_reference import GsgJunctionFineBudget
+        budget = GsgJunctionFineBudget("a"*64)
+        start = budget.started
+        key = struct.pack("<3d", *TARGETS_M[0]).hex()
+        budget.activate(key);budget.charge("pairs")
+        budget.activate_source("a"*64)
+        budget.activate(struct.pack("<3d", *TARGETS_M[1]).hex())
+        budget.charge("pairs");budget.activate(key)
+        self.assertEqual(budget.started, start)
+        self.assertEqual(budget.counts["pairs"],2)
+        self.assertEqual(budget.by_target["a"*64+":"+key]["pairs"],1)
+        budget.counts["pairs"] = PROFILE_LIMITS["pairs_case"]
+        with self.assertRaisesRegex(triangle.Refusal, "pair limit"):
+            budget.charge("pairs")

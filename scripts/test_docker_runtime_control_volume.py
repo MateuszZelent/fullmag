@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import dataclasses
 import importlib.util
+import json
 import os
 from pathlib import Path, PurePosixPath
 import sys
@@ -115,14 +117,93 @@ class RuntimeControlVolumeTests(unittest.TestCase):
             runtime_service.canonical_paths(environment)
 
     def test_source_identity_uses_build_control_volume_provenance(self):
-        paths = runtime_service.canonical_paths(_docker_environment())
-        provenance = {
+        with tempfile.TemporaryDirectory() as temporary:
+            provenance = Path(temporary) / "runtime-provenance.json"
+            provenance.write_text(json.dumps({
+                "commit": "a" * 40,
+                "native_source_identity": {"source_snapshot_sha256": "b" * 64},
+            }))
+            paths = dataclasses.replace(
+                runtime_service.canonical_paths(_docker_environment()),
+                provenance=provenance,
+            )
+            self.assertEqual(runtime_service._source_identity(paths), ("a" * 40, "b" * 64))
+
+    def test_source_identity_accepts_large_provenance_through_eight_mib(self):
+        document = json.dumps({
             "commit": "a" * 40,
             "native_source_identity": {"source_snapshot_sha256": "b" * 64},
-        }
-        with patch.object(runtime_service, "_read_json", return_value=provenance) as read_json:
-            self.assertEqual(runtime_service._source_identity(paths), ("a" * 40, "b" * 64))
-        read_json.assert_called_once_with(paths.provenance, "runtime image provenance")
+        }).encode()
+        for size in (297879, 8 * 1024 * 1024):
+            with self.subTest(size=size), tempfile.TemporaryDirectory() as temporary:
+                provenance = Path(temporary) / "runtime-provenance.json"
+                provenance.write_bytes(document + b" " * (size - len(document)))
+                paths = dataclasses.replace(
+                    runtime_service.canonical_paths(_docker_environment()),
+                    provenance=provenance,
+                )
+                self.assertEqual(runtime_service._source_identity(paths), ("a" * 40, "b" * 64))
+
+    def test_source_identity_rejects_provenance_above_eight_mib(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            provenance = Path(temporary) / "runtime-provenance.json"
+            document = json.dumps({
+                "commit": "a" * 40,
+                "native_source_identity": {"source_snapshot_sha256": "b" * 64},
+            }).encode()
+            provenance.write_bytes(document + b" " * (8 * 1024 * 1024 + 1 - len(document)))
+            paths = dataclasses.replace(
+                runtime_service.canonical_paths(_docker_environment()),
+                provenance=provenance,
+            )
+            with self.assertRaisesRegex(runtime_service.RuntimeServiceError, "bounded regular file"):
+                runtime_service._source_identity(paths)
+
+    def test_large_provenance_still_rejects_duplicate_or_unpinned_identity(self):
+        documents = (
+            ('{"commit":"' + "a" * 40 + '","commit":"' + "c" * 40
+             + '","native_source_identity":{"source_snapshot_sha256":"' + "b" * 64 + '"}}',
+             "duplicate key"),
+            (json.dumps({"commit": "invalid", "native_source_identity": {
+                "source_snapshot_sha256": "b" * 64}}), "pinned source commit"),
+            (json.dumps({"commit": "a" * 40, "native_source_identity": {
+                "source_snapshot_sha256": "invalid"}}), "pinned source snapshot"),
+        )
+        for document, reason in documents:
+            with self.subTest(reason=reason), tempfile.TemporaryDirectory() as temporary:
+                provenance = Path(temporary) / "runtime-provenance.json"
+                raw = document.encode()
+                provenance.write_bytes(raw + b" " * (297879 - len(raw)))
+                paths = dataclasses.replace(
+                    runtime_service.canonical_paths(_docker_environment()),
+                    provenance=provenance,
+                )
+                with self.assertRaisesRegex(runtime_service.RuntimeServiceError, reason):
+                    runtime_service._source_identity(paths)
+
+    def test_provenance_size_fix_preserves_general_json_limit(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            document = Path(temporary) / "control.json"
+            document.write_bytes(b"{}" + b" " * (256 * 1024 - 1))
+            with self.assertRaisesRegex(runtime_service.RuntimeServiceError, "bounded regular file"):
+                runtime_service._read_json(document, "ordinary control document")
+
+    def test_source_identity_rejects_provenance_symlink(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            target = root / "target.json"
+            target.write_text(json.dumps({
+                "commit": "a" * 40,
+                "native_source_identity": {"source_snapshot_sha256": "b" * 64},
+            }))
+            link = root / "runtime-provenance.json"
+            link.symlink_to(target)
+            paths = dataclasses.replace(
+                runtime_service.canonical_paths(_docker_environment()),
+                provenance=link,
+            )
+            with self.assertRaises((OSError, runtime_service.RuntimeServiceError)):
+                runtime_service._source_identity(paths)
 
     def test_api_environment_keeps_user_store_and_technical_cache_separate(self):
         paths = runtime_service.canonical_paths(_docker_environment())

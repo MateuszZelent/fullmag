@@ -130,8 +130,8 @@ impl Serialize for StudyExecutionPlan {
         let v3 = matches!(self.schema_version.as_str(), STUDY_EXECUTION_PLAN_SCHEMA | STUDY_EXECUTION_PLAN_SCHEMA_V4);
         let mut steps = Vec::with_capacity(self.steps.len());
         for step in &self.steps {
-            if self.schema_version != STUDY_EXECUTION_PLAN_SCHEMA_V4 && matches!(step.kind, StudyStepKind::ClosedLoopInspection { .. }) {
-                return Err(serde::ser::Error::custom("closed-loop operation requires study_execution_plan.v4"));
+            if self.schema_version != STUDY_EXECUTION_PLAN_SCHEMA_V4 && matches!(step.kind, StudyStepKind::ClosedLoopInspection { .. } | StudyStepKind::RetainedCurrentFieldInspection { .. }) {
+                return Err(serde::ser::Error::custom("antenna inspection operations require study_execution_plan.v4"));
             }
             if !v3 && !step.completion_dependencies.is_empty() {
                 return Err(serde::ser::Error::custom(
@@ -176,8 +176,8 @@ impl<'de> Deserialize<'de> for StudyExecutionPlan {
         }
         let mut steps = Vec::with_capacity(wire.steps.len());
         for value in wire.steps {
-            if wire.schema_version != STUDY_EXECUTION_PLAN_SCHEMA_V4 && value.pointer("/kind/kind").and_then(serde_json::Value::as_str) == Some("closed_loop_inspection") {
-                return Err(D::Error::custom("closed-loop operation requires study_execution_plan.v4"));
+            if wire.schema_version != STUDY_EXECUTION_PLAN_SCHEMA_V4 && matches!(value.pointer("/kind/kind").and_then(serde_json::Value::as_str), Some("closed_loop_inspection" | "retained_current_field_inspection")) {
+                return Err(D::Error::custom("antenna inspection operations require study_execution_plan.v4"));
             }
             let field = value.get("completion_dependencies");
             if (v3 && !field.is_some_and(serde_json::Value::is_array)) || (!v3 && field.is_some()) {
@@ -283,6 +283,39 @@ impl StudyExecutionPlan {
                     ));
                 }
             }
+            let retained_carrier = step.execution_plan.as_ref().and_then(|plan| match &plan.backend_plan {
+                fullmag_ir::BackendPlanIR::AntennaRetainedCurrentFieldInspection(operation) => Some(operation),
+                _ => None,
+            });
+            let retained_asset_carrier = step.execution_plan.as_ref().and_then(|plan| match &plan.backend_plan {
+                fullmag_ir::BackendPlanIR::AntennaRetainedPreparationFieldInspection(operation) => Some(operation),
+                _ => None,
+            });
+            let retained_direct_carrier = step.execution_plan.as_ref().and_then(|plan| match &plan.backend_plan {
+                fullmag_ir::BackendPlanIR::AntennaRetainedDirectFieldInspection(operation) => Some(operation),
+                _ => None,
+            });
+            if let StudyStepKind::RetainedCurrentFieldInspection { stage_id, port_mode_id, output_id } = &step.kind {
+                if self.schema_version != STUDY_EXECUTION_PLAN_SCHEMA_V4
+                    || step.until_seconds.is_some() || !step.inputs.is_empty()
+                    || step.outputs != [StudyOutputPort { port_id: "inspection".into(), data_kind: fullmag_authoring::StudyPortDataKind::Artifact }]
+                    || step.acceptance != StudyAcceptancePolicy::Any
+                    || step.acquisition != StudyAcquisitionPolicy::Exclusive
+                    || [stage_id, port_mode_id, output_id].iter().any(|id|
+                        id.trim().is_empty() || id.len() > 256 || id.chars().any(|ch| ch.is_control() || matches!(ch, '/' | '\\'))) {
+                    return Err(StudyLoweringError::Contract("retained-current operation requires v4, exact selectors, no horizon/state input, one inspection Artifact output and Any/Exclusive policies".into()));
+                }
+                if step.enabled {
+                    match (retained_carrier, retained_asset_carrier, retained_direct_carrier) {
+                        (None, None, Some(operation)) => validate_retained_direct_carrier(operation, stage_id, port_mode_id, output_id)?,
+                        (Some(operation), None, None) => validate_retained_current_carrier(operation, stage_id, port_mode_id, output_id)?,
+                        (None, Some(operation), None) => validate_retained_preparation_carrier(operation, stage_id, port_mode_id, output_id)?,
+                        _ => return Err(StudyLoweringError::Contract("retained-current operation lacks its exact H-only family".into())),
+                    }
+                }
+            } else if retained_carrier.is_some() || retained_asset_carrier.is_some() || retained_direct_carrier.is_some() {
+                return Err(StudyLoweringError::Contract("retained-current H-only carrier requires its dedicated accepted operation; legacy study kinds cannot execute it".into()));
+            }
             if let StudyStepKind::ClosedLoopInspection { stage_id, port_mode_id, .. } = &step.kind {
                 if self.schema_version != STUDY_EXECUTION_PLAN_SCHEMA_V4 || step.until_seconds.is_some() || !step.inputs.is_empty() {
                     return Err(StudyLoweringError::Contract("closed-loop operation requires v4 without horizon or state ports".into()));
@@ -386,8 +419,20 @@ where
                 step_id: step.step_id.clone(),
                 reason: error.to_string(),
             })?;
-            if let StudyStepKind::ClosedLoopInspection { stage_id, port_mode_id, output_id } = &step.kind {
-                validate_closed_loop_operation(&problem, stage_id, port_mode_id, output_id)?;
+            match &step.kind {
+                StudyStepKind::ClosedLoopInspection { stage_id, port_mode_id, output_id } => {
+                    validate_closed_loop_operation(&problem, stage_id, port_mode_id, output_id)?;
+                }
+                StudyStepKind::RetainedCurrentFieldInspection { stage_id, port_mode_id, output_id } => {
+                    if problem.antenna_field_solve_stages.iter().any(|stage| stage.id == *stage_id && stage.oersted_realization == fullmag_ir::AntennaOerstedRealizationIR::DirectTetraQuadrature) {
+                        validate_retained_direct_field_operation(&problem, stage_id, port_mode_id, output_id)?;
+                    } else if problem.antenna_field_solve_stages.iter().any(|stage| stage.id == *stage_id && stage.retained_source_preparation.is_some()) {
+                        validate_retained_preparation_field_operation(&problem, stage_id, port_mode_id, output_id)?;
+                    } else {
+                        validate_retained_current_field_operation(&problem, stage_id, port_mode_id, output_id)?;
+                    }
+                }
+                _ => {}
             }
             if matches!(problem.study, fullmag_ir::StudyIR::TimeEvolution { .. })
                 && step.until_seconds.is_none()
@@ -475,6 +520,137 @@ pub fn validate_closed_loop_operation(problem: &ProblemIR, stage_id: &str, port_
         return Err(StudyLoweringError::Contract("closed-loop operation cannot select external-lead or qualified basis".into()));
     }
     Ok(operation)
+}
+
+/// Replan only the typed H-only operation. A retained locator never authorizes fresh transport.
+pub fn validate_retained_current_field_operation(
+    problem: &ProblemIR, stage_id: &str, port_mode_id: &str, output_id: &str,
+) -> Result<fullmag_ir::AntennaRetainedCurrentFieldPlanIR, StudyLoweringError> {
+    let carrier = lower_problem_plan(problem).map_err(|error| StudyLoweringError::Planner {
+        step_id: stage_id.into(), reasons: error.reasons,
+    })?;
+    let fullmag_ir::BackendPlanIR::AntennaRetainedCurrentFieldInspection(carrier_operation) = &carrier.backend_plan else {
+        return Err(StudyLoweringError::Contract("retained-current operation differs from its selected H-only carrier".into()));
+    };
+    let operation = crate::plan_retained_current_field_inspection(problem, stage_id, port_mode_id)
+        .map_err(|error| StudyLoweringError::Planner { step_id: stage_id.into(), reasons: error.reasons })?;
+    validate_retained_current_carrier(&operation, stage_id, port_mode_id, output_id)?;
+    if carrier_operation != &operation {
+        return Err(StudyLoweringError::Contract("retained-current operation differs from its complete selected H-only plan".into()));
+    }
+    Ok(operation)
+}
+
+/// Canonical new input-asset operation; legacy retained-current validators remain strict.
+pub fn validate_retained_direct_field_operation(
+    problem: &ProblemIR, stage_id: &str, port_mode_id: &str, output_id: &str,
+) -> Result<fullmag_ir::AntennaRetainedDirectFieldPlanV2, StudyLoweringError> {
+    let carrier = lower_problem_plan(problem).map_err(|error| StudyLoweringError::Planner {
+        step_id: stage_id.into(), reasons: error.reasons,
+    })?;
+    let fullmag_ir::BackendPlanIR::AntennaRetainedDirectFieldInspection(carrier_operation) = &carrier.backend_plan else {
+        return Err(StudyLoweringError::Contract("retained preparation differs from its selected input-asset carrier".into()));
+    };
+    let operation = crate::plan_retained_direct_field_inspection(problem, stage_id, port_mode_id)
+        .map_err(|error| StudyLoweringError::Planner { step_id: stage_id.into(), reasons: error.reasons })?;
+    validate_retained_direct_carrier(&operation, stage_id, port_mode_id, output_id)?;
+    if carrier_operation != &operation {
+        return Err(StudyLoweringError::Contract("retained preparation differs from its complete canonical plan".into()));
+    }
+    Ok(operation)
+}
+
+fn validate_retained_direct_carrier(
+    operation: &fullmag_ir::AntennaRetainedDirectFieldPlanV2,
+    stage_id: &str, port_mode_id: &str, output_id: &str,
+) -> Result<(), StudyLoweringError> {
+    let stage = &operation.stage;
+    if operation.schema_version != fullmag_ir::ANTENNA_RETAINED_DIRECT_FIELD_PLAN_SCHEMA_V2
+        || stage.retained_source_preparation.as_ref() != Some(&operation.preparation_asset)
+        || !operation.preparation_asset.validation_errors("preparation_asset").is_empty()
+        || stage.oersted_realization != fullmag_ir::AntennaOerstedRealizationIR::DirectTetraQuadrature
+        || stage.surface_field_policy.is_some()
+        || fullmag_ir::antenna_closed_loop_direct_budget(&stage.solver_policy).is_none() {
+        return Err(StudyLoweringError::Contract("retained DTQ carrier requires its exact direct profile and explicit source asset".into()));
+    }
+    validate_retained_field_identity(stage, &operation.requested_execution, stage_id, port_mode_id, output_id)
+}
+
+/// Canonical new input-asset operation; legacy retained-current validators remain strict.
+pub fn validate_retained_preparation_field_operation(
+    problem: &ProblemIR, stage_id: &str, port_mode_id: &str, output_id: &str,
+) -> Result<fullmag_ir::AntennaRetainedPreparationFieldPlanIR, StudyLoweringError> {
+    let carrier = lower_problem_plan(problem).map_err(|error| StudyLoweringError::Planner {
+        step_id: stage_id.into(), reasons: error.reasons,
+    })?;
+    let fullmag_ir::BackendPlanIR::AntennaRetainedPreparationFieldInspection(carrier_operation) = &carrier.backend_plan else {
+        return Err(StudyLoweringError::Contract("retained preparation differs from its selected input-asset carrier".into()));
+    };
+    let operation = crate::plan_retained_preparation_field_inspection(problem, stage_id, port_mode_id)
+        .map_err(|error| StudyLoweringError::Planner { step_id: stage_id.into(), reasons: error.reasons })?;
+    validate_retained_preparation_carrier(&operation, stage_id, port_mode_id, output_id)?;
+    if carrier_operation != &operation {
+        return Err(StudyLoweringError::Contract("retained preparation differs from its complete canonical plan".into()));
+    }
+    Ok(operation)
+}
+
+fn validate_retained_preparation_carrier(
+    operation: &fullmag_ir::AntennaRetainedPreparationFieldPlanIR,
+    stage_id: &str, port_mode_id: &str, output_id: &str,
+) -> Result<(), StudyLoweringError> {
+    if operation.schema_version != fullmag_ir::ANTENNA_RETAINED_PREPARATION_FIELD_PLAN_SCHEMA
+        || operation.stage.retained_source_preparation.as_ref() != Some(&operation.preparation_asset)
+        || !operation.preparation_asset.validation_errors("preparation_asset").is_empty() {
+        return Err(StudyLoweringError::Contract("retained preparation carrier asset/version differs".into()));
+    }
+    validate_retained_field_carrier(&operation.stage, &operation.requested_execution, stage_id, port_mode_id, output_id)
+}
+
+fn validate_retained_current_carrier(
+    operation: &fullmag_ir::AntennaRetainedCurrentFieldPlanIR,
+    stage_id: &str, port_mode_id: &str, output_id: &str,
+) -> Result<(), StudyLoweringError> {
+    if operation.schema_version != fullmag_ir::ANTENNA_RETAINED_CURRENT_FIELD_PLAN_SCHEMA
+        || operation.stage.retained_source_preparation.is_some() {
+        return Err(StudyLoweringError::Contract("legacy retained-current carrier cannot accept a preparation asset".into()));
+    }
+    validate_retained_field_carrier(&operation.stage, &operation.requested_execution, stage_id, port_mode_id, output_id)
+}
+
+fn validate_retained_field_carrier(
+    stage: &fullmag_ir::AntennaFieldSolveStageIR,
+    execution: &fullmag_ir::RequestedTransportExecutionIR,
+    stage_id: &str, port_mode_id: &str, output_id: &str,
+) -> Result<(), StudyLoweringError> {
+    if stage.oersted_realization != fullmag_ir::AntennaOerstedRealizationIR::AnalyticRt0Surface
+        || stage.surface_field_policy.is_none() {
+        return Err(StudyLoweringError::Contract("surface retained carrier requires explicit analytic RT0 policy".into()));
+    }
+    validate_retained_field_identity(stage, execution, stage_id, port_mode_id, output_id)
+}
+
+fn validate_retained_field_identity(
+    stage: &fullmag_ir::AntennaFieldSolveStageIR,
+    execution: &fullmag_ir::RequestedTransportExecutionIR,
+    stage_id: &str, port_mode_id: &str, output_id: &str,
+) -> Result<(), StudyLoweringError> {
+    if stage.id != stage_id || stage.port_mode_ids != [port_mode_id.to_owned()]
+        || stage.outputs.len() != 1 || stage.outputs[0].id != output_id
+        || stage.outputs[0].quantity != "H_ant_basis" || stage.retained_current_source.is_none()
+        || stage.conservative_current_view_ref.is_some()
+        || execution.discretization != fullmag_ir::BackendTarget::Fem
+        || execution.device != fullmag_ir::ExecutionDevice::Cpu
+        || execution.precision != fullmag_ir::ExecutionPrecision::Double
+        || execution.execution_mode != fullmag_ir::ExecutionMode::Strict {
+        return Err(StudyLoweringError::Contract("retained-current operation requires its exact static H-only carrier, source locator, policy and FEM CPU/strict/double execution".into()));
+    }
+    let source_errors = stage.retained_current_source.as_ref().expect("source presence checked")
+        .validation_errors("retained_current_source");
+    if !source_errors.is_empty() {
+        return Err(StudyLoweringError::Contract(source_errors.join("; ")));
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -703,6 +879,140 @@ mod tests {
         let mut value=serde_json::to_value(lowered).unwrap();
         value["steps"][0]["kind"]=serde_json::json!({"kind":"closed_loop_inspection","stage_id":"stage","port_mode_id":"port","output_id":"output"});
         assert!(serde_json::from_value::<StudyExecutionPlan>(value).is_err());
+    }
+
+    fn retained_current_problem() -> ProblemIR {
+        // This is a shape/planning fixture, not an authenticated or qualified parent.
+        let mut wire: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../tests/fixtures/runtime/antenna-standalone-pipeline.json"
+        )).unwrap();
+        let ir = &mut wire["ir"];
+        ir["study"]["selection"] = json!({"stage_id":"inspect_antenna", "port_mode_id":"port"});
+        let assets = ir["geometry_assets"]["fem_mesh_assets"].as_array_mut().unwrap();
+        assets.retain(|asset| asset["geometry_name"] == "probe");
+        let stage = &mut ir["antenna_field_solve_stages"][0];
+        stage["retained_current_source"] = json!({"kind":"published_inspection", "project_id":"project-source",
+            "run_id":"run-source", "task_id":"task-source", "attempt_id":"attempt-source",
+            "ownership_epoch":"18446744073709551615", "artifact_id":"artifact-source", "object_ref":"a".repeat(64)});
+        stage["oersted_realization"] = "analytic_rt0_surface".into();
+        stage["surface_field_policy"] = json!({
+            "policy_version":fullmag_ir::ANTENNA_SURFACE_FIELD_POLICY_VERSION,
+            "limits":{"total":vec![1_000_000_u64;14], "per_target":vec![100_000_u64;14],
+                "maximum_raw_integer_bits":8192, "maximum_reduced_fraction_bits":8192,
+                "maximum_lifetime_peak_rss_bytes":268435456, "guard_interval_events":128,
+                "maximum_total_seconds":600.0, "maximum_target_seconds":120.0},
+            "tolerances":{"absolute_field_apm":1e-9,"relative_field":1e-5,"cancellation_floor_apm":1e-6,
+                "scalar_relative_80":1e-45,"scalar_relative_120":1e-55,"angle_relative_80":1e-45,"angle_relative_120":1e-55,
+                "binary_scalar_epsilon_factor":16.0,"binary_roundoff_epsilon_factor":64.0,
+                "binary_cancellation_limit":1e8,"highprecision_cancellation_limit":1e40}
+        });
+        serde_json::from_value(ir.take()).unwrap()
+    }
+
+    fn retained_current_study() -> StudyPlan {
+        let mut study = study();
+        study.schema_version = fullmag_authoring::STUDY_PLAN_SCHEMA_VERSION_V4.into();
+        let step = &mut study.steps[0];
+        step.until_seconds = None;
+        step.kind = StudyStepKind::RetainedCurrentFieldInspection {
+            stage_id: "inspect_antenna".into(), port_mode_id: "port".into(), output_id: "field".into(),
+        };
+        step.outputs = vec![StudyOutputPort {
+            port_id: "inspection".into(),
+            data_kind: fullmag_authoring::StudyPortDataKind::Artifact,
+        }];
+        study
+    }
+
+    #[test]
+    fn retained_current_study_lowers_without_a_source_mesh_or_fresh_transport() {
+        let problem = retained_current_problem();
+        let output_id = problem.antenna_field_solve_stages[0].outputs[0].id.clone();
+        let mut study = retained_current_study();
+        let StudyStepKind::RetainedCurrentFieldInspection { output_id: selected, .. } = &mut study.steps[0].kind else {panic!()};
+        *selected = output_id.clone();
+        let operation = validate_retained_current_field_operation(&problem, "inspect_antenna", "port", &output_id).unwrap();
+        let lowered = lower_study_plan(&study, |_| Ok::<_, &'static str>(problem.clone())).unwrap();
+        let fullmag_ir::BackendPlanIR::AntennaRetainedCurrentFieldInspection(actual) = &lowered.steps[0].execution_plan.as_ref().unwrap().backend_plan else {panic!()};
+        assert_eq!(actual, &operation);
+        assert_eq!(lowered.schema_version, STUDY_EXECUTION_PLAN_SCHEMA_V4);
+        lowered.validate().unwrap();
+        let wire = serde_json::to_value(&lowered).unwrap();
+        assert_eq!(serde_json::from_value::<StudyExecutionPlan>(wire).unwrap(), lowered);
+        assert!(crate::plan_antenna_field_solve_execution(&problem, "inspect_antenna", "port").is_err());
+    }
+
+    #[test]
+    fn retained_current_validator_rejects_selector_substitution_and_legacy_carriers() {
+        let problem = retained_current_problem();
+        let output = &problem.antenna_field_solve_stages[0].outputs[0].id;
+        for (stage, port, output) in [("missing", "port", output.as_str()),
+            ("inspect_antenna", "missing", output.as_str()), ("inspect_antenna", "port", "missing")] {
+            assert!(validate_retained_current_field_operation(&problem, stage, port, output).is_err());
+        }
+        assert!(validate_retained_current_field_operation(&ProblemIR::bootstrap_example(), "inspect_antenna", "port", output).is_err());
+        let mut fresh = problem;
+        fresh.antenna_field_solve_stages[0].retained_current_source = None;
+        assert!(validate_retained_current_field_operation(&fresh, "inspect_antenna", "port", "field").is_err());
+    }
+
+    fn lowered_retained_current() -> StudyExecutionPlan {
+        let problem = retained_current_problem();
+        let mut study = retained_current_study();
+        let StudyStepKind::RetainedCurrentFieldInspection { output_id, .. } = &mut study.steps[0].kind else {panic!()};
+        *output_id = problem.antenna_field_solve_stages[0].outputs[0].id.clone();
+        lower_study_plan(&study, |_| Ok::<_, &'static str>(problem.clone())).unwrap()
+    }
+
+    #[test]
+    fn retained_carrier_cannot_hide_under_any_legacy_kind_or_version() {
+        let original = lowered_retained_current();
+        for kind in [StudyStepKind::Primitive { stage_kind: StudyPrimitiveStageKind::AntennaFieldSolve },
+            StudyStepKind::ClosedLoopInspection { stage_id: "inspect_antenna".into(), port_mode_id: "port".into(), output_id: "field".into() },
+            StudyStepKind::Group { child_step_ids: vec![] }] {
+            let mut invalid = original.clone(); invalid.steps[0].kind = kind;
+            assert!(invalid.validate().is_err());
+        }
+        for version in [STUDY_EXECUTION_PLAN_SCHEMA_V1, STUDY_EXECUTION_PLAN_SCHEMA_V2, STUDY_EXECUTION_PLAN_SCHEMA] {
+            let mut invalid = original.clone(); invalid.schema_version = version.into();
+            assert!(invalid.validate().is_err());
+            assert!(serde_json::to_value(invalid).is_err());
+            let mut wire = serde_json::to_value(&original).unwrap(); wire["schema_version"] = json!(version);
+            if version != STUDY_EXECUTION_PLAN_SCHEMA {
+                wire["steps"][0].as_object_mut().unwrap().remove("completion_dependencies");
+            }
+            assert!(serde_json::from_value::<StudyExecutionPlan>(wire).is_err());
+        }
+    }
+
+    #[test]
+    fn retained_lowered_validation_rejects_legacy_plan_and_static_contract_tampering() {
+        let original = lowered_retained_current();
+        for case in ["carrier", "output", "port", "source", "source_epoch", "horizon", "input", "assessment", "acquisition", "output_kind"] {
+            let mut invalid = original.clone();
+            let step = &mut invalid.steps[0];
+            match case {
+                "carrier" => step.execution_plan = Some(lower_problem_plan(&ProblemIR::bootstrap_example()).unwrap()),
+                "horizon" => step.until_seconds = Some(1.0),
+                "input" => step.inputs.push(fullmag_authoring::StudyInputPort { port_id: "initial_state".into(),
+                    data_kind: fullmag_authoring::StudyPortDataKind::InitialState, required: true,
+                    source: fullmag_authoring::StudyInputSource::AuthoredInitialState { reference: "state".into() } }),
+                "assessment" => step.acceptance = StudyAcceptancePolicy::Converged,
+                "acquisition" => step.acquisition = StudyAcquisitionPolicy::Shared,
+                "output_kind" => step.outputs[0].data_kind = fullmag_authoring::StudyPortDataKind::State,
+                _ => {
+                    let fullmag_ir::BackendPlanIR::AntennaRetainedCurrentFieldInspection(operation) = &mut step.execution_plan.as_mut().unwrap().backend_plan else {panic!()};
+                    match case {
+                        "output" => operation.stage.outputs[0].id = "other".into(),
+                        "port" => operation.stage.port_mode_ids = vec!["other".into()],
+                        "source" => operation.stage.retained_current_source = None,
+                        "source_epoch" => { let fullmag_ir::AntennaRetainedCurrentSourceIR::PublishedInspection { ownership_epoch, .. } = operation.stage.retained_current_source.as_mut().unwrap(); *ownership_epoch = "01".into(); },
+                        _ => unreachable!(),
+                    }
+                }
+            }
+            assert!(invalid.validate().is_err(), "{case}");
+        }
     }
 
 }

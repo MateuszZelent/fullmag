@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
+import hashlib
 import math
 from typing import Mapping, Sequence
 from types import MappingProxyType
@@ -451,6 +453,80 @@ class AntennaSurfaceFieldPolicy:
 
 
 @dataclass(frozen=True, slots=True)
+class AntennaSourcePreparationAsset:
+    """Explicit input-only frozen source; accepted runtime authenticates its parent."""
+
+    source: str | Path
+    content_sha256: str
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.source, (str, Path)) or not str(self.source).strip():
+            raise TypeError("source preparation requires a non-empty Path or string")
+        if (not isinstance(self.content_sha256, str) or len(self.content_sha256) != 64
+                or any(c not in "0123456789abcdef" for c in self.content_sha256)):
+            raise ValueError("source preparation content_sha256 must be lowercase SHA256")
+
+    def resolved_source(self, source_root: str | Path | None = None) -> Path:
+        root = Path(source_root or Path.cwd()).resolve(strict=True)
+        path = Path(self.source).expanduser()
+        path = path if path.is_absolute() else root / path
+        # The observed input closure rejects links as well; refuse before reading.
+        for candidate in (path, *path.parents):
+            if candidate.is_symlink():
+                raise ValueError("source preparation must not traverse a symlink")
+        path = path.resolve(strict=True)
+        try:
+            path.relative_to(root)
+        except ValueError as error:
+            raise ValueError("source preparation must belong to the script source closure") from error
+        if not path.is_file():
+            raise ValueError("source preparation must be a regular file")
+        return path
+
+    def to_ir(self, *, source_root: str | Path | None = None) -> dict[str, str]:
+        root = Path(source_root or Path.cwd()).resolve(strict=True)
+        relative = self.resolved_source(root).relative_to(root).as_posix()
+        key = "source/" + relative
+        return {"asset_id": "script-file-" + hashlib.sha256(key.encode("utf-8")).hexdigest(),
+                "content_sha256": self.content_sha256}
+
+
+@dataclass(frozen=True, slots=True)
+class AntennaRetainedCurrentSource:
+    """Immutable locator; authentication belongs to accepted runtime preparation."""
+
+    project_id: str
+    run_id: str
+    task_id: str
+    attempt_id: str
+    ownership_epoch: str
+    artifact_id: str
+    object_ref: str
+    kind: str = "published_inspection"
+
+    def __post_init__(self) -> None:
+        if self.kind != "published_inspection":
+            raise ValueError("retained_current_source.kind must be published_inspection")
+        for name in ("project_id", "run_id", "task_id", "attempt_id", "artifact_id"):
+            value = getattr(self, name)
+            if not isinstance(value, str):
+                raise TypeError(f"retained_current_source.{name} must be a string")
+            if not value or value != value.strip() or any(ord(c) < 32 or 127 <= ord(c) <= 159 for c in value):
+                raise ValueError(f"retained_current_source.{name} must be a canonical non-empty identifier")
+        epoch = self.ownership_epoch
+        if not isinstance(epoch, str) or not epoch or epoch[0] == "0" or any(c not in "0123456789" for c in epoch) or len(epoch) > 20 or int(epoch) > 2**64 - 1:
+            raise ValueError("retained_current_source.ownership_epoch must be a canonical positive u64 string")
+        if not isinstance(self.object_ref, str) or len(self.object_ref) != 64 or any(c not in "0123456789abcdef" for c in self.object_ref):
+            raise ValueError("retained_current_source.object_ref must be a lowercase SHA256")
+
+    def to_ir(self) -> dict[str, object]:
+        return {name: getattr(self, name) for name in (
+            "kind", "project_id", "run_id", "task_id", "attempt_id", "ownership_epoch",
+            "artifact_id", "object_ref",
+        )}
+
+
+@dataclass(frozen=True, slots=True)
 class AntennaFieldSolveStage:
     id: str
     source_object_id: str
@@ -460,6 +536,8 @@ class AntennaFieldSolveStage:
     field_sampling_domain: FieldTarget
     target_refs: tuple[FieldTarget, ...]
     outputs: tuple[AntennaNamedOutput, ...]
+    retained_current_source: AntennaRetainedCurrentSource | None = None
+    retained_source_preparation: AntennaSourcePreparationAsset | None = None
     surface_field_policy: AntennaSurfaceFieldPolicy | None = None
     oersted_realization: str = "direct_tetra_quadrature"
     model: str = "quasistatic_conduction_biot_savart3d"
@@ -474,6 +552,8 @@ class AntennaFieldSolveStage:
         current_transport_id: str,
         port_mode_ids: Sequence[str],
         conservative_current_view_ref: str | None = None,
+        retained_current_source: AntennaRetainedCurrentSource | None = None,
+        retained_source_preparation: AntennaSourcePreparationAsset | None = None,
         field_sampling_domain: FieldTarget,
         target_refs: Sequence[FieldTarget],
         outputs: Sequence[AntennaNamedOutput],
@@ -524,6 +604,19 @@ class AntennaFieldSolveStage:
         if surface_field_policy is not None and not isinstance(surface_field_policy, AntennaSurfaceFieldPolicy):
             raise TypeError("surface_field_policy must be an AntennaSurfaceFieldPolicy")
         object.__setattr__(self, "surface_field_policy", surface_field_policy)
+        if retained_current_source is not None:
+            if not isinstance(retained_current_source, AntennaRetainedCurrentSource):
+                raise TypeError("retained_current_source must be an AntennaRetainedCurrentSource")
+            direct_asset = realization == "direct_tetra_quadrature" and retained_source_preparation is not None
+            if conservative_current_view_ref is not None or (realization != "analytic_rt0_surface" and not direct_asset):
+                raise ValueError("retained current requires analytic_rt0_surface or asset-backed direct_tetra_quadrature and no legacy current view")
+        if retained_source_preparation is not None:
+            if not isinstance(retained_source_preparation, AntennaSourcePreparationAsset):
+                raise TypeError("retained_source_preparation must be an AntennaSourcePreparationAsset")
+            if retained_current_source is None:
+                raise ValueError("source preparation is allowed only for retained-current H-only")
+        object.__setattr__(self, "retained_source_preparation", retained_source_preparation)
+        object.__setattr__(self, "retained_current_source", retained_current_source)
         if model != "quasistatic_conduction_biot_savart3d":
             raise ValueError("unsupported antenna field model")
         object.__setattr__(self, "port_mode_ids", ports)
@@ -533,7 +626,7 @@ class AntennaFieldSolveStage:
         object.__setattr__(self, "oersted_realization", realization)
         object.__setattr__(self, "model", model)
 
-    def to_ir(self) -> dict[str, object]:
+    def to_ir(self, *, source_root: str | Path | None = None) -> dict[str, object]:
         payload: dict[str, object] = {
             "id": self.id,
             "source_object_id": self.source_object_id,
@@ -551,6 +644,10 @@ class AntennaFieldSolveStage:
             payload["conservative_current_view_ref"] = self.conservative_current_view_ref
         if self.surface_field_policy is not None:
             payload["surface_field_policy"] = self.surface_field_policy.to_ir()
+        if self.retained_current_source is not None:
+            payload["retained_current_source"] = self.retained_current_source.to_ir()
+        if self.retained_source_preparation is not None:
+            payload["retained_source_preparation"] = self.retained_source_preparation.to_ir(source_root=source_root)
         return payload
 
 

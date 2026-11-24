@@ -1,4 +1,4 @@
-"""Mesh-exact, full-volume microstrip loop inputs; never a solved-field certificate."""
+"""Mesh-exact, full-volume microstrip and GSG loop inputs; never a solved-field certificate."""
 from __future__ import annotations
 
 from collections import Counter, defaultdict, deque
@@ -10,7 +10,7 @@ import json
 import numpy as np
 
 from fullmag.model.current_transport import ConservativeCurrentClosedGeometry, ConservativeCurrentSourceCut, ConservativeCurrentSourceCutFacePair
-from fullmag.model.geometry import MicrostripAntennaLayout
+from fullmag.model.geometry import CPWAntennaLayout, MicrostripAntennaLayout
 from ._gmsh_types import MeshData, MeshOptions
 
 _TET_FACES = ((1, 2, 3), (0, 3, 2), (0, 1, 3), (0, 2, 1))
@@ -157,8 +157,8 @@ def split_coincident_sourcecut(mesh, *, seam_faces, stable_vertex_ids, normal_wo
 
 
 def _validate_loop_request(closure, geometry, object_id, hmax_m):
-    if closure.schema_version != "structured_current_closure.v2" or not isinstance(geometry, MicrostripAntennaLayout) or not geometry.closed_loop:
-        raise ValueError("explicit structured closure v2 and closed microstrip geometry required")
+    if closure.schema_version != "structured_current_closure.v2" or not isinstance(geometry, (MicrostripAntennaLayout, CPWAntennaLayout)) or not geometry.closed_loop:
+        raise ValueError("explicit structured closure v2 and closed microstrip or GSG geometry required")
     if not np.isfinite(hmax_m) or hmax_m <= 0:
         raise ValueError("hmax_m must be finite positive")
     cut = closure.source_cuts[0]
@@ -167,7 +167,13 @@ def _validate_loop_request(closure, geometry, object_id, hmax_m):
     if not isinstance(object_id, str) or not object_id.strip() or cut.region.object_id != object_id:
         raise ValueError("sourcecut must bind the explicit immutable geometry object_id")
     offset = cut.plane.offset_m
-    if not -geometry.thickness_m / 2 - geometry.return_offset_m < offset < -geometry.thickness_m / 2:
+    expected_axis = "x" if isinstance(geometry, CPWAntennaLayout) else "z"
+    if cut.plane.coordinate_frame != "object" or cut.plane.axis != expected_axis:
+        raise ValueError("sourcecut axis must match the authored inlet geometry")
+    if isinstance(geometry, CPWAntennaLayout):
+        if not -geometry.inlet_connection_length_m + geometry.inlet_crossbar_length_m < offset < 0:
+            raise ValueError("sourcecut lies outside the central inlet neck")
+    elif not -geometry.thickness_m / 2 - geometry.return_offset_m < offset < -geometry.thickness_m / 2:
         raise ValueError("sourcecut lies outside inlet dielectric clearance")
     return cut
 
@@ -191,16 +197,21 @@ def realize_antenna_coincident_loop_mesh(closure, *, geometry, object_id, hmax_m
         add_antenna_layout_terminal_physical_groups(gmsh, geometry, parts, scale=scale, object_id=cut.region.object_id)
         inlet = parts[geometry.inlet_connection_part_id]
         surfaces = [tag for dim, tag in gmsh.model.getBoundary(inlet, combined=False, oriented=False) if dim == 2]
-        plane_normal = np.linalg.inv(np.asarray(geometry.transform.rotation_matrix)).T[:, 2]
+        axis = 0 if cut.plane.axis == "x" else 2
+        plane_normal = np.linalg.inv(np.asarray(geometry.transform.rotation_matrix)).T[:, axis]
         plane_normal /= np.linalg.norm(plane_normal)
-        origin = np.asarray(geometry.transform.apply((0, 0, offset))) * scale
+        local_origin = [0., 0., 0.]
+        local_origin[axis] = offset
+        origin = np.asarray(geometry.transform.apply(local_origin)) * scale
         selected = []
         for tag, count in sorted(Counter(abs(tag) for tag in surfaces).items()):
             if count != 2:
                 continue
-            # The shared interface of the two authored inlet solids owns this cut.
+            # GSG also has neck/crossbar interfaces away from the source plane.
             center = np.asarray(gmsh.model.occ.getCenterOfMass(2, tag))
             if abs(float(np.dot(center - origin, plane_normal))) >= 1e-10:
+                if isinstance(geometry, CPWAntennaLayout):
+                    continue
                 raise ValueError("inlet conforming interface does not match source plane")
             selected.append(tag)
         if not selected:
@@ -241,17 +252,20 @@ def prepare_antenna_coincident_loop(closure, *, geometry, object_id, hmax_m, raw
     if not isinstance(mesh, MeshData) or mesh.vertex_identity is None:
         raise ValueError("coincident preparation requires actual mesher-produced stable vertex IDs")
     ids = mesh.vertex_identity["vertex_ids"]
-    plane_normal = np.linalg.inv(np.asarray(geometry.transform.rotation_matrix)).T[:, 2]
+    axis = 0 if cut.plane.axis == "x" else 2
+    plane_normal = np.linalg.inv(np.asarray(geometry.transform.rotation_matrix)).T[:, axis]
     plane_normal /= np.linalg.norm(plane_normal)
     seam_faces = mesh.boundary_faces[mesh.boundary_markers == 2]
     local = (mesh.nodes[np.asarray(seam_faces).reshape(-1)] - np.asarray(geometry.transform.translation_m)) @ np.linalg.inv(np.asarray(geometry.transform.rotation_matrix)).T
-    if len(seam_faces) == 0 or np.any(np.abs(local[:, 2] - cut.plane.offset_m) > max(geometry.length_m, geometry.thickness_m) * 1e-12):
+    if len(seam_faces) == 0 or np.any(np.abs(local[:, axis] - cut.plane.offset_m) > max(geometry.length_m, geometry.thickness_m) * 1e-12):
         raise ValueError("cached sourcecut does not match the authored object-frame plane")
     normal = plane_normal if cut.plane.normal == "positive_axis" else -plane_normal
     mesh, ids, source = split_coincident_sourcecut(mesh, seam_faces=seam_faces, stable_vertex_ids=ids,
         normal_world=normal, source_cut_id=cut.source_cut_id, potential_jump_v=cut.drive.potential_jump_V)
-    sigma_by_marker = {1: geometry.conductivity_s_per_m, 2: geometry.conductivity_s_per_m,
-                       3: geometry.inlet_connection_conductivity_s_per_m, 4: geometry.outlet_connection_conductivity_s_per_m}
+    count = len(geometry.conductor_part_ids)
+    sigma_by_marker = {marker: geometry.conductivity_s_per_m for marker in range(1, count + 1)}
+    sigma_by_marker.update({count + 1: geometry.inlet_connection_conductivity_s_per_m,
+                            count + 2: geometry.outlet_connection_conductivity_s_per_m})
     sigma = tuple(sigma_by_marker[int(marker)] for marker in mesh.element_markers)
     payload = {"geometry": geometry.to_ir(), "authored_closure": closure.to_ir(), "hmax_m": hmax_m,
                "mesh": mesh.to_ir(geometry.geometry_name), "stable_vertex_ids": list(ids), "conductivity": list(sigma)}
@@ -268,13 +282,16 @@ def prepare_antenna_coincident_loop(closure, *, geometry, object_id, hmax_m, raw
 def coincident_terminal_observations(raw_mesh, prepared, *, geometry, object_id, port):
     """Bind authored refs to actual internal TRI3 contacts, outward from each part."""
     from ._gmsh_waveguides import antenna_terminal_marker
+    branch_count = len(geometry.conductor_part_ids)
+    if branch_count not in (2, 3):
+        raise ValueError("terminal observations support microstrip or three-strip GSG")
     if {branch.id for branch in port.branches} != set(geometry.conductor_part_ids):
         raise ValueError("coincident port must bind the exact signal and return part IDs")
-    if len(port.branches) != 2 or any(not np.isfinite(branch.signed_weight) for branch in port.branches):
-        raise ValueError("coincident port requires exactly two finite-weight branches")
+    if len(port.branches) != branch_count or any(not np.isfinite(branch.signed_weight) for branch in port.branches):
+        raise ValueError("coincident port requires one finite-weight branch per conductor")
     references = [ref for branch in port.branches for ref in (branch.inlet_terminal_ref, branch.outlet_terminal_ref)]
-    if any(not isinstance(ref, str) or not ref.strip() for ref in references) or len(set(references)) != 4:
-        raise ValueError("coincident source requires four unique authored observation references")
+    if any(not isinstance(ref, str) or not ref.strip() for ref in references) or len(set(references)) != 2 * branch_count:
+        raise ValueError("coincident source requires two unique authored observation references per conductor")
     ids = prepared.stable_vertex_ids
     id_nodes = {identity: index for index, identity in enumerate(ids)}
     topology = _faces(prepared.mesh.elements)
@@ -286,10 +303,10 @@ def coincident_terminal_observations(raw_mesh, prepared, *, geometry, object_id,
     tolerance = max(geometry.length_m, geometry.thickness_m) * 1e-12
     observations = []
     for branch in port.branches:
-        part_marker = 1 if branch.id == geometry.signal_part_id else 2
+        part_marker = geometry.conductor_part_ids.index(branch.id) + 1
         for selector, reference, bridge_marker, position, sign in (
-            ("local_u_min", branch.inlet_terminal_ref, 3, 0.0, -1.0),
-            ("local_u_max", branch.outlet_terminal_ref, 4, geometry.length_m, 1.0),
+            ("local_u_min", branch.inlet_terminal_ref, branch_count + 1, 0.0, -1.0),
+            ("local_u_max", branch.outlet_terminal_ref, branch_count + 2, geometry.length_m, 1.0),
         ):
             marker = antenna_terminal_marker(object_id, branch.id, selector)
             raw_faces = raw_mesh.boundary_faces[raw_mesh.boundary_markers == marker]

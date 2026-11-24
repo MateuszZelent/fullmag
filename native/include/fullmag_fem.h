@@ -1574,6 +1574,14 @@ typedef struct {
 static_assert(sizeof(fullmag_fem_antenna_operation_progress_v1) == 56, "antenna progress ABI");
 static_assert(sizeof(fullmag_fem_antenna_operation_observer_v1) == 32, "antenna observer ABI");
 #endif
+FULLMAG_FEM_API int fullmag_fem_solve_prepared_closed_loop_rt0_oersted_observed_v1(
+    const fullmag_fem_prepared_closed_loop_oersted_request_v2 *request,
+    fullmag_fem_steady_transport_rt0_oersted_result_v1 *result,
+    fullmag_fem_steady_transport_rt0_charge_snapshot_result_v1 *charge,
+    fullmag_fem_direct_oersted_snapshot_result_v1 *quadrature,
+    fullmag_fem_prepared_closed_loop_source_snapshot_result_v2 *source,
+    const fullmag_fem_antenna_operation_observer_v1 *observer);
+
 FULLMAG_FEM_API int fullmag_fem_solve_prepared_closed_loop_rt0_surface_observed_v1(
     const fullmag_fem_prepared_closed_loop_rt0_surface_request_v1 *request,
     fullmag_fem_prepared_closed_loop_rt0_surface_result_v1 *result,
@@ -1582,7 +1590,119 @@ FULLMAG_FEM_API int fullmag_fem_solve_prepared_closed_loop_rt0_surface_observed_
     fullmag_fem_surface_rt0_profile_result_v1 *profile,
     const fullmag_fem_antenna_operation_observer_v1 *observer);
 
+/* Additive H-only binding for canonically verified retained RT0. Neither these
+ * digests nor the private kernel authenticate a saved source. The canonical
+ * runtime must validate its owner/Completed/preparation/journal/CAS first.
+ * Caller owns all storage through this synchronous call. No charge solve,
+ * MFEM view, V/J output, current scaling, or implicit device fallback. */
+#define FULLMAG_FEM_FROZEN_RT0_SURFACE_ABI_VERSION 1u
+typedef struct {
+    double vertices_m[12];
+    /* Generic local coefficients in A, with DOF sign applied exactly once.
+     * These are NOT physical integrated face currents. */
+    double signed_coefficients_a[4];
+} fullmag_fem_frozen_rt0_element_v1;
+typedef struct {
+    uint32_t abi_version, reserved_flags;
+    uint64_t struct_size;
+    fullmag_fem_steady_transport_execution_lane execution_lane;
+    uint32_t reserved;
+    const fullmag_fem_frozen_rt0_element_v1 *source;
+    uint64_t source_count;
+    const double *target_points_xyz;
+    uint64_t target_points_xyz_len;
+    const char *source_view_identity_digest;
+    const char *accepted_source_state_digest;
+    fullmag_fem_surface_rt0_options_v1 options;
+} fullmag_fem_frozen_rt0_surface_request_v1;
+typedef struct {
+    uint32_t abi_version, reserved_flags;
+    uint64_t struct_size;
+    double *h_xyz_apm;
+    uint64_t h_xyz_apm_capacity, h_xyz_apm_len;
+    uint8_t *evidence_json;
+    uint64_t evidence_json_capacity, evidence_json_len;
+    char error_message[256];
+} fullmag_fem_frozen_rt0_surface_result_v1;
+#if defined(__cplusplus) && INTPTR_MAX == INT64_MAX
+static_assert(sizeof(fullmag_fem_frozen_rt0_element_v1) == 128, "frozen RT0 element ABI");
+static_assert(alignof(fullmag_fem_frozen_rt0_element_v1) == 8, "frozen RT0 element alignment");
+static_assert(offsetof(fullmag_fem_frozen_rt0_element_v1, signed_coefficients_a) == 96, "frozen RT0 coefficients ABI");
+static_assert(sizeof(fullmag_fem_frozen_rt0_surface_request_v1) == 440, "frozen RT0 request ABI");
+static_assert(alignof(fullmag_fem_frozen_rt0_surface_request_v1) == 8, "frozen RT0 request alignment");
+static_assert(offsetof(fullmag_fem_frozen_rt0_surface_request_v1, source) == 24, "frozen RT0 source ABI");
+static_assert(offsetof(fullmag_fem_frozen_rt0_surface_request_v1, target_points_xyz) == 40, "frozen RT0 targets ABI");
+static_assert(offsetof(fullmag_fem_frozen_rt0_surface_request_v1, source_view_identity_digest) == 56, "frozen RT0 digest ABI");
+static_assert(offsetof(fullmag_fem_frozen_rt0_surface_request_v1, accepted_source_state_digest) == 64, "frozen RT0 accepted digest ABI");
+static_assert(offsetof(fullmag_fem_frozen_rt0_surface_request_v1, options) == 72, "frozen RT0 options ABI");
+static_assert(sizeof(fullmag_fem_frozen_rt0_surface_result_v1) == 320, "frozen RT0 result ABI");
+static_assert(alignof(fullmag_fem_frozen_rt0_surface_result_v1) == 8, "frozen RT0 result alignment");
+static_assert(offsetof(fullmag_fem_frozen_rt0_surface_result_v1, evidence_json) == 40, "frozen RT0 evidence ABI");
+static_assert(offsetof(fullmag_fem_frozen_rt0_surface_result_v1, error_message) == 64, "frozen RT0 error ABI");
+#endif
+/* A non-null profile/observer uses the unchanged versioned diagnostic structs.
+ * Callbacks must obey the existing nonblocking/no-throw lifetime contract.
+ * Aliasing or malformed descriptor rejection is mutation-free, even for errors.
+ * Profile remains available after kernel entry on refusal; H/evidence never do. */
+FULLMAG_FEM_API int fullmag_fem_evaluate_frozen_rt0_surface_observed_v1(
+    const fullmag_fem_frozen_rt0_surface_request_v1 *request,
+    fullmag_fem_frozen_rt0_surface_result_v1 *result,
+    fullmag_fem_surface_rt0_profile_result_v1 *profile,
+    const fullmag_fem_antenna_operation_observer_v1 *observer);
 
+
+
+
+/* Numeric-only retained direct RT0 adapter. No digest, source authentication,
+ * current normalization, transport solve, or device fallback. All buffers remain
+ * caller-owned through this synchronous call. Invalid descriptors/aliasing are
+ * rejected without mutation; failed numerical work publishes no target records. */
+#define FULLMAG_FEM_FROZEN_RT0_DIRECT_ABI_VERSION 1u
+typedef struct {
+    uint32_t abi_version, reserved_flags;
+    uint64_t struct_size;
+    fullmag_fem_steady_transport_execution_lane execution_lane;
+    uint32_t reserved;
+    const fullmag_fem_frozen_rt0_element_v1 *source;
+    uint64_t source_count;
+    const double *target_points_xyz;
+    uint64_t target_points_xyz_len;
+    int32_t base_quadrature_order, maximum_subdivision_depth;
+    double absolute_tolerance_apm, relative_tolerance;
+    uint64_t maximum_source_target_pairs;
+} fullmag_fem_frozen_rt0_direct_request_v1;
+typedef struct {
+    uint32_t abi_version, reserved_flags;
+    uint64_t struct_size;
+    fullmag_fem_direct_oersted_target_record_v1 *target_records;
+    uint64_t target_records_capacity, target_records_len;
+    uint64_t source_target_pairs, refined_pairs, unconverged_pair_count;
+    double maximum_pair_error_apm;
+    uint64_t kernel_evaluations, ledger_leaf_visits;
+    int32_t base_quadrature_order, maximum_subdivision_depth;
+    double absolute_tolerance_apm, relative_tolerance, relative_scale_floor_apm;
+    uint64_t maximum_source_target_pairs, maximum_final_leaves_per_target;
+    uint64_t maximum_kernel_evaluations, maximum_ledger_leaf_visits;
+    char error_message[256];
+} fullmag_fem_frozen_rt0_direct_result_v1;
+#if defined(__cplusplus) && INTPTR_MAX == INT64_MAX
+static_assert(sizeof(fullmag_fem_frozen_rt0_direct_request_v1)==88, "frozen direct request ABI");
+static_assert(alignof(fullmag_fem_frozen_rt0_direct_request_v1)==8, "frozen direct request alignment");
+static_assert(offsetof(fullmag_fem_frozen_rt0_direct_request_v1,source)==24, "frozen direct source ABI");
+static_assert(offsetof(fullmag_fem_frozen_rt0_direct_request_v1,target_points_xyz)==40, "frozen direct targets ABI");
+static_assert(offsetof(fullmag_fem_frozen_rt0_direct_request_v1,base_quadrature_order)==56, "frozen direct options ABI");
+static_assert(offsetof(fullmag_fem_frozen_rt0_direct_request_v1,maximum_source_target_pairs)==80, "frozen direct pair budget ABI");
+static_assert(sizeof(fullmag_fem_frozen_rt0_direct_result_v1)==408, "frozen direct result ABI");
+static_assert(alignof(fullmag_fem_frozen_rt0_direct_result_v1)==8, "frozen direct result alignment");
+static_assert(offsetof(fullmag_fem_frozen_rt0_direct_result_v1,target_records)==16, "frozen direct records ABI");
+static_assert(offsetof(fullmag_fem_frozen_rt0_direct_result_v1,source_target_pairs)==40, "frozen direct diagnostics ABI");
+static_assert(offsetof(fullmag_fem_frozen_rt0_direct_result_v1,base_quadrature_order)==88, "frozen direct result options ABI");
+static_assert(offsetof(fullmag_fem_frozen_rt0_direct_result_v1,error_message)==152, "frozen direct error ABI");
+#endif
+FULLMAG_FEM_API int fullmag_fem_evaluate_frozen_rt0_direct_observed_v1(
+    const fullmag_fem_frozen_rt0_direct_request_v1 *request,
+    fullmag_fem_frozen_rt0_direct_result_v1 *result,
+    const fullmag_fem_antenna_operation_observer_v1 *observer);
 
 typedef struct {
     uint32_t abi_version;

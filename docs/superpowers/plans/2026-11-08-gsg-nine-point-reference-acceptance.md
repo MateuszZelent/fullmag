@@ -149,3 +149,27 @@ Profil pozostaje zgodny z
 
 Raport odbiera istniejący eksperyment; nie zmienia metody, API, ProblemIR,
 polityki limitów ani statusu kwalifikacji.
+
+## Kontrola zachowania danych po aktualizacji środowiska — 10.11.2026
+
+Po zewnętrznej aktualizacji Desktop do 4.99.0 sprawdzono trwałą kopię na WSL bez
+uruchamiania solvera, referencji lub API. Manifest zachowuje SHA256
+b16e054c34ebf287e5762f6f63957b80d38aa6c597729ae2e275ddf88a43ad79.
+Wszystkie 32 wpisy manifestu (419 235 853 B) mają zgodne rozmiary i hashe;
+nie znaleziono dodatkowych plików poza samym manifestem.
+
+Każdy z dziewięciu plików punktów jest zgodny z point_results końcowego wyniku.
+Niezależnie przeliczono normy różnicy i istniejące bramki w Decimal100, z dokładną
+konwersją zachowanych binary64 przez Decimal.from_float. Wynik 9/9 PASS;
+maksima zgadzają się z powyższą tabelą. Nie wykonywano ponownie całkowania,
+nie dopasowywano amplitudy, znaku ani tolerancji.
+
+Dowód:
+.superpowers/sdd/2026-11-09-saved-authoring-completed-build-reconciliation-proposal/gsg-archive-readonly-audit-20261110.json,
+SHA256 2ca4f5d885aa7fb645327e2d1a638fae0aa002be03db8b93669033d815fc43f6.
+
+To kontrola integralności zachowanych danych i arytmetyki porównania, nie nowy
+odbiór natywnego solvera lub aktualnego API. Nadal brak kwalifikowanej bazy,
+potwierdzonej zbieżności transportu oraz odtworzonej odpowiedzi z Fig.3.
+Aktualne API3203 nie działa; runtime recovery oczekuje na decyzję dla osobnej
+wersjonowanej bramki. Nie wykonano kolejnego Solve.

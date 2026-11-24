@@ -137,6 +137,7 @@ def _capture_scene_document(
     source_root: str | Path | None,
     include_authored_stages: bool,
     include_legacy_relax_stages: bool,
+    source_preparation_assets=None,
 ) -> Iterator[_SceneDocumentCapture]:
     """Render and capture one scene while its private source file is alive."""
 
@@ -144,6 +145,16 @@ def _capture_scene_document(
         raise TypeError("SceneDocument must be a JSON object")
     scene = copy.deepcopy(dict(scene_document))
     _reject_unlowered_scene_fields(scene)
+    if source_preparation_assets:
+        from fullmag.runtime.script_builder import _source_preparation_from_capture
+        roots = {_source_preparation_from_capture({"asset_id": key, "content_sha256": record["sha256"]}, source_preparation_assets)[1]
+                 for key, record in source_preparation_assets.items()}
+        if len(roots) != 1:
+            raise ValueError("source preparation scene capture requires one immutable input closure")
+        captured_root = next(iter(roots))
+        if source_root is not None and Path(source_root).resolve() != captured_root.resolve():
+            raise ValueError("source preparation scene capture root differs from immutable input closure")
+        source_root = captured_root
     stable_source_root = (
         Path(source_root).resolve() if source_root is not None else Path.cwd().resolve()
     )
@@ -243,11 +254,16 @@ def _capture_scene_document(
         include_authored_stages=include_authored_stages,
         include_legacy_relax_stages=include_legacy_relax_stages,
         _source_root=stable_source_root,
+        source_preparation_assets=source_preparation_assets,
     )
     with tempfile.TemporaryDirectory(prefix="fullmag-scene-problem-ir-") as temporary:
         script_path = Path(temporary) / "scene_document.py"
         script_path.write_text(script_source, encoding="utf-8")
-        loaded = load_problem_from_script(script_path, lightweight_assets=True)
+        if source_preparation_assets:
+            script_path = captured_root / "scene_document.py"
+            loaded = load_problem_from_script(script_path, lightweight_assets=True, source_bytes=script_source.encode("utf-8"))
+        else:
+            loaded = load_problem_from_script(script_path, lightweight_assets=True)
         builder = build_builder_from_scene_document(scene)
         if include_authored_stages:
             authored_stages = _enabled_scene_stages(_scene_antenna_stage_sequence(builder))
@@ -348,6 +364,7 @@ def scene_document_to_problem_ir(
     requested_precision: str,
     requested_mode: str,
     source_root: str | Path | None = None,
+    source_preparation_assets=None,
 ) -> dict[str, object]:
     """Return the canonical, geometry-light ProblemIR for a SceneDocument.
 
@@ -365,6 +382,7 @@ def scene_document_to_problem_ir(
         source_root=source_root,
         include_authored_stages=False,
         include_legacy_relax_stages=True,
+        source_preparation_assets=source_preparation_assets,
     ) as capture:
         problem_ir = _scene_capture_to_ir(capture, include_geometry_assets=False)
         if capture.loaded.stages:
@@ -408,6 +426,7 @@ def scene_document_to_execution_config(
     source_root: str | Path | None = None,
     materialize_geometry_assets: bool = False,
     _accepted_preparation: dict[str, object] | None = None,
+    source_preparation_assets=None,
 ) -> dict[str, object]:
     """Capture stages without solving; geometry realization is execution-only opt-in.
 
@@ -438,6 +457,7 @@ def scene_document_to_execution_config(
         source_root=source_root,
         include_authored_stages=not scene_pipeline_owns_stage_expansion,
         include_legacy_relax_stages=not scene_pipeline_owns_stage_expansion,
+        source_preparation_assets=source_preparation_assets,
     ) as capture:
         study_pipeline = _scene_capture_study_pipeline(capture)
         run_capture = capture

@@ -192,6 +192,9 @@ $$\tilde{N}_{\alpha\beta}[\Delta r] =
 $p_i = 2 N_i$ (open).  The kernel-building loop iterates over image
 indices only for periodic axes.
 
+For one magnetic layer with one periodic lateral axis, use the
+[stable direct image sum](0601-single-layer-dipolar-images.md).
+
 #### 3.1.5 CUDA backend
 
 Same neighbor policy and demag padding changes via C ABI.  The CUDA exchange

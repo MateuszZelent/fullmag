@@ -3,6 +3,9 @@
 use anyhow::{bail, Context, Result};
 use fullmag_application::{AcceptedPreparationReceipt, ClosedLoopPreparationReceipt, RunId, RunSpecification};
 use fullmag_ir::{BackendPlanIR, BackendTarget};
+
+#[path = "accepted_retained_preparation_preparer.rs"]
+mod retained_preparation;
 use fullmag_plan::StudyStepLoweringStatus;
 use fullmag_session::{
     FmsResourceLeaseState, FmsTaskLifecycle, FmsTaskPreparationReceipt, FmsTaskReadiness,
@@ -130,6 +133,12 @@ pub(crate) fn prepare_accepted_fem_task(
     }
     let entry = accepted.catalog.entries().iter().find(|entry| entry.step_id() == step.step_id)
         .context("native preparation has no captured ProblemIR")?;
+    if matches!(&execution_plan.backend_plan, BackendPlanIR::AntennaRetainedCurrentFieldInspection(_)) {
+        return prepare_retained_current_task(store, &accepted, task, &preparation_lease, step, entry.problem());
+    }
+    if matches!(&execution_plan.backend_plan, BackendPlanIR::AntennaRetainedDirectFieldInspection(_) | BackendPlanIR::AntennaRetainedPreparationFieldInspection(_)) {
+        return retained_preparation::prepare(store, &accepted, task, &preparation_lease, step, entry.problem());
+    }
     let (mesh, fe_order) = match (&step.kind, &execution_plan.backend_plan) {
         (fullmag_authoring::StudyStepKind::ClosedLoopInspection { stage_id, port_mode_id, output_id }, BackendPlanIR::AntennaFieldOnly(_)) => {
             let operation = fullmag_plan::validate_closed_loop_operation(entry.problem(), stage_id, port_mode_id, output_id)?;
@@ -265,6 +274,73 @@ pub(crate) fn prepare_accepted_fem_task(
         preparation_id: verified.preparation_id().to_owned(),
         plan_fingerprint: verified.plan_fingerprint().to_owned(),
         replayed,
+    })
+}
+
+/// Parent-bound H-only readiness uses no native source-mesh preparation or charge solve.
+/// The caller has validated the immutable accepted step and its supervisor launch permit.
+fn prepare_retained_current_task(
+    store: &SessionStore,
+    accepted: &fullmag_runtime_control::AcceptedStudySnapshot,
+    task: &fullmag_session::FmsTaskCatalogEntry,
+    lease: &fullmag_session::FmsPreparationResourceLease,
+    step: &fullmag_plan::StudyStepExecutionPlan,
+    problem: &fullmag_ir::ProblemIR,
+) -> Result<AcceptedFemPreparationResult> {
+    let specification = &accepted.run.specification;
+    let run_id = specification.run_id.as_str();
+    let task_id = task.task_id.as_str();
+    let fullmag_authoring::StudyStepKind::RetainedCurrentFieldInspection {
+        stage_id, port_mode_id, output_id,
+    } = &step.kind else { bail!("retained-current preparation requires its exact accepted step"); };
+    let operation = fullmag_plan::validate_retained_current_field_operation(
+        problem, stage_id, port_mode_id, output_id)?;
+    let source = operation.stage.retained_current_source.as_ref()
+        .context("retained-current preparation has no authored source")?;
+    if let Some(durable) = store.read_task_preparation_receipt(run_id, task_id)? {
+        let receipt = accepted.bind_retained_current_preparation(&durable, task_id)?;
+        let loaded = fullmag_runtime_control::load_saved_retained_current_with_pinned_evidence(
+            store, &specification.snapshot.project_id, source, &receipt.plan.parent)?;
+        loaded.verified_parent().validate_source_intent(problem, &operation.stage)?;
+        receipt.validate_for(specification, task_id, step, problem, loaded.parent())?;
+        return Ok(AcceptedFemPreparationResult {
+            run_id: run_id.to_owned(), task_id: task_id.to_owned(), step_id: step.step_id.clone(),
+            preparation_id: receipt.preparation_id, plan_fingerprint: receipt.plan_fingerprint, replayed: true,
+        });
+    }
+    if task.lifecycle != FmsTaskLifecycle::Accepted
+        || !matches!(&task.readiness, FmsTaskReadiness::Blocked { reason }
+            if reason == fullmag_session::FMS_TASK_AWAITING_PREPARATION_REASON)
+        || task.attempt_id.is_some() || task.resource_id.is_some()
+        || lease.state != FmsResourceLeaseState::Active {
+        bail!("new retained-current preparation requires an unclaimed accepted task and active preparation lease");
+    }
+    let loaded = fullmag_runtime_control::load_saved_retained_current_with_store_evidence(
+        store, &specification.snapshot.project_id, source)?;
+    loaded.verified_parent().validate_source_intent(problem, &operation.stage)?;
+    let receipt = fullmag_application::RetainedCurrentPreparationReceipt::ready(
+        specification, task_id, step, problem, loaded.parent().clone())?;
+    // The reader has released SH. Persist only exact immutable metadata, never active parent state.
+    for (expected, bytes) in loaded.metadata_objects() {
+        let actual = retry_preparation_store_writer_busy(|| store.cas().put(bytes))?;
+        if &actual != expected { bail!("retained-current parent metadata CAS identity differs"); }
+    }
+    let receipt = AcceptedPreparationReceipt::RetainedCurrent(receipt);
+    let durable = FmsTaskPreparationReceipt::new(
+        run_id, step.step_id.clone(), task.input_fingerprint.clone(),
+        receipt.preparation_id().to_owned(), receipt.plan_fingerprint().to_owned(), receipt.payload()?,
+    )?;
+    let replayed = matches!(retry_preparation_store_writer_busy(|| {
+        store.commit_task_preparation_receipt_with_preparation_lease(
+            &durable, &lease.resource_id, &lease.preparation_attempt_id, &lease.lease_token)
+    })?, PreparationReceiptCommitDisposition::Replayed);
+    let stored = store.read_task_preparation_receipt(run_id, task_id)?
+        .context("published retained-current preparation is missing")?;
+    let verified = accepted.bind_retained_current_preparation(&stored, task_id)?;
+    verified.validate_for(specification, task_id, step, problem, loaded.parent())?;
+    Ok(AcceptedFemPreparationResult {
+        run_id: run_id.to_owned(), task_id: task_id.to_owned(), step_id: step.step_id.clone(),
+        preparation_id: verified.preparation_id, plan_fingerprint: verified.plan_fingerprint, replayed,
     })
 }
 

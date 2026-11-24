@@ -732,6 +732,7 @@ export function buildViewport3DPrimitiveRenderModel(
     const geometry = asRecord(object?.geometry);
     if (
       !object ||
+      object.visible === false ||
       !objectId ||
       isVisualizationAirboxIdentity({ id: objectId, role: objectRole }) ||
       !geometry

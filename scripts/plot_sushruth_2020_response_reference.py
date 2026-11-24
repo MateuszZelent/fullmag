@@ -73,6 +73,24 @@ def plot_figure3_reference(input_path,output_path):
     return metadata
 
 
+
+def measure_gray_annotation_pixels(image, *, axes, row_bounds):
+    """Read a drawn annotation span; never infer a material FMR from it."""
+    import numpy as np
+    left,right=axes;top,bottom=row_bounds
+    strip=image[top:bottom]
+    gray=(strip[:,:,0]>150)&(strip[:,:,0]<230)&(np.ptp(strip.astype(int),axis=2)<6)
+    first=left+int(.15*(right-left));last=right-int(.15*(right-left))
+    columns=np.flatnonzero(gray[:,first:last].sum(axis=0)>=.9*strip.shape[0])+first
+    if not len(columns) or np.any(np.diff(columns)!=1):
+        raise ValueError('gray marker is missing or ambiguous')
+    marker=[int(columns[0]),int(columns[-1])]
+    convert=lambda x:6+3*(float(x)-left)/(right-left)
+    return {'pixel_span':marker,'frequency_span_ghz':[convert(x) for x in marker],
+            'maximum_coverage_pixel':int(columns[np.argmax(gray[:,columns].sum(axis=0))]),
+            'annotation_is_measured_fmr':False}
+
+
 def measure_figure3_e_pixels(image):
     """Measure only the black GSG curve and gray stroke in fixed panel (e)."""
     import numpy as np
@@ -103,17 +121,13 @@ def measure_figure3_e_pixels(image):
         points=xs[ys==extreme]+x0
         anchors[name]={'frequency_ghz':convert(points.mean()),
                        'stroke_frequency_span_ghz':[convert(points.min()),convert(points.max())]}
-    strip=image[47:367]
-    gray=(strip[:,:,0]>150)&(strip[:,:,0]<230)&(np.ptp(strip.astype(int),axis=2)<6)
-    first=left+int(.15*(right-left));last=right-int(.15*(right-left))
-    columns=np.flatnonzero(gray[:,first:last].sum(axis=0)>=.9*strip.shape[0])+first
-    if not len(columns) or np.any(np.diff(columns)!=1):
-        raise ValueError('panel (e) gray marker is missing or ambiguous')
-    marker=[int(columns[0]),int(columns[-1])]
+    annotation=measure_gray_annotation_pixels(image,axes=axes,row_bounds=(47,367))
+    marker=annotation['pixel_span']
     return {'panel':'e','antenna':'GSG','alpha':.01,'axis_pixel_bounds':[left,right],
             'frequency_bounds_ghz':[6,9],'pixel_pitch_ghz':3/(right-left),
             'published_GSG_alpha001':anchors,'published_FMR_marker_pixel_span':marker,
-            'published_FMR_marker_frequency_span_ghz':[convert(x) for x in marker],
+            'published_FMR_marker_frequency_span_ghz':annotation['frequency_span_ghz'],
+            'annotation_is_measured_fmr':False,
             'curve_pixel_window_xyxy':[x0,47,right-2,367],'excluded_annotations':annotations,
             'excluded_axis_ticks':ticks}
 
@@ -164,10 +178,9 @@ def measure_figure3_anchors(published_png_path,reference_json_path,*,panel='a'):
         points=xs[ys==extreme]+left+2
         anchors[name]={'frequency_ghz':convert(points.mean()),
                        'stroke_frequency_span_ghz':[convert(points.min()),convert(points.max())]}
-    strip=image[45:369]
-    gray=(strip[:,:,0]>150)&(strip[:,:,0]<230)&(np.ptp(strip.astype(int),axis=2)<6)
-    first=left+int(.15*(right-left));last=right-int(.15*(right-left))
-    marker=first+int(np.argmax(gray[:,first:last].sum(axis=0)))
+    annotation=measure_gray_annotation_pixels(image,axes=(left,right),row_bounds=(45,369))
+    # Preserve the historical raster alias; it is not a measured FMR.
+    marker=annotation['maximum_coverage_pixel']
     reference=json.loads(reference_bytes);frequency=np.asarray(reference['frequencies_hz'])/1e9
     case=next(c for c in reference['cases'] if c['antenna']=='S' and c['alpha']==.01)
     values=np.asarray(case['transmission'])[:,0];visible=np.flatnonzero((frequency>=6)&(frequency<=9))
@@ -178,6 +191,9 @@ def measure_figure3_anchors(published_png_path,reference_json_path,*,panel='a'):
             'reference_json_sha256':hashlib.sha256(reference_bytes).hexdigest(),
             'axis_pixel_bounds':[left,right],'frequency_bounds_ghz':[6,9],'pixel_pitch_ghz':3/(right-left),
             'published_FMR_marker_ghz':convert(marker),'published_S_alpha001':anchors,
+            'published_FMR_marker_pixel_span':annotation['pixel_span'],
+            'published_FMR_marker_frequency_span_ghz':annotation['frequency_span_ghz'],
+            'annotation_is_measured_fmr':False,
             'model_FMR_ghz':fmr,'model_maximum_frequency_ghz':model_max,'model_minimum_frequency_ghz':model_min,
             'model_minus_publication_ghz':{'FMR':fmr-convert(marker),
                 'maximum':model_max-anchors['maximum']['frequency_ghz'],

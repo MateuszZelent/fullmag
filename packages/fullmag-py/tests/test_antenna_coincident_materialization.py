@@ -121,7 +121,7 @@ def test_material_and_observation_failures_are_explicit(cached_execution):
     assignments[-1]=fm.ChargeTransportMaterialAssignment(fm.RegionRef("object","outlet"),fm.ChargeTransportMaterial(1.))
     with pytest.raises(ValueError,match="differs"):
         authored_problem(assignments=assignments).to_ir(include_geometry_assets=True)
-    with pytest.raises(ValueError,match="cover all four"):
+    with pytest.raises(ValueError,match="cover every conductor"):
         authored_problem(assignments=assignments[:-1]).to_ir(include_geometry_assets=True)
     overlap=[fm.ChargeTransportMaterialAssignment(fm.RegionRef("object"),fm.ChargeTransportMaterial(5.8e7)),assignments[0]]
     with pytest.raises(ValueError,match="overlap"):

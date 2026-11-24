@@ -61,6 +61,9 @@ use crate::types::{
 };
 use crate::writer::Writer;
 
+pub mod relocation;
+pub mod succeeded_namespace_teardown;
+pub use succeeded_namespace_teardown::{SucceededWorkerNamespaceTeardownRequest, SucceededWorkerNamespaceTeardownIntent, SucceededWorkerNamespaceTeardownAttestation, SucceededWorkerNamespaceTeardownReleaseProof};
 pub mod worker_orphan_teardown;
 pub use worker_orphan_teardown::*;
 pub mod claimed_worker_interruption;
@@ -93,6 +96,8 @@ pub const HOST_RESOURCE_RELEASE_PROOF_SCHEMA_V1: &str = "host_resource_release_p
 /// readers reject this schema and therefore fail closed until all clients are
 /// upgraded or the reservation is quiesced through the legacy path.
 pub const HOST_RESOURCE_RELEASE_PROOF_SCHEMA_V2: &str = "host_resource_release_proof.v2";
+/// Exact typed proof for claimed-worker interruption or succeeded-worker namespace teardown.
+pub const HOST_RESOURCE_RELEASE_PROOF_SCHEMA_V3: &str = "host_resource_release_proof.v3";
 
 const HOST_RESOURCE_LEDGER_FILE: &str = "HOST_RESOURCE_LEDGER.json";
 const HOST_RESOURCE_LEDGER_MARKER_FILE: &str = "HOST_RESOURCE_LEDGER.init.json";
@@ -1004,6 +1009,7 @@ enum HostResourceReleaseProofKind {
     PreparationNoSpawn,
     WorkerOrphanTeardown,
     ClaimedWorkerInterruption,
+    SucceededWorkerNamespaceTeardown,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -1030,6 +1036,8 @@ struct HostResourceReleaseProof {
     orphan_teardown: Option<WorkerOrphanTeardownReleaseProof>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     claimed_interruption: Option<ClaimedWorkerInterruptionReceipt>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    succeeded_namespace_teardown: Option<SucceededWorkerNamespaceTeardownReleaseProof>,
 }
 
 /// A validated read of the complete ledger and its pinned policy.
@@ -1313,6 +1321,7 @@ impl HostResourceLedger {
             preparation_launch_owner: None,
             orphan_teardown: None,
             claimed_interruption: None,
+            succeeded_namespace_teardown: None,
         };
         let bytes = bounded_json_bytes(
             &proof,
@@ -1849,6 +1858,7 @@ impl HostResourceLedger {
             preparation_launch_owner: None,
             orphan_teardown: None,
             claimed_interruption: None,
+            succeeded_namespace_teardown: None,
         };
         let bytes = bounded_json_bytes(
             &proof,
@@ -2166,6 +2176,7 @@ impl HostResourceLedger {
             preparation_launch_owner: None,
             orphan_teardown: None,
             claimed_interruption: None,
+            succeeded_namespace_teardown: None,
         };
         let bytes = bounded_json_bytes(
             &proof,
@@ -2854,6 +2865,17 @@ impl HostResourceLedger {
     /// Open a previously initialized ledger without creating or repairing its
     /// policy, marker, or reservation state. Runtime-readiness profiles also
     /// require their persisted native readiness record before admission.
+    pub(crate) fn open_read_only(root: impl AsRef<Path>, expected_policy: HostResourceLedgerPolicy) -> Result<Self> {
+        expected_policy.validate()?;
+        let root = canonical_ledger_root(root.as_ref(), false)?;
+        let ledger = Self::new(root, expected_policy);
+        let _guard = crate::writer::ReadTransaction::acquire(&ledger.root)?;
+        crate::writer::validate_existing_writer_admission(&ledger.root)?;
+        ledger.read_document_locked()?;
+        if ledger.policy.requires_runtime_readiness() { ledger.read_runtime_readiness_locked()?; }
+        Ok(ledger)
+    }
+
     pub(crate) fn open(root: impl AsRef<Path>, expected_policy: HostResourceLedgerPolicy) -> Result<Self> {
         expected_policy.validate()?;
         let root = canonical_ledger_root(root.as_ref(), false)?;
@@ -4138,6 +4160,20 @@ impl HostResourceLedger {
         operation: impl FnOnce(&HostResourceLedgerSnapshot) -> Result<T>,
     ) -> Result<T> {
         let _host_writer = self.writer.acquire()?;
+        self.container_runtime_recovery_quiescence_locked(operation)
+    }
+
+    pub(crate) fn with_container_runtime_recovery_read_quiescence<T>(
+        &self, operation: impl FnOnce(&HostResourceLedgerSnapshot) -> Result<T>,
+    ) -> Result<T> {
+        let _guard = crate::writer::ReadTransaction::acquire(&self.root)?;
+        crate::writer::validate_existing_writer_admission(&self.root)?;
+        self.container_runtime_recovery_quiescence_locked(operation)
+    }
+
+    fn container_runtime_recovery_quiescence_locked<T>(
+        &self, operation: impl FnOnce(&HostResourceLedgerSnapshot) -> Result<T>,
+    ) -> Result<T> {
         let document = self.read_document_locked()?;
         if document
             .reservations
@@ -4212,6 +4248,51 @@ impl HostResourceLedger {
             node_policy: document.node_policy.clone(),
         };
         operation(&snapshot, &evidence_sha256)
+    }
+
+    /// Called only inside the container recovery ledger guard and store writer.
+    pub(crate) fn validate_retained_no_spawn_locked(&self, store: &SessionStore,
+        pin: &crate::runtime_service::retained_pending_inboxes::RetainedPendingInboxPin,
+    ) -> Result<()> {
+        self.validate_retained_no_spawn_claim_locked(store, &pin.run_id, &pin.task_id, &pin.attempt_id,
+            &pin.resource_id, pin.ownership_epoch, pin.release_proof_sha256.as_deref())
+    }
+
+    pub(crate) fn validate_retained_absent_no_spawn_locked(&self, store: &SessionStore,
+        pin: &crate::runtime_service::retained_pending_inboxes::RetainedAbsentInboxPin,
+    ) -> Result<()> {
+        ensure_v7_worker_started_receipt_absent(store, &pin.run_id, &pin.task_id, &pin.attempt_id, pin.ownership_epoch)?;
+        self.validate_retained_no_spawn_claim_locked(store, &pin.run_id, &pin.task_id, &pin.attempt_id,
+            &pin.resource_id, pin.ownership_epoch, Some(&pin.release_proof_sha256))
+    }
+
+    fn validate_retained_no_spawn_claim_locked(&self, store: &SessionStore,
+        run_id: &str, task_id: &str, expected_attempt_id: &str, resource_id: &str, expected_epoch: u64,
+        release_proof_sha256: Option<&str>,
+    ) -> Result<()> {
+        let store_id = Self::store_id(store.root())?;
+        let document = self.read_document_locked()?;
+        let rows = document.reservations.iter().filter(|row| {
+            row.identity.store_id == store_id && row.identity.run_id == run_id
+                && row.identity.task_id == task_id && row.identity.resource_id == resource_id
+                && matches!(&row.identity.owner, HostReservationOwner::Solver { attempt_id, ownership_epoch }
+                    if attempt_id == expected_attempt_id && *ownership_epoch == expected_epoch)
+        }).collect::<Vec<_>>();
+        if rows.len() != 1 { bail!("v6 no-spawn claim requires one exact host reservation"); }
+        let row = rows[0];
+        if row.state != HostResourceReservationState::Released
+            || row.worker_launch_gate != Some(HostWorkerLaunchGate::Closed)
+            || row.release_proof_sha256 != release_proof_sha256.map(str::to_owned) {
+            bail!("v6 no-spawn reservation is not closed, released and pinned");
+        }
+        let proof = read_validated_release_proof(&self.root, document.policy_for_reservation(row)?, row)?;
+        let lease = store.read_resource_lease(&run_id, &resource_id, &row.identity.lease_token)?
+            .context("v6 no-spawn claim has no local released lease")?;
+        if proof.kind != HostResourceReleaseProofKind::WorkerNoSpawn
+            || proof.released_worker_lease.as_ref() != Some(&lease) {
+            bail!("v6 no-spawn proof differs from the authoritative local lease");
+        }
+        Ok(())
     }
 
     pub(crate) fn held_manual_run_evidence_sha256_locked(
@@ -4363,6 +4444,18 @@ impl HostResourceLedger {
                         bail!("worker release proof differs from the exact local exit receipt");
                     }
                     Ok(Some("worker"))
+                }
+                HostResourceReleaseProofKind::SucceededWorkerNamespaceTeardown => {
+                    if exit.is_some() || lease.state != FmsResourceLeaseState::Released {
+                        bail!("succeeded namespace evidence requires released lease and unknown process exit");
+                    }
+                    let nested = proof.succeeded_namespace_teardown.as_ref().context("succeeded namespace proof missing")?;
+                    let relative = succeeded_namespace_teardown::intent_relative_path(&nested.teardown_request_sha256)?;
+                    let bytes = read_bounded_regular_file(&self.root, &relative, MAX_RELEASE_PROOF_BYTES)?;
+                    let intent: SucceededWorkerNamespaceTeardownIntent = serde_json::from_slice(&bytes)?;
+                    intent.validate()?;
+                    succeeded_namespace_teardown::validate_released_lease(&intent.request, lease)?;
+                    Ok(Some("succeeded_worker_namespace_teardown"))
                 }
                 HostResourceReleaseProofKind::WorkerNoSpawn => {
                     if exit.is_some() {
@@ -5119,6 +5212,7 @@ impl HostResourceLedger {
             preparation_launch_owner: None,
             orphan_teardown: Some(nested_proof.clone()),
             claimed_interruption: None,
+            succeeded_namespace_teardown: None,
         };
         let proof_bytes = bounded_json_bytes(
             &proof,
@@ -5185,6 +5279,25 @@ impl HostResourceLedger {
         Ok(released)
     }
 
+    /// Hold host authority while an explicit recovery validates and releases
+    /// one local lease. The callback may acquire the store writer, never another
+    /// host writer. Host release still requires release_worker_after_exit.
+    pub fn with_worker_release_recovery_fence<T>(
+        &self,
+        identity: &HostReservationIdentity,
+        operation: impl FnOnce(&HostResourceReservation) -> Result<T>,
+    ) -> Result<T> {
+        let _host_writer = self.writer.acquire()?;
+        let document = self.read_document_locked()?;
+        if document.reservations.iter().any(|row| row.identity != *identity
+            && row.state != HostResourceReservationState::Released) {
+            bail!("worker release recovery requires every other reservation released");
+        }
+        let row = document.reservations.iter().find(|row| row.identity == *identity)
+            .context("worker release recovery exact reservation missing")?;
+        operation(row)
+    }
+
     /// Release one reservation only after both the durable worker exit receipt
     /// and the matching local resource lease are present in the SessionStore,
     /// with the local lease already in Released state.
@@ -5194,9 +5307,34 @@ impl HostResourceLedger {
         run_id: &str,
         receipt_id: &str,
     ) -> Result<HostResourceReservation> {
+        self.release_worker_after_exit_with_storage(store, run_id, receipt_id, None)
+    }
+
+    /// Use a request-scoped unpublished tool identity only for this exact release.
+    #[doc(hidden)]
+    pub fn release_succeeded_worker_after_exit(
+        &self,
+        store: &SessionStore,
+        run_id: &str,
+        receipt_id: &str,
+        candidate: &crate::SucceededRecoveryCandidateStorage,
+    ) -> Result<HostResourceReservation> {
+        self.release_worker_after_exit_with_storage(store, run_id, receipt_id, Some(candidate))
+    }
+
+    fn release_worker_after_exit_with_storage(
+        &self,
+        store: &SessionStore,
+        run_id: &str,
+        receipt_id: &str,
+        candidate: Option<&crate::SucceededRecoveryCandidateStorage>,
+    ) -> Result<HostResourceReservation> {
         let _host_writer = self.writer.acquire()?;
         let _store_writer = store.write_transaction()?;
-        let store_id = Self::store_id(store.root())?;
+        let store_id = match candidate {
+            Some(candidate) => candidate.authorize_release(store.root(), run_id, receipt_id)?,
+            None => Self::store_id(store.root())?,
+        };
         let mut document = self.read_document_locked()?;
         let receipt = store
             .read_worker_process_exit_receipt(run_id, receipt_id)?
@@ -5255,6 +5393,7 @@ impl HostResourceLedger {
             preparation_launch_owner: None,
             orphan_teardown: None,
             claimed_interruption: None,
+            succeeded_namespace_teardown: None,
         };
         let proof_bytes =
             bounded_json_bytes(&proof, MAX_RELEASE_PROOF_BYTES, "worker release proof")?;
@@ -5330,6 +5469,7 @@ impl HostResourceLedger {
             preparation_launch_owner: None,
             orphan_teardown: None,
             claimed_interruption: None,
+            succeeded_namespace_teardown: None,
         };
         let bytes = bounded_json_bytes(&proof, MAX_RELEASE_PROOF_BYTES, "worker no-spawn proof")?;
         let digest = format!("{:x}", Sha256::digest(&bytes));
@@ -5521,6 +5661,7 @@ impl HostResourceLedger {
                 .clone(),
             orphan_teardown: None,
             claimed_interruption: None,
+            succeeded_namespace_teardown: None,
         };
         let proof_bytes =
             bounded_json_bytes(&proof, MAX_RELEASE_PROOF_BYTES, "preparation release proof")?;
@@ -6800,25 +6941,28 @@ fn ensure_worker_orphan_quiescence_locked(
     Ok(())
 }
 
-fn worker_started_receipt_relative_path(
-    request: &WorkerOrphanTeardownRequest,
-) -> Result<String> {
-    for (value, field) in [
-        (request.run_id.as_str(), "run_id"),
-        (request.task_id.as_str(), "task_id"),
-        (request.attempt_id.as_str(), "attempt_id"),
-    ] {
+fn worker_started_receipt_relative_path(request: &WorkerOrphanTeardownRequest) -> Result<String> {
+    worker_started_receipt_claim_path(&request.run_id, &request.task_id, &request.attempt_id, request.ownership_epoch)
+}
+
+fn worker_started_receipt_claim_path(run_id: &str, task_id: &str, attempt_id: &str, ownership_epoch: u64) -> Result<String> {
+    for (value, field) in [(run_id, "run_id"), (task_id, "task_id"), (attempt_id, "attempt_id")] {
         crate::repository_path::validate_store_id(value)
             .with_context(|| format!("invalid worker started receipt {field}"))?;
     }
-    Ok(format!(
-        "runs/{}/worker-attempts/{}/{}/epoch-{}/{}",
-        request.run_id,
-        request.task_id,
-        request.attempt_id,
-        request.ownership_epoch,
-        WORKER_EXECUTION_STARTED_RECEIPT_FILE,
-    ))
+    Ok(format!("runs/{run_id}/worker-attempts/{task_id}/{attempt_id}/epoch-{ownership_epoch}/{WORKER_EXECUTION_STARTED_RECEIPT_FILE}"))
+}
+
+fn ensure_v7_worker_started_receipt_absent(
+    store: &SessionStore, run_id: &str, task_id: &str, attempt_id: &str, ownership_epoch: u64,
+) -> Result<()> {
+    let relative = worker_started_receipt_claim_path(run_id, task_id, attempt_id, ownership_epoch)?;
+    let path = checked_path(store.root(), &relative)?;
+    match fs::symlink_metadata(&path) {
+        Ok(_) => bail!("v7 WorkerNoSpawn contradicts a durable Started receipt path"),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error).context("checking v7 worker Started receipt absence"),
+    }
 }
 
 /// Check the actual accepted-worker attempt journal while the SessionStore
@@ -6959,6 +7103,7 @@ fn orphan_release_proof_sha256(
         preparation_launch_owner: None,
         orphan_teardown: Some(nested_proof.clone()),
         claimed_interruption: None,
+        succeeded_namespace_teardown: None,
     };
     let bytes = bounded_json_bytes(&proof, MAX_RELEASE_PROOF_BYTES, "worker orphan teardown proof")?;
     Ok(format!("{:x}", Sha256::digest(&bytes)))
@@ -7399,6 +7544,7 @@ fn replay_released_preparation_reservation(
         preparation_launch_owner: reservation.preparation_launch_owner.clone(),
         orphan_teardown: None,
         claimed_interruption: None,
+        succeeded_namespace_teardown: None,
     };
     let proof_bytes = bounded_json_bytes(
         &proof,
@@ -7468,19 +7614,25 @@ fn read_validated_release_proof(
         .context("corrupt host release proof; refusing to free host capacity")?;
     if (proof.schema_version != HOST_RESOURCE_RELEASE_PROOF_SCHEMA_V1
         && proof.schema_version != HOST_RESOURCE_RELEASE_PROOF_SCHEMA_V2
-        && proof.schema_version != "host_resource_release_proof.v3")
+        && proof.schema_version != HOST_RESOURCE_RELEASE_PROOF_SCHEMA_V3)
         || proof.host_id != policy.host_id
         || proof.store_id != reservation.identity.store_id
         || proof.request_sha256 != reservation.request_sha256
     {
         bail!("host release proof differs from the pinned host reservation");
     }
-    if (proof.schema_version == "host_resource_release_proof.v3")
-        != (proof.kind == HostResourceReleaseProofKind::ClaimedWorkerInterruption)
+    if (proof.schema_version == HOST_RESOURCE_RELEASE_PROOF_SCHEMA_V3)
+        != matches!(proof.kind,
+            HostResourceReleaseProofKind::ClaimedWorkerInterruption
+                | HostResourceReleaseProofKind::SucceededWorkerNamespaceTeardown)
         || (proof.kind != HostResourceReleaseProofKind::ClaimedWorkerInterruption
             && proof.claimed_interruption.is_some())
+        || (proof.kind != HostResourceReleaseProofKind::SucceededWorkerNamespaceTeardown
+            && proof.succeeded_namespace_teardown.is_some())
+        || (proof.kind != HostResourceReleaseProofKind::WorkerOrphanTeardown
+            && proof.orphan_teardown.is_some())
     {
-        bail!("claimed interruption requires its separate v3 proof schema");
+        bail!("host release schema or evidence differs from its exact proof kind");
     }
     if proof.schema_version == HOST_RESOURCE_RELEASE_PROOF_SCHEMA_V2
         && proof.kind != HostResourceReleaseProofKind::WorkerOrphanTeardown
@@ -7662,6 +7814,19 @@ fn read_validated_release_proof(
                 bail!("claimed interruption immutable request differs");
             }
             Ok(())
+        }
+        HostResourceReleaseProofKind::SucceededWorkerNamespaceTeardown => {
+            if proof.worker_receipt.is_some() || proof.released_worker_lease.is_some()
+                || proof.preparation_receipt.is_some() || proof.released_preparation_lease.is_some()
+                || proof.unadmitted_task.is_some() || proof.preparation_launch_owner.is_some()
+                || proof.orphan_teardown.is_some()
+            {
+                bail!("succeeded namespace proof cannot impersonate process-exit or no-spawn evidence");
+            }
+            succeeded_namespace_teardown::validate_release_proof_identity(
+                root, policy, reservation,
+                proof.succeeded_namespace_teardown.as_ref().context("succeeded namespace typed proof missing")?,
+            )
         }
         HostResourceReleaseProofKind::WorkerOrphanTeardown => {
             if proof.schema_version != HOST_RESOURCE_RELEASE_PROOF_SCHEMA_V2
@@ -9651,6 +9816,7 @@ mod tests {
             worker_receipt: None, released_worker_lease: None, preparation_receipt: None,
             released_preparation_lease: None, unadmitted_task: None, preparation_launch_owner: None,
             orphan_teardown: None, claimed_interruption: Some(receipt.clone()),
+            succeeded_namespace_teardown: None,
         };
         let bytes = serde_json::to_vec(&proof).unwrap();
         let digest = format!("{:x}", Sha256::digest(&bytes));
@@ -9888,6 +10054,7 @@ mod tests {
             preparation_launch_owner: None,
             orphan_teardown: Some(nested_proof),
             claimed_interruption: None,
+            succeeded_namespace_teardown: None,
         };
         let proof_bytes = bounded_json_bytes(
             &proof,
@@ -10388,6 +10555,21 @@ mod tests {
     }
 
     #[test]
+    fn v7_absent_inbox_rejects_current_started_receipt_even_without_journal_started() {
+        let (fixture, request, _) = worker_orphan_teardown_fixture("v7-started-receipt");
+        let check = || ensure_v7_worker_started_receipt_absent(&fixture.store, &request.run_id,
+            &request.task_id, &request.attempt_id, request.ownership_epoch);
+        check().unwrap();
+        let relative = worker_started_receipt_relative_path(&request).unwrap();
+        let path = crate::repository_path::create_parent(fixture.store.root(), &relative).unwrap();
+        fs::write(&path, b"{}").unwrap();
+        assert!(check().is_err());
+        fs::remove_file(&path).unwrap();
+        fs::create_dir(&path).unwrap();
+        assert!(check().is_err());
+    }
+
+    #[test]
     fn worker_orphan_teardown_rejects_durable_started_receipt() {
         let (fixture, request, attestation) =
             worker_orphan_teardown_fixture("orphan-started-receipt");
@@ -10691,6 +10873,7 @@ mod tests {
             preparation_launch_owner: None,
             orphan_teardown: None,
             claimed_interruption: None,
+            succeeded_namespace_teardown: None,
         };
         let bytes = bounded_json_bytes(&proof, MAX_RELEASE_PROOF_BYTES, "proof").unwrap();
         let digest = format!("{:x}", Sha256::digest(&bytes));
@@ -10793,6 +10976,7 @@ mod tests {
             preparation_launch_owner: None,
             orphan_teardown: None,
             claimed_interruption: None,
+            succeeded_namespace_teardown: None,
         };
         let proof_bytes = bounded_json_bytes(&proof, MAX_RELEASE_PROOF_BYTES, "proof").unwrap();
         let proof_sha256 = format!("{:x}", Sha256::digest(&proof_bytes));
@@ -11753,6 +11937,7 @@ mod tests {
             preparation_launch_owner: released.preparation_launch_owner.clone(),
             orphan_teardown: None,
             claimed_interruption: None,
+            succeeded_namespace_teardown: None,
         };
         let proof_bytes = bounded_json_bytes(&proof, MAX_RELEASE_PROOF_BYTES, "proof").unwrap();
         let proof_sha256 = format!("{:x}", Sha256::digest(&proof_bytes));

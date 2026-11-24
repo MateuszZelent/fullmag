@@ -21,6 +21,7 @@ from docker_volume_toolchain_reconcile import host_clients
 from docker_dev_host import docker_argv
 
 SCHEMA = "fullmag.docker-development-interrupted.v1"
+STARTING_SERVICES_SCHEMA = "fullmag.docker-development-starting-services-interrupted.v1"
 RESUME_SCHEMA = "fullmag.docker-resume-interrupted.v1"
 PUBLICATION_SCHEMA = "fullmag.docker-resume-publication-observation-interrupted.v1"
 PUBLICATION_ERROR = "Docker observation exceeded its time/output budget during docker_capture (timeout=90s); daemon resources retained"
@@ -527,14 +528,16 @@ def validate_publication_evidence(actual, r, state):
 def validate_request(r):
     resume = isinstance(r, dict) and r.get("schema") in RESUME_SCHEMAS
     gate_failure = isinstance(r, dict) and r.get("schema") == GATE_FAILURE_SCHEMA
+    starting_services = isinstance(r, dict) and r.get("schema") == STARTING_SERVICES_SCHEMA
     require(isinstance(r, dict) and set(r) == {"schema", "attempt", "source_root", "source_revision",
         "compose_project", "engine_id", "observed_at", "receipt_sha256", "compose_sha256", "active_sha256",
         "current_sha256", "verified_sha256", "helper_absence_sha256", "backend_log_sha256", "containers",
         "controller_inputs", "controller_sha256", "attempt_documents", "storage_certificate_sha256"}
         | ({"base_attempt", "host_boot_id", "failure", "storage_identity"} if resume else set())
         | ({"gate_failure"} if gate_failure else set())
+        | ({"storage_identity"} if starting_services else set())
         | ({"observation_failure"} if r.get("schema") == PUBLICATION_SCHEMA else set()), "Exact interrupted-operation request required")
-    require(r["schema"] in {SCHEMA, RESUME_SCHEMA, PUBLICATION_SCHEMA, GATE_FAILURE_SCHEMA}
+    require(r["schema"] in {SCHEMA, STARTING_SERVICES_SCHEMA, RESUME_SCHEMA, PUBLICATION_SCHEMA, GATE_FAILURE_SCHEMA}
             and isinstance(r["attempt"], str) and TOKEN.fullmatch(r["attempt"]),
             "Invalid schema or attempt")
     for k in ("receipt_sha256", "compose_sha256", "active_sha256", "helper_absence_sha256",
@@ -562,11 +565,12 @@ def validate_request(r):
         and all(isinstance(x, str) and SHA.fullmatch(x) for x in r["attempt_documents"].values()), "Attempt documents required")
     require(isinstance(r["controller_inputs"], dict) and set(r["controller_inputs"]) == set(CONTROLLERS + (("docker_volume_development_interrupted.py", "docker_volume_frontend_frozen_recovery.py", "docker_development_inputs.py") if resume else ()))
         and all(isinstance(x, str) and SHA.fullmatch(x) for x in r["controller_inputs"].values()), "Controller pin set differs")
-    if resume:
+    if resume or starting_services:
         require(isinstance(r["storage_identity"], dict) and set(r["storage_identity"]) == {
             "root_inode", "retained_device", "observed_device"}
             and all(type(value) is int and value > 0 for value in r["storage_identity"].values()),
             "Exact prior-boot storage identity required")
+    if resume:
         require(isinstance(r["base_attempt"], str) and TOKEN.fullmatch(r["base_attempt"])
                 and r["base_attempt"] != r["attempt"], "Resume base attempt differs")
         require(isinstance(r["host_boot_id"], str) and len(r["host_boot_id"]) == 36,
@@ -671,9 +675,12 @@ def validate_original(original, document, r, control, source):
                         for service, pin in r["containers"].items()),
                 "Initial Linux runtime images differ")
         return
+    starting_services = r["schema"] == STARTING_SERVICES_SCHEMA
+    expected_state = "starting-services" if starting_services else "starting"
     require(original.get("schema") == "fullmag.docker-build-operation.v1"
         and original.get("phase") == "development"
         and original.get("state") in {"starting", "starting-services"}
+        and (not starting_services or original.get("state") == expected_state)
         and original.get("attempt") == r["attempt"] and original.get("compose_project") == control.project
         and original.get("control_volume") == control.volume
         and original.get("helper_container") == "fullmag-control-" + r["attempt"], "Original operation differs")
@@ -690,6 +697,13 @@ def validate_original(original, document, r, control, source):
             started_at = original.get(service + "_started_at")
             require(isinstance(started_at, str) and bool(started_at) and len(started_at) <= 64,
                     "Service checkpoint start time is invalid: " + service)
+    if starting_services:
+        require(original.get("state_root") == str(_compose_state_root(document))
+                and original.get("worker_cgroup") is None
+                and all(original.get(service + "_container") == pin["id"]
+                        and isinstance(original.get(service + "_started_at"), str)
+                        for service, pin in r["containers"].items()),
+                "Starting services receipt does not bind the pre-runtime incarnations")
     require(document.get("name") == control.project and set(document.get("services", {})) == {"backend", "frontend"},
         "Retained Compose differs")
     require(document["services"]["backend"].get("environment", {}).get("FULLMAG_STARTUP_ENABLED") != "1",
@@ -714,6 +728,67 @@ def validate_no_handoff_or_api(raw_logs):
     require(b"phase=start state=handoff" not in raw_logs
             and b"phase=api state=exec" not in raw_logs,
             "Package handoff or API execution was observed")
+
+def validate_starting_service(actual, service, original):
+    require(actual["State"].get("StartedAt") == original[service + "_started_at"],
+            "Start time changed for interrupted " + service)
+
+
+def validate_starting_storage(state, document, r, original):
+    """Authenticate an unadmitted directory for archival, leaving its certificate intact."""
+    import docker_volume_dev as dev
+    from docker_volume_host_device import bind_host_path
+
+    require(state.resolve(strict=True) == state and state == _compose_state_root(document),
+            "Interrupted state directory differs from retained Compose")
+    bind = document["services"]["backend"].get("x-fullmag-daemon-binds", {}).get("/state")
+    require(isinstance(bind, str) and bind_host_path(bind, state) == state,
+            "Interrupted state bind cannot be resolved to its retained directory")
+    certificate = _interrupted_resume_certificate(state, document, r)
+    host = dev._session_host()
+    image = original["inputs"]["image_id"]
+    token = certificate.get("owner_token")
+    require(certificate.get("restart_verified") is False and certificate.get("role") == "session"
+            and certificate.get("owner_scope") == "docker-linux" and certificate.get("image_id") == image
+            and isinstance(token, str) and TOKEN.fullmatch(token),
+            "Interrupted storage is not the pinned provisional owner")
+    sentinel = (token + ":" + image).encode("ascii")
+    require(host.read_owned_regular(state / ".linux-native-sentinel") == sentinel
+            and digest(sentinel) == certificate.get("restart_expected_sha256")
+            and not (state / ".linux-native-restart").exists()
+            and not (state / ".linux-native-restart").is_symlink()
+            and not any(state.glob(".linux-native-probe*")),
+            "Interrupted storage has different sentinel or completed probe evidence")
+    _require_empty_run_store(state / "runs" / "docker-all")
+    return certificate
+
+
+def fresh_starting_services_certificate(control, previous, document, actual, state):
+    """Authorize archival only from the exact failure-only terminal and its request."""
+    proof = previous.get("reconciliation", {})
+    sha = proof.get("request_sha256")
+    require(previous.get("state") == "failed-confirmed"
+            and proof.get("schema") == STARTING_SERVICES_SCHEMA
+            and isinstance(sha, str) and SHA.fullmatch(sha),
+            "Fresh recovery requires a reconciled interrupted development")
+    root = "development/attempts/" + previous["attempt"]
+    request_raw = read_raw(control, "verification/development-interrupted/" + sha + "/request.json")
+    original_raw = read_raw(control, root + "/unknown-receipt.json")
+    require(digest(request_raw) == sha, "Interrupted development request changed")
+    r = json.loads(request_raw)
+    validate_request(r)
+    require(r["schema"] == STARTING_SERVICES_SCHEMA and r["attempt"] == previous["attempt"]
+            and digest(original_raw) == r["receipt_sha256"]
+            and digest(read_raw(control, root + "/compose.json")) == r["compose_sha256"]
+            and read_raw(control, root + "/terminal.json") == failure_result(original_raw, document, r, sha)
+            and previous == json.loads(failure_result(original_raw, document, r, sha)),
+            "Interrupted development terminal or Compose changed")
+    original = json.loads(original_raw)
+    require(set(actual) == set(r["containers"]), "Interrupted service inventory differs")
+    for service, observed in actual.items():
+        validate_container(observed, r["containers"][service], service, control.project)
+        validate_starting_service(observed, service, original)
+    return validate_starting_storage(state, document, r, original)
 
 
 def validate_container(actual, pin, service, project, *, interrupted_resume=False, gate_failure=False):
@@ -762,6 +837,8 @@ def failure_result(raw, document, r, request_sha):
             retained_publication=r["failure"], native_runtime_recovery_required=True,
             native_state_changed=False, solve_replayed=False,
             storage_identity=r["storage_identity"], native_storage_readmission_required=True)
+    elif r["schema"] == STARTING_SERVICES_SCHEMA:
+        result["reconciliation"]["storage_identity"] = r["storage_identity"]
     elif gate_failure:
         state_root = _compose_state_root(document)
         backend_volumes = {role: _compose_volume_name(document, "backend", target) for role, target in (
@@ -804,7 +881,8 @@ def _live_mount_consumes(actual, protected_volumes, protected_state_root, *, sta
 def _publication_cache_profile(control, r, original, backend):
     """Read and attest the stopped backend's pinned shared-package namespace."""
     import docker_backend_volume_cache as cache
-    raw = read_raw(control, "development/attempts/" + r["base_attempt"] + "/backend-cache.json")
+    attempt = r.get("base_attempt") or r["attempt"]
+    raw = read_raw(control, "development/attempts/" + attempt + "/backend-cache.json")
     require(digest(raw) == r["attempt_documents"]["backend-cache.json"], "Backend cache profile CAS differs")
     profile = json.loads(raw)
     require(profile.get("schema") == cache.SCHEMA and profile.get("state") == "ready"
@@ -846,7 +924,7 @@ def _observe_host_clients(source, request, helper_name):
     # changes this group's receipt under its operation.lock; unrelated DEV
     # clients do not consume that authority. Its private consumers and package
     # CAS are checked again while holding the lease.
-    if helper_name is None and request['schema'] != GATE_FAILURE_SCHEMA:
+    if helper_name is None and request['schema'] not in {GATE_FAILURE_SCHEMA, STARTING_SERVICES_SCHEMA}:
         host_clients(source)
 
 
@@ -882,6 +960,8 @@ def observe(control, source, r, result=None, helper_name=None):
              else Path(original["state_root"]))
     if r["schema"] in RESUME_SCHEMAS:
         _interrupted_resume_certificate(state, document, r)
+    elif r["schema"] == STARTING_SERVICES_SCHEMA:
+        validate_starting_storage(state, document, r, original)
     else:
         dev._retained_certificate(state, document)
     require(digest(dev._certificate_path(state).read_bytes()) == r["storage_certificate_sha256"], "Storage certificate changed")
@@ -932,6 +1012,13 @@ def observe(control, source, r, result=None, helper_name=None):
                            gate_failure=r["schema"] == GATE_FAILURE_SCHEMA)
         if r["schema"] == SCHEMA:
             validate_service_started_at(actual, service, original)
+
+        if r["schema"] == STARTING_SERVICES_SCHEMA:
+            validate_starting_service(actual, service, original)
+            config = json.loads(docker_capture("image", "inspect", actual["Image"]).stdout)[0]["Config"]
+            dev._validate_retained_service(document, actual, service, config, allow_legacy_frontend=True)
+            if service == "backend":
+                publication_cache = _publication_cache_profile(control, r, original, actual)
         if r["schema"] in {GATE_FAILURE_SCHEMA, PUBLICATION_SCHEMA}:
             validate_gate_container_mounts(actual, service, document, state)
         if r["schema"] == GATE_FAILURE_SCHEMA and service == "backend":
@@ -963,7 +1050,7 @@ def observe(control, source, r, result=None, helper_name=None):
 
         app_ids.add(actual["Id"])
     require(app_ids == {pin["id"] for pin in r["containers"].values()}, "Service inventory differs")
-    if r["schema"] == SCHEMA:
+    if r["schema"] in {SCHEMA, STARTING_SERVICES_SCHEMA}:
         for filename in ("backend-build-receipt.json", "provenance.json", "handoff-log.json"):
             require(read_raw(control, root + "/" + filename, optional=True) is None, "Package handoff was observed")
     if r["schema"] == GATE_FAILURE_SCHEMA:
@@ -983,12 +1070,12 @@ def observe(control, source, r, result=None, helper_name=None):
     retained_volumes, retained_state_root = _protected_retained_mounts(
         original, document, r, volumes, state_root=state if r["schema"] == GATE_FAILURE_SCHEMA else None)
     state_alias = (document['services']['backend'].get('x-fullmag-daemon-binds', {}).get('/state')
-                   if r['schema'] in {GATE_FAILURE_SCHEMA, PUBLICATION_SCHEMA} else None)
+                   if r['schema'] in {GATE_FAILURE_SCHEMA, PUBLICATION_SCHEMA, STARTING_SERVICES_SCHEMA} else None)
     for actual in (json.loads(docker_capture("inspect", *running).stdout) if running else []):
         if helper_name and actual.get("Name") == "/" + helper_name:
             continue
         if _live_mount_consumes(actual, retained_volumes, retained_state_root, state_alias=state_alias):
-            require(r["schema"] == PUBLICATION_SCHEMA and publication_cache is not None,
+            require(r["schema"] in {PUBLICATION_SCHEMA, STARTING_SERVICES_SCHEMA} and publication_cache is not None,
                     "A live container consumes retained volumes")
             _publication_shared_consumer(actual, publication_cache, retained_volumes, retained_state_root,
                                          state_alias=state_alias)

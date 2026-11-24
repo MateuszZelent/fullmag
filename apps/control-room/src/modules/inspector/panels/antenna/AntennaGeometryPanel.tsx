@@ -6,8 +6,7 @@ import type { InspectorPanelProps } from "../../inspectorTypes";
 import { InspectorGroup } from "../../primitives/InspectorGroup";
 import { FeedbackBanner } from "../../primitives/FeedbackBanner";
 import { FieldRow } from "../../primitives/FieldRow";
-import { AntennaPlacementEditor } from "./AntennaPlacementEditor";
-import { MicrostripGeometryEditor } from "./MicrostripGeometryEditor";
+import { AntennaGeometryAuthoring } from "./AntennaGeometryAuthoring";
 
 function dimensions(value: unknown): Record<string, unknown> | null {
   return value !== null && typeof value === "object" && !Array.isArray(value)
@@ -46,7 +45,7 @@ export function AntennaGeometryPanel({ selection }: InspectorPanelProps) {
   const params = dimensions(geometry?.geometry_params);
   const stations = Array.isArray(params?.stations) ? params.stations : [];
   const isCpw = geometry?.geometry_kind === "CPWAntennaLayout";
-  const closedLoop = !isCpw && dimensions(params?.loop)?.enabled === true;
+  const closedLoop = dimensions(params?.loop)?.enabled === true;
   return <div className="fm-inspector-panel" data-inspector-owner="object.antenna.geometry">
     {scene.error ? <FeedbackBanner kind="error" message={scene.error.message} />
       : !scene.data ? <p role="status">Loading antenna scene…</p>
@@ -68,13 +67,12 @@ export function AntennaGeometryPanel({ selection }: InspectorPanelProps) {
         <FieldRow label="Return offset" value={length(params.return_offset_m)} />
       </> : null}
       <FieldRow label="Width stations" value={stations.length.toLocaleString()} />
-      {!isCpw ? <FieldRow label="Circuit geometry" value={closedLoop ? "Closed 3D loop" : "No end connections"} /> : null}
-      <FieldRow label="Parts" value={isCpw ? "Signal · left return · right return"
+      <FieldRow label="Circuit geometry" value={closedLoop ? "Closed 3D loop" : "No end connections"} />
+      <FieldRow label="Parts" value={isCpw ? closedLoop ? "Signal · left return · right return · inlet connection · outlet connection" : "Signal · left return · right return"
         : closedLoop ? "Signal · wide return · inlet connection · outlet connection" : "Signal · wide return"} />
     </InspectorGroup> : null}
     {objectId ? <>
-      <MicrostripGeometryEditor key={`geometry:${objectId}`} objectId={objectId} scene={scene.data} status={scene.status} refetch={scene.refetch} />
-      <AntennaPlacementEditor key={`placement:${objectId}`} objectId={objectId} scene={scene.data} sceneScopeKey={scene.sessionScopeKey} status={scene.status} refetch={scene.refetch} />
+      <AntennaGeometryAuthoring key={objectId} objectId={objectId} scene={scene.data} sceneScopeKey={scene.sessionScopeKey} status={scene.status} refetch={scene.refetch} />
     </> : null}
   </div>;
 }

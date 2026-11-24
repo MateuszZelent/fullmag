@@ -142,6 +142,46 @@ ECE i znak członu brzegowego należy testować we wspólnym przypadku
 referencyjnym, niezależnie od testu portu modalnego.
 [Ciuprina, Ioan i Sabariego (2022), §2–3](https://doi.org/10.1186/s13362-022-00122-1).
 
+(rf-ece-local-return)=
+### Terminacja ECE z lokalnym powrotem przez GSG
+
+Do analizy rys. 1c i 2b porównujemy dwa obwody przy identycznej siatce,
+własnościach i obwiedni ECE. W pierwotnej konfiguracji wyjściowe paski
+masy mają zadane 0 V i rezystor sygnału jest odniesiony do globalnej masy.
+W wariancie lokalnym tylko wejściowe paski boczne mają zadane 0 V.
+Oba paski boczne na wyjściu są spięte idealnym, lokalnym połączeniem
+o wspólnym nieznanym potencjale $V_g$. Rezystor łączy wyjście sygnału
+o potencjale $V_s$ z tym węzłem. Nie ma połączenia tego węzła do masy
+poza domeną. Każdy pasek ma nadal osobny całkowany prąd.
+
+$$
+I_s=-I_L,\qquad I_{g_l}+I_{g_r}=I_L,\qquad
+I_L=\frac{V_s-V_g}{Z_L},\qquad
+Y_L=\frac{1}{Z_L}\begin{bmatrix}1&-1\\-1&1\end{bmatrix}.
+$$
+
+Fazory prądu są szczytowe w A i dodatnie do domeny. Potencjały są w V,
+$Z_L$ w Ω, a macierz obciążenia $Y_L$ w S. W sformułowaniu E–V człon
+dodany do podmacierzy potencjału ma postać $\mathrm i\omega Y_L$.
+W równaniu ciągłości Darwina przed skalowaniem wierszy ma postać $Y_L$.
+Moc oddana obciążeniu wynosi
+$\tfrac12\operatorname{Re}[(V_s-V_g)\overline{I_L}]$ w W. To opisuje
+idealne połączenie obwodowe końców, z pominięciem indukcyjności połączenia,
+i pozostaje warunkiem ECE w zamkniętej domenie. Parametry portów CST nadal
+są nieznane.
+
+Uruchamialny zakres walidacji to samodzielna referencja FEM CPU, FP64
+zespolone. FDM może później konsumować obie kwadratury pola przez ten sam
+kontrakt projekcji. Próba nie zmienia publicznego DSL, ProblemIR, planera,
+runtime, API i workspace. Raport zapisuje model obwodu, impedancję, oba
+potencjały, każdy prąd, reszty prawa obciążenia i moc. Weryfikacja zaczyna
+się od testu zespolonego obciążenia w małej domenie, z osobną asercją prawa
+Ohma i prądów węzła, potem porównuje CPW1 i CPW2 ze starymi wynikami na
+tych samych dwóch siatkach. W przekroju $x=0$ raportuje zespolone
+$-(I_{g_l,x}+I_{g_r,x})/I_{s,x}$ dla prądów scałkowanych po paskach,
+wraz z profilem i widmem z publikacji. Zbieżność siatkowa, niezależny port
+modalny i integracja natywna nadal należą do kwalifikacji.
+
 (rf-darwin-contract)=
 ### Kandydat EMQS typu Darwina
 
@@ -498,6 +538,56 @@ porównaniem. Załączone testy obejmują prosty kondensator, stabilizację
 przy małej długości elektrycznej, znak fali biegnącej, zaciski, odczyt
 obu kwadratur i spójność formatu siatki Palace. Kwalifikacja CPW wymaga
 wyników całych przebiegów.
+
+### Odczyt niezależnego pełnofalowego pola
+
+Archiwum Palace zachowuje oba pliki sond pełnofalowych, `probe-E.csv`
+i `probe-B.csv`. Eksport używa fazorów szczytowych i konwencji
+$\exp(\mathrm i\omega t)$. Nagłówki wiążą wartości z indeksem sondy,
+składową XYZ i kwadraturą, a dla kilku wzbudzeń także z indeksem
+wzbudzenia. Częstotliwość w GHz jest przeliczana na Hz. Położenie
+sondy pochodzi z danych wejściowych i fizycznej skali długości,
+nie z kolejności kolumn.
+
+Dla obecnego pasywnego, izotropowego wariantu YIG z $\mu_r=1$ używamy
+$\hat{\mathbf H}=\hat{\mathbf B}/\mu_0$. Tę konwersję ograniczamy
+do zadeklarowanego materiału sondy. Przy wprowadzeniu tensora
+przenikalności trzeba osobno zweryfikować odczyt
+$\hat{\mathbf H}=\boldsymbol\mu^{-1}\hat{\mathbf B}$.
+Jeśli podano osobny zweryfikowany fazor całkowitego prądu sygnałowego
+w płaszczyźnie wejścia, zapisujemy $\mathbf H/I_{\rm in}$.
+Fazor musi pochodzić z identycznego przebiegu, mieć jawny kierunek +x
+i zachować konwencję fazy. Moc padająca lub moduł S nie określają tego
+fazora. Bez niego import przechowuje fizyczne E, B i H, z oznaczeniem
+braku kalibracji na amper. Pole ma nadal pochodzenie niezależnej
+symulacji. Wczytanie danych nie kwalifikuje solvera, materiału,
+modu portu ani natywnego sprzężenia z dynamiką Fullmaga.
+[Format sond](https://github.com/awslabs/palace/blob/be4b5d36ffe77933d4dbf86209d2bf21a2059fe3/palace/models/postoperatorcsv.cpp) ·
+[Konwencja fazowa](https://github.com/awslabs/palace/blob/be4b5d36ffe77933d4dbf86209d2bf21a2059fe3/docs/src/reference.md).
+
+Do odczytu prądu przez miedź wybieramy trójkątne ściany końcowe
+pasków i jednostronny ślad pola z wnętrza przyległych tetraedrów.
+Dla afinicznego tetraedru i elementu krawędziowego rzędu 2 pole na
+każdej prostej od punktu ściany do przeciwległego wierzchołka jest
+wielomianem stopnia najwyżej dwa. Trzy próbki wewnętrzne w położeniach
+$t=1/4,1/2,3/4$ pozwalają odtworzyć ślad przy $t=0$ z wagami
+$(3,-3,1)$. Całkujemy ślad trójpunktową kwadraturą stopnia 2.
+Punkty są wewnątrz miedzi, dzięki czemu wyszukiwanie punktu przez
+solver nie wybiera śladu od strony dielektryka.
+
+$$
+\hat I_{\rm c}=\int_{S_{\rm Cu}}\sigma \hat E_x\,{\rm d}S,\qquad
+\hat I_{\rm tot}=\int_{S_{\rm Cu}}(\sigma+\mathrm i\omega\varepsilon)
+                        \hat E_x\,{\rm d}S .
+$$
+
+Prąd podajemy w A, współrzędne w m, wagi całki w $\mathrm{m^2}$.
+Znak dodatni jest zgodny z osią +x na obu końcach anteny. Suma
+prądów przez same trzy paski nie obejmuje prądu przesunięcia poza
+miedzią. Weryfikacja obejmuje dokładną całkę pola kwadratowego,
+sprawdzenie pól przekrojów, zgodność sond ze współrzędnymi siatki
+oraz normalizację niezależną od mocy portu. Porównanie obu śladów i
+rzędów solvera pozostaje częścią kwalifikacji numerycznej.
 
 (rf-python-api)=
 ## 4. Python i ProblemIR

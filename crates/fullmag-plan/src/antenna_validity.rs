@@ -499,6 +499,8 @@ mod tests {
             current_transport_id: "current".into(),
             port_mode_ids: vec!["port".into()],
             conservative_current_view_ref: Some("view".into()),
+            retained_current_source: None,
+            retained_source_preparation: None,
             model: AntennaFieldModelIR::QuasistaticConductionBiotSavart3d,
             oersted_realization: AntennaOerstedRealizationIR::DirectTetraQuadrature,
             surface_field_policy: None,

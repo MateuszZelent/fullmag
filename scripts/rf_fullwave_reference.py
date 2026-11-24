@@ -88,7 +88,7 @@ class TerminalTrace:
     potential_map: sparse.csr_matrix
     interior_edges: np.ndarray
     terminal_nodes: dict[str, np.ndarray]
-    load_columns: dict[str, int]
+    load_admittance_s: sparse.csr_matrix
 
 
 def _check_closed_simple_boundary(faces, edge_indices):
@@ -103,10 +103,19 @@ def _check_closed_simple_boundary(faces, edge_indices):
         raise ValueError("ECE requires one closed connected genus-zero boundary")
 
 
-def terminal_trace(points_count, edges, boundary_faces, terminals, voltages_v, loads_ohm):
-    """Construct the nodal scalar trace with equipotential electrode patches."""
+def terminal_trace(points_count, edges, boundary_faces, terminals, voltages_v, loads_ohm,
+                   *, floating_load=None):
+    """Construct equipotential patches and the passive reduced circuit."""
     fixed, loaded = set(voltages_v), set(loads_ohm)
-    if not terminals or fixed & loaded or fixed | loaded != terminals.keys():
+    floating = set()
+    if floating_load is not None:
+        signal, returns, impedance = floating_load
+        floating = {signal, *returns}
+        if not returns or len(floating) != 1 + len(returns) or floating & (fixed | loaded):
+            raise ValueError("floating load requires distinct, unassigned terminal patches")
+        if not np.isfinite(impedance) or impedance == 0 or complex(impedance).real < 0:
+            raise ValueError("floating load impedance must be finite, nonzero and passive")
+    if not terminals or fixed & loaded or fixed | loaded | floating != terminals.keys():
         raise ValueError("each terminal needs exactly one voltage or load")
     if not all(np.isfinite(complex(v)) for v in voltages_v.values()) or not any(
         complex(v) == 0 for v in voltages_v.values()
@@ -123,6 +132,7 @@ def terminal_trace(points_count, edges, boundary_faces, terminals, voltages_v, l
     taken = np.zeros(points_count, dtype=bool)
     rows, columns = [], []
     terminal_nodes, load_columns = {}, {}
+    return_column = None
     column = 0
     for name, raw in terminals.items():
         nodes = np.unique(_as_indices(raw, (None,), points_count, "terminal vertices"))
@@ -142,17 +152,33 @@ def terminal_trace(points_count, edges, boundary_faces, terminals, voltages_v, l
         if name in fixed:
             lift[nodes] = complex(voltages_v[name])
         else:
+            shared_return = floating_load is not None and name in returns
+            if shared_return and return_column is not None:
+                terminal_column = return_column
+            else:
+                terminal_column = column
+                column += 1
+                if shared_return:
+                    return_column = terminal_column
             rows.extend(nodes)
-            columns.extend([column] * len(nodes))
-            load_columns[name] = column
-            column += 1
+            columns.extend([terminal_column] * len(nodes))
+            load_columns[name] = terminal_column
     other = boundary_nodes[~taken[boundary_nodes]]
     rows.extend(other)
     columns.extend(range(column, column + len(other)))
     potential_map = sparse.csr_matrix(
         (np.ones(len(rows)), (rows, columns)), shape=(points_count, column + len(other)))
     internal = np.setdiff1d(np.arange(len(edges)), boundary_edges, assume_unique=True)
-    return TerminalTrace(lift, potential_map, internal, terminal_nodes, load_columns)
+    size = potential_map.shape[1]
+    diagonal = np.zeros(size, dtype=complex)
+    for name, impedance_to_ground in loads_ohm.items():
+        diagonal[load_columns[name]] = 1.0 / impedance_to_ground
+    admittance = sparse.diags(diagonal, format="csr")
+    if floating_load is not None:
+        endpoints = sparse.csr_matrix(
+            ([1.0, -1.0], ([0, 0], [load_columns[signal], return_column])), shape=(1, size))
+        admittance += (endpoints.T @ endpoints) * (1.0 / impedance)
+    return TerminalTrace(lift, potential_map, internal, terminal_nodes, admittance)
 
 
 def _cotree_edges(points_count, edges, boundary_faces, interior_edges):
@@ -215,9 +241,9 @@ class MaxwellSystem:
         field[rest], _ = _solve(operator[rest][:, rest], -(operator @ field)[rest])
         return field
 
-    def solve_ece(self, terminals, voltages_v, loads_ohm):
+    def solve_ece(self, terminals, voltages_v, loads_ohm, *, floating_load=None):
         trace = terminal_trace(len(self.points_m), self.edges, self.boundary_faces,
-                               terminals, voltages_v, loads_ohm)
+                               terminals, voltages_v, loads_ohm, floating_load=floating_load)
         incidence = gradient_incidence(len(self.points_m), self.edges)
         rows, scalar_nodes = _cotree_edges(
             len(self.points_m), self.edges, self.boundary_faces, trace.interior_edges)
@@ -236,11 +262,11 @@ class MaxwellSystem:
         curl = sparse.block_diag((self.curl_matrix[rows][:, rows],
                                   sparse.csr_matrix((potential_map.shape[1],)*2)), format="csr")
         reduced = curl + transform.T @ mass @ transform
-        impedance = np.zeros(reduced.shape[0], dtype=complex)
-        for name, column in trace.load_columns.items():
-            impedance[len(rows) + column] = 1j*self.omega/complex(loads_ohm[name])
-        reduced = reduced + sparse.diags(impedance)
-        # <AE,w> = iω I_in overline(q_k), and I_in = -V_k / Z on a load.
+        # With current positive into the field domain, I_in = -Y_load V.
+        load_stamp = sparse.block_diag(
+            (sparse.csr_matrix((len(rows),) * 2), trace.load_admittance_s,
+             sparse.csr_matrix((len(scalar_nodes),) * 2)), format="csr")
+        reduced += (1j * self.omega) * load_stamp
         free_result, residual = _solve(reduced, -(transform.T @ (mass @ lift)))
         field = lift + transform @ free_result
         curl_field = free @ free_result[:len(rows)]

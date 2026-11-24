@@ -2220,6 +2220,11 @@ class ClosedLoopNonmagneticRoundTripTests(unittest.TestCase):
         loaded = fm.load_problem_from_script(source, lightweight_assets=True)
         expected = loaded.problem.to_ir(include_geometry_assets=False, source_root=source.parent)
         scene = build_scene_document_from_builder(export_builder_draft(loaded))
+        nodes = scene["study"]["study_pipeline"]["nodes"]
+        self.assertEqual(len(nodes), len(loaded.stages))
+        for stage, node in zip(loaded.stages, nodes):
+            for key in ("interactive_session_requested", "wait_for_solve"):
+                self.assertIs(node["payload"][key], stage.problem.runtime_metadata.get(key, False))
         scripts = {
             "python": render_loaded_problem_as_script(loaded),
             "scene_document": render_scene_document_as_script(scene),

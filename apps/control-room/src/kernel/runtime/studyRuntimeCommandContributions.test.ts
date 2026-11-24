@@ -4697,3 +4697,100 @@ describe("study runtime command contributions", () => {
     });
   });
 });
+
+describe("Compute with backend-owned antenna mesh preparation", () => {
+  function fixture({ meshRevision = 0, sceneRevision = 3 } = {}) {
+    const preparation = vi.fn(async () => {
+      throw new ControlRoomApiError("simulation preparation unavailable", 404);
+    });
+    const scene = vi.fn(async () => ({ revision: sceneRevision }));
+    const sharedDomainManifest = vi.fn(async () => null);
+    const materializePreparation = vi.fn();
+    const submit = vi.fn(async () => ({ accepted: true, command_id: "cmd-antenna" }));
+    const resourceData = runtimeResourceData({
+      discretization: "fem", explicitTopology: true, sceneRevision: 3, meshRevision,
+    });
+    resourceData[MODEL_READINESS_PATH] = {
+      ...(resourceData[MODEL_READINESS_PATH] as Record<string, unknown>),
+      preparation_owns_mesh: true,
+    };
+    const context = {
+      api: {
+        commands: { submit }, model: { scene }, meshing: { sharedDomainManifest },
+        simulation: { preparation, materializePreparation },
+      } as never,
+      resourceData,
+      sessionScopeKey: "session=A&epoch=A%401&request_scope_epoch=api%3A1",
+      source: "test" as const,
+    };
+    return { context, preparation, scene, sharedDomainManifest, materializePreparation, submit };
+  }
+
+  it("submits actual study.run without requesting a magnetic mesh when current readiness delegates preparation", async () => {
+    const registry = registryWithStudyRuntimeCommands();
+    const test = fixture();
+    expect(registry.isEnabled("study.run", test.context)).toBe(true);
+    const result = await registry.execute("study.run", test.context);
+    expectPendingAcceptedRuntimeCommand(result, "Study compute command accepted.", "cmd-antenna");
+    expect(test.submit).toHaveBeenCalledWith(
+      expect.objectContaining({kind: "solve"}),
+      {sessionScopeKey: test.context.sessionScopeKey},
+    );
+    expect(test.preparation).toHaveBeenCalledWith({ sessionScopeKey: test.context.sessionScopeKey });
+    expect(test.scene).toHaveBeenCalledWith({ sessionScopeKey: test.context.sessionScopeKey });
+    expect(test.sharedDomainManifest).not.toHaveBeenCalled();
+    expect(test.materializePreparation).not.toHaveBeenCalled();
+  });
+
+  it("preserves the magnetic mesh guard with a legacy readiness response", async () => {
+    const registry = registryWithStudyRuntimeCommands();
+    const test = fixture();
+    delete (test.context.resourceData[MODEL_READINESS_PATH] as Record<string, unknown>).preparation_owns_mesh;
+    const result = await registry.execute("study.run", test.context);
+    expect(result).toMatchObject({status: "failed"});
+    expect(test.sharedDomainManifest).toHaveBeenCalled();
+    expect(test.submit).not.toHaveBeenCalled();
+  });
+
+  it.each(["study.compute-fields", "study.compute-energies"])("does not delegate %s mesh validation to antenna Solve", async (command) => {
+    const registry = registryWithStudyRuntimeCommands();
+    const test = fixture();
+    expect(registry.isEnabled(command, test.context)).toBe(false);
+    const result = await registry.execute(command, test.context);
+    expect(result).toMatchObject({status: "failed"});
+    expect(test.sharedDomainManifest).not.toHaveBeenCalled();
+    expect(test.submit).not.toHaveBeenCalled();
+  });
+
+  it("refuses Solve when the scene changes during delegated preparation", async () => {
+    const registry = registryWithStudyRuntimeCommands();
+    const test = fixture({sceneRevision: 4});
+    const result = await registry.execute("study.run", test.context);
+    expect(result).toMatchObject({status: "failed"});
+    expect(test.submit).not.toHaveBeenCalled();
+    expect(test.sharedDomainManifest).not.toHaveBeenCalled();
+  });
+
+  it("refuses Solve when preparation is present but not ready", async () => {
+    const registry = registryWithStudyRuntimeCommands();
+    const test = fixture();
+    test.preparation.mockResolvedValueOnce({ preparation_id: "failed", status: "failed" } as never);
+    const result = await registry.execute("study.run", test.context);
+    expect(result).toMatchObject({status: "failed"});
+    expect(test.submit).not.toHaveBeenCalled();
+    expect(test.scene).not.toHaveBeenCalled();
+  });
+
+  it.each(["blocked", "stale"])("refuses actual study.run for %s readiness even with ownership", async (kind) => {
+    const registry = registryWithStudyRuntimeCommands();
+    const test = fixture();
+    const readiness = test.context.resourceData[MODEL_READINESS_PATH] as Record<string, unknown>;
+    if (kind === "blocked") { readiness.ready_to_run = false; readiness.blockers = ["Blocked"]; }
+    else { readiness.scene_revision = 2; }
+    expect(registry.isEnabled("study.run", test.context)).toBe(false);
+    const result = await registry.execute("study.run", test.context);
+    expect(result).toMatchObject({status: "failed"});
+    expect(test.submit).not.toHaveBeenCalled();
+    expect(test.preparation).not.toHaveBeenCalled();
+  });
+});
