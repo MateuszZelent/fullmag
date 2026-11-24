@@ -861,13 +861,18 @@ pub(crate) async fn build_and_publish_geometry_mesh(
         }
         let validated_scene_revision = current_scene.revision;
         // This is the selected geometry domain, even if the preceding run
-        // used an FDM execution plan. Retain unrelated metadata and history.
+        // used an FDM execution plan. Retain unrelated metadata and history,
+        // and keep/restore FEM authoring capabilities so post-mesh study
+        // stage authoring stays enabled instead of turning stale.
         let mut metadata = snapshot.metadata.as_deref()
             .and_then(Value::as_object).cloned().unwrap_or_default();
         for key in ["execution_plan", "artifact_layout", "live_preview", "magnetic_state_present"] {
             metadata.remove(key);
         }
-        metadata.insert("capabilities".into(), Value::Null);
+        metadata.insert(
+            "capabilities".into(),
+            post_mesh_build_capabilities_value(snapshot, current_scene),
+        );
         let mut published = snapshot.clone();
         crate::session::apply_current_live_snapshot(
             &mut published,
@@ -916,6 +921,94 @@ pub(crate) async fn build_and_publish_geometry_mesh(
             .await?;
     }
     Ok(())
+}
+
+/// Capabilities metadata published alongside a geometry-only shared-domain FEM
+/// mesh. Preserves/restores FEM authoring capabilities when the active lane is
+/// FEM so study/stage authoring stays enabled after meshing, while still
+/// clearing stale non-FEM (e.g. preceding FDM run) capabilities to `null`.
+fn post_mesh_build_capabilities_value(
+    snapshot: &SessionStateResponse,
+    scene: &SceneDocument,
+) -> Value {
+    let backend = {
+        let authored = scene.study.requested_backend.trim();
+        if !authored.is_empty() {
+            authored
+        } else {
+            snapshot.session.requested_backend.trim()
+        }
+    };
+    let device = {
+        let authored = scene.study.requested_device.trim();
+        if !authored.is_empty() {
+            authored
+        } else {
+            snapshot.session.requested_device.trim()
+        }
+    };
+    let precision = {
+        let authored = scene.study.requested_precision.trim();
+        if !authored.is_empty() {
+            authored
+        } else {
+            snapshot.session.requested_precision.trim()
+        }
+    };
+    let resolved_backend = snapshot
+        .session
+        .resolved_backend
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    if !backend.eq_ignore_ascii_case("fem")
+        || resolved_backend.is_some_and(|resolved| !resolved.eq_ignore_ascii_case("fem"))
+    {
+        return Value::Null;
+    }
+    if let Some(capabilities) = fullmag_runner::scratch_authoring_capabilities(
+        &backend.to_ascii_lowercase(),
+        &device.to_ascii_lowercase(),
+        &precision.to_ascii_lowercase(),
+    ) {
+        return serde_json::to_value(capabilities).unwrap_or(Value::Null);
+    }
+    if let (Some(rb), Some(rd), Some(rp)) = (
+        resolved_backend,
+        snapshot.session.resolved_device.as_deref().map(str::trim),
+        snapshot.session.resolved_precision.as_deref().map(str::trim),
+    ) {
+        if let Some(capabilities) = fullmag_runner::scratch_authoring_capabilities(
+            &rb.to_ascii_lowercase(),
+            &rd.to_ascii_lowercase(),
+            &rp.to_ascii_lowercase(),
+        ) {
+            return serde_json::to_value(capabilities).unwrap_or(Value::Null);
+        }
+    }
+    // Preserve an already-resolved FEM time-domain capability profile (for
+    // example, after an earlier `fem_native_gpu` execution) when its device
+    // matches the session's resolved device.
+    if let Some(existing) = snapshot.capabilities.as_ref() {
+        let resolved_device = snapshot
+            .session
+            .resolved_device
+            .as_deref()
+            .map(str::trim);
+        let matches_resolved_fem_lane = match existing.engine_id {
+            fullmag_runner::RuntimeEngineId::FemCpuNative => {
+                resolved_device.is_some_and(|value| value.eq_ignore_ascii_case("cpu"))
+            }
+            fullmag_runner::RuntimeEngineId::FemNativeGpu => {
+                resolved_device.is_some_and(|value| value.eq_ignore_ascii_case("gpu"))
+            }
+            _ => false,
+        };
+        if matches_resolved_fem_lane {
+            return serde_json::to_value(existing).unwrap_or(Value::Null);
+        }
+    }
+    Value::Null
 }
 
 #[cfg(test)]
@@ -1151,5 +1244,75 @@ mod tests {
         let mut shared = Map::new();
         shared.insert("hmax".to_string(), json!(1e-8));
         assert_eq!(body_hmax(&shared, &[], 2), Some(1e-8));
+    }
+
+    #[test]
+    fn post_mesh_build_capabilities_retains_fem_authoring_lane_and_clears_stale_fdm() {
+        let mut fem_scene: SceneDocument = serde_json::from_value(json!({
+            "version": "scene.v2",
+            "objects": [{
+                "id": "py", "name": "Py_Film", "role": "magnet",
+                "geometry": {"geometry_kind": "Box", "geometry_params": {"size": [1e-6, 5e-7, 1e-8]}},
+                "material_ref": ""
+            }]
+        }))
+        .unwrap();
+        fem_scene.study.requested_backend = "fem".into();
+        fem_scene.study.requested_device = "cpu".into();
+        fem_scene.study.requested_precision = "double".into();
+
+        let request = serde_json::from_value(json!({"session_id": "fem-post-mesh"})).unwrap();
+        let mut snapshot = crate::session::default_current_live_state(&request);
+        snapshot.session.requested_backend = "fem".into();
+        snapshot.session.requested_device = "cpu".into();
+        snapshot.session.requested_precision = "double".into();
+        snapshot.session.requested_mode = "strict".into();
+        snapshot.session.resolved_backend = Some("fem".into());
+        snapshot.session.resolved_device = Some("cpu".into());
+        snapshot.session.resolved_precision = Some("double".into());
+        snapshot.session.resolved_mode = Some("strict".into());
+        snapshot.capabilities =
+            fullmag_runner::scratch_authoring_capabilities("fem", "cpu", "double");
+        snapshot.scene_document = Some(fem_scene.clone());
+
+        let mut metadata = Map::new();
+        metadata.insert(
+            "capabilities".into(),
+            post_mesh_build_capabilities_value(&snapshot, &fem_scene),
+        );
+        crate::session::apply_current_live_metadata(&mut snapshot, Value::Object(metadata));
+
+        let restored = snapshot
+            .capabilities
+            .as_ref()
+            .expect("FEM authoring capabilities must survive shared-domain mesh publication");
+        assert_eq!(restored.engine_id, fullmag_runner::RuntimeEngineId::FemCpuNative);
+
+        let active_lane = crate::router_v2::handlers::sessions::status::active_lane_capability_snapshot(
+            &snapshot, true,
+        );
+        assert_eq!(active_lane.source.kind, "planner");
+        for op_id in [
+            "shared_mesh_build",
+            "study.relaxation",
+            "study.time_integration",
+            "study.fft",
+        ] {
+            assert_eq!(
+                active_lane.operations[op_id].state,
+                crate::schemas::status::ActiveLaneCapabilityState::Supported,
+                "{op_id} must remain supported after shared-domain FEM mesh build"
+            );
+        }
+
+        // Switching from a preceding FDM resolved lane must still clear stale FDM capabilities.
+        let mut fdm_snapshot = snapshot.clone();
+        fdm_snapshot.session.resolved_backend = Some("fdm".into());
+        fdm_snapshot.capabilities =
+            fullmag_runner::scratch_authoring_capabilities("fdm", "cpu", "double");
+        assert_eq!(
+            post_mesh_build_capabilities_value(&fdm_snapshot, &fem_scene),
+            Value::Null
+        );
     }
 }

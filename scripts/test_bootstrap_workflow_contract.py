@@ -337,6 +337,16 @@ jobs:
         pyproject = (ROOT / "packages/fullmag-py/pyproject.toml").read_text()
 
         self.assertIn('"manifold3d>=3,<4"', pyproject)
+        for dockerfile_path in (
+            "docker/fem-gpu/Dockerfile",
+            "docker/fem-cpu/Dockerfile",
+        ):
+            dockerfile = (ROOT / dockerfile_path).read_text()
+            self.assertIn(
+                "manifold3d>=3,<4",
+                dockerfile,
+                f"{dockerfile_path} must install manifold3d for trimesh CSG booleans",
+            )
 
     def test_viewport_audit_installs_playwright_from_control_room_workspace(self) -> None:
         workflow = (ROOT / ".github/workflows/bootstrap.yml").read_text()
