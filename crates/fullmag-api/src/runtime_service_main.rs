@@ -6,7 +6,7 @@ mod runtime_service_unclaimed_cancellation;
 mod claimed_worker_interruption;
 use anyhow::{bail, Context, Result};
 use fullmag_session::{
-    compute_node_snapshot::Reported,
+    compute_node_snapshot::{GpuDeviceSnapshot, Reported, SampleFreshness},
     host_resource_ledger::{
         DockerNamespaceTeardownAttestation, HostInventoryOwner, HostInventoryOwnerDescriptor,
         HostReservationIdentity, HostReservationOwner, HostResourceLedger,
@@ -45,6 +45,7 @@ use fullmag_session::{
     FMS_PREPARATION_RESOURCE_POOL_SCHEMA, FMS_SCHEDULER_RESOURCE_POOL_SCHEMA,
 };
 use serde::{Deserialize, Serialize};
+use fullmag_runtime_control::host_runtime::ComputeNodeAdmissionFailure;
 use std::{
     collections::{BTreeMap, BTreeSet},
     ffi::OsString,
@@ -88,84 +89,161 @@ fn startup_phase_event(phase: &str, status: &str, started_at: Instant, deadline:
     );
 }
 
+fn compute_node_refresh_failure(
+    freshness: SampleFreshness,
+    gpus: &Reported<Vec<GpuDeviceSnapshot>>,
+    requires_gpu_inventory: bool,
+    cpu_pinning_blocked: bool,
+) -> Option<String> {
+    if freshness != SampleFreshness::Current {
+        return Some(format!("compute-node sample freshness is {freshness:?}"));
+    }
+    if cpu_pinning_blocked {
+        return Some("current CPU topology or allowed CPU set is unavailable".into());
+    }
+    match (requires_gpu_inventory, gpus) {
+        (true, Reported::Unavailable { reason, .. }) => {
+            Some(format!("current GPU inventory is unavailable: {reason:?}"))
+        }
+        (true, Reported::Available { value }) if value.is_empty() => {
+            Some("current GPU inventory is empty".into())
+        }
+        _ => None,
+    }
+}
+
+struct PublishedComputeNodeSample {
+    owner: Arc<HostInventoryOwner>,
+    refresh_failure: Option<String>,
+}
+
+type ComputeNodeSampleResult = Result<Option<PublishedComputeNodeSample>>;
+
 async fn publish_compute_node_sample(
     ledger: Arc<HostResourceLedger>,
     inventory_owner: Option<Arc<HostInventoryOwner>>,
     expected_generation: Option<String>,
-) -> Result<Option<Arc<HostInventoryOwner>>> {
-    tokio::task::spawn_blocking(move || -> Result<Option<Arc<HostInventoryOwner>>> {
-        if let Some(expected) = expected_generation.as_deref() {
-            fullmag_runtime_control::retry_store_writer_busy(|| {
-                ledger.validate_runtime_generation(expected)
-            })?;
-        }
-        let inventory_owner = match inventory_owner {
-            Some(owner) => Some(owner),
-            None => {
-                // StoreWriterBusy can occur only while entering the ledger
-                // writer for this operation. Native owner-lock contention is
-                // reported as Ok(None) and must not be turned into a retry.
+) -> ComputeNodeSampleResult {
+    tokio::task::spawn_blocking(move || {
+        let initial = inventory_owner.is_none();
+        let started = Instant::now();
+        let mut probe_started = None;
+        let mut publication_started = None;
+        let mut ledger_write = Duration::ZERO;
+        let result: ComputeNodeSampleResult = (|| {
+            if let Some(expected) = expected_generation.as_deref() {
                 fullmag_runtime_control::retry_store_writer_busy(|| {
+                    ledger.validate_runtime_generation(expected)
+                })?;
+            }
+            let inventory_owner = match inventory_owner {
+                Some(owner) => Some(owner),
+                None => fullmag_runtime_control::retry_store_writer_busy(|| {
                     ledger.try_acquire_inventory_owner()
                 })?
-                .map(Arc::new)
-            }
-        };
-        let Some(inventory_owner) = inventory_owner else {
-            return Ok(None);
-        };
-        let previous = fullmag_runtime_control::retry_store_writer_busy(|| {
-            ledger.read_compute_node_snapshot()
-        })?;
-        let snapshot = if ledger.policy().requires_runtime_readiness() {
-            let readiness = fullmag_runtime_control::retry_store_writer_busy(|| {
-                ledger.read_runtime_readiness()
+                .map(Arc::new),
+            };
+            let Some(inventory_owner) = inventory_owner else {
+                // An existing producer owns the shared ledger. This cycle
+                // did not make a refresh attempt.
+                return Ok(None);
+            };
+            let previous = fullmag_runtime_control::retry_store_writer_busy(|| {
+                ledger.read_compute_node_snapshot()
             })?;
-            fullmag_runtime_control::compute_node_probe::validate_native_runtime_readiness_for_host(
-                &readiness,
-            )?;
-            fullmag_runtime_control::compute_node_probe::sample_compute_node_for_owner_with_readiness(
-                &ledger,
-                inventory_owner.descriptor(),
-                previous.as_ref(),
-                &readiness,
-            )?
-        } else {
-            fullmag_runtime_control::compute_node_probe::sample_compute_node_for_owner(
-                &ledger,
-                inventory_owner.descriptor(),
-                previous.as_ref(),
-            )?
+            let readiness = ledger.policy().requires_runtime_readiness().then(|| {
+                fullmag_runtime_control::retry_store_writer_busy(|| ledger.read_runtime_readiness())
+            }).transpose()?;
+
+            probe_started = Some(Instant::now());
+            let snapshot = if let Some(readiness) = readiness.as_ref() {
+                fullmag_runtime_control::compute_node_probe::validate_native_runtime_readiness_for_host(
+                    readiness,
+                )?;
+                fullmag_runtime_control::compute_node_probe::sample_compute_node_for_owner_with_readiness(
+                    &ledger,
+                    inventory_owner.descriptor(),
+                    previous.as_ref(),
+                    readiness,
+                )?
+            } else {
+                fullmag_runtime_control::compute_node_probe::sample_compute_node_for_owner(
+                    &ledger,
+                    inventory_owner.descriptor(),
+                    previous.as_ref(),
+                )?
+            };
+
+            publication_started = Some(Instant::now());
+            fullmag_runtime_control::retry_store_writer_busy(|| {
+                let mut acquired = None;
+                let result = ledger.publish_compute_node_snapshot_observed(
+                    &inventory_owner,
+                    &snapshot,
+                    expected_generation.as_deref(),
+                    || acquired = Some(Instant::now()),
+                );
+                if let Some(acquired) = acquired {
+                    ledger_write += acquired.elapsed();
+                }
+                result
+            })
+            .with_context(|| {
+                // A rejected snapshot is never written to the CAS.
+                let gpu_inventory = snapshot.gpus.known_value().map(|devices| {
+                    devices.iter().map(|gpu| serde_json::json!({
+                        "uuid": gpu.uuid,
+                        "pci_id": gpu.pci_id.known_value(),
+                        "partition": gpu.partition.known_value(),
+                        "topology": gpu.topology.known_value(),
+                    })).collect::<Vec<_>>()
+                });
+                format!(
+                    "compute-node sample rejected: observed_inventory={}, expected_inventory={}, cpu_topology_matches_previous={:?}, allowed_cpu_ids={:?}, cpu_quota={:?}, gpu_inventory={}",
+                    snapshot.inventory_sha256,
+                    ledger.policy().topology_sha256,
+                    previous.as_ref().map(|old| old.cpu.topology.known_value() == snapshot.cpu.topology.known_value()),
+                    snapshot.cpu.os_constraints.allowed_logical_cpu_ids.known_value(),
+                    snapshot.cpu.os_constraints.quota.known_value(),
+                    serde_json::json!(gpu_inventory),
+                )
+            })?;
+
+            let policy = ledger.policy();
+            let cpu_pinning_blocked = !policy.allowed_cpu_ids.is_empty()
+                && (!snapshot.cpu.topology.is_available()
+                    || !snapshot.cpu.os_constraints.allowed_logical_cpu_ids.is_available());
+            Ok(Some(PublishedComputeNodeSample {
+                owner: inventory_owner,
+                refresh_failure: compute_node_refresh_failure(
+                    snapshot.sample.freshness_at(chrono::Utc::now()),
+                    &snapshot.gpus,
+                    !policy.gpu_vram_bytes_by_uuid.is_empty(),
+                    cpu_pinning_blocked,
+                ),
+            }))
+        })();
+
+        let finished = Instant::now();
+        let elapsed = finished.duration_since(started);
+        let outcome = match &result {
+            Ok(Some(sample)) if sample.refresh_failure.is_none() => "fresh",
+            Ok(Some(_)) => "unusable",
+            Ok(None) => "other_producer",
+            Err(_) => "failed",
         };
-        fullmag_runtime_control::retry_store_writer_busy(|| {
-            ledger.publish_compute_node_snapshot_with_owner_for_generation(
-                &inventory_owner,
-                &snapshot,
-                expected_generation.as_deref(),
-            )
-        })
-        .with_context(|| {
-            // Retain the observed identity when publication rejects a sample;
-            // the rejected snapshot is deliberately never written to the CAS.
-            let gpu_inventory = snapshot.gpus.known_value().map(|devices| {
-                devices.iter().map(|gpu| serde_json::json!({
-                    "uuid": gpu.uuid,
-                    "pci_id": gpu.pci_id.known_value(),
-                    "partition": gpu.partition.known_value(),
-                    "topology": gpu.topology.known_value(),
-                })).collect::<Vec<_>>()
-            });
-            format!(
-                "compute-node sample rejected: observed_inventory={}, expected_inventory={}, cpu_topology_matches_previous={:?}, allowed_cpu_ids={:?}, cpu_quota={:?}, gpu_inventory={}",
-                snapshot.inventory_sha256,
-                ledger.policy().topology_sha256,
-                previous.as_ref().map(|old| old.cpu.topology.known_value() == snapshot.cpu.topology.known_value()),
-                snapshot.cpu.os_constraints.allowed_logical_cpu_ids.known_value(),
-                snapshot.cpu.os_constraints.quota.known_value(),
-                serde_json::json!(gpu_inventory),
-            )
-        })?;
-        Ok(Some(inventory_owner))
+        if initial || elapsed >= Duration::from_secs(1) || matches!(outcome, "unusable" | "failed") {
+            eprintln!("{}", serde_json::json!({
+                "event": "compute_node_sample_timing",
+                "outcome": outcome,
+                "elapsed_ms": elapsed.as_millis(),
+                "ledger_read_ms": probe_started.unwrap_or(finished).duration_since(started).as_millis(),
+                "probe_ms": probe_started.map(|start| publication_started.unwrap_or(finished).duration_since(start).as_millis()),
+                "writer_wait_and_retry_ms": publication_started.map(|start| finished.duration_since(start).saturating_sub(ledger_write).as_millis()),
+                "ledger_write_ms": publication_started.map(|_| ledger_write.as_millis()),
+            }));
+        }
+        result
     })
     .await
     .context("compute-node sampling worker failed")?
@@ -179,13 +257,86 @@ fn is_store_writer_busy(error: &anyhow::Error) -> bool {
         .any(|cause| cause.is::<fullmag_session::StoreWriterBusy>())
 }
 
-fn record_sample_store_writer_busy(consecutive: &mut u32) {
-    *consecutive = consecutive.saturating_add(1);
+fn is_transient_sample_refresh(error: &anyhow::Error) -> bool {
+    if error.chain().any(|cause| cause.is::<fullmag_session::PublicationUncertain>()) {
+        return false;
+    }
+    is_store_writer_busy(error) || fullmag_runtime_control::is_transient_store_io(error)
 }
 
-fn host_admission_deferral_within_budget(deferred_at: &mut Option<Instant>, now: Instant) -> bool {
-    let started_at = deferred_at.get_or_insert(now);
-    now.duration_since(*started_at) < HOST_ADMISSION_DEFERRAL_BUDGET
+const SAMPLE_REFRESH_ALERT_AFTER: u32 = 3;
+
+#[derive(Default)]
+struct SampleRefreshFailures(u32);
+
+impl SampleRefreshFailures {
+    fn failed(&mut self) -> (u32, bool) {
+        self.0 = self.0.saturating_add(1);
+        (self.0, self.0 == SAMPLE_REFRESH_ALERT_AFTER)
+    }
+
+    fn recovered(&mut self) -> u32 {
+        std::mem::take(&mut self.0)
+    }
+
+    fn report_failure(&mut self, reason: impl std::fmt::Display) {
+        let (attempts, escalate) = self.failed();
+        if attempts <= SAMPLE_REFRESH_ALERT_AFTER {
+            eprintln!("{}", serde_json::json!({
+                "event": "compute_node_sample_refresh_failed",
+                "level": if escalate { "error" } else { "warn" },
+                "consecutive_failures": attempts,
+                "reason": reason.to_string(),
+                "retrying": true,
+            }));
+        }
+    }
+
+    fn report_recovery(&mut self) {
+        let attempts = self.recovered();
+        if attempts > 0 {
+            eprintln!("{}", serde_json::json!({
+                "event": "compute_node_sample_refresh_recovered",
+                "prior_failures": attempts,
+            }));
+        }
+    }
+}
+
+#[derive(Default)]
+struct HostAdmissionDeferral {
+    unavailable_since: Option<Instant>,
+    waiting_for_sample: bool,
+}
+
+impl HostAdmissionDeferral {
+    fn allows_owner_heartbeat(
+        &mut self,
+        failure: Option<&ComputeNodeAdmissionFailure>,
+        now: Instant,
+    ) -> bool {
+        match failure {
+            Some(ComputeNodeAdmissionFailure::Unavailable(_)) => {
+                let started_at = self.unavailable_since.get_or_insert(now);
+                now.duration_since(*started_at) < HOST_ADMISSION_DEFERRAL_BUDGET
+            }
+            Some(ComputeNodeAdmissionFailure::SampleNotCurrent(reason)) => {
+                if !self.waiting_for_sample {
+                    eprintln!("compute-node admission waiting for a fresh sample: {reason}");
+                }
+                self.waiting_for_sample = true;
+                self.unavailable_since = None;
+                true
+            }
+            None => {
+                if self.waiting_for_sample {
+                    eprintln!("compute-node admission has a fresh sample again");
+                }
+                *self = Self::default();
+                true
+            }
+        }
+    }
 }
 
 impl SchedulerChild {
@@ -654,7 +805,7 @@ enum RuntimeLoopEvent<T, U> {
 }
 
 type ComputeNodeSampleFuture =
-    Pin<Box<dyn Future<Output = Result<Option<Arc<HostInventoryOwner>>>> + Send>>;
+    Pin<Box<dyn Future<Output = ComputeNodeSampleResult> + Send>>;
 
 /// Keep both operations pinned while one wins the race. In particular, a
 /// control future may already own an accepted socket when the sample future
@@ -680,13 +831,13 @@ where
 }
 
 async fn select_pending_sample_with_control(
-    sample: Pin<&mut (dyn Future<Output = Result<Option<Arc<HostInventoryOwner>>>> + Send)>,
+    sample: Pin<&mut (dyn Future<Output = ComputeNodeSampleResult> + Send)>,
     listener: &TcpListener,
     owner: &RuntimeServiceOwner,
     config: &ServiceConfig,
     store: &SessionStore,
 ) -> RuntimeLoopEvent<
-    Result<Option<Arc<HostInventoryOwner>>>,
+    ComputeNodeSampleResult,
     Result<ControlObservation>,
 > {
     // The control future is scoped to this helper. If sampling wins, the
@@ -720,7 +871,7 @@ async fn await_heartbeat_with_control<T>(
 
 async fn join_compute_node_sample(
     sample: ComputeNodeSampleFuture,
-) -> Result<Option<Arc<HostInventoryOwner>>> {
+) -> ComputeNodeSampleResult {
     // This is the only exit from the control-first branch. Keeping the join
     // explicit makes it impossible to detach the spawn_blocking publisher.
     sample.await
@@ -2627,43 +2778,16 @@ fn publish_service_heartbeat(
     config: &ServiceConfig,
     pools: (u64, u64),
     children: Vec<RuntimeServiceChild>,
-    host_admission: Option<&fullmag_runtime_control::host_runtime::HostRuntimeAdmission>,
-    admission_deferred_at: &mut Option<Instant>,
+    admission_observation: Result<Option<ComputeNodeAdmissionFailure>>,
+    admission_deferral: &mut HostAdmissionDeferral,
     admission_unknown: &mut bool,
 ) -> Result<()> {
-    if let Some(admission) = host_admission {
-        match admission.compute_snapshot_admission_failure() {
-            Ok(None) => *admission_deferred_at = None,
-            Ok(Some(reason)) => {
-                if !host_admission_deferral_within_budget(
-                    admission_deferred_at,
-                    Instant::now(),
-                ) {
-                    *admission_unknown = true;
-                    owner.publish(
-                        RuntimeServiceState::Unknown,
-                        Some(pools.0),
-                        Some(pools.1),
-                        children.clone(),
-                    )?;
-                    bail!(
-                        "host compute-node freshness or topology admission was lost: {reason}"
-                    );
-                }
-                // The ledger still refuses reservations. Continue
-                // pool validation and owner heartbeat so a live
-                // service is not mistaken for an expired owner.
-                tracing::debug!(%reason, "host compute-node admission deferred");
-            }
-            Err(error) if is_store_writer_busy(&error) => {
-                // Contention is not evidence of a failed owner.
-                // Reservations still require a fresh snapshot;
-                // keep validating pools and publishing liveness.
-                // Do not consume the separate stale/topology
-                // observation budget without an observation.
-                tracing::warn!(error = ?error, "host admission observation deferred while the ledger writer is busy");
-            }
-            Err(error) => {
+    match admission_observation {
+        Ok(failure) => {
+            // Admission independently requires a current sample. A stale
+            // sample with matching identities cannot expire a live owner.
+            if !admission_deferral.allows_owner_heartbeat(failure.as_ref(), Instant::now()) {
+                let reason = failure.expect("a refused heartbeat must have an admission failure");
                 *admission_unknown = true;
                 owner.publish(
                     RuntimeServiceState::Unknown,
@@ -2671,8 +2795,31 @@ fn publish_service_heartbeat(
                     Some(pools.1),
                     children.clone(),
                 )?;
-                bail!("host compute-node admission observation failed: {error:#}");
+                bail!(
+                    "host compute-node freshness or topology admission was lost: {reason}"
+                );
             }
+            if let Some(reason) = failure {
+                tracing::debug!(%reason, "host compute-node admission deferred");
+            }
+        }
+        Err(error) if is_transient_sample_refresh(&error) => {
+            // Contention is not evidence of a failed owner.
+            // Reservations still require a fresh snapshot;
+            // keep validating pools and publishing liveness.
+            // Do not consume the separate stale/topology
+            // observation budget without an observation.
+            tracing::warn!(error = ?error, "host admission observation deferred while the ledger writer is busy");
+        }
+        Err(error) => {
+            *admission_unknown = true;
+            owner.publish(
+                RuntimeServiceState::Unknown,
+                Some(pools.0),
+                Some(pools.1),
+                children.clone(),
+            )?;
+            bail!("host compute-node admission observation failed: {error:#}");
         }
     }
     let compute = store
@@ -2838,7 +2985,8 @@ fn run_service(path: PathBuf) -> Result<()> {
                         }),
                     )
                     .await
-                    .context("initial compute-node sample is required before releasing host schedulers")?;
+                    .context("initial compute-node sample is required before releasing host schedulers")?
+                    .map(|sample| sample.owner);
                     if host_admission
                         .as_ref()
                         .context("host admission context disappeared during startup")?
@@ -2894,8 +3042,8 @@ fn run_service(path: PathBuf) -> Result<()> {
             let mut heartbeat = Instant::now();
             let mut last_compute_node_sample = Instant::now();
             let mut pending_compute_node_sample: Option<ComputeNodeSampleFuture> = None;
-            let mut consecutive_busy_samples = 0_u32;
-            let mut admission_deferred_at = None;
+            let mut sample_refresh_failures = SampleRefreshFailures::default();
+            let mut admission_deferral = HostAdmissionDeferral::default();
             // A drain or control error observed while a sample is in flight
             // cannot make us leave the loop: doing so would drop the future
             // while its spawn_blocking worker continued to own the ledger.
@@ -2972,35 +3120,22 @@ fn run_service(path: PathBuf) -> Result<()> {
                     };
 
                     match sample_result {
-                        Ok(sample_owner) => {
-                            consecutive_busy_samples = 0;
-                            inventory_owner = sample_owner;
+                        Ok(Some(sample)) => {
+                            inventory_owner = Some(sample.owner);
+                            if let Some(failure) = sample.refresh_failure {
+                                sample_refresh_failures.report_failure(failure);
+                            } else {
+                                sample_refresh_failures.report_recovery();
+                            }
+                        }
+                        Ok(None) => inventory_owner = None,
+                        Err(error) if is_transient_sample_refresh(&error) => {
+                            // The ledger still rejects new reservations once the
+                            // previous sample expires. Keep the workers alive
+                            // and let the next publication restore admission.
+                            sample_refresh_failures.report_failure(format_args!("{error:#}"));
                         }
                         Err(error) => {
-                            if is_store_writer_busy(&error) {
-                                // A competing writer cannot invalidate the
-                                // service owner. The scheduler independently
-                                // gates every new admission on a fresh sample.
-                                record_sample_store_writer_busy(&mut consecutive_busy_samples);
-                                tracing::warn!(
-                                    error = ?error,
-                                    consecutive_busy_samples,
-                                    "compute-node sample deferred while the host ledger writer is busy"
-                                );
-                                last_compute_node_sample = Instant::now();
-                                if let Some(control_error) = deferred_control_error.take() {
-                                    return Err(control_error).context(
-                                        "service control request failed while compute-node sampling was in flight",
-                                    );
-                                }
-                                if let Some(ControlObservation::Drain(confirmation)) =
-                                    deferred_control.take()
-                                {
-                                    drain_confirmation = confirmation;
-                                    break;
-                                }
-                                continue;
-                            }
                             admission_unknown = true;
                             owner_slot.as_mut().expect("runtime owner is present").publish(
                                 RuntimeServiceState::Unknown,
@@ -3046,22 +3181,25 @@ fn run_service(path: PathBuf) -> Result<()> {
                     let host_admission = host_admission.clone();
                     let config_for_worker = config.clone();
                     let store_for_worker = Arc::clone(&store);
+                    let mut next_deferral = std::mem::take(&mut admission_deferral);
                     let pending = tokio::task::spawn_blocking(move || {
-                        let mut admission_deferred_at = admission_deferred_at;
                         let mut admission_unknown = admission_unknown;
+                        let admission_observation = host_admission.as_ref().map_or(Ok(None), |admission| {
+                            admission.compute_snapshot_admission_failure()
+                        });
                         let result = publish_service_heartbeat(
                             &mut owner, &store_for_worker, &config_for_worker, pools,
-                            children, host_admission.as_ref(),
-                            &mut admission_deferred_at, &mut admission_unknown,
+                            children, admission_observation,
+                            &mut next_deferral, &mut admission_unknown,
                         );
-                        (owner, result, admission_deferred_at, admission_unknown)
+                        (owner, result, next_deferral, admission_unknown)
                     });
                     let (completed, control) =
                         await_heartbeat_with_control(pending, &listener, &descriptor, &config, &store).await;
                     let (owner, result, deferred_at, unknown) =
                         completed.context("runtime heartbeat worker failed")?;
                     owner_slot = Some(owner);
-                    admission_deferred_at = deferred_at;
+                    admission_deferral = deferred_at;
                     admission_unknown = unknown;
                     result?;
                     if let ControlObservation::Drain(confirmation) = control? {
@@ -3295,33 +3433,168 @@ mod tests {
     }
 
     #[test]
-    fn sample_writer_busy_counter_is_diagnostic_and_saturates() {
-        let mut consecutive = 0;
-        for _ in 0..6 {
-            record_sample_store_writer_busy(&mut consecutive);
-        }
-        assert_eq!(consecutive, 6);
-        consecutive = u32::MAX;
-        record_sample_store_writer_busy(&mut consecutive);
-        assert_eq!(consecutive, u32::MAX);
+    fn refresh_escalates_only_on_the_third_completed_failure_and_recovers() {
+        let mut refresh = SampleRefreshFailures::default();
+        assert_eq!(refresh.failed(), (1, false));
+        assert_eq!(refresh.failed(), (2, false));
+        assert_eq!(refresh.failed(), (3, true));
+        assert_eq!(refresh.failed(), (4, false));
+        assert_eq!(refresh.recovered(), 4);
+        assert_eq!(refresh.recovered(), 0);
+        assert_eq!(refresh.failed(), (1, false));
+    }
+
+    #[test]
+    fn fresh_partial_gpu_sample_is_an_incomplete_refresh_for_gpu_hosts() {
+        use fullmag_session::compute_node_snapshot::UnavailableReason;
+
+        let warm_inventory = Reported::Unavailable {
+            reason: UnavailableReason::ProbeFailed,
+            last_known: Some(Vec::new()),
+        };
+        assert_eq!(
+            compute_node_refresh_failure(SampleFreshness::Current, &warm_inventory, true, false)
+                .as_deref(),
+            Some("current GPU inventory is unavailable: ProbeFailed"),
+        );
+        assert_eq!(
+            compute_node_refresh_failure(SampleFreshness::Current, &warm_inventory, false, false),
+            None,
+        );
+
+        let empty_inventory = Reported::Available { value: Vec::new() };
+        assert_eq!(
+            compute_node_refresh_failure(SampleFreshness::Current, &empty_inventory, true, false)
+                .as_deref(),
+            Some("current GPU inventory is empty"),
+        );
+        assert!(compute_node_refresh_failure(SampleFreshness::Stale, &warm_inventory, false, false)
+            .is_some());
+    }
+
+    #[test]
+    fn fresh_sample_with_unavailable_cpu_pinning_is_an_incomplete_refresh() {
+        let no_gpu = Reported::Available { value: Vec::new() };
+        assert_eq!(
+            compute_node_refresh_failure(SampleFreshness::Current, &no_gpu, false, true)
+                .as_deref(),
+            Some("current CPU topology or allowed CPU set is unavailable"),
+        );
+        assert_eq!(
+            compute_node_refresh_failure(SampleFreshness::Current, &no_gpu, false, false),
+            None,
+        );
+    }
+
+    #[test]
+    fn only_safe_transient_sample_errors_are_retried() {
+        let busy = anyhow::Error::new(fullmag_session::StoreWriterBusy).context("write deferred");
+        assert!(is_transient_sample_refresh(&busy));
+        assert!(is_transient_sample_refresh(&anyhow::Error::new(
+            std::io::Error::from_raw_os_error(12),
+        )));
+        assert!(!is_transient_sample_refresh(&anyhow::anyhow!("inventory owner changed")));
     }
 
     #[test]
     fn admission_deferral_uses_a_monotonic_sixty_second_budget() {
         let started = Instant::now();
-        let mut deferred_at = None;
-        assert!(host_admission_deferral_within_budget(
-            &mut deferred_at,
-            started,
-        ));
-        assert!(host_admission_deferral_within_budget(
-            &mut deferred_at,
+        let unavailable = ComputeNodeAdmissionFailure::Unavailable("boot changed".into());
+        let mut deferral = HostAdmissionDeferral::default();
+        assert!(deferral.allows_owner_heartbeat(Some(&unavailable), started));
+        assert!(deferral.allows_owner_heartbeat(
+            Some(&unavailable),
             started + HOST_ADMISSION_DEFERRAL_BUDGET - Duration::from_nanos(1),
         ));
-        assert!(!host_admission_deferral_within_budget(
-            &mut deferred_at,
+        assert!(!deferral.allows_owner_heartbeat(
+            Some(&unavailable),
             started + HOST_ADMISSION_DEFERRAL_BUDGET,
         ));
+    }
+
+    #[test]
+    fn stale_sample_does_not_expire_supervisor_liveness() {
+        let start = Instant::now();
+        let stale = ComputeNodeAdmissionFailure::SampleNotCurrent("sample aged out".into());
+        let mut deferral = HostAdmissionDeferral::default();
+
+        assert!(deferral.allows_owner_heartbeat(Some(&stale), start));
+        assert!(deferral.allows_owner_heartbeat(
+            Some(&stale),
+            start + HOST_ADMISSION_DEFERRAL_BUDGET * 2,
+        ));
+        assert!(deferral.allows_owner_heartbeat(
+            None,
+            start + HOST_ADMISSION_DEFERRAL_BUDGET * 3,
+        ));
+    }
+
+    #[test]
+    fn identity_failure_has_its_own_bounded_grace_after_staleness() {
+        let start = Instant::now();
+        let stale = ComputeNodeAdmissionFailure::SampleNotCurrent("sample aged out".into());
+        let unavailable = ComputeNodeAdmissionFailure::Unavailable("boot changed".into());
+        let mut deferral = HostAdmissionDeferral::default();
+
+        assert!(deferral.allows_owner_heartbeat(Some(&stale), start));
+        let identity_failure_at = start + HOST_ADMISSION_DEFERRAL_BUDGET;
+        assert!(deferral.allows_owner_heartbeat(Some(&unavailable), identity_failure_at));
+        assert!(!deferral.allows_owner_heartbeat(
+            Some(&unavailable),
+            identity_failure_at + HOST_ADMISSION_DEFERRAL_BUDGET,
+        ));
+        let recovered_at = identity_failure_at + HOST_ADMISSION_DEFERRAL_BUDGET;
+        assert!(deferral.allows_owner_heartbeat(None, recovered_at));
+        assert!(deferral.allows_owner_heartbeat(Some(&unavailable), recovered_at));
+    }
+
+    #[test]
+    fn stale_inventory_keeps_the_pinned_owner_ready_but_still_validates_pools() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = SessionStore::open(directory.path().join("store")).unwrap();
+        let config = config();
+        let mut owner = RuntimeServiceOwner::acquire(&store, &config.target_id).unwrap();
+        owner.set_control_address(Some("127.0.0.1:40000".into())).unwrap();
+        owner.set_execution_identity(
+            &"a".repeat(40),
+            &"b".repeat(64),
+            &config.compute_pool_id,
+            &config.preparation_pool_id,
+        ).unwrap();
+        store.commit_scheduler_resource_pool(0, &FmsSchedulerResourcePool {
+            schema_version: FMS_SCHEDULER_RESOURCE_POOL_SCHEMA.into(),
+            pool_id: config.compute_pool_id.clone(),
+            generation: 1,
+            resources: config.compute_resources.clone(),
+        }).unwrap();
+        store.commit_preparation_resource_pool(0, &FmsPreparationResourcePool {
+            schema_version: FMS_PREPARATION_RESOURCE_POOL_SCHEMA.into(),
+            pool_id: config.preparation_pool_id.clone(),
+            generation: 1,
+            resources: config.preparation_resources.clone(),
+        }).unwrap();
+        let children = vec![
+            RuntimeServiceChild { role: "compute".into(), pid: 201, status: "running".into() },
+            RuntimeServiceChild { role: "preparation".into(), pid: 202, status: "running".into() },
+        ];
+        let observation = || Ok(Some(ComputeNodeAdmissionFailure::SampleNotCurrent("sample aged out".into())));
+        let mut deferral = HostAdmissionDeferral::default();
+        let mut unknown = false;
+        publish_service_heartbeat(
+            &mut owner, &store, &config, (1, 1), children.clone(),
+            observation(), &mut deferral, &mut unknown,
+        ).unwrap();
+
+        assert_eq!(owner.descriptor().state, RuntimeServiceState::Ready);
+        assert_eq!(owner.descriptor().children, children);
+        assert!(!unknown);
+        for generations in [(2, 1), (1, 2)] {
+            let error = publish_service_heartbeat(
+                &mut owner, &store, &config, generations, children.clone(),
+                observation(), &mut deferral, &mut unknown,
+            ).unwrap_err();
+            assert!(error.to_string().contains("service-owned resource pool changed"));
+        }
     }
 
     #[test]
@@ -3858,7 +4131,7 @@ mod tests {
                     .await
                     .map_err(|_| anyhow::anyhow!("sample gate closed"))?;
                 sample_completed_by_task.notify_one();
-                Ok::<Option<Arc<HostInventoryOwner>>, anyhow::Error>(None)
+                Ok::<Option<PublishedComputeNodeSample>, anyhow::Error>(None)
             });
             let mut control = Box::pin(PendingControl {
                 gate: control_receiver,
@@ -3906,7 +4179,7 @@ mod tests {
                 sample_receiver
                     .await
                     .map_err(|_| anyhow::anyhow!("sample gate closed"))?;
-                Ok::<Option<Arc<HostInventoryOwner>>, anyhow::Error>(None)
+                Ok::<Option<PublishedComputeNodeSample>, anyhow::Error>(None)
             });
             let mut control = Box::pin(PendingControl {
                 gate: control_receiver,
