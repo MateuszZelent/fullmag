@@ -18,9 +18,12 @@
 .fm-command-palette__overlay {
   position: fixed;
   inset: 0;
-  background: color-mix(in srgb, var(--fm-bg-app) 76%, transparent);
+  background: color-mix(in oklab, var(--fm-bg-app) 58%, transparent);
+  -webkit-backdrop-filter: blur(8px) saturate(1.15);
+  backdrop-filter: blur(8px) saturate(1.15);
+  overscroll-behavior: contain;
   z-index: var(--fm-z-dialog);
-  animation: fm-overlay-in var(--fm-duration-normal) ease-out both;
+  animation: fm-overlay-in var(--fm-duration-normal) var(--fm-ease-out-soft) both;
 }
 
 .fm-command-palette {
@@ -28,15 +31,19 @@
   top: 12vh;
   left: 50%;
   width: min(640px, calc(100vw - var(--fm-space-8)));
-  max-height: min(560px, calc(100vh - 96px));
-  overflow: hidden;
-  border: 1px solid var(--fm-border-default);
-  border-radius: var(--fm-radius-lg);
-  background: var(--fm-bg-overlay);
-  box-shadow: var(--fm-shadow-panel);
+  max-height: min(560px, calc(100dvh - 96px));
+  overflow: clip;
+  overscroll-behavior: contain;
+  border: 1px solid var(--fm-glass-line);
+  border-radius: var(--fm-radius-panel);
+  background: var(--fm-glass-strong);
+  -webkit-backdrop-filter: var(--fm-glass-backdrop);
+  backdrop-filter: var(--fm-glass-backdrop);
+  box-shadow: var(--fm-elevation-lg), inset 0 1px 0 var(--fm-glass-highlight);
   transform: translateX(-50%);
   z-index: var(--fm-z-dialog-content);
-  animation: fm-palette-in var(--fm-duration-moderate) ease-out both;
+  animation: fm-palette-in var(--fm-duration-moderate) var(--fm-ease-out-soft) both;
+  outline: none;
 }
 
 .fm-command-palette__title,

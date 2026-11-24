@@ -501,6 +501,70 @@ def _validate_failed_iteration_terminal(control, attempt, expected_sha256, *,
             "frontend_container": receipt["frontend_container"], "failed_iteration": True}
 
 
+def _validate_reconciled_iteration_terminal(control, attempt, expected_sha256, *, previous_raw, document_raw):
+    """Bind a failed idle-restart receipt to its observed service incarnations."""
+    from docker_volume_idle_restart_interrupted import SCHEMA, validate_restart
+
+    if (not isinstance(attempt, str) or ATTEMPT_RE.fullmatch(attempt) is None
+            or not isinstance(expected_sha256, str) or SHA256_RE.fullmatch(expected_sha256) is None):
+        _fail("Reconciled iteration requires its exact attempt and terminal SHA-256")
+    root = "iteration/attempts/" + attempt
+    relative = root + "/terminal.json"
+    raw = _read_raw(control, relative)
+    terminal = _json(raw, "reconciled iteration terminal")
+    evidence = terminal.get("reconciliation")
+    fields = {"schema", "attempt", "receipt_sha256", "helper_id", "compose_sha256",
+              "development_terminal_sha256", "previous_native_drain_sha256", "verified_sha256",
+              "containers", "plan_sha256", "restart_replayed"}
+    if (_sha256(raw) != expected_sha256 or terminal.get("state") != "failed-confirmed"
+            or terminal.get("error") != "Idle restart finalization interrupted after the fixed services started"
+            or not isinstance(evidence, dict) or set(evidence) != fields
+            or evidence["schema"] != SCHEMA or evidence["attempt"] != attempt
+            or evidence["restart_replayed"] is not False):
+        _fail("Terminal is not the exact failure-only idle restart reconciliation")
+    proof = {key: value for key, value in evidence.items() if key not in {"plan_sha256", "restart_replayed"}}
+    if (_sha256(canonical(proof)) != evidence["plan_sha256"]
+            or _sha256(previous_raw) != evidence["development_terminal_sha256"]
+            or _sha256(document_raw) != evidence["compose_sha256"]
+            or _read_raw(control, root + "/receipt.json") != raw
+            or _read_raw(control, root + "/reconciliation/" + expected_sha256 + "/result.json") != raw):
+        _fail("Reconciled iteration journal or original development differs")
+    original_raw = _read_raw(control, root + "/unknown-receipt.json")
+    drain_raw = _read_raw(control, root + "/backend-drain.json")
+    original = _json(original_raw, "original idle restart")
+    previous = _json(previous_raw, "original development terminal")
+    validate_restart(original, previous, _json(drain_raw, "original native drain"), token=attempt,
+                     project=control.project, volume=control.volume, source=previous["inputs"]["source_root"])
+    pins = evidence["containers"]
+    if (_sha256(original_raw) != evidence["receipt_sha256"]
+            or _sha256(drain_raw) != evidence["previous_native_drain_sha256"]
+            or _read_raw(control, root + "/compose.json") != document_raw
+            or {key: value for key, value in terminal.items() if key not in {
+                "state", "finished_at", "error", "reconciliation"}} != {
+                key: value for key, value in original.items() if key != "state"}
+            or not isinstance(pins, dict) or set(pins) != {"backend", "frontend"}):
+        _fail("Original idle restart evidence changed")
+    for service, pin in pins.items():
+        if (not isinstance(pin, dict) or set(pin) != {"id", "started_at", "fingerprint"}
+                or pin["id"] != original[service + "_container"]
+                or pin["started_at"] != original[service + "_started_at"]
+                or not isinstance(pin["fingerprint"], str) or SHA256_RE.fullmatch(pin["fingerprint"]) is None):
+            _fail("Reconciled service incarnation pins differ")
+    return {"attempt": attempt, "phase": "iteration", "relative": relative,
+            "sha256": expected_sha256, "backend_started_at": pins["backend"]["started_at"],
+            "reconciled_containers": pins}
+
+
+def _validate_reconciled_containers(pins, actual):
+    from docker_volume_reconcile import fingerprint
+
+    for service, pin in pins.items():
+        row = actual[service]
+        if (row["Id"] != pin["id"] or row["State"]["StartedAt"] != pin["started_at"]
+                or fingerprint(row) != pin["fingerprint"]):
+            _fail("Live service differs from its reconciled idle restart incarnation: " + service)
+
+
 def _probe_script() -> str:
     import inspect
     from docker_dev_recovery_build import require, validate_diagnostic_build
@@ -2044,8 +2108,14 @@ def stop_diagnostic(args: argparse.Namespace) -> dict[str, object]:
     iteration_attempt = getattr(args, "iteration_attempt", None)
     failed_iteration = getattr(args, "failed_iteration_attempt", None)
     failed_sha = getattr(args, "failed_iteration_sha256", None)
+    reconciled_iteration = getattr(args, "reconciled_iteration_attempt", None)
+    reconciled_sha = getattr(args, "reconciled_iteration_sha256", None)
     if bool(failed_iteration) != bool(failed_sha) or (failed_iteration and (resume_attempt or iteration_attempt)):
         _fail("Failed iteration requires its digest and excludes other continuation pins")
+    if (bool(reconciled_iteration) != bool(reconciled_sha)
+            or (reconciled_iteration and (resume_attempt or iteration_attempt or failed_iteration
+                                          or getattr(args, "pending_activation", None)))):
+        _fail("Reconciled iteration requires its digest and excludes other continuation pins")
     if resume_attempt is not None and iteration_attempt is not None:
         _fail("Specify one exact resume or iteration, never both")
     continuation_phase = "iteration" if iteration_attempt is not None else "resume"
@@ -2113,6 +2183,13 @@ def stop_diagnostic(args: argparse.Namespace) -> dict[str, object]:
             development_attempt=args.attempt, config_sha256=args.config_sha256, previous=previous)
         started_at = resume_pin["backend_started_at"]
         effective_previous = dict(previous, backend_started_at=started_at)
+    if reconciled_iteration:
+        resume_pin = _validate_reconciled_iteration_terminal(
+            control, reconciled_iteration, reconciled_sha, previous_raw=terminal_raw,
+            document_raw=document_raw,
+        )
+        started_at = resume_pin["backend_started_at"]
+        effective_previous = dict(previous, backend_started_at=started_at)
     # A failed-confirmed start has a _finish process sidecar; a succeeded
     # start may fail later under supervision, so current process-tree bytes
     # are the live failure pin in that case.
@@ -2168,6 +2245,8 @@ def stop_diagnostic(args: argparse.Namespace) -> dict[str, object]:
         operation["receipt"]["inputs"].update(
             backend_container_id=ids["backend"], frontend_container_id=ids["frontend"]
         )
+        if reconciled_iteration:
+            _validate_reconciled_containers(resume_pin["reconciled_containers"], actual)
         helper_id = _assert_group_consumers(control, operation, ids)
         guest_probe = _probe_backend(ids["backend"])
         before = _probe_evidence(control, previous_root, guest_probe)
@@ -2195,6 +2274,8 @@ def stop_diagnostic(args: argparse.Namespace) -> dict[str, object]:
                        != actual[name].get("State", {}).get("StartedAt")
                        for name in ids)):
             _fail("Compose container incarnation changed during diagnostic stop preflight")
+        if reconciled_iteration:
+            _validate_reconciled_containers(resume_pin["reconciled_containers"], fresh_actual)
         fresh_probe = _probe_backend(ids["backend"])
         rechecked = _probe_evidence(control, previous_root, fresh_probe)
         if failed_iteration and _failed_iteration_runtime_probe(fresh_actual["backend"], rechecked) != failed_runtime:
@@ -2293,6 +2374,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--preview", action="store_true")
     parser.add_argument("--failed-iteration-attempt")
     parser.add_argument("--failed-iteration-sha256")
+    parser.add_argument("--reconciled-iteration-attempt")
+    parser.add_argument("--reconciled-iteration-sha256")
     parser.add_argument(
         "--resume-attempt",
         help="exact successful retained resume attempt that pins the current backend start time",

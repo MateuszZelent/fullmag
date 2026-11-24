@@ -18,6 +18,8 @@ const VALID_EXPLORER_TABS = new Set<ExplorerTabId>([
   "results",
   "jobs",
   "diagnostics",
+  "helper",
+  "errors",
 ]);
 
 function currentTabNodeIds(): string[] {

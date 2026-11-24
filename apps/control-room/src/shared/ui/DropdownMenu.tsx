@@ -63,13 +63,15 @@ function DropdownMenuSubContent({
   ...props
 }: ComponentPropsWithRef<typeof DropdownMenuPrimitive.SubContent>) {
   return (
-    <DropdownMenuPrimitive.SubContent
-      ref={ref}
-      collisionPadding={collisionPadding}
-      data-slot="dropdown-menu-sub-content"
-      className={cn("fm-dropdown-content", className)}
-      {...props}
-    />
+    <DropdownMenuPrimitive.Portal>
+      <DropdownMenuPrimitive.SubContent
+        ref={ref}
+        collisionPadding={collisionPadding}
+        data-slot="dropdown-menu-sub-content"
+        className={cn("fm-dropdown-content", className)}
+        {...props}
+      />
+    </DropdownMenuPrimitive.Portal>
   );
 }
 DropdownMenuSubContent.displayName =

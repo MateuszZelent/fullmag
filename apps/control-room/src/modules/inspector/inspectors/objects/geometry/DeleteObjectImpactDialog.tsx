@@ -214,28 +214,30 @@ export function DeleteObjectImpactDialog({
         </AlertDialogHeader>
 
         {impact.categories.length > 0 ? (
-          <div
-            className="flex flex-col gap-2 rounded border border-[var(--fm-border-subtle)] bg-[var(--fm-surface-subtle)] p-3"
-            data-slot="delete-object-impact-list"
-          >
-            {impact.categories.map((category) => (
-              <div
-                key={category.kind}
-                className="flex flex-col gap-1"
-                data-impact-kind={category.kind}
-              >
-                <div className="flex items-center justify-between gap-2 text-xs font-medium text-[var(--fm-text-primary)]">
-                  <span>{category.label}</span>
-                  <Badge variant="warning">{category.count}</Badge>
+          <div className="fm-dialog__body">
+            <div
+              className="flex flex-col gap-2 rounded-[var(--fm-radius-field)] border border-[var(--fm-border-subtle)] bg-[var(--fm-section-bg)] p-3"
+              data-slot="delete-object-impact-list"
+            >
+              {impact.categories.map((category) => (
+                <div
+                  key={category.kind}
+                  className="flex flex-col gap-1"
+                  data-impact-kind={category.kind}
+                >
+                  <div className="flex items-center justify-between gap-2 text-xs font-medium text-[var(--fm-text-primary)]">
+                    <span>{category.label}</span>
+                    <Badge variant="warning">{category.count}</Badge>
+                  </div>
+                  <p className="text-xs text-[var(--fm-text-muted)]">
+                    {category.items.slice(0, 5).join(", ")}
+                    {category.items.length > 5
+                      ? ` +${category.items.length - 5} more`
+                      : ""}
+                  </p>
                 </div>
-                <p className="text-xs text-[var(--fm-text-muted)]">
-                  {category.items.slice(0, 5).join(", ")}
-                  {category.items.length > 5
-                    ? ` +${category.items.length - 5} more`
-                    : ""}
-                </p>
-              </div>
-            ))}
+              ))}
+            </div>
           </div>
         ) : null}
 

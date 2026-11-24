@@ -23,7 +23,15 @@ type ExplorerStoreListener = () => void;
 
 /** Returns a set with every node ID in that tab's tree — fully expanded by default. */
 function defaultExpandedIds(): ExpandedIdsByTab {
-  const tabs: ExplorerTabId[] = ["model", "resources", "results", "jobs", "diagnostics"];
+  const tabs: ExplorerTabId[] = [
+    "model",
+    "resources",
+    "results",
+    "jobs",
+    "diagnostics",
+    "helper",
+    "errors",
+  ];
   const result = {} as ExpandedIdsByTab;
   for (const tab of tabs) {
     const expandedIds = new Set(collectExplorerNodeIds(buildExplorerTree(tab)));

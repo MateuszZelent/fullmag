@@ -505,7 +505,7 @@ export function BooleanNodeSection({
               onClick={handleSwapBaseTool}
             >
               <ArrowUpDown aria-hidden="true" size={13} />
-              <span>Swap Base \u2194 Tool</span>
+              <span>Swap Base ↔ Tool</span>
             </Button>
           ) : null}
         </div>

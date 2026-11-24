@@ -130,6 +130,8 @@ import {
   modelTreeSnapshotWithStageExecution,
 } from "./builders/sceneModelTreeAdapter";
 import { ExplorerTabBar } from "./ExplorerTabBar";
+import { ExplorerErrorsPanel } from "./ExplorerErrorsPanel";
+import { ExplorerHelperPanel } from "./ExplorerHelperPanel";
 import { publishExplorerNodePath } from "./explorerNodePath";
 import { resolveCurrentFemAirboxEvidence } from "./femAirboxEvidence";
 import {
@@ -1051,117 +1053,125 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
     <WorkspaceRenderProfiler id="ExplorerModule">
       <section className="fm-explorer" aria-label="Explorer">
         <ExplorerTabBar activeTab={activeTab} />
-        {activeTab === "results" ? (
+        {activeTab === "helper" ? (
+          <ExplorerHelperPanel kernel={kernel} />
+        ) : activeTab === "errors" ? (
+          <ExplorerErrorsPanel />
+        ) : (
           <>
-            <ResultContextSelector
-              currentRunId={currentRunId}
-              knownRunIds={knownResultContextRunIds}
-              onChange={setExplorerResultContextRunId}
-              selectedRunId={resolvedResultContextRunId}
+            {activeTab === "results" ? (
+              <>
+                <ResultContextSelector
+                  currentRunId={currentRunId}
+                  knownRunIds={knownResultContextRunIds}
+                  onChange={setExplorerResultContextRunId}
+                  selectedRunId={resolvedResultContextRunId}
+                />
+                <StudyResultHistory runId={resultContextIsCurrent ? undefined : resolvedResultContextRunId ?? undefined}
+                  onPreviewRun={setExplorerResultContextRunId} />
+              </>
+            ) : null}
+            <AnalysisFieldOverlayContextNotice
+              context={analysisFieldOverlayContext}
+              onClear={() => {
+                void kernel.commands.execute(
+                  "analysis.frequency-domain.clear-3d-overlay",
+                  overlayCommandContext,
+                );
+              }}
+              onRebind={() => {
+                void kernel.commands.execute(
+                  "analysis.frequency-domain.rebind-3d-overlay",
+                  overlayCommandContext,
+                );
+              }}
+              rebindDisabledReason={rebindDisabledReason}
             />
-            <StudyResultHistory runId={resultContextIsCurrent ? undefined : resolvedResultContextRunId ?? undefined}
-              onPreviewRun={setExplorerResultContextRunId} />
+            {/* Tree actions share the filter row instead of a separate footer row. */}
+            <div className="fm-explorer-filter-row">
+              <label className="fm-explorer-filter">
+                <Search size={13} aria-hidden="true" className="fm-explorer-filter__search-icon" />
+                <input
+                  aria-label="Filter explorer"
+                  value={filterText}
+                  onChange={(event) => setExplorerFilterText(event.target.value)}
+                  placeholder="Filter nodes…"
+                  type="search"
+                />
+              </label>
+              <div aria-label="Explorer tree actions" className="fm-explorer-toolbar" role="group">
+                <button
+                  className="fm-explorer-toolbar__action"
+                  aria-label="Expand all explorer nodes"
+                  title="Expand All"
+                  type="button"
+                  onClick={() => {
+                    expandExplorerNodes(activeTab, collectExplorerNodeIds(nodes));
+                  }}
+                >
+                  <ChevronsUpDown size={13} aria-hidden="true" />
+                </button>
+                <button
+                  className="fm-explorer-toolbar__action"
+                  aria-label="Collapse all explorer nodes"
+                  title="Collapse All"
+                  type="button"
+                  onClick={() => {
+                    collapseExplorerNodes(activeTab, collectExplorerNodeIds(nodes));
+                  }}
+                >
+                  <ChevronsDownUp size={13} aria-hidden="true" />
+                </button>
+                <button
+                  className="fm-explorer-toolbar__action"
+                  aria-label="Reset explorer filter and expand nodes"
+                  title="Reset filter and expand nodes"
+                  type="button"
+                  onClick={() => {
+                    setExplorerFilterText("");
+                    expandExplorerNodes(activeTab, collectExplorerNodeIds(nodes));
+                  }}
+                >
+                  <RefreshCw size={13} aria-hidden="true" />
+                </button>
+              </div>
+            </div>
+            <ExplorerTreeView
+              activeNodeId={selectedNodeId}
+              expandedIds={expandedIds}
+              keyboardRowId={keyboardRow}
+              kernel={kernel}
+              moduleId={moduleId}
+              nodes={nodes}
+              sceneResourceData={
+                modelResource.status === "ready" ? modelResource.data : null
+              }
+              sharedCommandResources={sharedCommandResources}
+              tabId={activeTab}
+            />
+            {activeTab === "results" && observationFrames.status !== "idle" ? (
+              <div className="flex flex-wrap items-center gap-2 px-2 py-1" role="group" aria-label="State snapshots" aria-busy={observationFrames.loading}>
+                {observationFrames.error || observationFrames.refreshError ? (
+                  <p className="m-0 w-full break-words text-fm-help" role="alert">
+                    {(observationFrames.error ?? observationFrames.refreshError)?.message}
+                  </p>
+                ) : observationFrames.loading ? (
+                  <p className="m-0 w-full text-fm-help" role="status">Loading state snapshots…</p>
+                ) : null}
+                <Button disabled={observationFrames.loading} onClick={observationFrames.refetch} size="sm" type="button">
+                  Refresh snapshots
+                </Button>
+                {observationFrames.error || observationFrames.refreshError ? (
+                  <Button onClick={observationFrames.retry} size="sm" type="button">Retry snapshots</Button>
+                ) : observationFrames.hasMore ? (
+                  <Button disabled={observationFrames.loading} onClick={observationFrames.loadMore} size="sm" type="button">
+                    Load more snapshots
+                  </Button>
+                ) : null}
+              </div>
+            ) : null}
           </>
-        ) : null}
-        <AnalysisFieldOverlayContextNotice
-          context={analysisFieldOverlayContext}
-          onClear={() => {
-            void kernel.commands.execute(
-              "analysis.frequency-domain.clear-3d-overlay",
-              overlayCommandContext,
-            );
-          }}
-          onRebind={() => {
-            void kernel.commands.execute(
-              "analysis.frequency-domain.rebind-3d-overlay",
-              overlayCommandContext,
-            );
-          }}
-          rebindDisabledReason={rebindDisabledReason}
-        />
-        {/* Tree actions share the filter row instead of a separate footer row. */}
-        <div className="fm-explorer-filter-row">
-          <label className="fm-explorer-filter">
-            <Search size={13} aria-hidden="true" className="fm-explorer-filter__search-icon" />
-            <input
-              aria-label="Filter explorer"
-              value={filterText}
-              onChange={(event) => setExplorerFilterText(event.target.value)}
-              placeholder="Filter nodes…"
-              type="search"
-            />
-          </label>
-          <div aria-label="Explorer tree actions" className="fm-explorer-toolbar" role="group">
-            <button
-              className="fm-explorer-toolbar__action"
-              aria-label="Expand all explorer nodes"
-              title="Expand All"
-              type="button"
-              onClick={() => {
-                expandExplorerNodes(activeTab, collectExplorerNodeIds(nodes));
-              }}
-            >
-              <ChevronsUpDown size={13} aria-hidden="true" />
-            </button>
-            <button
-              className="fm-explorer-toolbar__action"
-              aria-label="Collapse all explorer nodes"
-              title="Collapse All"
-              type="button"
-              onClick={() => {
-                collapseExplorerNodes(activeTab, collectExplorerNodeIds(nodes));
-              }}
-            >
-              <ChevronsDownUp size={13} aria-hidden="true" />
-            </button>
-            <button
-              className="fm-explorer-toolbar__action"
-              aria-label="Reset explorer filter and expand nodes"
-              title="Reset filter and expand nodes"
-              type="button"
-              onClick={() => {
-                setExplorerFilterText("");
-                expandExplorerNodes(activeTab, collectExplorerNodeIds(nodes));
-              }}
-            >
-              <RefreshCw size={13} aria-hidden="true" />
-            </button>
-          </div>
-        </div>
-        <ExplorerTreeView
-          activeNodeId={selectedNodeId}
-          expandedIds={expandedIds}
-          keyboardRowId={keyboardRow}
-          kernel={kernel}
-          moduleId={moduleId}
-          nodes={nodes}
-          sceneResourceData={
-            modelResource.status === "ready" ? modelResource.data : null
-          }
-          sharedCommandResources={sharedCommandResources}
-          tabId={activeTab}
-        />
-        {activeTab === "results" && observationFrames.status !== "idle" ? (
-          <div className="flex flex-wrap items-center gap-2 px-2 py-1" role="group" aria-label="State snapshots" aria-busy={observationFrames.loading}>
-            {observationFrames.error || observationFrames.refreshError ? (
-              <p className="m-0 w-full break-words text-fm-help" role="alert">
-                {(observationFrames.error ?? observationFrames.refreshError)?.message}
-              </p>
-            ) : observationFrames.loading ? (
-              <p className="m-0 w-full text-fm-help" role="status">Loading state snapshots…</p>
-            ) : null}
-            <Button disabled={observationFrames.loading} onClick={observationFrames.refetch} size="sm" type="button">
-              Refresh snapshots
-            </Button>
-            {observationFrames.error || observationFrames.refreshError ? (
-              <Button onClick={observationFrames.retry} size="sm" type="button">Retry snapshots</Button>
-            ) : observationFrames.hasMore ? (
-              <Button disabled={observationFrames.loading} onClick={observationFrames.loadMore} size="sm" type="button">
-                Load more snapshots
-              </Button>
-            ) : null}
-          </div>
-        ) : null}
+        )}
       </section>
     </WorkspaceRenderProfiler>
   );

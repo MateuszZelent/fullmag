@@ -1283,6 +1283,7 @@ export function InspectorTemplate<TDraft>({
                     <TabsTrigger
                       key={tab.id}
                       className="fm-inspector__mode-tab"
+                      title={tab.label}
                       value={tab.id}
                     >
                       {TabIcon ? <TabIcon aria-hidden="true" size={14} /> : null}

@@ -35,8 +35,8 @@
   --fm-start-group-header-height: 26px;
 
   /* ── Launch tiles (New FDM / New FEM / Template / Import) ────────────── */
-  --fm-start-tile-min-width: 168px;
-  --fm-start-tile-height: 92px;
+  --fm-start-tile-min-width: 146px;
+  --fm-start-tile-height: 124px;
 
   /* ── Continue card ───────────────────────────────────────────────────── */
   --fm-start-continue-thumb-w: 176px;
@@ -48,9 +48,9 @@
   --fm-start-scrubber-height: 22px;
 
   /* ── Typography additions ────────────────────────────────────────────── */
-  --fm-start-title-size: 22px;           /* "Welcome back, <name>"          */
+  --fm-start-title-size: 26px;           /* "Welcome back, <name>"          */
   --fm-start-section-size: var(--fm-font-size-xs);  /* section eyebrow 11px */
-  --fm-start-section-tracking: 0.07em;
+  --fm-start-section-tracking: 0.08em;
 
   /* ── Motion ──────────────────────────────────────────────────────────── */
   --fm-start-stagger-step: 24ms;         /* list entrance stagger           */

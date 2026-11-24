@@ -26,6 +26,8 @@ import { ObjectVisualizationController } from "../visualization/ObjectVisualizat
 import { VisualizationDebugController } from "../visualization/VisualizationDebugController";
 import { VisualizationRegistrySyncController } from "../visualization/VisualizationRegistrySyncController";
 import { setViewport3DInspectorContext } from "@/modules/viewport-3d/public";
+import { resetExplorerStoreForTests } from "@/modules/explorer/explorerStore";
+import { sessionErrorStore } from "../diagnostics/sessionErrorStore";
 
 import { LayoutController } from "./LayoutController";
 import {
@@ -76,6 +78,8 @@ function makeKernel(): KernelApi {
 
 afterEach(() => {
   setViewport3DInspectorContext("selection");
+  resetExplorerStoreForTests();
+  sessionErrorStore.resetForTests();
 });
 
 describe("WorkspaceSideRail (right)", () => {
@@ -128,6 +132,75 @@ describe("WorkspaceSideRail (right)", () => {
       });
       expect(kernel.layout.get().panelVisible.right).toBe(true);
       expect(exportButton.getAttribute("aria-pressed")).toBe("true");
+    } finally {
+      await act(async () => root.unmount());
+      dom.restore();
+    }
+  });
+});
+
+describe("WorkspaceSideRail (left)", () => {
+  it("exposes Helper and Errors tabs and displays a live badge when errors are recorded", async () => {
+    const dom = installSimulationPreparationTestDom();
+    const container = dom.document.createElement("div");
+    dom.document.body.appendChild(container);
+    const root = createRoot(container as unknown as Element);
+    const kernel = makeKernel();
+
+    try {
+      await act(async () => {
+        root.render(
+          <KernelContext.Provider value={kernel}>
+            <WorkspaceSideRail side="left" />
+          </KernelContext.Provider>,
+        );
+      });
+
+      const items = findElements(
+        container,
+        (element) => element.getAttribute("data-rail-item") !== null,
+      ).map((element) => element.getAttribute("data-rail-item"));
+      expect(items).toEqual([
+        "model",
+        "resources",
+        "results",
+        "jobs",
+        "diagnostics",
+        "helper",
+        "errors",
+      ]);
+
+      const errorsButton = findElement(
+        container,
+        (element) => element.getAttribute("data-rail-item") === "errors",
+        "errors rail item",
+      );
+      expect(errorsButton.getAttribute("data-error-count")).toBeNull();
+
+      await act(async () => {
+        sessionErrorStore.record({
+          category: "backend",
+          code: "COMMAND_FAILED",
+          message: "Air domain required",
+          source: "backend:mesh_build",
+          title: "mesh_build failed",
+        });
+      });
+
+      expect(errorsButton.getAttribute("data-error-count")).toBe("1");
+      expect(errorsButton.getAttribute("aria-label")).toBe(
+        "Errors (1 error recorded)",
+      );
+
+      const helperButton = findElement(
+        container,
+        (element) => element.getAttribute("data-rail-item") === "helper",
+        "helper rail item",
+      );
+      await act(async () => {
+        helperButton.click();
+      });
+      expect(helperButton.getAttribute("data-active")).toBe("true");
     } finally {
       await act(async () => root.unmount());
       dom.restore();

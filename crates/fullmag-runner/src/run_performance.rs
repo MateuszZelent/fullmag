@@ -2,7 +2,7 @@
 //!
 //! This recorder is intentionally separate from the opt-in detailed solver
 //! profiler. The callback only copies scalar fields into a bounded queue; a
-//! writer thread streams CSV rows and samples process/device resources.
+//! writer thread publishes progress, samples resources and optionally streams step CSV rows.
 
 use crate::StepStats;
 use serde_json::{json, Value};
@@ -152,6 +152,17 @@ pub struct RunPerformanceRecorder {
 impl RunPerformanceRecorder {
     /// Start the best-effort writer and resource sampler.
     pub fn start(output_dir: &Path, identity: Value, realization: &str) -> Self {
+        let steps_csv_enabled = std::env::var_os("FULLMAG_RUN_PERFORMANCE_STEP_CSV").as_deref()
+            == Some(std::ffi::OsStr::new("1"));
+        Self::start_with_step_csv(output_dir, identity, realization, steps_csv_enabled)
+    }
+
+    pub(crate) fn start_with_step_csv(
+        output_dir: &Path,
+        identity: Value,
+        realization: &str,
+        steps_csv_enabled: bool,
+    ) -> Self {
         let started_at = Instant::now();
         let started_at_unix_ms = unix_time_millis();
         let callback_latency_unavailable_reason =
@@ -180,6 +191,7 @@ impl RunPerformanceRecorder {
                     started_at_unix_ms,
                     worker_identity,
                     worker_realization,
+                    steps_csv_enabled,
                 );
                 let _ = done_sender.send(diagnostics);
             });
@@ -702,10 +714,12 @@ struct WriterDiagnostics {
     resource_error_count: u64,
     writer_error_count: u64,
     writer_errors: Vec<String>,
+    steps_csv_enabled: bool,
     steps_file_opened: bool,
     resources_file_opened: bool,
 }
 
+#[allow(clippy::too_many_arguments)]
 fn writer_thread(
     output_dir: &Path,
     receiver: Receiver<StepRow>,
@@ -714,19 +728,27 @@ fn writer_thread(
     started_at_unix_ms: u64,
     identity: Value,
     realization: String,
+    steps_csv_enabled: bool,
 ) -> WriterDiagnostics {
     let performance_dir = output_dir.join("performance");
-    let mut diagnostics = WriterDiagnostics::default();
+    let mut diagnostics = WriterDiagnostics {
+        steps_csv_enabled,
+        ..WriterDiagnostics::default()
+    };
     if let Err(error) = fs::create_dir_all(&performance_dir) {
         record_writer_error(&mut diagnostics, format!("create_performance_dir: {error}"));
     }
 
-    let mut steps = open_csv(
-        &performance_dir.join("steps.csv"),
-        &step_header(),
-        "steps.csv",
-        &mut diagnostics,
-    );
+    let mut steps = if steps_csv_enabled {
+        open_csv(
+            &performance_dir.join("steps.csv"),
+            &step_header(),
+            "steps.csv",
+            &mut diagnostics,
+        )
+    } else {
+        None
+    };
     let mut resources = open_csv(
         &performance_dir.join("resources.csv"),
         &resource_header(),
@@ -1006,7 +1028,7 @@ fn write_resource_sample(
 }
 
 /// One bounded control-plane snapshot from the writer, never the solver thread.
-/// Points cover the most recent 120 resource samples; full history stays in CSV.
+/// Points cover the most recent 120 resource samples; resource history stays in CSV.
 #[allow(clippy::too_many_arguments)]
 fn publish_live_performance(
     directory: &Path,
@@ -1292,7 +1314,12 @@ fn summary_json(snapshot: &FinalSnapshot, diagnostics: &WriterDiagnostics) -> Va
             "accepted_step_index_span": accepted_step_index_span,
             "step_gap_count": snapshot.step_gap_count,
             "missing_step_indices_not_synthesized": snapshot.missing_step_indices,
-            "csv_rows_dropped_by_bounded_queue": snapshot.dropped_rows,
+            "step_records_dropped_by_bounded_queue": snapshot.dropped_rows,
+            "csv_rows_dropped_by_bounded_queue": if diagnostics.steps_csv_enabled {
+                snapshot.dropped_rows
+            } else {
+                0
+            },
             "csv_rows_written": diagnostics.step_rows_written,
             "solver_wall_clock_regressions": snapshot
                 .solver_wall_cumulative
@@ -1348,7 +1375,8 @@ fn summary_json(snapshot: &FinalSnapshot, diagnostics: &WriterDiagnostics) -> Va
             "gpu_unavailable_values": "JSON null with sampler errors preserved"
         },
         "artifacts": {
-            "steps_csv": "performance/steps.csv",
+            "steps_csv_enabled": diagnostics.steps_csv_enabled,
+            "steps_csv": diagnostics.steps_file_opened.then_some("performance/steps.csv"),
             "resources_csv": "performance/resources.csv",
             "summary_json": "performance/summary.json",
             "steps_csv_opened": diagnostics.steps_file_opened,
@@ -1513,6 +1541,35 @@ mod tests {
         fn drop(&mut self) {
             let _ = fs::remove_dir_all(&self.0);
         }
+    }
+
+    #[test]
+    fn automatic_diagnostics_keep_the_clock_and_summary_without_step_csv() {
+        let output = TestDir::new();
+        let mut recorder =
+            RunPerformanceRecorder::start_with_step_csv(&output.0, json!({}), "fdm_cpu", false);
+        let mut sample = stats(0);
+        sample.dt = 1e-12;
+        recorder.observe(&sample);
+        for step in 1..=10_000 {
+            sample.step = step;
+            sample.time = step as f64 * sample.dt;
+            recorder.observe(&sample);
+        }
+        recorder.finish("completed");
+
+        let performance = output.0.join("performance");
+        assert!(!performance.join("steps.csv").exists());
+        let summary: Value =
+            serde_json::from_slice(&fs::read(performance.join("summary.json")).unwrap()).unwrap();
+        assert_eq!(summary["artifacts"]["steps_csv_enabled"], false);
+        assert!(summary["artifacts"]["steps_csv"].is_null());
+        assert_eq!(summary["coverage"]["unique_step_callback_records"], 10_001);
+        assert_eq!(summary["coverage"]["csv_rows_written"], 0);
+        let live: Value =
+            serde_json::from_slice(&fs::read(performance.join("live.v1.json")).unwrap()).unwrap();
+        assert_eq!(live["solver_clock"]["step_index"], 10_000);
+        assert_eq!(live["solver_clock"]["dt_s"], 1e-12);
     }
 
     #[test]

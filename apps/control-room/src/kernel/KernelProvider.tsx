@@ -50,6 +50,7 @@ import {
 import { recordDiagnosticBrowserSnapshot } from "./performance/diagnostic-recorder/diagnosticBrowserSnapshot";
 import { installDiagnosticConsoleCapture } from "./performance/diagnostic-recorder/diagnosticConsoleCapture";
 import { resolveDiagnosticRecorderConfig } from "./performance/diagnostic-recorder/diagnosticRecorderConfig";
+import { sessionErrorStore } from "./diagnostics/sessionErrorStore";
 import { KernelContext } from "./KernelContext";
 import { LayoutController } from "./layout/LayoutController";
 import { SHELL_COMMANDS } from "./layout/shellCommands";
@@ -358,6 +359,54 @@ function DiagnosticRecorderConnector({ kernel }: { kernel: KernelApi }) {
     const cleanupConsoleCapture = installDiagnosticConsoleCapture({
       record: (record) => {
         kernel.diagnosticRecorder.record(record);
+        if ("contextLost" in record) {
+          if (record.contextLost) {
+            sessionErrorStore.record({
+              category: "frontend",
+              code: "WEBGL_CONTEXT_LOST",
+              detail:
+                Object.keys(record.detail ?? {}).length > 0
+                  ? JSON.stringify(record.detail, null, 2)
+                  : null,
+              message: "3D viewport WebGL context was lost.",
+              severity: "error",
+              source: record.name,
+              timestampMs: record.timestampMs,
+              title: "WebGL context lost",
+            });
+          }
+          return;
+        }
+        if (
+          (record.kind === "console" && record.level === "error") ||
+          record.kind === "page-error" ||
+          record.kind === "unhandled-rejection"
+        ) {
+          sessionErrorStore.record({
+            category: "frontend",
+            code:
+              record.kind === "unhandled-rejection"
+                ? "UNHANDLED_REJECTION"
+                : record.kind === "page-error"
+                  ? "WINDOW_ERROR"
+                  : "CONSOLE_ERROR",
+            detail:
+              Object.keys(record.detail ?? {}).length > 0
+                ? JSON.stringify(record.detail, null, 2)
+                : null,
+            message: record.message,
+            path: record.source ?? null,
+            severity: "error",
+            source: record.name,
+            timestampMs: record.timestampMs,
+            title:
+              record.kind === "unhandled-rejection"
+                ? "Unhandled promise rejection"
+                : record.kind === "page-error"
+                  ? "Uncaught runtime error"
+                  : "Console error",
+          });
+        }
       },
     });
     kernel.diagnosticRecorder.mark(DIAGNOSTIC_EVENT_NAMES.kernelProviderMounted);
@@ -883,6 +932,123 @@ function InstanceTabVisibilityConnector() {
   return null;
 }
 
+function SessionErrorConnector({ kernel }: { kernel: KernelApi }) {
+  const sessionIdentity = useSessionResourceIdentity();
+  const seenCommandIdsRef = useRef<Set<string>>(new Set());
+
+  useEffect(() => {
+    sessionErrorStore.setSessionId(sessionIdentity?.sessionId ?? null);
+  }, [sessionIdentity?.sessionId]);
+
+  useEffect(() => {
+    const unsubscribeRequests = kernel.diagnostics.subscribeRecords((entry) => {
+      const isHttpError =
+        entry.outcome === "error" ||
+        entry.outcome === "network-error" ||
+        (entry.status !== null && entry.status >= 400);
+      if (!isHttpError) return;
+      const statusLabel =
+        entry.status !== null ? `HTTP ${entry.status}` : entry.outcome;
+      sessionErrorStore.record({
+        category: "api",
+        code:
+          entry.status !== null
+            ? `HTTP_${entry.status}`
+            : entry.channel === "websocket"
+              ? "WS_ERROR"
+              : "NETWORK_ERROR",
+        detail: [
+          `Channel: ${entry.channel}`,
+          `Method: ${entry.method}`,
+          `Path: ${entry.path}`,
+          entry.status !== null ? `Status: ${entry.status}` : null,
+          entry.durationMs !== null ? `Duration: ${Math.round(entry.durationMs)} ms` : null,
+          entry.detail ? `Detail: ${entry.detail}` : null,
+        ]
+          .filter(Boolean)
+          .join("\n"),
+        message:
+          entry.detail ??
+          `${entry.method} ${entry.path} failed (${statusLabel}).`,
+        path: `${entry.method} ${entry.path}`,
+        requestId: entry.requestId,
+        severity: "error",
+        source: entry.channel === "websocket" ? "websocket" : "http",
+        timestampMs: entry.timestampMs,
+        title: `${entry.channel === "websocket" ? "WebSocket" : "API"} ${statusLabel}`,
+      });
+    });
+
+    const unsubscribeResourceFailures = kernel.bus.on(
+      "resource:load-failed",
+      (payload) => {
+        sessionErrorStore.record({
+          category: "api",
+          code:
+            payload.status !== null && payload.status !== undefined
+              ? `HTTP_${payload.status}`
+              : payload.errorName || "RESOURCE_LOAD_FAILED",
+          detail: [
+            `Resource: ${payload.resourceKey}`,
+            payload.situation ? `Situation: ${payload.situation}` : null,
+            payload.revision !== null ? `Revision: ${String(payload.revision)}` : null,
+            payload.cause ? `Cause: ${payload.cause}` : null,
+          ]
+            .filter(Boolean)
+            .join("\n"),
+          message:
+            payload.cause ||
+            payload.situation ||
+            `Failed to load ${payload.resourceKey}.`,
+          path: payload.resourceKey,
+          requestId: null,
+          severity: "error",
+          source: payload.source,
+          title: `Resource load failed (${payload.resourceKey})`,
+        });
+      },
+    );
+
+    const recordFailedCommands = () => {
+      const seen = seenCommandIdsRef.current;
+      for (const entry of kernel.commandDiagnostics.listNewestFirst()) {
+        if (entry.status !== "failed") continue;
+        if (seen.has(entry.id)) continue;
+        seen.add(entry.id);
+        sessionErrorStore.record({
+          category: "backend",
+          code: "COMMAND_FAILED",
+          detail: [
+            `Command: ${entry.commandId}`,
+            entry.backendCommandId ? `Backend ID: ${entry.backendCommandId}` : null,
+            `Source: ${entry.source}${entry.sourceDetail ? ` (${entry.sourceDetail})` : ""}`,
+            entry.message ? `Message: ${entry.message}` : null,
+          ]
+            .filter(Boolean)
+            .join("\n"),
+          message: entry.message ?? `Command ${entry.commandId} failed.`,
+          path: entry.backendCommandId ?? entry.commandId,
+          requestId: entry.backendCommandId ?? null,
+          severity: "error",
+          source: `command:${entry.source}`,
+          timestampMs: entry.timestampMs,
+          title: `Command failed: ${entry.commandId}`,
+        });
+      }
+    };
+    recordFailedCommands();
+    const unsubscribeCommands = kernel.commandDiagnostics.subscribe(recordFailedCommands);
+
+    return () => {
+      unsubscribeRequests();
+      unsubscribeResourceFailures();
+      unsubscribeCommands();
+    };
+  }, [kernel]);
+
+  return null;
+}
+
 export function KernelProvider({ children }: KernelProviderProps) {
   const [kernel] = useState(() => createKernel());
 
@@ -891,6 +1057,7 @@ export function KernelProvider({ children }: KernelProviderProps) {
       <SessionRuntimeConnectors kernel={kernel} />
       <BrowserAuditConnector kernel={kernel} />
       <DiagnosticRecorderConnector kernel={kernel} />
+      <SessionErrorConnector kernel={kernel} />
       <PerformanceDiagnosticsConnector kernel={kernel} />
       <Viewport3DResourceLifecycleConnector kernel={kernel} />
       <InstanceTabVisibilityConnector />

@@ -23,10 +23,12 @@
   display: flex;
   align-items: center;
   max-width: calc(100vw - 32px);
-  border: 1px solid var(--fm-border-default);
-  border-radius: var(--fm-radius-md);
-  background: var(--fm-bg-overlay);
-  box-shadow: var(--fm-shadow-panel);
+  border: 1px solid var(--fm-glass-line);
+  border-radius: var(--fm-radius-section);
+  background: var(--fm-glass-strong);
+  -webkit-backdrop-filter: var(--fm-glass-backdrop);
+  backdrop-filter: var(--fm-glass-backdrop);
+  box-shadow: var(--fm-elevation-md), inset 0 1px 0 var(--fm-glass-highlight);
 }
 
 .fm-simulation-startup__restore > button:first-child {

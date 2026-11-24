@@ -85,11 +85,14 @@
   display: grid;
   width: min(620px, calc(100vw - 16px));
   max-height: min(620px, calc(100vh - 16px));
-  overflow: hidden;
-  border: 1px solid var(--fm-border-default);
-  border-radius: var(--fm-radius-lg);
-  background: var(--fm-bg-overlay);
-  box-shadow: var(--fm-shadow-panel);
+  overflow: clip;
+  overscroll-behavior: contain;
+  border: 1px solid var(--fm-glass-line);
+  border-radius: var(--fm-radius-panel);
+  background: var(--fm-glass-strong);
+  -webkit-backdrop-filter: var(--fm-glass-backdrop);
+  backdrop-filter: var(--fm-glass-backdrop);
+  box-shadow: var(--fm-elevation-lg), inset 0 1px 0 var(--fm-glass-highlight);
   color: var(--fm-text-primary);
 }
 
@@ -100,8 +103,8 @@
   align-items: center;
   cursor: grab;
   border-bottom: 1px solid var(--fm-border-subtle);
-  background: var(--fm-bg-panel);
-  padding: var(--fm-space-3);
+  background: var(--fm-section-bg);
+  padding: var(--fm-space-3) var(--fm-space-4);
   user-select: none;
 }
 

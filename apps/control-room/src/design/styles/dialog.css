@@ -2,8 +2,11 @@
   position: fixed;
   inset: 0;
   z-index: var(--fm-z-dialog);
-  background: color-mix(in srgb, var(--fm-bg-app) 76%, transparent);
-  animation: fm-overlay-in var(--fm-duration-normal) ease-out;
+  background: color-mix(in oklab, var(--fm-bg-app) 58%, transparent);
+  -webkit-backdrop-filter: blur(8px) saturate(1.15);
+  backdrop-filter: blur(8px) saturate(1.15);
+  overscroll-behavior: contain;
+  animation: fm-overlay-in var(--fm-duration-normal) var(--fm-ease-out-soft);
 }
 
 .fm-dialog {
@@ -14,22 +17,28 @@
   display: flex;
   flex-direction: column;
   width: min(560px, calc(100vw - var(--fm-space-8)));
-  max-height: min(680px, calc(100vh - 96px));
-  gap: var(--fm-space-4);
-  overflow: hidden;
-  border: 1px solid var(--fm-border-default);
-  border-radius: var(--fm-radius-lg);
-  background: var(--fm-bg-overlay);
-  box-shadow: var(--fm-shadow-panel);
+  max-height: min(760px, calc(100dvh - 48px));
+  gap: 0;
+  overflow: clip;
+  overscroll-behavior: contain;
+  border: 1px solid var(--fm-glass-line);
+  border-radius: var(--fm-radius-panel);
+  background: var(--fm-glass-strong);
+  -webkit-backdrop-filter: var(--fm-glass-backdrop);
+  backdrop-filter: var(--fm-glass-backdrop);
+  box-shadow: var(--fm-elevation-lg), inset 0 1px 0 var(--fm-glass-highlight);
   color: var(--fm-text-primary);
   transform: translate(-50%, -50%);
-  animation: fm-dialog-in var(--fm-duration-moderate) ease-out;
+  animation: fm-dialog-in var(--fm-duration-moderate) var(--fm-ease-out-soft);
+  outline: none;
 }
 
 .fm-dialog__header {
   display: grid;
-  gap: var(--fm-space-2);
-  padding: var(--fm-space-5) var(--fm-space-5) 0;
+  gap: var(--fm-space-1-5);
+  padding: var(--fm-space-4) var(--fm-space-5);
+  border-bottom: 1px solid var(--fm-border-subtle);
+  background: var(--fm-section-bg);
   flex: 0 0 auto;
 }
 
@@ -38,7 +47,8 @@
   color: var(--fm-text-primary);
   font-size: var(--fm-font-size-lg);
   font-weight: 650;
-  line-height: 1.2;
+  letter-spacing: -0.015em;
+  line-height: 1.25;
 }
 
 .fm-dialog__description {
@@ -50,27 +60,73 @@
 
 .fm-dialog__body {
   display: grid;
+  align-content: start;
   gap: var(--fm-space-3);
   min-width: 0;
-  overflow: auto;
-  padding: 0 var(--fm-space-5);
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+  padding: var(--fm-space-4) var(--fm-space-5);
   flex: 1 1 auto;
   min-height: 0;
 }
 
-.fm-dialog__footer {
-  padding: 0 var(--fm-space-5) var(--fm-space-5);
+/* Fallback horizontal padding for lightweight dialogs that render direct content
+   children without wrapping them in .fm-dialog__body or a full-bleed layout. */
+.fm-dialog:not(.fm-new-problem):not(.fm-material-library):not(.fm-registry-inspector):not([data-slot="reference-materials-popover"])
+  > :not(.fm-dialog__header):not(.fm-dialog__footer):not(.fm-dialog__actions):not(.fm-dialog__body):not(.fm-viewport-camera-dialog__body):not(.fm-viewport-3d__settings-body):not(.fm-export-3d-dialog__body):not(form) {
+  padding-inline: var(--fm-space-5);
+}
+
+.fm-dialog:not(.fm-new-problem):not(.fm-material-library):not(.fm-registry-inspector):not([data-slot="reference-materials-popover"])
+  > .fm-dialog__header
+  + :not(.fm-dialog__footer):not(.fm-dialog__actions):not(.fm-dialog__body):not(.fm-viewport-camera-dialog__body):not(.fm-viewport-3d__settings-body):not(.fm-export-3d-dialog__body):not(form) {
+  margin-top: var(--fm-space-4);
+}
+
+.fm-dialog:not(.fm-new-problem):not(.fm-material-library):not(.fm-registry-inspector):not([data-slot="reference-materials-popover"])
+  > :not(.fm-dialog__header):not(.fm-dialog__footer):not(.fm-dialog__actions):not(.fm-dialog__body):not(.fm-viewport-camera-dialog__body):not(.fm-viewport-3d__settings-body):not(.fm-export-3d-dialog__body):not(form):has(+ .fm-dialog__footer),
+.fm-dialog:not(.fm-new-problem):not(.fm-material-library):not(.fm-registry-inspector):not([data-slot="reference-materials-popover"])
+  > :not(.fm-dialog__header):not(.fm-dialog__footer):not(.fm-dialog__actions):not(.fm-dialog__body):not(.fm-viewport-camera-dialog__body):not(.fm-viewport-3d__settings-body):not(.fm-export-3d-dialog__body):not(form):last-child {
+  margin-bottom: var(--fm-space-4);
+}
+
+.fm-dialog__footer,
+.fm-dialog__actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--fm-space-2);
+  padding: var(--fm-space-3) var(--fm-space-5);
+  border-top: 1px solid var(--fm-border-subtle);
+  background: color-mix(in oklab, var(--fm-field-bg) 42%, transparent);
   flex: 0 0 auto;
+}
+
+.fm-dialog__footer .fm-button--ghost,
+.fm-dialog__actions .fm-button--ghost {
+  border-color: var(--fm-border-subtle);
+  background: color-mix(in oklab, var(--fm-section-bg) 90%, transparent);
+  color: var(--fm-text-secondary);
+}
+
+.fm-dialog__footer .fm-button--ghost:hover:not(:disabled):not([aria-disabled="true"]):not([data-disabled="true"]),
+.fm-dialog__actions .fm-button--ghost:hover:not(:disabled):not([aria-disabled="true"]):not([data-disabled="true"]) {
+  border-color: var(--fm-border-strong);
+  background: var(--fm-bg-hover);
+  color: var(--fm-text-primary);
 }
 
 .fm-dialog__details {
   display: grid;
   gap: var(--fm-space-2);
   margin: 0;
-  padding: var(--fm-space-3);
+  padding: var(--fm-space-3) var(--fm-space-4);
   border: 1px solid var(--fm-border-subtle);
-  border-radius: var(--fm-radius-md);
-  background: var(--fm-bg-panel);
+  border-radius: var(--fm-radius-section);
+  background: var(--fm-section-bg);
 }
 
 .fm-dialog__details-row {
@@ -98,9 +154,9 @@
   margin: 0;
   max-height: 180px;
   overflow: auto;
-  border: 1px solid var(--fm-danger);
-  border-radius: var(--fm-radius-md);
-  background: color-mix(in srgb, var(--fm-danger) 10%, var(--fm-bg-panel));
+  border: 1px solid color-mix(in oklab, var(--fm-danger) 48%, var(--fm-border-subtle));
+  border-radius: var(--fm-radius-field);
+  background: color-mix(in oklab, var(--fm-danger) 10%, var(--fm-field-bg));
   color: var(--fm-text-primary);
   font-family: var(--fm-font-mono);
   font-size: var(--fm-font-size-xs);
@@ -109,34 +165,44 @@
   white-space: pre-wrap;
 }
 
-
-.fm-dialog__footer {
-  display: flex;
-  justify-content: flex-end;
-  gap: var(--fm-space-2);
-  padding: 0 var(--fm-space-5) var(--fm-space-5);
-  flex: 0 0 auto;
-}
-
 @keyframes fm-overlay-in {
   from { opacity: 0; }
   to { opacity: 1; }
 }
 
+@keyframes fm-dialog-in {
+  from {
+    opacity: 0;
+    transform: translate(-50%, -48.5%) scale(0.975);
+  }
+  to {
+    opacity: 1;
+    transform: translate(-50%, -50%) scale(1);
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
-  /* Keep the crossfade, drop the scale/translate. */
   .fm-dialog {
     animation-name: fm-reduced-fade-in;
   }
 }
 
-@keyframes fm-dialog-in {
-  from {
-    opacity: 0;
-    transform: translate(-50%, -48%) scale(0.96);
+@media (prefers-reduced-transparency: reduce) {
+  .fm-dialog__overlay {
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+    background: var(--fm-scrim);
   }
-  to {
-    opacity: 1;
-    transform: translate(-50%, -50%) scale(1);
+
+  .fm-dialog {
+    background: var(--fm-bg-panel);
+  }
+}
+
+@media (forced-colors: active) {
+  .fm-dialog {
+    border: 2px solid CanvasText;
+    background: Canvas;
+    color: CanvasText;
   }
 }

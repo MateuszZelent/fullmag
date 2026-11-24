@@ -5841,10 +5841,8 @@ mod tests {
         assert_eq!(summary["coverage"]["unique_step_callback_records"], 8);
         assert_eq!(summary["coverage"]["last_step_index"], 8);
         assert_eq!(summary["coverage"]["out_of_order_step_callbacks_skipped"], 0);
-        let csv = std::fs::read_to_string(output.path().join("performance/steps.csv")).unwrap();
-        let steps = csv.lines().skip(1).map(|row|
-            row.split(',').nth(1).unwrap().parse::<u64>().unwrap()).collect::<Vec<_>>();
-        assert_eq!(steps, (1..=8).collect::<Vec<_>>());
+        assert_eq!(summary["coverage"]["first_step_index"], 1);
+        assert_eq!(summary["coverage"]["missing_step_indices_not_synthesized"], 0);
     }
 
     #[test]

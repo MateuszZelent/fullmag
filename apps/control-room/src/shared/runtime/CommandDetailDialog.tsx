@@ -23,31 +23,35 @@ export function CommandDetailDialog({
           <>
             <Dialog.Overlay className="fm-dialog__overlay" />
             <Dialog.Content className="fm-dialog" aria-label="Command detail">
-              <Dialog.Title className="fm-dialog__title">
-                {command?.kind ?? "Command"} detail
-              </Dialog.Title>
-              <Dialog.Description className="fm-dialog__description">
-                {commandId}
-              </Dialog.Description>
-              {detail.status === "loading" ? (
-                <p className="fm-dialog__description">Loading command detail…</p>
-              ) : null}
-              {detail.status === "error" ? (
-                <p className="fm-dialog__description">
-                  {detail.error instanceof Error
-                    ? detail.error.message
-                    : "Command detail unavailable."}
-                </p>
-              ) : null}
-              {command ? <CommandDetailBody command={command} /> : null}
-              {detail.status !== "loading" && !detail.error && !command ? (
-                <p className="fm-dialog__description">
-                  Command detail unavailable.
-                </p>
-              ) : null}
-              <div className="fm-dialog__actions">
+              <div className="fm-dialog__header">
+                <Dialog.Title className="fm-dialog__title">
+                  {command?.kind ?? "Command"} detail
+                </Dialog.Title>
+                <Dialog.Description className="fm-dialog__description">
+                  {commandId}
+                </Dialog.Description>
+              </div>
+              <div className="fm-dialog__body">
+                {detail.status === "loading" ? (
+                  <p className="fm-dialog__description">Loading command detail…</p>
+                ) : null}
+                {detail.status === "error" ? (
+                  <p className="fm-dialog__description">
+                    {detail.error instanceof Error
+                      ? detail.error.message
+                      : "Command detail unavailable."}
+                  </p>
+                ) : null}
+                {command ? <CommandDetailBody command={command} /> : null}
+                {detail.status !== "loading" && !detail.error && !command ? (
+                  <p className="fm-dialog__description">
+                    Command detail unavailable.
+                  </p>
+                ) : null}
+              </div>
+              <div className="fm-dialog__footer">
                 <Dialog.Close asChild>
-                  <button className="fm-button fm-button--secondary" type="button">
+                  <button className="fm-button fm-button--secondary fm-button--sm" type="button">
                     Close
                   </button>
                 </Dialog.Close>

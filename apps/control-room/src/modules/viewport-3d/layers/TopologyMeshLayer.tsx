@@ -1,5 +1,6 @@
 "use client";
 
+import { resolveCanonicalQuantityId } from "@/kernel/api/quantityIds";
 import type { LivePhaseUniform } from "@/kernel/visualization/livePhaseUniform";
 import type { VisualizationTargetSettings } from "@/kernel/visualization/ObjectVisualizationController";
 import type { SessionResourceIdentity } from "@/kernel/resources/sessionResourceIdentity";
@@ -35,6 +36,7 @@ import { modeCompositionTargetIdForMeshPart } from "../model/modeCompositionView
 
 export function TopologyMeshLayer({
   adoptionRegistry,
+  authoredTextureSurfaceObjectIds,
   colors,
   primitiveModel,
   sessionIdentity,
@@ -60,6 +62,7 @@ export function TopologyMeshLayer({
   vectorStyle,
 }: {
   adoptionRegistry?: Viewport3DRenderAdoptionRegistry;
+  authoredTextureSurfaceObjectIds?: ReadonlySet<string>;
   colors: Viewport3DColors;
   primitiveModel?: Viewport3DPrimitiveRenderModel | null;
   sessionIdentity?: SessionResourceIdentity | null;
@@ -105,6 +108,19 @@ export function TopologyMeshLayer({
           const replacementVisible = !topologyCurrent || !previewObject ||
             previewObject.role !== "antenna" || !replacementObjectIds ||
             replacementObjectIds.has(previewObject.objectId);
+          const authoredTextureOwnsSurface = previewObject !== undefined &&
+            authoredTextureSurfaceObjectIds?.has(previewObject.objectId);
+          const topologySettings = topologyCurrent
+            ? settings
+            : resolveUnavailableTopologyVisualizationSettings(settings);
+          // The authored texture fills the object's surface. Drawing the FEM
+          // solid over it makes the two tessellations intersect at the sidewall.
+          const partSettings = authoredTextureOwnsSurface &&
+            topologySettings.shaderVisible &&
+            topologySettings.surfaceColorSource !== "solid" &&
+            resolveCanonicalQuantityId(topologySettings.activeQuantityId) === "m"
+            ? { ...topologySettings, shaderVisible: false }
+            : topologySettings;
           const modeTargetId = modeCompositionTargetIdForMeshPart(partModel.part);
           const modeCompositionSnapshot = modeTargetId
             ? modeCompositionFieldLayers?.get(modeTargetId) ?? null
@@ -162,11 +178,7 @@ export function TopologyMeshLayer({
               partModel={partModel}
               onGeometryReady={onGeometryReady}
               renderVisible={replacementVisible}
-              settings={
-                topologyCurrent
-                  ? settings
-                  : resolveUnavailableTopologyVisualizationSettings(settings)
-              }
+              settings={partSettings}
               topologyModel={topologyModel}
               tracker={tracker}
               vectorColorMode={vectorColorMode}

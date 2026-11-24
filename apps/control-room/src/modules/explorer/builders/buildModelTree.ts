@@ -235,6 +235,7 @@ export function buildExplorerTree(
     );
   }
   if (tabId === "jobs") return buildRuntimeJobTree(runtime?.jobs);
+  if (tabId === "helper" || tabId === "errors") return [];
 
   return buildRuntimeDiagnosticTree(runtime?.diagnostics);
 }

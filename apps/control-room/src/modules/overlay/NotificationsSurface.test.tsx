@@ -106,6 +106,35 @@ describe("NotificationsSurface", () => {
     expect(notifications[0]?.id).toBe("mesh-rendered:viewport-main:3");
   });
 
+  it("collapses concurrent identical resource error toasts across different endpoints", () => {
+    const bus = new EventBus<KernelEventMap>();
+    const notifications = buildNotificationItems(bus, [
+      {
+        cause: "Workspace changes are unavailable while runtime execution cannot be confirmed.",
+        errorName: "ControlRoomApiError",
+        resourceKey: "/v2/sessions/current/simulation/objects/a/metrics",
+        revision: null,
+        situation: "Loading object metrics",
+        source: "resource-hook",
+        status: 503,
+        type: "resource-load-failed",
+      },
+      {
+        cause: "Workspace changes are unavailable while runtime execution cannot be confirmed.",
+        errorName: "ControlRoomApiError",
+        resourceKey: "/v2/sessions/current/model/geometry/diagnostics",
+        revision: null,
+        situation: "Loading geometry diagnostics",
+        source: "resource-hook",
+        status: 503,
+        type: "resource-load-failed",
+      },
+    ]);
+
+    expect(notifications).toHaveLength(1);
+    expect(notifications[0]?.title).toBe("Resource load failed");
+  });
+
   it("removes dismissed notifications from the visible list", () => {
     const notifications = dismissNotificationItems(
       [

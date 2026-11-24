@@ -54,6 +54,23 @@ class PerformanceArtifacts(unittest.TestCase):
             with self.assertRaises(ValueError):
                 analyze(root)
 
+    def test_default_report_uses_summary_without_optional_step_csv(self):
+        with tempfile.TemporaryDirectory() as path:
+            root = Path(path)
+            self.fixture(root)
+            summary_path = root / "summary.json"
+            summary = json.loads(summary_path.read_text())
+            summary["artifacts"] = {"steps_csv_enabled": False, "steps_csv": None}
+            summary_path.write_text(json.dumps(summary))
+            for stale_csv in (True, False):
+                with self.subTest(stale_csv=stale_csv):
+                    if not stale_csv:
+                        (root / "steps.csv").unlink()
+                    report, _ = analyze(root)
+                    self.assertEqual(report["observed_step_rows"], 0)
+                    self.assertIsNone(report["observed_steps_per_second"])
+                    self.assertEqual(report["stage_steps_per_second"], 0.5)
+
     def test_plot_memory_is_bounded_and_covers_the_full_run(self):
         series = Series(100, bins=16)
         for i in range(100_000):
