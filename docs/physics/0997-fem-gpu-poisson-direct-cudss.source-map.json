@@ -1,7 +1,7 @@
 {
   "document": {
     "path": "docs/physics/0997-fem-gpu-poisson-direct-cudss.md",
-    "reviewed_revision": "733675fb697e3ab19211187bdeba0ae4d8803db4"
+    "reviewed_revision": "e11d3137d547e8a9b823b753f78842c23784ae2f"
   },
   "backend_matrix": [
     {

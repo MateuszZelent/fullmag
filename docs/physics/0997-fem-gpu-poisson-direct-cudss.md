@@ -76,8 +76,10 @@ r = b - K\tilde{\phi},\qquad
   factorization reports a nonzero `CUDSS_DATA_INFO` and the run stops with an error instead of producing a field.
 - Real double precision only, one GPU, one process. The periodic reduced operator and the FEM/BEM realization are
   outside this proof of concept and are rejected at setup.
-- The factor memory grows faster than the mesh; the measured sizes are in the validation section. There is no
-  automatic fallback to CG when the factor does not fit; the setup fails with the CUDA or cuDSS error.
+- The factor memory grows faster than the mesh. The demag accuracy contract uses a P2 potential, about 7.9 unknowns
+  per mesh node: at 14 911 nodes the system has 117 651 unknowns, 1 736 229 stored lower-triangle entries and a factor
+  with 46 474 450 nonzeros that takes 524 MiB of device memory. Larger meshes are reported in the validation section.
+  There is no automatic fallback to CG when the factor does not fit; the setup fails with the CUDA or cuDSS error.
 - Cholesky with any symmetric permutation is backward stable for symmetric positive definite matrices, so the
   computed $\tilde{\phi}$ is the exact solution of a nearby system; the residual check of
   {eq}`eq-direct-residual` measures that directly for every solve.
@@ -153,8 +155,10 @@ variable have identical `ProblemIR` and plan; they differ only in the native rea
 - **Requested intent** is the public policy above, exported and re-imported unchanged by the script round trip.
 - **Resolved execution** is the native realization. With the override, setup prints one receipt line to standard
   error (`fullmag: FEM GPU Poisson demag uses the cuDSS direct solve ...` with rows, factor nonzeros, device bytes and
-  phase times), every solve reports one iteration, and the AMG coarse-relax getter reports no AMG. This proof of
-  concept does not yet add a dedicated provenance field; that is listed under limitations.
+  phase times), every solve reports one iteration, and the AMG coarse-relax getter reports no AMG. The
+  executed-operator receipt keeps `DEMAG_SOLVE | PRECONDITIONER`, because the runner checks it against the operator
+  mask required by the requested CG/AMG policy. This proof of concept does not yet add a dedicated provenance field;
+  that is listed under limitations.
 - **Validation errors**: a factorization with `CUDSS_DATA_INFO` different from zero (matrix not positive definite), a
   cuDSS or CUDA status other than success, a non-square or empty matrix, a missing diagonal entry, or a residual that
   fails {eq}`eq-direct-residual` stop the run with a message naming the step.
@@ -203,7 +207,27 @@ memory.
 4. Timing: mean step time over steps 2 to N−1 at 14 911, 49 176 and 89 732 nodes, with interleaved runs.
 5. Memory: device peak and host peak with both realizations.
 
-**Results.** Recorded in `docs/audits/2026-11-24-fem-gpu-cudss-direct-poc.md` after the runs.
+**Results** (RTX 5050 8 GB, WSL2, measured on the same change applied to master `dbd7550dc`, 2026-11-23/24; details in
+`docs/audits/2026-11-24-fem-gpu-cudss-direct-poc.md`):
+
+1. The default path of the new build gave an `m_final` bit-identical to the previous build at 49 176 nodes.
+2. Every direct solve was certified at $\rho \le 2.7\times10^{-15}$ (CG/AMG: up to $5.7\times10^{-9}$).
+3. After 20 steps the largest component difference of `m_final` against CG/AMG was $2.8\times10^{-10}$,
+   $4.7\times10^{-10}$ and $4.0\times10^{-10}$ at 14 911, 49 176 and 89 732 nodes; the total energy agreed to
+   $1.4\times10^{-13}$ relative. After 500 steps at 14 911 nodes the total and demag energies differed by
+   $3.4\times10^{-9}$ and $2.2\times10^{-8}$ relative, the scale of the CG tolerance.
+4. Step time (mean over steps 2 to N−1):
+
+   | Mesh | P2 unknowns | CG/AMG | cuDSS | Factor device memory | Analysis + factorization |
+   |---|---:|---:|---:|---:|---:|
+   | 14 911 nodes | 117 651 | 463–697 ms (three runs) | 17.5–20.2 ms | 524 MiB | 2.3–3.3 s |
+   | 49 176 nodes | 394 216 | 909 ms (three runs) | 72.4 ms (three runs) | 2 300 MiB | 9.3 s |
+   | 89 732 nodes | 723 473 | 1 758 ms | 150.0 ms | 5 310 MiB | 21.7 s |
+
+5. At 199 457 nodes (1 620 071 unknowns) the factor has $1.66\times10^{9}$ nonzeros, more than the 8 GB card
+   holds. The run did not fail: under WSL2 the device allocation spilled beyond dedicated memory, analysis and
+   factorization took 325 s and a step 3.1 s. A production version needs a VRAM preflight so that this case
+   resolves to CG/AMG instead of spilling.
 
 (limitations)=
 ## Limitations
@@ -211,6 +235,8 @@ memory.
 - Proof of concept: no managed qualification, no standard-problem comparison, no Windows or multi-GPU evidence.
 - The resolved realization is visible in the receipt line and the iteration count, not in a dedicated provenance
   field; a production version must record it next to the requested policy.
+- The executed-operator receipt reports the preconditioner bit for the factor application; a production version needs
+  its own operator bit and a required mask derived from the resolved realization.
 - No size-based selection and no VRAM preflight for the factor; very large meshes still need CG/AMG.
 - The periodic reduced operator and FEM/BEM are excluded.
 
