@@ -302,10 +302,14 @@ fn prepared_evaluation_binding<'a>(
     snapshot: &'a SessionStateResponse,
     spec: &QuantitySpec,
 ) -> Option<&'a crate::schemas::common::FieldPublicationBinding> {
-    if !matches!(spec.shape,
-        fullmag_quantities::QuantityShape::VectorField
-        | fullmag_quantities::QuantityShape::SpatialScalar
-        | fullmag_quantities::QuantityShape::TensorField)
+    if !spec.ui_exposed
+        || !spec.interactive_preview
+        || !spec.supports_preview_3d
+        || !matches!(
+            spec.shape,
+            fullmag_quantities::QuantityShape::VectorField
+                | fullmag_quantities::QuantityShape::SpatialScalar
+        )
     {
         return None;
     }

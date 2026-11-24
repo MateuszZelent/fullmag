@@ -7190,6 +7190,8 @@ async fn prepared_fem_demag_is_readable_in_airbox_without_a_solver_run() {
     assert_eq!(demag["requestable"], true);
     assert_eq!(demag["renderable"], true);
     assert_eq!(demag["materializable"], false);
+    assert_eq!(demag["solver_capability"], "unsupported");
+    assert_eq!(demag["resolved_capability"]["publication"], "interactive");
 
     let response = get(VECTOR).await.unwrap();
     assert_eq!(response.status(), StatusCode::OK);
