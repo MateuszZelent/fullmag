@@ -2803,18 +2803,27 @@ mod tests {
             validate_terminal_runs_subset_with_pending(&fixture.store, std::slice::from_ref(&fixture.pin),
                 &mut ReadBudget::default(), &mut BTreeSet::new(), &[], std::slice::from_ref(pin))
         };
-        let before = tree_snapshot(fixture.store.root());
+        // The legacy fixture helper acquires a writer and publishes its owner record.
         assert!(validate(&fixture).is_err());
+        let before = tree_snapshot(fixture.store.root());
         check(&pin).unwrap();
         assert_eq!(before, tree_snapshot(fixture.store.root()));
         let mut changed = pin.clone(); changed.inbox_sha256 = "f".repeat(64); assert!(check(&changed).is_err());
         let mut changed = pin.clone(); changed.ownership_epoch = 2; assert!(check(&changed).is_err());
         let mut changed = pin.clone(); changed.kind = "cancelled_before_spawn".into(); changed.release_proof_sha256 = Some("a".repeat(64)); assert!(check(&changed).is_err());
-        let mut changed_entry = entry;
-        changed_entry.payload["message"]["envelope"]["claim"]["lease_token"] = serde_json::json!("foreign-token");
-        write_inbox(&fixture.store, Some(changed_entry.payload.pointer("/message/envelope").unwrap().clone()));
-        let mut repinned = pin.clone(); repinned.inbox_sha256 = crate::hex_sha256(&fs::read(&inbox_path).unwrap());
-        assert!(check(&repinned).is_err());
+        // Tamper with the stored record directly so constructor validation does
+        // not reject it before the recovery reader has a chance to inspect it.
+        let mut inbox: FmsWorkerInboxRecord =
+            serde_json::from_slice(&fs::read(&inbox_path).unwrap()).unwrap();
+        inbox.payload["pending"]["claim"]["lease_token"] = serde_json::json!("foreign-token");
+        inbox.payload_sha256 = crate::canonical_json_sha256(&inbox.payload);
+        write_json(&inbox_path, &inbox);
+        let mut repinned = pin.clone();
+        repinned.inbox_sha256 = crate::hex_sha256(&fs::read(&inbox_path).unwrap());
+        let error = check(&repinned).unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("worker inbox command identity or sequence mismatch"));
     }
 
     #[test]
