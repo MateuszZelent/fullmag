@@ -69,6 +69,21 @@
       "sources": [
         "residual"
       ]
+    },
+    {
+      "id": "eq-direct-memory-budget",
+      "symbols": [
+        "Mmargin",
+        "M0",
+        "Mtotal",
+        "B",
+        "Mfree",
+        "Bcap",
+        "Mpeak"
+      ],
+      "sources": [
+        "cudss-factor"
+      ]
     }
   ],
   "symbols": [
@@ -131,6 +146,48 @@
       "latex": "\\tau_{\\mathrm{rel}}",
       "meaning": "Relative residual tolerance from the solver policy",
       "si_unit": "1"
+    },
+    {
+      "id": "Mfree",
+      "latex": "M_{\\mathrm{free}}",
+      "meaning": "Free device memory reported by `cudaMemGetInfo` after the analysis phase",
+      "si_unit": "\\mathrm{B}"
+    },
+    {
+      "id": "Mtotal",
+      "latex": "M_{\\mathrm{total}}",
+      "meaning": "Total device memory reported by `cudaMemGetInfo`",
+      "si_unit": "\\mathrm{B}"
+    },
+    {
+      "id": "M0",
+      "latex": "M_{0}",
+      "meaning": "Minimum safety margin, $536\\,870\\,912$ bytes (512 MiB)",
+      "si_unit": "\\mathrm{B}"
+    },
+    {
+      "id": "Mmargin",
+      "latex": "M_{\\mathrm{margin}}",
+      "meaning": "Safety margin kept free for the rest of the run, the display and allocator fragmentation",
+      "si_unit": "\\mathrm{B}"
+    },
+    {
+      "id": "Bcap",
+      "latex": "B_{\\mathrm{cap}}",
+      "meaning": "Optional diagnostic cap on the budget; $+\\infty$ when not set",
+      "si_unit": "\\mathrm{B}"
+    },
+    {
+      "id": "B",
+      "latex": "B",
+      "meaning": "Device budget for the cuDSS factorization and solve phases",
+      "si_unit": "\\mathrm{B}"
+    },
+    {
+      "id": "Mpeak",
+      "latex": "\\hat{M}_{\\mathrm{peak}}",
+      "meaning": "Device peak estimated by cuDSS after analysis (`CUDSS_DATA_MEMORY_ESTIMATES`, entry 1)",
+      "si_unit": "\\mathrm{B}"
     }
   ],
   "sources": [
@@ -145,7 +202,7 @@
       "id": "cudss-factor",
       "path": "backends/fem/gpu/cuda/demag_poisson/cudss_direct_solver.cpp",
       "symbol": "create_demag_cudss_direct_solver",
-      "responsibility": "Builds the sorted lower CSR, runs analysis and factorization, rejects info != 0, measures device bytes.",
+      "responsibility": "Builds the sorted lower CSR, runs analysis, the memory preflight and factorization, rejects info != 0, measures device bytes.",
       "evidence_status": "proof_of_concept"
     },
     {
@@ -270,7 +327,7 @@
     ]
   },
   "validation": {
-    "plan": "Same build, realization selected only by FULLMAG_FEM_DEMAG_GPU_DIRECT_SOLVER; default path bit-identical to the previous build; certified residual per solve; m_final agreement at the CG tolerance scale; interleaved step timing at 14 911, 49 176 and 89 732 nodes; device and host memory peaks.",
+    "plan": "Same build, realization selected only by FULLMAG_FEM_DEMAG_GPU_DIRECT_SOLVER; default path bit-identical to the previous build; certified residual per solve; m_final agreement at the CG tolerance scale; interleaved step timing at 14 911, 49 176 and 89 732 nodes; device and host memory peaks. Review of PR #550: contract tests for both required operator masks, conflicting-bit rejection, the provenance field and the memory preflight (in-budget factor, 1-byte cap); strict 50-step PG-BB film relaxations with and without the override; the 4 082 076-row tetrahedral film with the override must stop after analysis with the budget error.",
     "results": "docs/audits/2026-11-24-fem-gpu-cudss-direct-poc.md"
   }
 }

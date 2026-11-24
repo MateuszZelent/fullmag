@@ -1,8 +1,8 @@
 # FEM GPU. Factor-once direct solve of the Poisson demag system (cuDSS, proof of concept)
 
-Status `proof of concept / experimental opt-in / unqualified`. Branch `codex/poc-fem-gpu-cudss-direct-20261124`. The
-realization is off unless the runtime environment requests it; without the request every run follows the existing
-CG/AMG path unchanged.
+Status `proof of concept / experimental opt-in / unqualified`. Branch `codex/fem-gpu-cudss-direct-poisson-20261124`
+(PR #550). The realization is off unless the runtime environment requests it; without the request every run follows
+the existing CG/AMG path unchanged.
 
 (problem-statement)=
 ## Scope
@@ -52,6 +52,19 @@ r = b - K\tilde{\phi},\qquad
 \rho = \frac{\lVert r\rVert_2}{\lVert b\rVert_2} \le \tau_{\mathrm{rel}}
 ```
 
+The factorization starts only when the device-memory peak that cuDSS estimates in the analysis phase fits a device
+budget derived from the free device memory at that moment:
+
+```{math}
+:label: eq-direct-memory-budget
+M_{\mathrm{margin}} = \max\left(M_{0},\ \frac{M_{\mathrm{total}}}{20}\right),\qquad
+B = \min\left(M_{\mathrm{free}} - M_{\mathrm{margin}},\ B_{\mathrm{cap}}\right),\qquad
+\hat{M}_{\mathrm{peak}} \le B
+```
+
+The budget is a resource check, not physics: it does not change $\tilde{\phi}$. It only decides whether the
+factorization is attempted.
+
 (symbols-and-si-units)=
 ## Symbols and SI units
 
@@ -67,6 +80,13 @@ r = b - K\tilde{\phi},\qquad
 | $r$ | Algebraic residual of the computed solution | $\mathrm{A\,m}$ |
 | $\rho$ | Relative Euclidean residual | $1$ |
 | $\tau_{\mathrm{rel}}$ | Relative residual tolerance from the solver policy | $1$ |
+| $M_{\mathrm{free}}$ | Free device memory reported by `cudaMemGetInfo` after the analysis phase | $\mathrm{B}$ (byte) |
+| $M_{\mathrm{total}}$ | Total device memory reported by `cudaMemGetInfo` | $\mathrm{B}$ (byte) |
+| $M_{0}$ | Minimum safety margin, $536\,870\,912$ bytes (512 MiB) | $\mathrm{B}$ (byte) |
+| $M_{\mathrm{margin}}$ | Safety margin kept free for the rest of the run, the display and allocator fragmentation | $\mathrm{B}$ (byte) |
+| $B_{\mathrm{cap}}$ | Optional diagnostic cap on the budget; $+\infty$ when not set | $\mathrm{B}$ (byte) |
+| $B$ | Device budget for the cuDSS factorization and solve phases | $\mathrm{B}$ (byte) |
+| $\hat{M}_{\mathrm{peak}}$ | Device peak estimated by cuDSS after analysis (`CUDSS_DATA_MEMORY_ESTIMATES`, entry 1) | $\mathrm{B}$ (byte) |
 
 (assumptions-and-validity)=
 ## Assumptions and validity
@@ -79,7 +99,13 @@ r = b - K\tilde{\phi},\qquad
 - The factor memory grows faster than the mesh. The demag accuracy contract uses a P2 potential, about 7.9 unknowns
   per mesh node: at 14 911 nodes the system has 117 651 unknowns, 1 736 229 stored lower-triangle entries and a factor
   with 46 474 450 nonzeros that takes 524 MiB of device memory. Larger meshes are reported in the validation section.
-  There is no automatic fallback to CG when the factor does not fit; the setup fails with the CUDA or cuDSS error.
+  A factor whose estimated device peak does not fit the budget of {eq}`eq-direct-memory-budget` is rejected after
+  the analysis phase, before the factorization starts. There is no automatic fallback to CG/AMG: the explicit request
+  fails with an error that names the estimate and the budget.
+- The budget relies on the cuDSS estimate. Allocations that cuDSS makes beyond its estimate, and later allocations of
+  the run, are covered only by $M_{\mathrm{margin}}$. Under WSL2 the WDDM driver does not fail an allocation beyond
+  dedicated memory; it pages it to host memory. Before the preflight, a P2 film with 4 082 076 rows and a factor of
+  $7.43\times10^{9}$ nonzeros spent 1 596 s in the factorization on an 8 GB RTX 5050 this way.
 - Cholesky with any symmetric permutation is backward stable for symmetric positive definite matrices, so the
   computed $\tilde{\phi}$ is the exact solution of a nearby system; the residual check of
   {eq}`eq-direct-residual` measures that directly for every solve.
@@ -153,29 +179,65 @@ variable have identical `ProblemIR` and plan; they differ only in the native rea
 ## Round trip and failure semantics
 
 - **Requested intent** is the public policy above, exported and re-imported unchanged by the script round trip.
-- **Resolved execution** is the native realization. With the override, setup prints one receipt line to standard
-  error (`fullmag: FEM GPU Poisson demag uses the cuDSS direct solve ...` with rows, factor nonzeros, device bytes and
-  phase times), every solve reports one iteration, and the AMG coarse-relax getter reports no AMG. The
-  executed-operator receipt keeps `DEMAG_SOLVE | PRECONDITIONER`, because the runner checks it against the operator
-  mask required by the requested CG/AMG policy. This proof of concept does not yet add a dedicated provenance field;
-  that is listed under limitations.
+- **Resolved execution** is the native realization, read back from the initialized device Poisson workspace, not
+  from the environment:
+  - **Provenance.** `execution_provenance.fem_poisson_demag.resolved_linear_solver` is `cudss_direct` for the
+    factor-once solve and `hypre_krylov` for the HYPRE Krylov solve of the policy. The neighbouring fields
+    `linear_solver`, `preconditioner`, `rtol` and `max_iterations` keep the requested policy. The field is written
+    only on the native FEM GPU lane with the `device_hypre_poisson` owner; FEM CPU, FEM/BEM and the explicit hybrid
+    CPU-Poisson mode leave it out. The demag runtime metadata of the artifacts repeats it as
+    `resolved_linear_solver`; under `cudss_direct` it reports `runtime_solver = CudssDirect`, no
+    `runtime_preconditioner` and no `amg_profile`, and the AMG fields of the step statistics are zero.
+  - **Executed-operator receipt.** The required operator mask follows the resolved realization, not the requested
+    policy. The Krylov solve requires `DEMAG_SOLVE | PRECONDITIONER`; the cuDSS solve requires
+    `DEMAG_SOLVE | DIRECT_SOLVE`, where `DIRECT_SOLVE` is bit 12 (`FULLMAG_FEM_GPU_OPERATOR_DIRECT_SOLVE`) and means
+    "the linear solve applied a sparse direct factorization; no Krylov iteration and no preconditioner ran". The two
+    bits exclude each other, and `DIRECT_SOLVE` requires `DEMAG_SOLVE`; the native plan check and the Rust receipt
+    parser reject any other combination. The time-integration and the PG-BB/NCG relaxation receipts derive their
+    required mask from the same planner, so both carry the resolved bit.
+  - **Diagnostics.** Setup prints one line to standard error (`fullmag: FEM GPU Poisson demag uses the cuDSS direct
+    solve ...` with rows, factor nonzeros, the estimated device peak, the budget, device bytes and phase times),
+    every solve reports one iteration, and the AMG coarse-relax getter reports no AMG.
 - **Validation errors**: a factorization with `CUDSS_DATA_INFO` different from zero (matrix not positive definite), a
   cuDSS or CUDA status other than success, a non-square or empty matrix, a missing diagonal entry, or a residual that
-  fails {eq}`eq-direct-residual` stop the run with a message naming the step.
-- **Unsupported combinations**: the override with the periodic reduced operator, with FEM/BEM, with FEM CPU or with
-  FDM is rejected or not applicable; a build without cuDSS rejects the override at setup.
+  fails {eq}`eq-direct-residual` stop the run with a message naming the step. The memory preflight adds three setup
+  errors: a failed or empty `CUDSS_DATA_MEMORY_ESTIMATES` query; a malformed
+  `FULLMAG_FEM_DEMAG_GPU_DIRECT_SOLVER_DEVICE_BUDGET_BYTES`; and an estimated peak above the budget of
+  {eq}`eq-direct-memory-budget`. The last message names the estimated peak, the budget with its free memory and
+  margin, the rows and the estimated factor nonzeros, and states that the factorization was not started.
+- **Unsupported combinations**: the override with the periodic reduced operator is rejected at setup, and a build
+  without cuDSS rejects the override at setup. FEM/BEM, the explicit hybrid CPU-Poisson mode and FEM CPU do not read
+  the override and run their own solver; FDM has no Poisson system. The FEM LLG time-domain qualification tool
+  accepts only the Krylov operator vocabulary, so a cuDSS run is not qualified there.
 
 (discrete-realization)=
 ## Discrete realization and residency
 
 1. Setup reads the boundary-conditioned host matrix (`poisson_bc_op`), keeps the lower triangle, sorts each row by
    column and uploads it once as 32-bit CSR.
-2. cuDSS analysis chooses $P$ and the symbolic structure of $L$; the factorization computes $L$ in device memory. Both
-   run once per operator. The factor device bytes are added to the Poisson workspace accounting.
-3. Each evaluation runs only the solve phase on the hypre stream, inside the same event fences that order the CG
+2. cuDSS analysis chooses $P$ and the symbolic structure of $L$.
+3. Memory preflight. After the analysis, setup reads `CUDSS_DATA_MEMORY_ESTIMATES`, an array of 16 `int64_t`
+   values. In cuDSS 0.8.0.10 entries 0 and 1 are the stable and peak device bytes, entries 2 and 3 the stable and
+   peak host bytes, and entries 4 and 5 the hybrid-mode peaks (the meaning is taken from the shipped example
+   `examples/cudss_get_set.cpp`; the header gives no comment). The device peak is $\hat{M}_{\mathrm{peak}}$. Setup
+   then reads $M_{\mathrm{free}}$ and $M_{\mathrm{total}}$ with `cudaMemGetInfo` and evaluates
+   {eq}`eq-direct-memory-budget`:
+   - $M_{\mathrm{free}}$ is measured after the CSR upload and the analysis, so a peak estimate that already counts
+     those allocations is counted twice; the check errs on the safe side.
+   - $M_{0}$ = 512 MiB, or 5 % of the device memory when that is larger, is kept free for later allocations of the
+     run, the display on a WDDM device and allocator fragmentation.
+   - $B_{\mathrm{cap}}$ comes from `FULLMAG_FEM_DEMAG_GPU_DIRECT_SOLVER_DEVICE_BUDGET_BYTES`, a positive integer of
+     bytes. It can only lower the budget. It is a diagnostic and test knob of this proof of concept, not a public
+     parameter and not part of `ProblemIR`.
+   - If $\hat{M}_{\mathrm{peak}} > B$, setup stops with the error described above; the factorization is not called.
+4. The factorization computes $L$ in device memory. Analysis and factorization run once per operator. The factor
+   device bytes are added to the Poisson workspace accounting.
+5. Each evaluation runs only the solve phase on the hypre stream, inside the same event fences that order the CG
    solve today. The right-hand side and the solution are the existing device buffers; nothing is copied to the host.
-4. The existing independent residual check (RHS norm, matvec, AXPY, residual norm) then certifies the result against
+6. The existing independent residual check (RHS norm, matvec, AXPY, residual norm) then certifies the result against
    $\tau_{\mathrm{rel}}$.
+7. The device Poisson workspace reports its realization (`hypre_krylov` or `cudss_direct`) to the GPU planner, which
+   builds the required operator mask from it, and to the C ABI query that fills the provenance field.
 
 The hypre PCG and AMG objects are not created under the override, which also removes the AMG hierarchy from device
 memory.
@@ -185,7 +247,18 @@ memory.
 
 - `backends/fem/gpu/cuda/demag_poisson/cudss_direct_solver.cpp::demag_gpu_direct_solver_requested` reads the override.
 - `backends/fem/gpu/cuda/demag_poisson/cudss_direct_solver.cpp::create_demag_cudss_direct_solver` builds the sorted
-  lower CSR, runs analysis and factorization, checks the factorization status and measures device bytes.
+  lower CSR, runs analysis, the memory preflight and the factorization, checks the factorization status and
+  measures device bytes.
+- `backends/fem/gpu/cuda/demag_poisson/cudss_direct_solver.cpp::resolve_demag_cudss_device_budget` evaluates the
+  budget $B$ of {eq}`eq-direct-memory-budget` from $M_{\mathrm{free}}$, $M_{\mathrm{total}}$ and the optional cap;
+  `check_demag_cudss_factor_fits` compares $\hat{M}_{\mathrm{peak}}$ with $B$ and writes the error.
+- `backends/fem/gpu/cuda/demag_poisson/poisson.cpp::gpu_demag_poisson_linear_solver` reports the realization of the
+  initialized workspace; `backends/fem/gpu/cuda/integrators/rk/rk_plan.cpp::gpu_rk_required_operator_mask` builds the
+  required mask from it, and `backends/fem/gpu/cuda/runtime/execution_receipt.cpp::plan_masks_are_valid` rejects
+  conflicting linear-solve bits.
+- `backends/fem/src/api.cpp::fullmag_fem_backend_get_gpu_demag_linear_solver_v1` exposes the realization through the
+  C ABI (`native/include/fullmag_fem.h`, mirrored in `crates/fullmag-fem-sys/src/lib.rs`); the runner records it in
+  `FemPoissonDemagProvenance` (`crates/fullmag-runner/src/types.rs`).
 - `backends/fem/gpu/cuda/demag_poisson/cudss_direct_solver.cpp::solve_demag_cudss_direct` runs the solve phase on a
   given stream with the device right-hand side and solution.
 - `backends/fem/gpu/cuda/demag_poisson/hypre_device_solver.cpp::initialize_demag_poisson_hypre_device_solver` selects
@@ -206,6 +279,13 @@ memory.
    tolerance (at most $10^{-8}$ in any component after the measured steps).
 4. Timing: mean step time over steps 2 to N−1 at 14 911, 49 176 and 89 732 nodes, with interleaved runs.
 5. Memory: device peak and host peak with both realizations.
+6. Receipt and provenance (review of PR #550): contract tests for both required masks, for the rejection of
+   conflicting bits and for the provenance field; two strict 50-step PG-BB relaxations of the prism film mesh
+   (`scripts/benchmarks/relax_film_compare_case.py`, 36 576 nodes) with and without the override must pass the strict
+   receipt with distinct masks and record `hypre_krylov` and `cudss_direct`.
+7. Memory preflight: a contract test with a small SPD matrix that factors within the budget and is rejected after
+   analysis under a 1-byte cap; and the tetrahedral film mesh (4 082 076 rows) with the override, which must stop
+   right after the analysis with the budget error instead of factorizing.
 
 **Results** (RTX 5050 8 GB, WSL2, measured on the same change applied to master `dbd7550dc`, 2026-11-23/24; details in
 `docs/audits/2026-11-24-fem-gpu-cudss-direct-poc.md`):
@@ -226,19 +306,20 @@ memory.
 
 5. At 199 457 nodes (1 620 071 unknowns) the factor has $1.66\times10^{9}$ nonzeros, more than the 8 GB card
    holds. The run did not fail: under WSL2 the device allocation spilled beyond dedicated memory, analysis and
-   factorization took 325 s and a step 3.1 s. A production version needs a VRAM preflight so that this case
-   resolves to CG/AMG instead of spilling.
+   factorization took 325 s and a step 3.1 s. That measurement predates the memory preflight, which now rejects such
+   a factor after the analysis (item 7); it does not resolve the case to CG/AMG.
 
 (limitations)=
 ## Limitations
 
 - Proof of concept: no managed qualification, no standard-problem comparison, no Windows or multi-GPU evidence.
-- The resolved realization is visible in the receipt line and the iteration count, not in a dedicated provenance
-  field; a production version must record it next to the requested policy.
-- The executed-operator receipt reports the preconditioner bit for the factor application; a production version needs
-  its own operator bit and a required mask derived from the resolved realization.
-- No size-based selection and no VRAM preflight for the factor; very large meshes still need CG/AMG.
-- The periodic reduced operator and FEM/BEM are excluded.
+- The realization is still selected by an environment variable, outside `ProblemIR`; the provenance field records
+  what ran, but the request itself is not part of the requested intent.
+- No size-based selection: a request whose factor does not fit fails after the analysis; it does not resolve to
+  CG/AMG. Very large meshes still need the default path.
+- The memory budget trusts the cuDSS peak estimate; the margin is a fixed rule, not a measured bound for every device
+  and driver.
+- The periodic reduced operator and FEM/BEM are excluded; the hybrid CPU-Poisson mode ignores the override.
 
 (scientific-bibliography)=
 ## Bibliography
@@ -250,7 +331,8 @@ memory.
 - N. J. Higham, *Accuracy and Stability of Numerical Algorithms*, 2nd ed., SIAM (2002), chapter 10 (Cholesky
   factorization), [doi:10.1137/1.9780898718027](https://doi.org/10.1137/1.9780898718027).
 - [NVIDIA cuDSS documentation](https://docs.nvidia.com/cuda/cudss/), version 0.8.0.10 as installed in the `fem-gpu`
-  image (`docker/fem-gpu/Dockerfile`).
+  image (`docker/fem-gpu/Dockerfile`); the layout of `CUDSS_DATA_MEMORY_ESTIMATES` is taken from the shipped example
+  `examples/cudss_get_set.cpp` of that version.
 - Note 0532 and the canonical Poisson description own the public policy and the shared physics; note 0913 documents
   the CG/AMG coarse-level residency that this realization replaces under the override.
 

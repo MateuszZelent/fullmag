@@ -108,8 +108,9 @@ That is the scale of the CG tolerance.
    - analysis and factorization took 325 s, and a step took 3.1 s.
 
    We infer that the WDDM driver under WSL2 placed the rest in system memory; the spill itself was not observed. A
-   production version needs a preflight from the analysis-phase memory estimate and a resolution to CG/AMG. It cannot
-   rely on an out-of-memory error.
+   production version cannot rely on an out-of-memory error. Since the review of PR #550, a preflight compares the
+   analysis-phase device-peak estimate with a device budget and rejects the request before the factorization
+   (note 0997, equation `eq-direct-memory-budget`); there is still no resolution to CG/AMG.
 2. **Pre-existing: a longer CG/AMG run failed at the end.** A 500-step CG/AMG run at 14 911 nodes completed every step
    and wrote all scalars. It then waited about 100 s and stopped with `timed out waiting for artifact provenance update`
    (`crates/fullmag-runner/src/artifact_pipeline.rs`), without `m_final.json`.
@@ -125,10 +126,12 @@ That is the scale of the CG tolerance.
 
 ## Proposed next steps
 
-1. A device-memory preflight from the analysis-phase estimate, and a resolution to CG/AMG when the factor does not fit.
-2. A provenance field and an executed-operator bit for the resolved realization. The proof of concept keeps
-   `DEMAG_SOLVE | PRECONDITIONER`, because the runner's required mask follows the requested CG/AMG policy. The
-   realization shows only in a stderr receipt line and as one iteration per solve.
+1. A device-memory preflight from the analysis-phase estimate (done in the review of PR #550: an explicit request
+   whose factor does not fit now fails after the analysis), and a resolution to CG/AMG when the factor does not fit
+   (still open).
+2. A provenance field and an executed-operator bit for the resolved realization (done in the review of PR #550:
+   `fem_poisson_demag.resolved_linear_solver` and the `DIRECT_SOLVE` bit; the required mask follows the resolved
+   realization). The measurements above predate this change and ran with `DEMAG_SOLVE | PRECONDITIONER`.
 3. A public-policy decision: a `DIRECT` solver value, or an automatic resolution by size. Then the managed
    qualification.
 4. The periodic reduced operator and FEM/BEM stay excluded; FEM CPU is unchanged.
