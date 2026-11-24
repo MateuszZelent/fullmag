@@ -52,6 +52,7 @@ DEVELOPMENT_IMAGE_SCHEMA = "fullmag.direct-compose.development-image.v1"
 RUNTIME_IMAGE_CONTEXT_SCHEMA = "fullmag.direct-compose.runtime-image-context.v1"
 BACKEND_START_INPUTS_SCHEMA = "fullmag.direct-compose.backend-start-inputs.v1"
 OPERATOR_PROBE_ENVIRONMENT_SCHEMA = "fullmag.operator-probe-environment.v1"
+RUN_PERFORMANCE_STEP_CSV_ENV = "FULLMAG_RUN_PERFORMANCE_STEP_CSV"
 OPERATOR_PROBE_ENVIRONMENT_DEFAULTS = {
     "FULLMAG_MIXED_P1_DEVICE": "gpu",
     "FULLMAG_ARTIFACT_FIELD_STORAGE": "json",
@@ -59,6 +60,7 @@ OPERATOR_PROBE_ENVIRONMENT_DEFAULTS = {
 OPERATOR_PROBE_ENVIRONMENT_ALLOWED = {
     "FULLMAG_MIXED_P1_DEVICE": frozenset({"cpu", "gpu"}),
     "FULLMAG_ARTIFACT_FIELD_STORAGE": frozenset({"json", "zarr"}),
+    RUN_PERFORMANCE_STEP_CSV_ENV: frozenset({"0", "1"}),
 }
 BASE_CONTEXT_FILES = (
     ("Dockerfile.dev", "docker/all-in-one/Dockerfile.dev"),
@@ -137,13 +139,15 @@ class DirectDockerOutcomeUnknown(DirectDockerError):
 def _normalize_operator_probe_environment(value: Mapping[str, object]) -> dict[str, str]:
     """Validate the bounded operator-probe environment without ambient passthrough."""
 
-    if not isinstance(value, Mapping) or set(value) != set(OPERATOR_PROBE_ENVIRONMENT_ALLOWED):
+    if (not isinstance(value, Mapping)
+            or not OPERATOR_PROBE_ENVIRONMENT_DEFAULTS.keys() <= value.keys()
+            or not value.keys() <= OPERATOR_PROBE_ENVIRONMENT_ALLOWED.keys()):
         raise _fail(
-            "operator_probe_environment must contain exactly the bounded probe controls"
+            "operator_probe_environment must contain exactly the required controls and only allowed options"
         )
     normalized: dict[str, str] = {}
-    for name, allowed in OPERATOR_PROBE_ENVIRONMENT_ALLOWED.items():
-        raw = value[name]
+    for name, raw in value.items():
+        allowed = OPERATOR_PROBE_ENVIRONMENT_ALLOWED[name]
         if not isinstance(raw, str):
             raise _fail(f"{name} must be a string")
         candidate = raw.strip().lower()
@@ -155,12 +159,14 @@ def _normalize_operator_probe_environment(value: Mapping[str, object]) -> dict[s
 
 
 def _operator_probe_environment_from_host() -> dict[str, str]:
-    """Capture the two allowed host controls once for one backend start."""
+    """Capture the allowlisted host controls once for one backend start."""
 
-    return _normalize_operator_probe_environment({
-        name: os.environ.get(name, default)
-        for name, default in OPERATOR_PROBE_ENVIRONMENT_DEFAULTS.items()
-    })
+    values = {name: os.environ.get(name, default)
+              for name, default in OPERATOR_PROBE_ENVIRONMENT_DEFAULTS.items()}
+    step_csv = os.environ.get(RUN_PERFORMANCE_STEP_CSV_ENV)
+    if step_csv is not None:
+        values[RUN_PERFORMANCE_STEP_CSV_ENV] = step_csv
+    return _normalize_operator_probe_environment(values)
 
 
 def _operator_probe_environment_sha256(value: Mapping[str, object]) -> str:
@@ -1619,7 +1625,7 @@ def _environment(layout: Mapping[str, object], selected: Path, run_root: Path,
         "FULLMAG_WORKSPACE_STATE_ROOT": str(workspace_state_root),
         "FULLMAG_BACKEND_BUILD_STATE_ROOT": str(build_state_root),
     })
-    # Only these two workload controls may cross the host -> Compose boundary.
+    # Only allowlisted controls may cross the host -> Compose boundary.
     # The caller captures them once before image/cache preparation.  Never
     # reread the mutable ambient host environment here and never let a cache
     # profile smuggle a stale workload choice into a new run.
