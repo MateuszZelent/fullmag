@@ -87,6 +87,7 @@ import { DiagnosticRecorderDialog } from "./diagnostic-recorder/DiagnosticRecord
 import { useHomeViewOpen } from "./homeView";
 import { NewProblemDialog, useNewProblemRequest } from "./NewProblemDialog";
 import { ReadinessHelperHeaderControl } from "./ReadinessHelperDialog";
+import { WorkspaceFullscreenButton } from "./WorkspaceFullscreenButton";
 
 function subscribeToHydration(): () => void {
   return () => {};
@@ -737,6 +738,7 @@ function NoSessionAppMenuBar({
       <div className="fm-header__actions">
         <ProjectDocumentStatus />
         <ThemeSwitcher theme={theme} onThemeChange={setTheme} />
+        {homeVisible ? null : <WorkspaceFullscreenButton />}
       </div>
     </header>
   );
@@ -987,6 +989,7 @@ function SessionAppMenuBar() {
       <div className="fm-header__actions">
         <ProjectDocumentStatus />
         <ThemeSwitcher theme={theme} onThemeChange={setTheme} />
+        {homeOpen ? null : <WorkspaceFullscreenButton />}
       </div>
     </header>
   );

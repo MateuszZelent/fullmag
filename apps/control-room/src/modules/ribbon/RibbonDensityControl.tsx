@@ -1,8 +1,7 @@
 "use client";
 
-import { ChevronDown, Rows3 } from "lucide-react";
+import { Rows3 } from "lucide-react";
 
-import { Button } from "@/shared/ui/Button";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -30,24 +29,18 @@ export function RibbonDensityControl({
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <Button
+        <button
           aria-label={`Ribbon density: ${DENSITY_LABELS[density]}`}
           className="fm-ribbon-density"
-          size="sm"
-          title="Choose ribbon density"
+          data-density={density}
+          title={`Ribbon layout: ${DENSITY_LABELS[density]}`}
           type="button"
-          variant="ghost"
         >
-          <Rows3 aria-hidden="true" size={16} />
-          <span>Density</span>
-          <span className="fm-ribbon-density__value">
-            {DENSITY_LABELS[density]}
-          </span>
-          <ChevronDown aria-hidden="true" size={14} />
-        </Button>
+          <Rows3 aria-hidden="true" size={15} />
+        </button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="fm-ribbon-density__menu">
-        <DropdownMenuLabel>Ribbon density</DropdownMenuLabel>
+        <DropdownMenuLabel>Ribbon layout</DropdownMenuLabel>
         <DropdownMenuRadioGroup
           value={density}
           onValueChange={(value) => {

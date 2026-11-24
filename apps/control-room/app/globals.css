@@ -9,7 +9,6 @@
 @import "../src/design/styles/start-screen.tokens.css" layer(fm-tokens);
 @import "../src/design/styles/base.css" layer(fm-base);
 @import "../src/design/styles/layout.css" layer(fm-base);
-@import "../src/design/styles/instance-tabs.css" layer(fm-base);
 @import "../src/design/styles/slots.css" layer(fm-base);
 @import "../src/design/styles/primitives.css" layer(fm-primitives);
 @import "../src/design/styles/dropdown.css" layer(fm-primitives);
@@ -26,6 +25,7 @@
 @import "../src/design/styles/simulation-preparation-log.css" layer(fm-primitives);
 @import "../src/design/styles/dialog-communication-policy.css" layer(fm-primitives);
 @import "../src/design/styles/dialog-notifications.css" layer(fm-primitives);
+@import "../src/design/styles/instance-tabs.css" layer(fm-components);
 @import "../src/design/styles/header.css" layer(fm-components);
 @import "../src/design/styles/ribbon.css" layer(fm-components);
 @import "../src/design/styles/explorer.css" layer(fm-components);

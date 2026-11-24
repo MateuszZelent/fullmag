@@ -1514,11 +1514,10 @@ fn validate_scene_field_target(
                 .iter()
                 .find(|object| object.id == *object_id)
                 .unwrap();
-            let exists = object.allocated_region_ids.iter().any(|id| id == region_id)
-                || object
-                    .regions
-                    .iter()
-                    .any(|region| region.region_id == *region_id);
+            let exists = object
+                .regions
+                .iter()
+                .any(|region| region.region_id == *region_id);
             if exists {
                 Ok(())
             } else {
@@ -1564,7 +1563,7 @@ fn validate_spin_authoring(
                 "current_transports[{index}] uses an unsupported read-only variant"
             ))
         })?;
-        validate_current_transport(index, transport, object_ids)?;
+        validate_current_transport(index, transport, scene, object_ids)?;
         validate_scene_closed_loop_owner(index, transport, scene)?;
         if !transport_ids.insert(transport.name.clone()) {
             return Err(SceneDocumentValidationError::new(format!(
@@ -1645,9 +1644,11 @@ fn validate_spin_authoring(
         let mut domain = BTreeSet::new();
         for (region_index, region) in module.domain.iter().enumerate() {
             validate_spin_region_ref(
+                scene,
                 region,
                 object_ids,
                 &format!("spin_transports[{index}].domain[{region_index}]"),
+                false,
             )?;
             if !domain.insert((region.object_id.clone(), region.region_id.clone())) {
                 return Err(SceneDocumentValidationError::new(format!(
@@ -1658,9 +1659,11 @@ fn validate_spin_authoring(
         let mut assigned = BTreeSet::new();
         for (material_index, assignment) in module.materials.iter().enumerate() {
             validate_spin_region_ref(
+                scene,
                 &assignment.region,
                 object_ids,
                 &format!("spin_transports[{index}].materials[{material_index}].region"),
+                false,
             )?;
             let key = (
                 assignment.region.object_id.clone(),
@@ -1767,6 +1770,7 @@ fn validate_spin_authoring(
         }
         for (interface_index, interface) in module.interfaces.iter().enumerate() {
             validate_scene_spin_interface(
+                scene,
                 interface,
                 object_ids,
                 &format!("spin_transports[{index}].interfaces[{interface_index}]"),
@@ -1810,6 +1814,7 @@ fn validate_spin_authoring(
         validate_spin_torque(
             index,
             torque,
+            scene,
             object_ids,
             &transport_ids,
             &spin_transport_ids,
@@ -1860,20 +1865,77 @@ fn validate_spin_authoring(
     Ok(())
 }
 
+fn object_has_active_region(
+    object: &crate::SceneObject,
+    region_id: &str,
+    allow_conductor_parts: bool,
+) -> bool {
+    if object
+        .regions
+        .iter()
+        .any(|entry| entry.region_id == region_id)
+        || object.region_name.as_deref() == Some(region_id)
+    {
+        return true;
+    }
+    if allow_conductor_parts {
+        if let Some(conductors) = object
+            .geometry
+            .geometry_params
+            .get("conductors")
+            .and_then(Value::as_array)
+        {
+            if conductors
+                .iter()
+                .any(|part| part.get("id").and_then(Value::as_str) == Some(region_id))
+            {
+                return true;
+            }
+        }
+        if let Some(loop_obj) = object.geometry.geometry_params.get("loop") {
+            if loop_obj
+                .get("inlet_connection_part_id")
+                .and_then(Value::as_str)
+                == Some(region_id)
+                || loop_obj
+                    .get("outlet_connection_part_id")
+                    .and_then(Value::as_str)
+                    == Some(region_id)
+            {
+                return true;
+            }
+        }
+    }
+    false
+}
+
 fn validate_spin_region_ref(
+    scene: &SceneDocument,
     region: &SceneRegionRef,
     object_ids: &BTreeSet<String>,
     path: &str,
+    allow_conductor_parts: bool,
 ) -> Result<(), SceneDocumentValidationError> {
     require_reference(&region.object_id, object_ids, &format!("{path}.object_id"))?;
-    if region
-        .region_id
-        .as_ref()
-        .is_some_and(|id| id.trim().is_empty())
-    {
-        return Err(SceneDocumentValidationError::new(format!(
-            "{path}.region_id must not be empty"
-        )));
+    if let Some(region_id) = region.region_id.as_deref() {
+        if region_id.trim().is_empty() {
+            return Err(SceneDocumentValidationError::new(format!(
+                "{path}.region_id must not be empty"
+            )));
+        }
+        let exists = scene
+            .objects
+            .iter()
+            .find(|object| object.id == region.object_id)
+            .is_some_and(|object| {
+                object_has_active_region(object, region_id, allow_conductor_parts)
+            });
+        if !exists {
+            return Err(SceneDocumentValidationError::new(format!(
+                "{path}.region_id references missing region '{region_id}' on object '{}'",
+                region.object_id
+            )));
+        }
     }
     Ok(())
 }
@@ -1903,6 +1965,7 @@ fn validate_scene_surface_ref(
 }
 
 fn validate_scene_spin_interface(
+    scene: &SceneDocument,
     interface: &SceneSpinInterface,
     object_ids: &BTreeSet<String>,
     path: &str,
@@ -1919,8 +1982,8 @@ fn validate_scene_spin_interface(
                     "{path} requires a non-empty id and two distinct sides"
                 )));
             }
-            validate_spin_region_ref(side_a, object_ids, &format!("{path}.side_a"))?;
-            validate_spin_region_ref(side_b, object_ids, &format!("{path}.side_b"))?;
+            validate_spin_region_ref(scene, side_a, object_ids, &format!("{path}.side_a"), false)?;
+            validate_spin_region_ref(scene, side_b, object_ids, &format!("{path}.side_b"), false)?;
             finite_vec3(*normal_a_to_b, &format!("{path}.normal_a_to_b"), true)
         }
         SceneSpinInterface::MixingConductance {
@@ -1948,11 +2011,19 @@ fn validate_scene_spin_interface(
                     "{path} has an incomplete oriented mixing contract"
                 )));
             }
-            validate_spin_region_ref(normal_side, object_ids, &format!("{path}.normal_side"))?;
             validate_spin_region_ref(
+                scene,
+                normal_side,
+                object_ids,
+                &format!("{path}.normal_side"),
+                false,
+            )?;
+            validate_spin_region_ref(
+                scene,
                 ferromagnet_side,
                 object_ids,
                 &format!("{path}.ferromagnet_side"),
+                false,
             )?;
             finite_vec3(
                 *normal_to_ferromagnet,
@@ -2123,6 +2194,7 @@ fn validate_scene_spin_boundary(
 fn validate_current_transport(
     index: usize,
     transport: &KnownSceneCurrentTransport,
+    scene: &SceneDocument,
     object_ids: &BTreeSet<String>,
 ) -> Result<(), SceneDocumentValidationError> {
     if transport.name.trim().is_empty() {
@@ -2183,7 +2255,7 @@ fn validate_current_transport(
                     "current_transports[{index}] legacy ohmic_poisson solve_region/conductivity_s_per_m is ambiguous"
                 )));
             }
-            validate_scene_charge_contract(index, transport, object_ids)?;
+            validate_scene_charge_contract(index, transport, scene, object_ids)?;
         }
         CurrentTransportModel::MagnetoresistivePoisson => {
             if transport.coupling != SceneTransportCoupling::Bidirectional {
@@ -2199,7 +2271,7 @@ fn validate_current_transport(
                     "current_transports[{index}] magnetoresistive_poisson does not accept legacy current or solve fields"
                 )));
             }
-            validate_scene_charge_contract(index, transport, object_ids)?;
+            validate_scene_charge_contract(index, transport, scene, object_ids)?;
         }
     }
     if let Some(value) = transport.external_lead_preparation.as_ref() {
@@ -2287,7 +2359,7 @@ fn validate_current_transport(
                 "current_transports[{index}].structured_current_closure requires model=ohmic_poisson and coupling=one_way"
             )));
         }
-        validate_scene_structured_current_closure(index, closure, object_ids)?;
+        validate_scene_structured_current_closure(index, closure, scene, object_ids)?;
     }
     Ok(())
 }
@@ -2295,6 +2367,7 @@ fn validate_current_transport(
 fn validate_scene_structured_current_closure(
     index: usize,
     closure: &SceneStructuredCurrentClosure,
+    scene: &SceneDocument,
     object_ids: &BTreeSet<String>,
 ) -> Result<(), SceneDocumentValidationError> {
     let prefix = format!("current_transports[{index}].structured_current_closure");
@@ -2307,7 +2380,13 @@ fn validate_scene_structured_current_closure(
     }
     let SceneStructuredCurrentClosure::ClosedGeometry { source_cuts, .. } = closure;
     for (cut_index, cut) in source_cuts.iter().enumerate() {
-        validate_spin_region_ref(&cut.region, object_ids, &format!("{prefix}.source_cuts[{cut_index}].region"))?;
+        validate_spin_region_ref(
+            scene,
+            &cut.region,
+            object_ids,
+            &format!("{prefix}.source_cuts[{cut_index}].region"),
+            true,
+        )?;
     }
     Ok(())
 }
@@ -2928,6 +3007,7 @@ fn parse_scene_face_vertex_ids(
 fn validate_scene_charge_contract(
     index: usize,
     transport: &KnownSceneCurrentTransport,
+    scene: &SceneDocument,
     object_ids: &BTreeSet<String>,
 ) -> Result<(), SceneDocumentValidationError> {
     let prefix = format!("current_transports[{index}]");
@@ -2964,9 +3044,11 @@ fn validate_scene_charge_contract(
     let mut domain = BTreeSet::new();
     for (region_index, region) in transport.domain.iter().enumerate() {
         validate_spin_region_ref(
+            scene,
             region,
             object_ids,
             &format!("{prefix}.domain[{region_index}]"),
+            true,
         )?;
         if !domain.insert((region.object_id.clone(), region.region_id.clone())) {
             return Err(SceneDocumentValidationError::new(format!(
@@ -2977,9 +3059,11 @@ fn validate_scene_charge_contract(
     let mut assigned = BTreeSet::new();
     for (material_index, assignment) in transport.materials.iter().enumerate() {
         validate_spin_region_ref(
+            scene,
             &assignment.region,
             object_ids,
             &format!("{prefix}.materials[{material_index}].region"),
+            true,
         )?;
         let key = (
             assignment.region.object_id.clone(),
@@ -3178,6 +3262,7 @@ fn validate_scene_charge_contract(
 fn validate_spin_torque(
     index: usize,
     torque: &SceneSpinTorque,
+    scene: &SceneDocument,
     object_ids: &BTreeSet<String>,
     transport_ids: &BTreeSet<String>,
     spin_transport_ids: &BTreeSet<String>,
@@ -3223,7 +3308,7 @@ fn validate_spin_torque(
                             "spin_torques[{index}] canonical Zhang-Li fullmag contract is incomplete"
                         )));
                     }
-                    validate_region_ref(index, target.as_ref(), object_ids)?;
+                    validate_region_ref(index, target.as_ref(), scene, object_ids)?;
                     positive(
                         lande_g.ok_or_else(|| {
                             SceneDocumentValidationError::new(format!(
@@ -3245,7 +3330,7 @@ fn validate_spin_torque(
                             "spin_torques[{index}] canonical MuMax3-compatible Zhang-Li requires zl_mumax3_central_v1 and lande_g=2"
                         )));
                     }
-                    validate_region_ref(index, target.as_ref(), object_ids)?;
+                    validate_region_ref(index, target.as_ref(), scene, object_ids)?;
                 }
                 crate::ZhangLiFormulaVersion::LegacyFullmagV0 => {
                     if schema_version.is_some()
@@ -3331,7 +3416,7 @@ fn validate_spin_torque(
                             "spin_torques[{index}] canonical Slonczewski contract is incomplete"
                         )));
                     }
-                    validate_region_ref(index, target.as_ref(), object_ids)?;
+                    validate_region_ref(index, target.as_ref(), scene, object_ids)?;
                     finite_vec3(
                         stack_normal.ok_or_else(|| {
                             SceneDocumentValidationError::new(format!(
@@ -3380,7 +3465,7 @@ fn validate_spin_torque(
             )?;
             match formula_version {
                 PrescribedSotFormulaVersion::FullmagV1 => {
-                    validate_region_ref(index, target.as_ref(), object_ids)?;
+                    validate_region_ref(index, target.as_ref(), scene, object_ids)?;
                     if raw_spin_polarization.is_some() || compatibility_origin.is_some() {
                         return Err(SceneDocumentValidationError::new(format!(
                             "spin_torques[{index}] canonical prescribed SOT contains legacy fields"
@@ -3435,7 +3520,7 @@ fn validate_spin_torque(
                     "spin_torques[{index}].solve_id references missing spin transport '{solve_id}'"
                 )));
             }
-            validate_region_ref(index, Some(target), object_ids)?;
+            validate_region_ref(index, Some(target), scene, object_ids)?;
         }
     }
     Ok(())
@@ -3472,15 +3557,18 @@ fn validate_current_binding(
 fn validate_region_ref(
     index: usize,
     target: Option<&crate::SceneRegionRef>,
+    scene: &SceneDocument,
     object_ids: &BTreeSet<String>,
 ) -> Result<(), SceneDocumentValidationError> {
     let target = target.ok_or_else(|| {
         SceneDocumentValidationError::new(format!("spin_torques[{index}].target is required"))
     })?;
-    require_reference(
-        &target.object_id,
+    validate_spin_region_ref(
+        scene,
+        target,
         object_ids,
-        &format!("spin_torques[{index}].target.object_id"),
+        &format!("spin_torques[{index}].target"),
+        false,
     )
 }
 
@@ -5164,14 +5252,15 @@ mod tests {
             "boundaries":[],"gauge":"terminal_reference","solver":{"engine":"cg","linear":{"relative_tolerance":1e-10,"absolute_tolerance":0.,"max_iterations":100},"operator_version":"fem_charge_conforming_h1_p1.transparent.v1","physical_residual_version":"charge_balance_integrated_l2.v1"},
             "conservative_current_source":{}
         })).unwrap();
+        let scene = region_owned_scene();
         let objects = BTreeSet::from(["body".to_string()]);
-        validate_scene_charge_contract(0, &transport, &objects).unwrap();
-        assert!(validate_current_transport(0, &transport, &objects)
+        validate_scene_charge_contract(0, &transport, &scene, &objects).unwrap();
+        assert!(validate_current_transport(0, &transport, &scene, &objects)
             .unwrap_err()
             .message
             .contains("conservative_current_source"));
         transport.gauge = Some(SceneChargePotentialGauge::ZeroMean);
-        assert!(validate_scene_charge_contract(0, &transport, &objects)
+        assert!(validate_scene_charge_contract(0, &transport, &scene, &objects)
             .unwrap_err()
             .message
             .contains("terminal_reference"));
@@ -5180,13 +5269,13 @@ mod tests {
             id: "legacy".into(),
             surfaces: vec![],
         });
-        assert!(validate_scene_charge_contract(0, &transport, &objects)
+        assert!(validate_scene_charge_contract(0, &transport, &scene, &objects)
             .unwrap_err()
             .message
             .contains("empty boundaries"));
         transport.boundaries.clear();
         transport.conservative_current_source = None;
-        assert!(validate_scene_charge_contract(0, &transport, &objects)
+        assert!(validate_scene_charge_contract(0, &transport, &scene, &objects)
             .unwrap_err()
             .message
             .contains("non-empty"));
@@ -5205,18 +5294,19 @@ mod tests {
             "boundaries":[],"gauge":"terminal_reference","solver":{"engine":"cg","linear":{"relative_tolerance":1e-10,"absolute_tolerance":0.,"max_iterations":100},"operator_version":"fem_charge_conforming_h1_p1.transparent.v1","physical_residual_version":"charge_balance_integrated_l2.v1"},
             "external_lead_preparation":intent
         })).unwrap();
+        let scene = region_owned_scene();
         let objects = BTreeSet::from(["body".to_string()]);
-        validate_current_transport(0, &transport, &objects).unwrap();
+        validate_current_transport(0, &transport, &scene, &objects).unwrap();
         assert!(transport.conservative_current_source.is_none());
         assert_eq!(serde_json::to_value(&transport).unwrap()["external_lead_preparation"], intent);
         transport.external_lead_preparation.as_mut().unwrap().insert("certificate".into(), serde_json::json!("fake"));
-        assert!(validate_current_transport(0, &transport, &objects).unwrap_err().message.contains("external_lead_preparation"));
+        assert!(validate_current_transport(0, &transport, &scene, &objects).unwrap_err().message.contains("external_lead_preparation"));
         transport.external_lead_preparation = serde_json::from_value(intent.clone()).unwrap();
         transport.conservative_current_source = Some(BTreeMap::new());
-        assert!(validate_current_transport(0, &transport, &objects).unwrap_err().message.contains("no source/view/closure"));
+        assert!(validate_current_transport(0, &transport, &scene, &objects).unwrap_err().message.contains("no source/view/closure"));
         transport.conservative_current_source = None;
         transport.gauge = Some(SceneChargePotentialGauge::ZeroMean);
-        assert!(validate_current_transport(0, &transport, &objects).unwrap_err().message.contains("terminal_reference"));
+        assert!(validate_current_transport(0, &transport, &scene, &objects).unwrap_err().message.contains("terminal_reference"));
     }
 
     #[test]

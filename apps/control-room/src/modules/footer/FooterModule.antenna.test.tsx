@@ -221,4 +221,58 @@ describe("Footer Telemetry/Antenna navigation", () => {
     expect(kernel.layout.get().activeBottomPanelTab).toBe("logs");
     expect(observation.stageOptions).toEqual([{ enabled: true }, { enabled: true }]);
   });
+
+  it("hides the Antenna and Eigensolve telemetry switcher completely when neither module is active", () => {
+    observation.realTabs = true;
+    observation.execution = null;
+    const kernel = makeKernel();
+    kernel.layout.setBottomPanelTab("telemetry");
+    const html = renderToStaticMarkup(footer(kernel));
+    expect(html).not.toContain('aria-label="Telemetry views"');
+    expect(html).not.toContain(">Antenna</button>");
+    expect(html).not.toContain(">Eigensolve</button>");
+    expect(html).toContain('data-telemetry-view="overview"');
+  });
+
+  it("shows the Eigensolve telemetry switcher and auto-opens it when an eigenmodes stage starts running", async () => {
+    observation.execution = {
+      session_id: observation.status!.sessionId,
+      session_epoch: observation.status!.sessionEpoch,
+      request_scope_epoch: observation.status!.requestScopeEpoch,
+      run_id: observation.status!.run!.run_id,
+      runtime_state: "running",
+      active_stage_index: 0,
+      active_stage_kind: "eigenmodes",
+      stages: [
+        {
+          index: 0,
+          stage_id: "eigen-1",
+          kind: "eigenmodes",
+          status: "running",
+          progress_percent: 40,
+        },
+      ],
+    } as unknown as StageExecutionResource;
+    const dom = installSimulationPreparationTestDom();
+    const container = dom.document.createElement("div");
+    dom.document.body.appendChild(container);
+    const kernel = makeKernel();
+    const open = vi.spyOn(kernel.layout, "openBottomPanel");
+    const root = createRoot(container as unknown as Element);
+    try {
+      await act(async () => root.render(footer(kernel)));
+      expect(kernel.layout.get().activeBottomPanelTab).toBe("telemetry");
+      expect(
+        container
+          .querySelector("[data-telemetry-view]")
+          ?.getAttribute("data-telemetry-view"),
+      ).toBe("eigensolve");
+      expect(container.textContent).toContain("Eigensolve");
+      expect(container.textContent).not.toContain("Antenna");
+      expect(open).toHaveBeenCalledTimes(1);
+    } finally {
+      await act(async () => root.unmount());
+      dom.restore();
+    }
+  });
 });

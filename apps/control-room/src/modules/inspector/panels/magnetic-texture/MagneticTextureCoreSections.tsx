@@ -2,16 +2,16 @@
 
 import {
   Compass,
+  Crosshair,
   Eye,
   FolderOpen,
   Grid3x3,
   Move3D,
-  RotateCcw,
   Scan,
+  Scaling,
   SearchCheck,
   SlidersHorizontal,
   Sparkles,
-  Trash2,
   Upload,
 } from "lucide-react";
 import { useEffect, useRef, useState, type ReactNode } from "react";
@@ -36,7 +36,6 @@ import {
   centerDraftInTargetBounds,
   fitCharacteristicSizeToTarget,
   orthonormalizeSecondBasis,
-  resetDraftTransform,
   resolveLargestFacePlane,
   switchDraftPresetPatch,
   THREE_DIMENSIONAL_OBJECT_LOCAL_PRESETS,
@@ -366,10 +365,8 @@ export interface BuildMagneticTextureSectionsOptions {
   onCopyParentTextureToRegion?: (ctx: InspectorActionContext<MagneticTextureDraft>) => void;
   showObjectAssignmentSection?: boolean;
   defaultMagnetizationRefPlaceholder?: string;
-  canClearObjectTexture?: boolean;
-  clearObjectTextureDisabledReason?: string | null;
-  clearingObjectTexture?: boolean;
-  onClearObjectTexture?: () => void | Promise<void>;
+  gizmoEnabled?: boolean;
+  onToggleGizmo?: () => void;
   canLoadFieldState?: boolean;
   loadFieldStateDisabledReason?: string | null;
   loadingFieldState?: boolean;
@@ -404,10 +401,8 @@ export function buildMagneticTextureInspectorSections({
   onCopyParentTextureToRegion,
   showObjectAssignmentSection = false,
   defaultMagnetizationRefPlaceholder,
-  canClearObjectTexture = false,
-  clearObjectTextureDisabledReason = null,
-  clearingObjectTexture = false,
-  onClearObjectTexture,
+  gizmoEnabled = false,
+  onToggleGizmo,
   canLoadFieldState = false,
   loadFieldStateDisabledReason = null,
   loadingFieldState = false,
@@ -415,57 +410,12 @@ export function buildMagneticTextureInspectorSections({
 }: BuildMagneticTextureSectionsOptions): readonly InspectorSectionSpec<MagneticTextureDraft>[] {
   const autoFace = resolveLargestFacePlane(bounds.size).toUpperCase();
   const targetWord = hostContext === "region" ? "region" : "object";
+  const fitTargetLabel = hostContext === "region" ? "Fit to Region" : "Fit to Object";
 
   const fieldError = (key: string) => (_value: unknown, draft: MagneticTextureDraft) =>
     validateMagneticTextureDraft(draft).get(key) ?? null;
 
   const sections: InspectorSectionSpec<MagneticTextureDraft>[] = [];
-
-  if (hostContext === "object" && showObjectAssignmentSection) {
-    sections.push({
-      id: "object-assignment",
-      title: "Assignment",
-      icon: Compass,
-      defaultOpen: true,
-      summary: (d) => {
-        const refVal = typeof d.magnetizationRef === "string" ? d.magnetizationRef.trim() : "";
-        return refVal || defaultMagnetizationRefPlaceholder || "Auto asset ID";
-      },
-      rows: [
-        {
-          key: "magnetizationRef",
-          label: "Magnetization ref",
-          type: "expression",
-          placeholder: defaultMagnetizationRefPlaceholder ?? "mag:object:uniform",
-          hint: "Custom asset IDs are preserved across saves; leave blank to auto-name.",
-        },
-        ...(onClearObjectTexture
-          ? ([
-              {
-                type: "custom",
-                wide: true,
-                render: () => (
-                  <div className="flex justify-end">
-                    <Button
-                      data-testid="clear-magnetization-btn"
-                      disabled={!canClearObjectTexture || clearingObjectTexture}
-                      disabledReason={clearObjectTextureDisabledReason ?? undefined}
-                      size="sm"
-                      type="button"
-                      variant="secondary"
-                      onClick={() => void onClearObjectTexture()}
-                    >
-                      <Trash2 aria-hidden="true" size={14} />
-                      <span>{clearingObjectTexture ? "Clearing…" : "Clear"}</span>
-                    </Button>
-                  </div>
-                ),
-              },
-            ] as InspectorRowSpec<MagneticTextureDraft>[])
-          : []),
-      ],
-    });
-  }
 
   if (hostContext === "region") {
     sections.push({
@@ -606,6 +556,45 @@ export function buildMagneticTextureInspectorSections({
                 ctx.setField("translationM", nextTranslation)
               }
             />
+            <div
+              className="flex flex-wrap items-center gap-1.5"
+              data-slot="texture-preview-3d-actions"
+            >
+              {onToggleGizmo ? (
+                <Button
+                  aria-pressed={gizmoEnabled}
+                  data-active={gizmoEnabled ? "true" : "false"}
+                  data-testid="texture-gizmo-btn"
+                  size="sm"
+                  type="button"
+                  variant={gizmoEnabled ? "secondary" : "ghost"}
+                  onClick={onToggleGizmo}
+                >
+                  <Move3D aria-hidden="true" size={13} />
+                  <span>{gizmoEnabled ? "Hide 3D Gizmo (T)" : "3D Gizmo (T)"}</span>
+                </Button>
+              ) : null}
+              <Button
+                data-testid="texture-center-btn"
+                size="sm"
+                type="button"
+                variant="secondary"
+                onClick={() => ctx.patchDraft(centerDraftInTargetBounds(ctx.draft, bounds))}
+              >
+                <Crosshair aria-hidden="true" size={13} />
+                <span>Center</span>
+              </Button>
+              <Button
+                data-testid="texture-fit-btn"
+                size="sm"
+                type="button"
+                variant="secondary"
+                onClick={() => ctx.patchDraft(fitCharacteristicSizeToTarget(ctx.draft, bounds))}
+              >
+                <Scaling aria-hidden="true" size={13} />
+                <span>{fitTargetLabel}</span>
+              </Button>
+            </div>
           </div>
         ),
       },
@@ -617,7 +606,7 @@ export function buildMagneticTextureInspectorSections({
     // Shared Plane selector for all 2D planar presets (eliminates ConflictingPlane)
     {
       key: "planeMode",
-      label: "Plane",
+      label: "Texture plane",
       symbol: <>(e<sub>u</sub>, e<sub>v</sub>)</>,
       symbolInfo: {
         name: "Texture reference plane",
@@ -1531,54 +1520,29 @@ export function buildMagneticTextureInspectorSections({
     rows: parameterRows,
   });
 
-  // Section 3: Placement & Transform in Target
+  // Section 3: Placement & Transform in Target (collapsed by default)
   sections.push({
     id: "placement-transform",
     title: `Placement & transform in ${targetWord}`,
     icon: Move3D,
     modeTabId: hostContext === "object" ? "preset" : undefined,
-    defaultOpen: true,
+    defaultOpen: false,
     showWhen: showPresetAuthoring,
-    summary: (d) =>
-      `rot (${d.eulerDeg.map((a) => Math.round(a)).join("°, ")}°) · scale (${d.scale.map((s) => Number(s.toFixed(2))).join(", ")})${
+    summary: (d) => {
+      const offsetNm = d.translationM.map((v) => Number((v * 1e9).toFixed(1))).join(", ");
+      const rotDeg = d.eulerDeg.map((a) => `${Math.round(a)}°`).join(", ");
+      const isUniformScale =
+        Math.abs(d.scale[0] - d.scale[1]) < 1e-3 && Math.abs(d.scale[1] - d.scale[2]) < 1e-3;
+      const scaleText = isUniformScale
+        ? `${Number(d.scale[0].toFixed(2))}×`
+        : `(${d.scale.map((s) => Number(s.toFixed(2))).join(", ")})`;
+      const thicknessText =
         d.axisExtentMode === "thickness"
           ? ` · tz ${(d.axisThicknessM * 1e9).toPrecision(3)} nm`
-          : ""
-      }`,
+          : "";
+      return `Offset (${offsetNm}) nm · Rot (${rotDeg}) · Scale ${scaleText}${thicknessText}`;
+    },
     rows: [
-      {
-        type: "custom",
-        wide: true,
-        render: (ctx) => (
-          <div className="flex flex-wrap gap-1.5" data-slot="placement-quick-actions">
-            <Button
-              size="sm"
-              type="button"
-              variant="secondary"
-              onClick={() => ctx.patchDraft(centerDraftInTargetBounds(ctx.draft, bounds))}
-            >
-              Center in bounds
-            </Button>
-            <Button
-              size="sm"
-              type="button"
-              variant="secondary"
-              onClick={() => ctx.patchDraft(fitCharacteristicSizeToTarget(ctx.draft, bounds))}
-            >
-              {`Fit characteristic size to ${targetWord}`}
-            </Button>
-            <Button
-              size="sm"
-              type="button"
-              variant="ghost"
-              onClick={() => ctx.patchDraft(resetDraftTransform(ctx.draft, bounds))}
-            >
-              <RotateCcw aria-hidden="true" size={13} />
-              <span>Reset transform</span>
-            </Button>
-          </div>
-        ),
-      },
       {
         key: "translationUnitMode",
         label: "Offset coordinate mode",
@@ -1708,30 +1672,6 @@ export function buildMagneticTextureInspectorSections({
         validate: (val) => validateScaleMultiplier(val),
       },
       {
-        type: "custom",
-        wide: true,
-        render: (ctx) => (
-          <div className="flex flex-wrap gap-1.5">
-            <Button
-              size="sm"
-              type="button"
-              variant="secondary"
-              onClick={() => ctx.setField("scale", [1, 1, 1])}
-            >
-              Reset scale [1, 1, 1]
-            </Button>
-            <Button
-              size="sm"
-              type="button"
-              variant="secondary"
-              onClick={() => ctx.patchDraft(fitCharacteristicSizeToTarget(ctx.draft, bounds))}
-            >
-              {`Fit characteristic size to ${targetWord}`}
-            </Button>
-          </div>
-        ),
-      },
-      {
         key: "pivotMode",
         label: "Pivot point",
         symbol: <>p</>,
@@ -1761,17 +1701,37 @@ export function buildMagneticTextureInspectorSections({
     ],
   });
 
-  // Section 4: Coordinate Mapping & Bounds
+  // Section 4: Coordinate Mapping, Bounds & Asset ID (collapsed by default)
   sections.push({
     id: "coordinate-mapping",
-    title: "Coordinate mapping & bounds",
+    title:
+      hostContext === "object" && showObjectAssignmentSection
+        ? "Coordinate mapping, bounds & asset ID"
+        : "Coordinate mapping & bounds",
     icon: Scan,
     modeTabId: hostContext === "object" ? "preset" : undefined,
     defaultOpen: false,
     showWhen: showPresetAuthoring,
-    summary: (d) =>
-      `${d.mappingSpace === "region" ? "Region local" : d.mappingSpace === "world" ? "World" : "Object local"} · ${d.clampMode === "none" ? "Unbounded" : d.clampMode}`,
+    summary: (d) => {
+      const base = `${d.mappingSpace === "region" ? "Region local" : d.mappingSpace === "world" ? "World" : "Object local"} · ${d.clampMode === "none" ? "Unbounded" : d.clampMode}`;
+      if (hostContext === "object" && showObjectAssignmentSection) {
+        const refVal = typeof d.magnetizationRef === "string" ? d.magnetizationRef.trim() : "";
+        return refVal ? `${base} · ${refVal}` : base;
+      }
+      return base;
+    },
     rows: [
+      ...(hostContext === "object" && showObjectAssignmentSection
+        ? ([
+            {
+              key: "magnetizationRef",
+              label: "Magnetization ref",
+              type: "expression",
+              placeholder: defaultMagnetizationRefPlaceholder ?? "mag:object:uniform",
+              hint: "Custom asset IDs are preserved across saves; leave blank to auto-name.",
+            },
+          ] as InspectorRowSpec<MagneticTextureDraft>[])
+        : []),
       {
         key: "mappingSpace",
         label: "Mapping space",
@@ -1912,7 +1872,7 @@ export function buildMagneticTextureInspectorSections({
                 disabledReason={loadFieldStateDisabledReason ?? undefined}
                 size="sm"
                 type="button"
-                variant="primary"
+                variant="secondary"
                 onClick={() => void onLoadFieldState()}
               >
                 <Upload aria-hidden="true" size={14} />
@@ -2192,6 +2152,78 @@ export function applyCoupledDraftFieldChange<K extends keyof MagneticTextureDraf
       return {
         pivotMode: value as MagneticTextureDraft["pivotMode"],
         pivotM: [0, 0, 0],
+      };
+    }
+  }
+
+  const canonicalKind = canonicalPresetKind(current.presetKind);
+
+  // Coupled auto-clamping for skyrmion_lattice: keep latticeConstantM > 2 * radiusM smoothly
+  if (
+    canonicalKind === "skyrmion_lattice" &&
+    key === "radiusM" &&
+    typeof value === "number" &&
+    Number.isFinite(value) &&
+    value > 0
+  ) {
+    const minLattice = value * 2.1;
+    if (!Number.isFinite(current.latticeConstantM) || current.latticeConstantM < minLattice) {
+      return {
+        ...(current.sourceMode !== "preset" ? { sourceMode: "preset" as const } : {}),
+        radiusM: value,
+        latticeConstantM: minLattice,
+      };
+    }
+  }
+
+  if (
+    canonicalKind === "skyrmion_lattice" &&
+    key === "latticeConstantM" &&
+    typeof value === "number" &&
+    Number.isFinite(value) &&
+    value > 0
+  ) {
+    const maxRadius = value * 0.45;
+    if (!Number.isFinite(current.radiusM) || current.radiusM > maxRadius) {
+      return {
+        ...(current.sourceMode !== "preset" ? { sourceMode: "preset" as const } : {}),
+        latticeConstantM: value,
+        radiusM: maxRadius,
+      };
+    }
+  }
+
+  // Coupled auto-clamping for skyrmionium: keep outerRadiusM >= innerRadiusM * 1.1 smoothly
+  if (
+    canonicalKind === "skyrmionium" &&
+    key === "innerRadiusM" &&
+    typeof value === "number" &&
+    Number.isFinite(value) &&
+    value > 0
+  ) {
+    const minOuter = value * 1.1;
+    if (!Number.isFinite(current.outerRadiusM) || current.outerRadiusM < minOuter) {
+      return {
+        ...(current.sourceMode !== "preset" ? { sourceMode: "preset" as const } : {}),
+        innerRadiusM: value,
+        outerRadiusM: minOuter,
+      };
+    }
+  }
+
+  if (
+    canonicalKind === "skyrmionium" &&
+    key === "outerRadiusM" &&
+    typeof value === "number" &&
+    Number.isFinite(value) &&
+    value > 0
+  ) {
+    const maxInner = value / 1.1;
+    if (!Number.isFinite(current.innerRadiusM) || current.innerRadiusM > maxInner) {
+      return {
+        ...(current.sourceMode !== "preset" ? { sourceMode: "preset" as const } : {}),
+        outerRadiusM: value,
+        innerRadiusM: maxInner,
       };
     }
   }

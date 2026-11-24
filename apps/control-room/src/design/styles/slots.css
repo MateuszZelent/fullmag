@@ -6,19 +6,41 @@
   background: var(--fm-bg-panel);
 }
 
-.fm-slot[data-slot-id="app-menu"],
-.fm-slot[data-slot-id="ribbon"],
 .fm-slot[data-slot-id="status-bar"] {
-  /* Full-width chrome bars are translucent so the page glow reads through. */
+  /* Full-width status chrome bar is translucent so the page glow reads through. */
   border-color: var(--fm-border-muted);
   background: color-mix(in srgb, var(--fm-bg-chrome) 70%, transparent);
 }
 
+/* Top chrome card (header + ribbon): matches the floating rounded glass cards
+   used by the docked workspace panels and bottom footer dock. */
+.fm-slot[data-slot-id="app-menu"],
+.fm-slot[data-slot-id="ribbon"] {
+  margin-inline: var(--fm-space-1);
+  border: 1px solid var(--fm-glass-line);
+  background: var(--fm-glass-strong);
+  -webkit-backdrop-filter: var(--fm-glass-backdrop);
+  backdrop-filter: var(--fm-glass-backdrop);
+}
+
+.fm-slot[data-slot-id="app-menu"] {
+  border-radius: var(--fm-radius-section);
+  box-shadow: inset 0 1px 0 var(--fm-glass-highlight);
+}
+
+.fm-slot[data-slot-id="ribbon"] {
+  border-top: 0;
+  border-radius: 0 0 var(--fm-radius-section) var(--fm-radius-section);
+}
+
 @media (prefers-reduced-transparency: reduce) {
-  .fm-slot[data-slot-id="app-menu"],
-  .fm-slot[data-slot-id="ribbon"],
   .fm-slot[data-slot-id="status-bar"] {
     background: var(--fm-bg-chrome);
+  }
+
+  .fm-slot[data-slot-id="app-menu"],
+  .fm-slot[data-slot-id="ribbon"] {
+    background: var(--fm-bg-panel);
   }
 }
 
@@ -131,7 +153,4 @@
   overflow: hidden;
 }
 
-/* The shell owns this row; a nested border must not clip the header. */
-.fm-slot[data-slot-id="app-menu"] {
-  border: 0;
-}
+/* Rounded header card keeps its own hairline frame; inner header stays borderless. */

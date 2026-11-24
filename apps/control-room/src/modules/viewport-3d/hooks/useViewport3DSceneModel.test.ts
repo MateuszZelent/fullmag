@@ -6544,4 +6544,94 @@ describe("FDM region membership reconciliation after grid.build-fdm", () => {
       }).vectorsVisible,
     ).toBe(true);
   });
+
+  it("preserves requested vectorsVisible for uncommitted brand-new objects when a live texture preview is active and wires texture draft bridge subscription", () => {
+    const controller = new ObjectVisualizationController();
+    const target = { id: "object:brand-new-film", kind: "object" as const, label: "New film" };
+    controller.patchTarget(target, { vectorsVisible: true, visible: true });
+    const snapshot = controller.getSnapshot();
+    const input = {
+      objectContext: {
+        object: {
+          id: "brand-new-film",
+          physics_stack: [],
+          role: "magnet",
+        },
+        quantityCatalog: null,
+      },
+      snapshot,
+      target,
+    };
+
+    const resolved = resolveViewport3DPrimitiveVisualizationSettings(input, {
+      authoredMagnetizationAvailable: true,
+    });
+    expect(resolved.activeQuantityId).toBe("");
+    expect(resolved.vectorsVisible).toBe(true);
+
+    const source = readFileSync(sceneModelSourceUrl, "utf8");
+    expect(source).toContain("subscribeTextureDraftBridge");
+    expect(source).toContain("getActiveLiveTextureSurfaceKey");
+    expect(source).toContain(
+      "textureTransformModel.hasAuthoredMagnetization(object.objectId) ||",
+    );
+    expect(source).toContain("activeLiveTextureObjectId === object.objectId");
+  });
+
+  it("prevents stale backend fdm_native_layer overrides from shadowing explicit object:<id> edits while preserving local native-layer edits", () => {
+    const visualization = new ObjectVisualizationController();
+    const domain = {
+      ...nativeLayerFieldDomainFixture(),
+      layerId: "layer:TopLayer",
+      magnetName: "TopLayer",
+      objectId: "toplayer-mwtopvuc",
+    };
+    const layerTarget = targetForFdmNativeLayer(domain.layerId, domain.magnetName);
+    const visualizationState = {
+      overrides: [
+        {
+          scope: "fdm_native_layer",
+          scope_id: layerTarget.id,
+          display: {
+            bounds: { visible: true },
+            vectors: { visible: false },
+          },
+        },
+        {
+          scope: "object",
+          scope_id: "toplayer-mwtopvuc",
+          display: {
+            vectors: { visible: true },
+          },
+        },
+      ],
+    } as never;
+
+    // Explicit backend object:<id> override wins over stale backend fdm_native_layer vectors:false,
+    // while unrelated fdm_native_layer overrides (boundsVisible: true) are preserved.
+    const resolvedFromBackend = resolveViewport3DFdmNativeLayerSettings({
+      activeMaskReady: true,
+      domain,
+      globalObjectBaseSettings: resolveGlobalObjectVisualizationSettings(null),
+      objectContext: undefined,
+      snapshot: visualization.getSnapshot(),
+      target: layerTarget,
+      visualizationState,
+    });
+    expect(resolvedFromBackend.vectorsVisible).toBe(true);
+    expect(resolvedFromBackend.boundsVisible).toBe(true);
+
+    // Explicit local native-layer override still wins when the user directly edits the native layer.
+    visualization.patchTarget(layerTarget, { vectorsVisible: false });
+    const resolvedWithLocalLayerEdit = resolveViewport3DFdmNativeLayerSettings({
+      activeMaskReady: true,
+      domain,
+      globalObjectBaseSettings: resolveGlobalObjectVisualizationSettings(null),
+      objectContext: undefined,
+      snapshot: visualization.getSnapshot(),
+      target: layerTarget,
+      visualizationState,
+    });
+    expect(resolvedWithLocalLayerEdit.vectorsVisible).toBe(false);
+  });
 });

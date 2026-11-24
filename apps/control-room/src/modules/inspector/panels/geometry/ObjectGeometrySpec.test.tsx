@@ -215,6 +215,7 @@ const mocks = vi.hoisted(() => ({
   selectionState: null as unknown,
   setSelection: vi.fn(),
   objectEditSession: null as ObjectEditSessionController<GeometryObjectDraft> | null,
+  validationData: null as unknown,
 }));
 
 vi.mock("@/kernel/KernelContext", async (importOriginal) => {
@@ -280,7 +281,7 @@ vi.mock("@/kernel/resources/geometryLifecycleResources", () => ({
     refetch: mocks.refetchScene,
     sessionScopeKey: mocks.sessionScopeKey,
   }),
-  useGeometryValidationResource: () => ({ data: null, status: "ready", error: null }),
+  useGeometryValidationResource: () => ({ data: mocks.validationData, status: "ready", error: null }),
 }));
 
 vi.mock("@/kernel/resources/frozenSpinsResources", () => ({
@@ -407,6 +408,7 @@ describe("ObjectOverviewSpec & ObjectGeometrySpec (Wave 4 Parity)", () => {
       objects: [defaultArchObject()],
     };
     mocks.sceneStatus = "ready";
+    mocks.validationData = null;
     mocks.sessionIdentity = {
       sessionId: "s1",
       sessionEpoch: 1,
@@ -1216,5 +1218,67 @@ describe("ObjectOverviewSpec & ObjectGeometrySpec (Wave 4 Parity)", () => {
     expect(mounted.host.textContent).toContain(
       "ImportedMesh only supports uniform unit_scale baking (sx = sy = sz).",
     );
+  });
+
+  it("filters missing-material and missing-magnetization diagnostics from Geometry validation diagnostic banners while keeping true geometry errors", () => {
+    const sel: Selection = {
+      kind: "object.geometry",
+      label: "Geometry",
+      moduleSource: "explorer",
+      nodeId: "model:object:arch-1:geometry",
+      objectId: "arch-1",
+      ref: null,
+    };
+
+    // Non-geometry simulation-readiness diagnostics alone should NOT show a Geometry validation diagnostic banner.
+    mocks.validationData = {
+      diagnostics: [
+        {
+          code: "GEOMETRY_OBJECT_MATERIAL_MISSING",
+          message: "Object 'arch-1' references a missing material.",
+          object_id: "arch-1",
+        },
+        {
+          code: "GEOMETRY_OBJECT_MAGNETIZATION_MISSING",
+          message: "Object 'arch-1' must reference a magnetization asset before compute.",
+          object_id: "arch-1",
+        },
+      ],
+    };
+
+    mounted = mountWave4TestElement(<GeometryObjectInspectorPanel selection={sel} />);
+    expect(mounted.host.textContent).not.toContain("Geometry validation diagnostic");
+    expect(mounted.host.textContent).not.toContain("references a missing material");
+    expect(mounted.host.textContent).not.toContain("must reference a magnetization asset");
+    mounted.unmount();
+
+    // True geometry diagnostics MUST still render while material/magnetization readiness diagnostics stay filtered out.
+    mocks.validationData = {
+      diagnostics: [
+        {
+          code: "GEOMETRY_OBJECT_MATERIAL_MISSING",
+          message: "Object 'arch-1' references a missing material.",
+          object_id: "arch-1",
+        },
+        {
+          code: "GEOMETRY_OBJECT_MAGNETIZATION_MISSING",
+          message: "Object 'arch-1' must reference a magnetization asset before compute.",
+          object_id: "arch-1",
+        },
+        {
+          code: "GEOMETRY_OBJECT_OUTSIDE_UNIVERSE",
+          message: "Object 'arch-1' extends outside the declared Universe bounds.",
+          object_id: "arch-1",
+        },
+      ],
+    };
+
+    mounted = mountWave4TestElement(<GeometryObjectInspectorPanel selection={sel} />);
+    expect(mounted.host.textContent).toContain("Geometry validation diagnostic");
+    expect(mounted.host.textContent).toContain(
+      "Object 'arch-1' extends outside the declared Universe bounds.",
+    );
+    expect(mounted.host.textContent).not.toContain("references a missing material");
+    expect(mounted.host.textContent).not.toContain("must reference a magnetization asset");
   });
 });

@@ -6207,7 +6207,18 @@ class ProblemApiTests(unittest.TestCase):
             and node.func.attr == "translate"
         ]
         self.assertEqual(translation_offsets, [(15e-9, 0.0, 0.0)])
-        self.assertIn(" - ", rewritten)
+        self.assertIn(".subtract(fm.Cylinder(", rewritten)
+
+        with TemporaryDirectory() as tmp_dir:
+            roundtrip_path = Path(tmp_dir) / "canonical_csg_geometry.py"
+            roundtrip_path.write_text(rewritten, encoding="utf-8")
+            roundtripped = fm.load_problem_from_script(roundtrip_path, lightweight_assets=True)
+
+        roundtripped_geometry = export_builder_draft(roundtripped)["geometries"][0]
+        self.assertEqual(roundtripped_geometry["geometry_kind"], "Difference")
+        self.assertEqual(
+            roundtripped_geometry["geometry_params"], geometry["geometry_params"]
+        )
 
     def test_script_builder_rewrites_file_texture_override_with_loadfile(self) -> None:
         script = """

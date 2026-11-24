@@ -11,6 +11,7 @@ const PROJECT_WORKSPACE_COMMAND_IDS = new Set([
   "workspace.return-to-workspace",
   "workspace.new-problem",
   "workspace.theme-toggle",
+  "workspace.fullscreen-toggle",
   "workspace.command-palette",
   "panels:explorer:toggle",
   "panels:inspector:toggle",

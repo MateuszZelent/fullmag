@@ -683,18 +683,27 @@ export function parseRegionShapeState(
         ? shape.kind
         : "box";
 
-  const isKnownMode = (value: string): value is RegionShapeMode =>
-    value === "box" ||
-    value === "cylinder" ||
-    value === "sphere" ||
+  const isEditablePrimitiveMode = (value: string): value is "box" | "cylinder" | "sphere" =>
+    value === "box" || value === "cylinder" || value === "sphere";
+  const isEditableCsgMode = (
+    value: string,
+  ): value is "through_disk" | "layer_z_slice" | "half_space" | "boolean_expr" =>
     value === "through_disk" ||
     value === "layer_z_slice" ||
     value === "half_space" ||
     value === "boolean_expr";
 
-  const shapeMode: RegionShapeMode = isKnownMode(rawKind) ? rawKind : "box";
+  const csgKind = typeof csgExpr?.kind === "string" ? csgExpr.kind : "";
+  const shapeMode: RegionShapeMode =
+    shape?.kind === "csg"
+      ? isEditableCsgMode(csgKind)
+        ? csgKind
+        : "box"
+      : isEditablePrimitiveMode(rawKind) || isEditableCsgMode(rawKind)
+        ? rawKind
+        : "box";
   const preservedCsgExpression =
-    csgExpr && !isKnownMode(String(csgExpr.kind ?? ""))
+    shape?.kind === "csg" && csgExpr && !isEditableCsgMode(csgKind)
       ? structuredClone(csgExpr)
       : null;
 
@@ -816,16 +825,16 @@ export function serializeRegionShapeState(
     let zMin = draft.zMin;
     let zMax = draft.zMax;
     if (draft.frame === "object" && ownerBounds) {
-      const ownerZMin = ownerBounds.center[2] - ownerBounds.size[2] * 0.5;
-      const ownerZMax = ownerBounds.center[2] + ownerBounds.size[2] * 0.5;
+      const ownerZMin = -ownerBounds.size[2] * 0.5;
+      const ownerZMax = ownerBounds.size[2] * 0.5;
       zMin = Math.max(ownerZMin, Math.min(ownerZMax, zMin));
       zMax = Math.max(ownerZMin, Math.min(ownerZMax, zMax));
       if (zMax <= zMin) {
         zMax = Math.min(ownerZMax, zMin + Math.max(ownerBounds.size[2] * 1e-6, 1e-12));
       }
     }
-    const cx = ownerBounds?.center[0] ?? 0;
-    const cy = ownerBounds?.center[1] ?? 0;
+    const cx = draft.frame === "object" ? 0 : (ownerBounds?.center[0] ?? 0);
+    const cy = draft.frame === "object" ? 0 : (ownerBounds?.center[1] ?? 0);
     const sx = ownerBounds?.size[0] ?? draft.size[0];
     const sy = ownerBounds?.size[1] ?? draft.size[1];
     return {
@@ -864,10 +873,10 @@ export function validateShapeAgainstOwnerBounds(
   draft: ParsedRegionShapeState & { frame: SceneRegionFrame },
   ownerBounds: RegionOwnerBounds | null,
 ): string | null {
-  if (draft.frame !== "object" || !ownerBounds) return null;
+  if (draft.frame !== "object" || !ownerBounds || draft.preservedCsgExpression) return null;
   const [ox, oy, oz] = ownerBounds.size;
-  const minZ = ownerBounds.center[2] - oz * 0.5;
-  const maxZ = ownerBounds.center[2] + oz * 0.5;
+  const minZ = -oz * 0.5;
+  const maxZ = oz * 0.5;
 
   if (draft.shapeMode === "box") {
     if (

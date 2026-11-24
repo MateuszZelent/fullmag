@@ -31,6 +31,7 @@ import { RibbonGroupsRow } from "./RibbonGroupsRow";
 import { resolveRibbonActionTriggerState, resolveRibbonIconColor } from "./RibbonGroupsRow.model";
 import { RIBBON_TABS, type RibbonMenuNode, type RibbonTabContent } from "./ribbonTypes";
 import { RibbonTabStrip } from "./RibbonTabStrip";
+import { RibbonTargetBarControl } from "./RibbonTargetBarControl";
 import {
   MESHING_CAPABILITIES_PATH,
   MODEL_GEOMETRY_VALIDATION_PATH,
@@ -1884,7 +1885,7 @@ describe("ribbon structure", () => {
     });
   });
 
-  it("fails closed for unresolved physics lanes and hides FEM airbox controls from FDM", () => {
+  it("fails closed for unresolved physics and airbox lanes while exposing Airbox on resolved FDM", () => {
     const baseContext = {
       commands: createRibbonCommandRegistry(),
       sessionStatus: null,
@@ -1911,6 +1912,13 @@ describe("ribbon structure", () => {
       }),
     ]);
 
+    const unresolvedView = buildRibbonTabContent("view", baseContext);
+    expect(
+      unresolvedView?.groups
+        .find((group) => group.id === "view-global-display")
+        ?.actions.some((action) => action.id === "view-airbox"),
+    ).toBe(false);
+
     const fdmView = buildRibbonTabContent("view", {
       ...baseContext,
       sessionStatus: {
@@ -1923,14 +1931,14 @@ describe("ribbon structure", () => {
       fdmView?.groups
         .find((group) => group.id === "view-global-display")
         ?.actions.some((action) => action.id === "view-airbox"),
-    ).toBe(false);
+    ).toBe(true);
   });
 
-  it("rejects every FEM airbox command in an explicit FDM lane", async () => {
+  it("rejects airbox commands only while discretization lane is unresolved", async () => {
     const visualization = new ObjectVisualizationController();
     const before = visualization.getSettings(AIRBOX_VISUALIZATION_TARGET);
     const patches: VisualizationStatePatch[] = [];
-    const commandContext = {
+    const unresolvedContext = {
       api: {
         visualization: {
           patch: async (patch: VisualizationStatePatch) => {
@@ -1940,9 +1948,7 @@ describe("ribbon structure", () => {
         },
       },
       resourceData: {
-        [SESSION_STATUS_RESOURCE_KEY]: {
-          data: { capabilities: { active_lane: ribbonActiveLane("fdm") }, domain: { discretization: "fdm" } },
-        },
+        [SESSION_STATUS_RESOURCE_KEY]: null,
       },
       selection: {
         get: () => ({ objectId: null }),
@@ -1958,9 +1964,9 @@ describe("ribbon structure", () => {
       [RIBBON_VISUALIZATION_RESET_AIRBOX_COMMAND, undefined],
       [RIBBON_SELECTION_FOCUS_AIRBOX_COMMAND, undefined],
     ] as const) {
-      const result = await registry.execute(commandId, commandContext, input);
+      const result = await registry.execute(commandId, unresolvedContext, input);
       expect(result).toMatchObject({ status: "failed" });
-      expect(result.message).toMatch(/FDM|not applicable|unresolved/i);
+      expect(result.message).toMatch(/unresolved/i);
     }
 
     expect(patches).toEqual([]);
@@ -3234,6 +3240,12 @@ describe("ribbon structure", () => {
         label: "Airbox Visualization",
         nodeId: "model:airbox:visualization",
         objectId: null,
+        ref: {
+          kind: "airbox.visualization",
+          nodeId: "model:airbox:visualization",
+          type: "airbox",
+          visualizationTargetId: "airbox",
+        },
       },
       "ribbon",
     );
@@ -3763,21 +3775,32 @@ describe("ribbon structure", () => {
       },
       {
         layers: { vectors: { density: 2048 } },
-        sampling: { max_glyphs: 2048 },
         vector_density: 2048,
       },
     ]);
     expect(context.visualization.getDefaultSettings("object")).toMatchObject({
       geometryScope: "surface",
+      vectorBudget: 2048,
       vectorCenteringEnabled: false,
       vectorSurfaceOffsetEnabled: true,
     });
     expect(context.visualization.getDefaultSettings("part")).toMatchObject({
       geometryScope: "surface",
+      vectorBudget: 2048,
+      vectorCenteringEnabled: false,
+      vectorSurfaceOffsetEnabled: true,
+    });
+    expect(context.visualization.getDefaultSettings("fdm-native-layer")).toMatchObject({
+      geometryScope: "surface",
+      vectorBudget: 2048,
       vectorCenteringEnabled: false,
       vectorSurfaceOffsetEnabled: true,
     });
     expect(context.visualization.getSnapshot().viewportPreferenceDefaults).toEqual({
+      "fdm-native-layer": {
+        vectorCenteringEnabled: false,
+        vectorSurfaceOffsetEnabled: true,
+      },
       object: {
         vectorCenteringEnabled: false,
         vectorSurfaceOffsetEnabled: true,
@@ -4524,7 +4547,7 @@ describe("ribbon structure", () => {
     const geometryBuildAction = geometry?.groups
       .find((group) => group.id === "builder-lifecycle")
       ?.actions.find((action) => action.id === "mesh.build-selected");
-    expect(geometryBuildAction?.label).toBe("Build Mesh");
+    expect(geometryBuildAction?.label).toBe("Mesh Selected");
 
     const mesh = buildRibbonTabContent("mesh", context);
     const buildGroup = mesh?.groups.find((group) => group.id === "build");
@@ -4943,12 +4966,11 @@ describe("ribbon structure", () => {
     expect(matchedIds).toEqual(unsupportedIds);
   });
 
-  it("keeps unsupported Materials edit workflows disabled while enabling Magnetic Texture presets and transform tools", () => {
+  it("keeps unsupported Materials edit workflows disabled while enabling Magnetic Texture Inspector, presets, and transform tools", () => {
     const unsupportedIds = new Set([
       "mat-params",
       "mat-dmi",
       "mat-ku",
-      "mat-texture-inspector",
     ]);
     const matchedIds = new Set<string>();
 
@@ -4965,6 +4987,16 @@ describe("ribbon structure", () => {
     const magGroup = ALL_TAB_CONTENT.materials.groups.find(
       (group) => group.id === "materials-magnetization",
     );
+    const inspectorAction = magGroup?.actions.find(
+      (action) => action.id === "mat-texture-inspector",
+    );
+    expect(inspectorAction).toMatchObject({
+      commandId: "ribbon.inspector.open-magnetic-texture",
+      id: "mat-texture-inspector",
+      label: "Inspector",
+    });
+    expect(inspectorAction?.disabled).not.toBe(true);
+    expect(inspectorAction?.preview).not.toBe(true);
     const transformGroup = ALL_TAB_CONTENT.materials.groups.find(
       (group) => group.id === "materials-transform",
     );
@@ -5387,27 +5419,38 @@ describe("ribbon structure", () => {
     expect(importCommand?.shortcut).toBe("Ctrl+Shift+O");
   });
 
-  it("exposes object draft commit from the Geometry lifecycle group", () => {
+  it("keeps Geometry lifecycle labels distinct and free of redundant Apply Draft", () => {
     const lifecycleGroup = ALL_TAB_CONTENT.geometry.groups.find(
       (group) => group.id === "builder-lifecycle",
     );
 
-    expect(lifecycleGroup?.actions.map((action) => action.id)).toEqual(
-      expect.arrayContaining([
-        "geometry.commit-object-draft",
-        "mesh.build-selected",
-      ]),
-    );
+    expect(lifecycleGroup?.actions.map((action) => action.id)).toEqual([
+      "builder-build-geometry",
+      "mesh.build-selected",
+      "builder-validate",
+    ]);
+    expect(lifecycleGroup?.actions.map((action) => action.label)).toEqual([
+      "Realize Geometry",
+      "Mesh Selected",
+      "Validate",
+    ]);
   });
 
-  it("exposes microstrip antenna creation from the Geometry create group", () => {
+  it("separates microstrip and CPW antennas into their dedicated AC/DC Antennas group in Geometry", () => {
     const createGroup = ALL_TAB_CONTENT.geometry.groups.find(
       (group) => group.id === "builder-create",
     );
+    const acDcGroup = ALL_TAB_CONTENT.geometry.groups.find(
+      (group) => group.id === "builder-acdc-antennas",
+    );
 
-    expect(createGroup?.actions.map((action) => action.id)).toEqual(
+    expect(createGroup?.actions.map((action) => action.id)).not.toEqual(
       expect.arrayContaining(["geometry.add-microstrip-antenna"]),
     );
+    expect(acDcGroup?.actions.map((action) => action.id)).toEqual([
+      "geometry.add-microstrip-antenna",
+      "geometry.add-cpw-antenna",
+    ]);
   });
 
   it("routes Thin Film to the enabled geometry command", () => {
@@ -5422,19 +5465,37 @@ describe("ribbon structure", () => {
     expect(thinFilmAction).not.toHaveProperty("disabled");
   });
 
+  it("exposes enabled Etap B primitives, Boolean CSG, and Modify actions in Geometry tab", () => {
+    const actions = ALL_TAB_CONTENT.geometry.groups.flatMap((group) => group.actions);
+    const enabledIds = [
+      "geometry.add-box",
+      "geometry.add-thin-film",
+      "geometry.add-cylinder",
+      "geometry.add-sphere",
+      "geometry.add-ellipsoid",
+      "geometry.add-cone",
+      "geometry.add-torus",
+      "geometry.add-polygon-prism",
+      "geometry.import-stl",
+      "geometry.boolean-union",
+      "geometry.boolean-subtract",
+      "geometry.boolean-intersect",
+      "geometry.boolean-imprint-regions",
+      "geometry.duplicate-objects",
+      "geometry.apply-array-3d",
+      "geometry.split-by-plane",
+      "geometry.extract-operand",
+    ];
+    for (const id of enabledIds) {
+      const action = actions.find((item) => item.id === id);
+      expect(action, id).toBeDefined();
+      expect(action?.disabled, id).not.toBe(true);
+      expect(action?.preview, id).not.toBe(true);
+    }
+  });
+
   it("keeps unsupported Geometry builder controls explicitly disabled", () => {
     const unsupportedIds = new Set([
-      "builder-add-ellipsoid",
-      "builder-add-disk",
-      "builder-add-pillar",
-      "builder-add-nanowire",
-      "builder-add-ring",
-      "builder-add-triangular_prism",
-      "builder-add-cone",
-      "builder-add-capsule",
-      "builder-add-tube",
-      "builder-add-wedge",
-      "builder-add-polygon_prism",
       "builder-tool-rotate",
       "builder-tool-scale",
       "builder-mode-camera",
@@ -5473,7 +5534,7 @@ describe("ribbon structure", () => {
 
     expect(actions.find((action) => action.id === "builder-build-geometry")).toMatchObject({
       id: "builder-build-geometry",
-      label: "Build Geometry",
+      label: "Realize Geometry",
     });
     expect(actions.find((action) => action.id === "builder-validate")).toMatchObject({
       id: "builder-validate",
@@ -5834,5 +5895,420 @@ describe("stripRibbonPlaceholders", () => {
     if (radioGroup && radioGroup.type === "radio-group") {
       expect(radioGroup.items.map((item) => item.value)).toEqual(["x", "z"]);
     }
+  });
+});
+
+describe("Ribbon explicit Target Context & routing", () => {
+  const sampleScene = {
+    objects: [
+      { id: "BottomLayer", name: "BottomLayer", role: "magnet" },
+      { id: "TopLayer", name: "TopLayer", role: "magnet" },
+    ],
+    revision: 5,
+  };
+
+  it("renders the top-bar Target selector across All Objects, Airbox, single object, and Boolean CSG multi-selection", () => {
+    const sceneObjects = [
+      { id: "BottomLayer", label: "BottomLayer", role: "magnet" as const },
+      { id: "TopLayer", label: "TopLayer", role: "magnet" as const },
+    ];
+    const allHtml = renderToStaticMarkup(
+      createElement(RibbonTargetBarControl, {
+        activeTab: "view",
+        discretization: "fdm",
+        onAction: () => undefined,
+        sceneObjects,
+        selection: {
+          kind: null,
+          label: null,
+          moduleSource: null,
+          nodeId: null,
+          objectId: null,
+          ref: null,
+        },
+        visualizationTarget: null,
+      }),
+    );
+    expect(allHtml).toContain("fm-ribbon-target");
+    expect(allHtml).not.toContain("Target:");
+    expect(allHtml).toContain("All Objects");
+    expect(allHtml).toContain('data-target-kind="all"');
+
+    const objectHtml = renderToStaticMarkup(
+      createElement(RibbonTargetBarControl, {
+        activeTab: "view",
+        discretization: "fdm",
+        onAction: () => undefined,
+        sceneObjects,
+        selection: {
+          kind: "object.root",
+          label: "BottomLayer",
+          moduleSource: "explorer",
+          nodeId: "model:object:BottomLayer",
+          objectId: "BottomLayer",
+          ref: {
+            kind: "object.root",
+            nodeId: "model:object:BottomLayer",
+            objectId: "BottomLayer",
+            objectRole: "magnet",
+            type: "scene-object",
+            visualizationTargetId: "object:BottomLayer",
+          },
+        },
+        visualizationTarget: { id: "object:BottomLayer", kind: "object", label: "BottomLayer" },
+      }),
+    );
+    expect(objectHtml).not.toContain("Target:");
+    expect(objectHtml).toContain("BottomLayer");
+    expect(objectHtml).toContain('data-target-kind="object"');
+
+    const airboxHtml = renderToStaticMarkup(
+      createElement(RibbonTargetBarControl, {
+        activeTab: "view",
+        discretization: "fdm",
+        onAction: () => undefined,
+        sceneObjects,
+        selection: {
+          kind: "airbox.visualization",
+          label: "Airbox Visualization",
+          moduleSource: "ribbon",
+          nodeId: "model:airbox:visualization",
+          objectId: null,
+          ref: {
+            kind: "airbox.visualization",
+            nodeId: "model:airbox:visualization",
+            type: "airbox",
+            visualizationTargetId: "airbox",
+          },
+        },
+        visualizationTarget: AIRBOX_VISUALIZATION_TARGET,
+      }),
+    );
+    expect(airboxHtml).toContain("Airbox");
+    expect(airboxHtml).toContain('data-target-kind="airbox"');
+
+    const csgHtml = renderToStaticMarkup(
+      createElement(RibbonTargetBarControl, {
+        activeTab: "geometry",
+        discretization: "fdm",
+        onAction: () => undefined,
+        sceneObjects,
+        selection: {
+          kind: "object.root",
+          label: "TopLayer",
+          moduleSource: "explorer",
+          nodeId: "model:object:TopLayer",
+          objectId: "TopLayer",
+          ref: null,
+          selectedObjectIds: ["TopLayer", "BottomLayer"],
+        },
+        visualizationTarget: { id: "object:TopLayer", kind: "object", label: "TopLayer" },
+      }),
+    );
+    expect(csgHtml).toContain("TopLayer · BottomLayer");
+    expect(csgHtml).toContain('data-target-kind="multi"');
+  });
+
+  it("routes View tab Vectors and Surface controls to Airbox and places compact Viz/Airbox Settings utilities inside Display without a duplicate Target group", () => {
+    const visualization = new ObjectVisualizationController();
+    const content = buildRibbonTabContent("view", {
+      commands: createRibbonCommandRegistry(),
+      fdmMultilayerLayout: {
+        airbox: null,
+        layers: [{ id: "layer-0", name: "BottomLayer" }],
+      } as unknown as Parameters<typeof buildRibbonTabContent>[1] extends { fdmMultilayerLayout?: infer T } ? T : never,
+      scene: sampleScene as unknown as Parameters<typeof buildRibbonTabContent>[1] extends { scene?: infer T } ? T : never,
+      selection: {
+        kind: "airbox.visualization",
+        label: "Airbox Visualization",
+        moduleSource: "ribbon",
+        nodeId: "model:airbox:visualization",
+        objectId: null,
+        ref: {
+          kind: "airbox.visualization",
+          nodeId: "model:airbox:visualization",
+          type: "airbox",
+          visualizationTargetId: "airbox",
+        },
+      },
+      sessionStatus: {
+        capabilities: { active_lane: ribbonActiveLane("fdm") },
+        domain: { discretization: "fdm" },
+        resources: { field_revision: 0, fields_revision: 0 },
+      },
+      visualization,
+      visualizationSnapshot: visualization.getSnapshot(),
+    });
+
+    expect(content?.groups.some((g) => g.id === "view-target-context")).toBe(false);
+    expect(content?.groups[0]?.id).toBe("view-global-display");
+    const displayGroup = content?.groups.find((g) => g.id === "view-global-display");
+    expect(displayGroup?.subtitle).toBe("Airbox");
+    expect(displayGroup?.actions.some((a) => a.id === "view-target-selector")).toBe(false);
+    expect(displayGroup?.actions.some((a) => a.id === "view-target-airbox-shortcut")).toBe(false);
+    expect(displayGroup?.actions.find((a) => a.id === "view-open-target-inspector")?.label).toBe(
+      "Airbox Viz",
+    );
+    expect(displayGroup?.actions.find((a) => a.id === "view-open-airbox-settings")?.label).toBe(
+      "Airbox Settings",
+    );
+    const vectorsAction = displayGroup?.actions.find((a) => a.id === "view-vectors");
+    expect(vectorsAction?.splitButton).toBe(true);
+    expect(vectorsAction?.commandId).toBe(RIBBON_VISUALIZATION_PATCH_TARGET_COMMAND);
+    const surfaceAction = displayGroup?.actions.find((a) => a.id === "view-surface");
+    const wireframeNode = surfaceAction?.menu?.find((n) => n.id === "surface:wireframe");
+    expect(wireframeNode).toMatchObject({
+      commandId: RIBBON_VISUALIZATION_PATCH_TARGET_COMMAND,
+    });
+
+    const objectView = buildRibbonTabContent("view", {
+      commands: createRibbonCommandRegistry(),
+      scene: sampleScene as unknown as Parameters<typeof buildRibbonTabContent>[1] extends { scene?: infer T } ? T : never,
+      selection: {
+        kind: "object.root",
+        label: "BottomLayer",
+        moduleSource: "explorer",
+        nodeId: "model:object:BottomLayer",
+        objectId: "BottomLayer",
+        ref: {
+          kind: "object.root",
+          nodeId: "model:object:BottomLayer",
+          objectId: "BottomLayer",
+          objectRole: "magnet",
+          type: "scene-object",
+          visualizationTargetId: "object:BottomLayer",
+        },
+      },
+      sessionStatus: {
+        capabilities: { active_lane: ribbonActiveLane("fdm") },
+        domain: { discretization: "fdm" },
+        resources: { field_revision: 0, fields_revision: 0 },
+      },
+      visualization,
+      visualizationSnapshot: visualization.getSnapshot(),
+    });
+    const objectDisplay = objectView?.groups.find((g) => g.id === "view-global-display");
+    expect(objectDisplay?.subtitle).toBe("BottomLayer");
+    expect(objectDisplay?.actions.find((a) => a.id === "view-open-target-inspector")?.label).toBe(
+      "Object Viz",
+    );
+    expect(objectDisplay?.actions.some((a) => a.id === "view-open-airbox-settings")).toBe(false);
+  });
+
+  it("omits duplicate Target dropdown groups across View, Geometry, Materials, Physics, and Mesh while preserving target routing", () => {
+    const visualization = new ObjectVisualizationController();
+    const commands = createControlRoomCommandRegistry();
+    const multiSelection = {
+      kind: "object.root" as const,
+      label: "TopLayer",
+      moduleSource: "explorer" as const,
+      nodeId: "model:object:TopLayer",
+      objectId: "TopLayer",
+      ref: {
+        kind: "object.root" as const,
+        nodeId: "model:object:TopLayer",
+        objectId: "TopLayer",
+        objectRole: "magnet" as const,
+        type: "scene-object" as const,
+        visualizationTargetId: "object:TopLayer" as const,
+      },
+      selectedObjectIds: ["TopLayer", "BottomLayer"],
+    };
+    const baseContext = {
+      api: { visualization: { patch: vi.fn() } },
+      commandContext: {
+        api: {} as unknown as CommandContext["api"],
+        resourceData: { [MODEL_SCENE_PATH]: sampleScene },
+        selection: {
+          get: () => multiSelection,
+          set: vi.fn(),
+        } as unknown as CommandContext["selection"],
+        source: "ribbon" as const,
+      },
+      commands,
+      scene: sampleScene as unknown as Parameters<typeof buildRibbonTabContent>[1] extends { scene?: infer T } ? T : never,
+      selection: multiSelection,
+      sessionStatus: {
+        capabilities: { active_lane: ribbonActiveLane("fdm") },
+        domain: { discretization: "fdm" as const },
+        resources: { field_revision: 0, fields_revision: 0 },
+      },
+      visualization,
+      visualizationSnapshot: visualization.getSnapshot(),
+    };
+
+    const duplicateTargetGroupIds = new Set([
+      "view-target-context",
+      "geometry-target-context",
+      "materials-target-context",
+      "physics-target-context",
+      "mesh-target-context",
+    ]);
+    const duplicateTargetActionIds = new Set([
+      "view-target-selector",
+      "view-target-airbox-shortcut",
+      "geometry-target-selector",
+      "materials-target-selector",
+      "physics-target-selector",
+      "mesh-scope-selector",
+    ]);
+
+    for (const tabId of ["view", "geometry", "materials", "physics", "mesh"] as const) {
+      const tab = buildRibbonTabContent(tabId, baseContext);
+      expect(tab?.groups.some((g) => duplicateTargetGroupIds.has(g.id))).toBe(false);
+      expect(
+        tab?.groups.some((g) => g.actions.some((a) => duplicateTargetActionIds.has(a.id))),
+      ).toBe(false);
+    }
+
+    const geometry = buildRibbonTabContent("geometry", baseContext);
+    expect(geometry?.groups[0].id).toBe("builder-create");
+    expect(
+      geometry?.groups.find((g) => g.id === "builder-boolean")?.actions.map((a) => a.id),
+    ).toEqual([
+      "geometry.boolean-union",
+      "geometry.boolean-subtract",
+      "geometry.boolean-intersect",
+      "geometry.boolean-imprint-regions",
+    ]);
+
+    const materials = buildRibbonTabContent("materials", baseContext);
+    expect(materials?.groups[0].id).toBe("materials-magnetization");
+    const matGroup = materials?.groups.find((g) => g.id === "materials-magnetization");
+    expect(matGroup?.subtitle).toBe("applies to TopLayer");
+    const matInspector = matGroup?.actions.find((a) => a.id === "mat-texture-inspector");
+    expect(matInspector?.disabled).toBe(false);
+    expect(matInspector?.commandId).toBe("ribbon.inspector.open-magnetic-texture");
+    const uniformPreset = matGroup?.actions.find(
+      (a) => a.id === "magnetization-texture.assign-uniform",
+    );
+    expect(uniformPreset?.tooltip).toContain("TopLayer");
+
+    const physics = buildRibbonTabContent("physics", baseContext);
+    expect(physics?.groups[0].id).toBe("physics-core");
+    expect(physics?.groups[0].subtitle).toBe("TopLayer · Global: Demag");
+    expect(
+      physics?.groups[0].actions.find((a) => a.id === "physics-interactions")?.tooltip,
+    ).toContain("TopLayer");
+
+    const mesh = buildRibbonTabContent("mesh", baseContext);
+    expect(mesh?.groups[0].id).toBe("build");
+  });
+
+  it("resolves FDM multilayer selected objects to canonical fdm-native-layer targets and clears fdm_native_layer + viewportPreferences on global Ribbon edits", async () => {
+    const fdmMultilayerLayout = {
+      available: true,
+      domain_generation_id: "gen-1",
+      layout_revision: 1,
+      layers: [
+        {
+          active_cell_count: 5141,
+          active_mask_present: true,
+          inactive_cell_count: 484,
+          layer_id: "layer:TopLayer",
+          magnet_name: "TopLayer",
+          native_cell_size: [4e-9, 4e-9, 15e-9],
+          native_grid: [75, 75, 1],
+          native_origin: [-150e-9, -150e-9, 32.5e-9],
+          object_id: "toplayer-mwtopvuc",
+          transfer_kind: "fft",
+        },
+      ],
+    } as unknown as NonNullable<Parameters<typeof resolveRibbonVisualizationTarget>[0]["fdmMultilayerLayout"]>;
+
+    const target = resolveRibbonVisualizationTarget({
+      discretization: "fdm",
+      fdmMultilayerLayout,
+      sceneObjectIds: new Set(["toplayer-mwtopvuc"]),
+      selectedMeshPart: null,
+      selection: {
+        kind: "object.visualization",
+        label: "TopLayer",
+        moduleSource: "explorer",
+        nodeId: "model:object:toplayer-mwtopvuc:visualization",
+        objectId: "toplayer-mwtopvuc",
+        ref: {
+          kind: "object.visualization",
+          nodeId: "model:object:toplayer-mwtopvuc:visualization",
+          objectId: "toplayer-mwtopvuc",
+          objectRole: "magnet",
+          type: "scene-object",
+          visualizationTargetId: "object:toplayer-mwtopvuc",
+        },
+      },
+      visualizationState: null,
+    });
+    expect(target).toEqual({
+      id: "fdm-native-layer:layer%3ATopLayer",
+      kind: "fdm-native-layer",
+      label: "TopLayer",
+    });
+
+    const { context, patches } = createVisualizationRibbonContext({
+      layers: { vectors: { density: 50, visible: true } },
+      overrides: [
+        {
+          display: {
+            geometry_scope: "surface",
+            vectors: { visible: true },
+          },
+          scope: "fdm_native_layer",
+          scope_id: "layer:TopLayer",
+          style: {
+            vector_budget: 5141,
+          },
+        },
+      ],
+      sampling: { max_glyphs: 16384 },
+    });
+    const nativeTarget = {
+      id: "fdm-native-layer:layer%3ATopLayer",
+      kind: "fdm-native-layer" as const,
+      label: "TopLayer",
+    };
+    context.visualization.patchViewportPreferences(nativeTarget, {
+      vectorSurfaceOffsetEnabled: true,
+      vectorSurfaceOffsetScale: 0.4,
+    });
+    context.fdmMultilayerLayout = fdmMultilayerLayout;
+
+    const content = buildRibbonTabContent("view", context);
+    const vectorsAction = content?.groups
+      .find((group) => group.id === "view-global-display")
+      ?.actions.find((action) => action.id === "view-vectors");
+    const densityNode = vectorsAction?.menu?.find(
+      (node) => node.type === "slider" && node.id === "vectors:density",
+    );
+    const placementNode = vectorsAction?.menu?.find(
+      (node) => node.type === "submenu" && node.id === "vectors:placement",
+    );
+    const surfaceOffsetNode = placementNode?.type === "submenu"
+      ? placementNode.nodes.find(
+          (node) =>
+            node.type === "checkbox" && node.id === "vectors:surface-offset",
+        )
+      : undefined;
+
+    expect(densityNode).toMatchObject({ max: 16384, step: 1, value: 50 });
+    if (
+      densityNode?.type !== "slider" ||
+      surfaceOffsetNode?.type !== "checkbox"
+    ) {
+      throw new Error("Expected density slider and surface offset checkbox");
+    }
+
+    await runRibbonNode(densityNode, 5141, context);
+    await runRibbonNode(surfaceOffsetNode, false, context);
+
+    expect(patches[0]).toMatchObject({
+      layers: { vectors: { density: 5141 } },
+      vector_density: 5141,
+    });
+    expect(patches[0]?.overrides?.[0]?.style?.vector_budget).toBeUndefined();
+    expect(
+      context.visualization.getSnapshot().viewportPreferences?.[
+        "fdm-native-layer:layer%3ATopLayer"
+      ]?.vectorSurfaceOffsetEnabled,
+    ).toBeUndefined();
   });
 });

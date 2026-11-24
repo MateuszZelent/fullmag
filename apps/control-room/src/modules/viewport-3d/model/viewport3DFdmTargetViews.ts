@@ -81,6 +81,10 @@ const surfaceColorCache = new WeakMap<
   object,
   { colorKey: string; colors: ScalarColorBuffer | null }
 >();
+const vectorGlyphColorCache = new WeakMap<
+  object,
+  { colorKey: string; colors: ScalarColorBuffer | null }
+>();
 
 export function memoizeViewport3DFdmSurfaceColors({
   build,
@@ -95,6 +99,22 @@ export function memoizeViewport3DFdmSurfaceColors({
   if (cached?.colorKey === colorKey) return cached.colors;
   const colors = build();
   surfaceColorCache.set(owner, { colorKey, colors });
+  return colors;
+}
+
+export function memoizeViewport3DFdmVectorGlyphColors({
+  build,
+  colorKey,
+  owner,
+}: {
+  build: () => ScalarColorBuffer | null;
+  colorKey: string;
+  owner: object;
+}): ScalarColorBuffer | null {
+  const cached = vectorGlyphColorCache.get(owner);
+  if (cached?.colorKey === colorKey) return cached.colors;
+  const colors = build();
+  vectorGlyphColorCache.set(owner, { colorKey, colors });
   return colors;
 }
 

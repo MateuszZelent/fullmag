@@ -559,6 +559,16 @@ pub struct ScriptBuilderMaterialState {
     pub dind: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none", rename = "Dbulk")]
     pub dbulk: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none", rename = "Ku1")]
+    pub ku1: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none", rename = "Ku2")]
+    pub ku2: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none", rename = "Kc1")]
+    pub kc1: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none", rename = "Kc2")]
+    pub kc2: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none", rename = "Kc3")]
+    pub kc3: Option<f64>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq)]

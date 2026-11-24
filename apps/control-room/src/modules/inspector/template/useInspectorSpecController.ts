@@ -117,6 +117,7 @@ export interface InspectorSpecController<TDraft> {
   requestApply: InspectorRequestApplyHandler;
   confirmPendingApply: () => Promise<boolean>;
   cancelPendingApply: () => void;
+  acknowledgeCommitted: () => void;
   resetDisplay: () => Promise<void>;
   focusField: (fieldKey: keyof TDraft & string) => void;
   clearFocusRequest: () => void;
@@ -202,11 +203,15 @@ export function useInspectorSpecController<TDraft extends object>(
     scopedState.targetKey === targetKey ? scopedState : createEmptyScopedState<TDraft>(targetKey);
 
   const [applying, setApplying] = useState(false);
+  const committedCleanRef = useRef(false);
   const pendingConfirmRef = useRef<InspectorConfirmApplyState | null>(null);
   const pendingConfirmPresenterRef = useRef<InspectorPendingConfirmPresenter | null>(null);
   useLayoutEffect(() => {
     pendingConfirmRef.current = activeScoped.pendingConfirm;
   }, [activeScoped.pendingConfirm]);
+  useLayoutEffect(() => {
+    committedCleanRef.current = false;
+  }, [targetKey]);
   const [focusRequest, setFocusRequest] = useState<{
     key: keyof TDraft & string;
     seq: number;
@@ -422,6 +427,7 @@ export function useInspectorSpecController<TDraft extends object>(
 
   const setField = useCallback(
     <K extends keyof TDraft & string>(key: K, value: TDraft[K]) => {
+      committedCleanRef.current = false;
       clearAppliedTimer();
       if (liveFieldKeys.has(key)) {
         updateScoped((prev) => ({
@@ -459,6 +465,7 @@ export function useInspectorSpecController<TDraft extends object>(
 
   const patchDraft = useCallback(
     (partial: Partial<TDraft>) => {
+      committedCleanRef.current = false;
       clearAppliedTimer();
       const baseRecord = effectiveBaseline as Record<string, unknown>;
       updateScoped((prev) => {
@@ -711,8 +718,10 @@ export function useInspectorSpecController<TDraft extends object>(
         forceShowErrors: true,
         applyError: "Changes could not be applied. Review highlighted fields.",
       }));
+      committedCleanRef.current = false;
       return false;
     } catch (error) {
+      committedCleanRef.current = false;
       const message =
         error instanceof Error && error.message.trim()
           ? error.message.trim()
@@ -724,6 +733,7 @@ export function useInspectorSpecController<TDraft extends object>(
       }));
       return false;
     } finally {
+      committedCleanRef.current = false;
       setApplying(false);
     }
   }, [
@@ -917,6 +927,10 @@ export function useInspectorSpecController<TDraft extends object>(
     return firstStaged?.id ?? "default";
   }, [activeModeTabId, effectiveCommitMode, spec.commitBar.mode, spec.modeTabs]);
 
+  const acknowledgeCommitted = useCallback(() => {
+    committedCleanRef.current = true;
+  }, []);
+
   const registeredSessionKey = isStagedSpec
     ? formatInspectorSessionKey(selectionTargetKey, spec.id, stagedTabId)
     : sessionKey;
@@ -926,8 +940,12 @@ export function useInspectorSpecController<TDraft extends object>(
       sessionKey: registeredSessionKey,
       nodeTitle,
       mode: isStagedSpec ? "staged" : effectiveCommitMode,
+      allowCleanApply: canCleanApply,
       applying,
-      dirty: isStagedSpec ? dirtyFields.size > 0 : phase === "liveOverridden",
+      get dirty() {
+        if (committedCleanRef.current) return false;
+        return isStagedSpec ? dirtyFields.size > 0 : phase === "liveOverridden";
+      },
       get pendingConfirmation() {
         return pendingConfirmRef.current !== null;
       },
@@ -947,6 +965,7 @@ export function useInspectorSpecController<TDraft extends object>(
     }),
     [
       applying,
+      canCleanApply,
       dirtyFieldLabels,
       dirtyFields,
       effectiveCommitMode,
@@ -1003,6 +1022,7 @@ export function useInspectorSpecController<TDraft extends object>(
     requestApply,
     confirmPendingApply,
     cancelPendingApply,
+    acknowledgeCommitted,
     resetDisplay,
     focusField,
     clearFocusRequest,

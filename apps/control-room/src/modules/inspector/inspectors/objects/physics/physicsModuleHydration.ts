@@ -24,6 +24,7 @@ import {
   formatGraphAppliesTo,
   formatGraphCapability,
   isRestFetchableInteractionKind,
+  resolveTargetStudyExchangeEnabled,
   ROTATED_DMI_EXCHANGE_ERROR,
   studyRotatedDmiNumber,
   type CanonicalPhysicsModuleKind,
@@ -228,6 +229,14 @@ export function hydratePhysicsModuleBaseline(input: {
     enabled = physicsActivation === "active";
   }
 
+  if (
+    scopeKind === "object" &&
+    moduleKind === "exchange" &&
+    studyRec.exchange_enabled === false
+  ) {
+    enabled = false;
+  }
+
   const strain6 = readStrain6(params.strain);
   const provenance: GraphModuleProvenanceSummary | null = selectedGraphModule
     ? {
@@ -347,6 +356,7 @@ export function evaluatePhysicsModuleConflictOrLaneError(
   activeLane: ReturnType<typeof useActiveLaneCapabilities>,
   sceneObjects: SceneResource["objects"] | undefined,
   sceneStudy: unknown,
+  sceneMaterials?: SceneResource["materials"],
 ): string | null {
   if (d.moduleKind === null) {
     return `Physics module kind '${d.rawKind}' has no editable authoring schema; displaying graph provenance read-only.`;
@@ -401,10 +411,22 @@ export function evaluatePhysicsModuleConflictOrLaneError(
   ) {
     return `Object-scoped ${d.moduleKind} conflicts with active study-level rotated interfacial DMI. Disable or remove the study-level term before applying the object-scoped DMI.`;
   }
-  if (d.moduleKind === "exchange" && d.scopeKind === "global" && !d.enabled) {
-    const rotVal = studyRotatedDmiNumber(studyRec);
-    if (rotVal !== null && rotVal !== 0) {
-      return ROTATED_DMI_EXCHANGE_ERROR;
+  if (d.moduleKind === "exchange" && !d.enabled) {
+    const disablesStudyExchange =
+      d.scopeKind === "global" ||
+      (d.objectId !== null &&
+        resolveTargetStudyExchangeEnabled({
+          objectId: d.objectId,
+          nextEnabled: false,
+          studyRec,
+          sceneObjects,
+          sceneMaterials,
+        }) === false);
+    if (disablesStudyExchange) {
+      const rotVal = studyRotatedDmiNumber(studyRec);
+      if (rotVal !== null && rotVal !== 0) {
+        return ROTATED_DMI_EXCHANGE_ERROR;
+      }
     }
   }
   return null;

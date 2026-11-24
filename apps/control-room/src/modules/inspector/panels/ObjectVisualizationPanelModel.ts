@@ -22,6 +22,10 @@ import {
 import { resolveVisualizationTargetForMeshPart } from "@/kernel/selection/visualizationTargetResolver";
 import type { VisualizationDebugSnapshot } from "@/kernel/visualization/visualizationDebugTypes";
 import {
+  isAcDcOnlyQuantityId,
+  isConductorOnlyQuantityId,
+} from "@/kernel/resources/sessionPhysicsModules";
+import {
   isAnalysisFieldQuantityId,
   fieldCatalogQuantitySupportsAirbox,
   fieldCatalogQuantitySupportsSpatialVisualization,
@@ -1848,7 +1852,10 @@ export function resolveVisualizationVectorCapacityForTarget({
   target: VisualizationTargetRef | null | undefined;
 }): VisualizationVectorCapacityDescriptor | null {
   if (!target) return null;
-  if (target.kind === "fdm-native-layer" && fdmNativeLayer) {
+  if (
+    (target.kind === "fdm-native-layer" || target.kind === "object") &&
+    fdmNativeLayer
+  ) {
     const source = fdmNativeLayerVisualizationVectorCapacitySource({
       ...fdmNativeLayer,
       activeMask: fdmNativeActiveMask ?? null,
@@ -2232,17 +2239,28 @@ export function visualizationQuantityItems(
   targetAvailability?: ReadonlyMap<string, TargetFieldAvailability>,
   authoredMagnetizationAvailable = false,
   conductor = false,
+  acDcActive = true,
 ): Array<{ disabled?: boolean; label: string; value: string }> {
   const supportsTarget = targetKind === "airbox"
     ? quantityCatalogEntrySupportsAnyAirboxVisualization
     : quantityCatalogEntrySupportsAnySpatialVisualization;
+  const allowsQuantityForTarget = (quantityId: string): boolean => {
+    if (!conductor && isConductorOnlyQuantityId(quantityId)) {
+      return false;
+    }
+    if (!acDcActive && isAcDcOnlyQuantityId(quantityId)) {
+      return false;
+    }
+    return true;
+  };
   const capabilityItems = quantityCatalog?.quantities.flatMap((quantity) =>
-    supportsTarget(quantity)
+    supportsTarget(quantity) && allowsQuantityForTarget(quantity.id)
       ? [quantityCatalogPickerItem(quantity, quantity.label || quantity.id)]
       : [],
   ) ?? [];
   const fieldItems = fieldCatalog?.quantities.flatMap((quantity) => {
     if (!fieldCatalogQuantitySupportsSpatialVisualization(quantity)) return [];
+    if (!allowsQuantityForTarget(quantity.quantity_id)) return [];
     if (targetKind === "airbox" && quantity.domain !== "full_domain") return [];
     return [{
       label: quantity.label || resolveCanonicalQuantityId(quantity.quantity_id),
@@ -2253,7 +2271,9 @@ export function visualizationQuantityItems(
     ? mergeVisualizationQuantityItems<{ disabled?: boolean; label: string; value: string }>(
         mergeVisualizationQuantityItems(capabilityItems, fieldItems),
         targetKind === "airbox"
-          ? pendingAirboxQuantityItems(quantityCatalog)
+          ? pendingAirboxQuantityItems(quantityCatalog).filter((item) =>
+              allowsQuantityForTarget(item.value),
+            )
           : conductor
             ? quantityCatalog.quantities
               .filter((quantity) =>

@@ -445,6 +445,7 @@ function sceneObjectSnapshot(
   const objectRole = sceneObjectRole(object);
 
   return {
+    geometry: object.geometry,
     geometryKind: geometryKind(object.geometry),
     hasAbsorbingBoundary: recordValue(object.absorbing_boundary) !== null,
     id,

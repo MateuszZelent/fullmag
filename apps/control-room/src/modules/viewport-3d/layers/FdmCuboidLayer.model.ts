@@ -157,6 +157,7 @@ export function buildFdmVectorSegments(
     cellSelection?: FdmCuboidCellSelection;
     geometryScope?: "surface" | "full";
     instanceOrdinals?: Uint32Array | null;
+    liftThinSheetAboveSurface?: boolean;
     realizedRegionIds?: Uint32Array | null;
     vectorLengthScale?: number;
     surfaceOffsetEnabled?: boolean;
@@ -174,7 +175,7 @@ export function buildFdmVectorSegments(
     );
   }
   const anchorMode = options.anchorMode ?? "center";
-  const cacheKey = `${scale}:${maxVectors}:${options.vectorLengthScale ?? "scale"}:${anchorMode}:${options.geometryScope ?? "full"}:${options.surfaceOffsetEnabled === true}:${options.surfaceOffsetScale ?? 0}`;
+  const cacheKey = `${scale}:${maxVectors}:${options.vectorLengthScale ?? "scale"}:${anchorMode}:${options.geometryScope ?? "full"}:${options.liftThinSheetAboveSurface === true}:${options.surfaceOffsetEnabled === true}:${options.surfaceOffsetScale ?? 0}`;
   const cachedSegments = cachedFdmVectorSegments(model, fieldVector, cacheKey);
   if (cachedSegments !== undefined) return cachedSegments;
 
@@ -440,6 +441,7 @@ export interface FdmCuboidAsyncBuildInput {
   enabled: boolean;
   groupKey: string | null;
   maxVectorGlyphs: number;
+  membershipAdmission?: "exact" | "full-domain";
   modelFieldVector?: DecodedFieldVector | null;
   nativeActiveMask?: Uint8Array | null;
   realizedRegionIds: Uint32Array | null;
@@ -451,6 +453,7 @@ export interface FdmCuboidAsyncBuildInput {
   vectorAnchorMode: Viewport3DVectorAnchorMode;
   vectorField?: DecodedFieldVector | null;
   vectorGeometryScope?: "full" | "surface";
+  liftThinSheetAboveSurface?: boolean;
   vectorLengthScale?: number;
   vectorScale: number;
   vectorSurfaceOffsetEnabled?: boolean;
@@ -604,12 +607,14 @@ export function createFdmCuboidBatchBuildController(
         cellSelection: entry.cellSelection,
         domain: entry.domain,
         maxVectorGlyphs: entry.maxVectorGlyphs,
+        membershipAdmission: entry.membershipAdmission,
         modelFieldVector: entry.modelFieldVector,
         nativeActiveMask: entry.nativeActiveMask,
         realizedRegionIds: entry.realizedRegionIds,
         vectorAnchorMode: entry.vectorAnchorMode,
         vectorField: entry.vectorField,
         vectorGeometryScope: entry.vectorGeometryScope,
+        liftThinSheetAboveSurface: entry.liftThinSheetAboveSurface,
         vectorLengthScale: entry.vectorLengthScale,
         vectorOnly: entry.vectorOnly,
         vectorScale: entry.vectorScale,

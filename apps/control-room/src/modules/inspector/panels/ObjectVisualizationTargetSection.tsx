@@ -715,6 +715,7 @@ function viewportRenderedRangeScopeKind(
 }
 
 export function VisualizationQuantitySection({
+  acDcActive = true,
   conductor,
   executionRequired = false,
   fieldCatalog,
@@ -730,6 +731,7 @@ export function VisualizationQuantitySection({
   targetKind,
   authoredMagnetizationAvailable = false,
 }: {
+  acDcActive?: boolean;
   conductor?: boolean;
   executionRequired?: boolean;
   fieldCatalog: FieldCatalogResource | null;
@@ -754,6 +756,7 @@ export function VisualizationQuantitySection({
     targetFieldAvailability,
     authoredMagnetizationAvailable,
     conductor,
+    acDcActive,
   );
   const { selectedValue, summary, status } = visualizationQuantitySelectionState({
     activeQuantityId: settings.activeQuantityId, items: quantityItems,
@@ -1170,7 +1173,7 @@ export function VisualizationVectorsSection({
             })
           }
         />
-        {supportsVectorSurfaceOffset && settings.geometryScope === "surface" && (
+        {supportsVectorSurfaceOffset && (
           <ToggleButton
             active={settings.vectorSurfaceOffsetEnabled}
             disabled={vectorsUnavailable || isFieldPending("vectorSurfaceOffsetEnabled")}
@@ -1191,9 +1194,7 @@ export function VisualizationVectorsSection({
           />
         )}
       </div>
-      {supportsVectorSurfaceOffset &&
-      settings.geometryScope === "surface" &&
-      settings.vectorSurfaceOffsetEnabled ? (
+      {supportsVectorSurfaceOffset && settings.vectorSurfaceOffsetEnabled ? (
         <NumberField disabled={vectorsUnavailable || isFieldPending("vectorSurfaceOffsetScale")} label="Extra surface gap" max={1} min={0} step={0.01} value={settings.vectorSurfaceOffsetScale} onChange={(value) => patchNumber("vectorSurfaceOffsetScale", value)} />
       ) : null}
       {artifactFieldBinding?.historical && settings.geometryScope === "surface" && settings.vectorSurfaceOffsetEnabled ? <FieldRow label="Surface lift" value="Display offset; field sample positions unchanged" /> : null}

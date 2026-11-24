@@ -617,6 +617,40 @@ describe("control-room design styles", () => {
     );
   });
 
+  it("styles the top chrome header and ribbon as a floating rounded glass card joined to Chrome-style instance tabs", () => {
+    const globalsCss = readAppFile("app/globals.css");
+    const slotsCss = readAppFile("src/design/styles/slots.css");
+    const layoutCss = readAppFile("src/design/styles/layout.css");
+    const instanceTabsCss = readAppFile("src/design/styles/instance-tabs.css");
+
+    expect(globalsCss).toContain('instance-tabs.css" layer(fm-components)');
+    expect(slotsCss).toContain('border-radius: var(--fm-radius-section);');
+    expect(slotsCss).toContain('background: var(--fm-glass-strong);');
+    expect(layoutCss).toContain(
+      '.fm-workspace-shell:not(:has(> .fm-home-overlay)):has(> .fm-slot[data-slot-id="ribbon"])',
+    );
+    expect(instanceTabsCss).toContain(".fm-instance-tabs:has(+ .fm-instance-stage)");
+    expect(instanceTabsCss).toContain("@media (forced-colors: active)");
+    expect(instanceTabsCss).toContain("@media (prefers-reduced-transparency: reduce)");
+  });
+
+  it("minimizes header and ribbon in workspace full-screen mode with accessible toggle states", () => {
+    const headerCss = readAppFile("src/design/styles/header.css");
+    const layoutCss = readAppFile("src/design/styles/layout.css");
+    const instanceTabsCss = readAppFile("src/design/styles/instance-tabs.css");
+
+    expect(layoutCss).toContain(
+      '.fm-workspace-frame[data-workspace-fullscreen="true"]',
+    );
+    expect(layoutCss).toContain('> .fm-slot[data-slot-id="app-menu"]');
+    expect(layoutCss).toContain('> .fm-slot[data-slot-id="ribbon"]');
+    expect(instanceTabsCss).toContain(".fm-instance-tabs__actions");
+    expect(headerCss).toContain('.fm-header__fullscreen-toggle[aria-pressed="true"]');
+    expect(headerCss).toContain("min-inline-size:");
+    expect(headerCss).toContain("@media (pointer: coarse)");
+    expect(headerCss).toContain("@media (forced-colors: active)");
+  });
+
   it("defines every shared CSS custom property used by design styles", () => {
     const defined = new Set<string>();
     const used = new Set<string>();
