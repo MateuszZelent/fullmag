@@ -61,6 +61,62 @@ class DiagnosticUnknownStopTests(unittest.TestCase):
                 validate({**receipt,field:value})
         with self.assertRaises(BuildControlError):validate(receipt,'0'*64)
 
+    def test_reconciled_iteration_requires_original_and_immutable_journal(self):
+        from types import SimpleNamespace
+        from docker_volume_idle_restart_interrupted import SCHEMA
+
+        encode = lambda value: stop.canonical(value) + b"\n"
+        digest = lambda value: hashlib.sha256(value).hexdigest()
+        attempt, development = "a" * 32, "b" * 32
+        config_sha = "9" * 64
+        pins = {service: {"id": letter * 64, "started_at": "current", "fingerprint": "e" * 64}
+                for service, letter in (("backend", "c"), ("frontend", "d"))}
+        previous = {"state": "succeeded", "attempt": development, "compose_project": "project",
+                    "control_volume": "volume", "config_sha256": config_sha, "state_root": "/state",
+                    "ledger_profile": "group-ledger-v1", "inputs": {"source_root": "/source"}}
+        original = {"schema": "fullmag.docker-build-operation.v1", "phase": "iteration",
+                    "state": "restarting-idle-backend", "attempt": attempt, "compose_project": "project",
+                    "control_volume": "volume", "state_root": "/state",
+                    "helper_container": "fullmag-control-" + attempt,
+                    "inputs": {"source_root": "/source", "attempt": development, "config_sha256": config_sha}}
+        for service, pin in pins.items():
+            previous.update({service + "_container": pin["id"], service + "_started_at": "before"})
+            original.update({service + "_container": pin["id"], service + "_started_at": "current"})
+        process = {"schema": "fullmag.docker-process-tree.v1", "state": "drained", "api_exit_code": 0,
+                   "terminal_service_owner": {"state": "drained"}}
+        process_raw = (json.dumps(process, sort_keys=True, separators=(",", ":")) + "\n").encode()
+        drain = {"schema": "fullmag.docker-idle-restart-drain.v1", "backend_container_id": pins["backend"]["id"],
+                 "process_receipt_sha256": digest(process_raw), "process_receipt": process}
+        previous_raw, original_raw, drain_raw = map(encode, (previous, original, drain))
+        compose_raw = encode({"name": "project"})
+        proof = {"schema": SCHEMA, "attempt": attempt, "receipt_sha256": digest(original_raw),
+                 "helper_id": "f" * 64, "compose_sha256": digest(compose_raw),
+                 "development_terminal_sha256": digest(previous_raw),
+                 "previous_native_drain_sha256": digest(drain_raw), "verified_sha256": None, "containers": pins}
+        terminal = {**original, "state": "failed-confirmed", "finished_at": 3,
+                    "error": "Idle restart finalization interrupted after the fixed services started",
+                    "reconciliation": {**proof, "plan_sha256": digest(stop.canonical(proof)), "restart_replayed": False}}
+        raw = encode(terminal)
+        sha = digest(raw)
+        records = {"terminal.json": raw, "receipt.json": raw, f"reconciliation/{sha}/result.json": raw,
+                   "unknown-receipt.json": original_raw, "backend-drain.json": drain_raw, "compose.json": compose_raw}
+        root = f"iteration/attempts/{attempt}/"
+        control = SimpleNamespace(project="project", volume="volume")
+        with patch.object(stop, "_read_raw", side_effect=lambda _, path: records[path.removeprefix(root)]):
+            bound = stop._validate_reconciled_iteration_terminal(
+                control, attempt, sha, previous_raw=previous_raw, document_raw=compose_raw)
+            self.assertEqual(bound["reconciled_containers"], pins)
+            records["unknown-receipt.json"] += b" "
+            with self.assertRaisesRegex(BuildControlError, "Original idle restart evidence changed"):
+                stop._validate_reconciled_iteration_terminal(
+                    control, attempt, sha, previous_raw=previous_raw, document_raw=compose_raw)
+        actual = {service: {"Id": pin["id"], "State": {"StartedAt": pin["started_at"]}} for service, pin in pins.items()}
+        with patch("docker_volume_reconcile.fingerprint", return_value="e" * 64):
+            stop._validate_reconciled_containers(pins, actual)
+            actual["frontend"]["State"]["StartedAt"] = "later"
+            with self.assertRaisesRegex(BuildControlError, "frontend"):
+                stop._validate_reconciled_containers(pins, actual)
+
     def fixture(self):
         ready=ready_owner()
         owner={**ready,'state':'unknown','heartbeat_at':'2026-10-25T14:00:00Z',
