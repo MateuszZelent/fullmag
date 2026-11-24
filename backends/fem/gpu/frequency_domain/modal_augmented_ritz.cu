@@ -618,8 +618,20 @@ std::optional<AugmentedRitzBlock> solve_open_airbox_augmented_ritz(
         return fail("cudss_ritz_qr_status_failed");
     }
     ProjectedPencilStatus status{};
-    if (!projected_status.read(&status, 1) || status != ProjectedPencilStatus::converged) {
-        return fail("cudss_ritz_projected_eigensolve_failed");
+    if (!projected_status.read(&status, 1)) {
+        return fail("cudss_ritz_projected_status_readback_failed");
+    }
+    switch (status) {
+    case ProjectedPencilStatus::converged:
+        break;
+    case ProjectedPencilStatus::invalid_pencil:
+        return fail("cudss_ritz_projected_pencil_invalid");
+    case ProjectedPencilStatus::not_positive_definite:
+        return fail("cudss_ritz_projected_stiffness_not_positive_definite");
+    case ProjectedPencilStatus::iteration_limit:
+        return fail("cudss_ritz_projected_eigensolve_iteration_limit");
+    default:
+        return fail("cudss_ritz_projected_eigensolve_status_unknown");
     }
     AugmentedRitzBlock result;
     result.negative_shift_inertia = factor->negative_inertia();

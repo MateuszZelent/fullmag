@@ -115,15 +115,6 @@ def inventory_args(helper_id="a" * 64):
 
 
 class NetworkFailureValidatorsTests(unittest.TestCase):
-    def test_compact_compose_pool_failure_is_admissible_for_its_exact_network(self):
-        terminal = f"failed to create network {NETWORK}: Error response from daemon: {POOL_ERROR}"
-        output = f"Network {NETWORK} Creating\n Network {NETWORK} {terminal}\n{terminal}"
-        self.assertEqual(reconcile.validate_pool_failure(output, NETWORK, PROJECT), terminal)
-        for bad in (output.replace(f"Network {NETWORK} {terminal}", f"Network foreign {terminal}"),
-                    output + "\nContainer foreign Started"):
-            with self.subTest(output=bad), self.assertRaises(BuildControlError):
-                reconcile.validate_pool_failure(bad, NETWORK, PROJECT)
-
     def test_exact_compose_failure_sequence_is_admissible(self):
         terminal = reconcile.validate_pool_failure(COMPOSE_ERROR, NETWORK, PROJECT)
         self.assertEqual(terminal, f"failed to create network {NETWORK}: Error response from daemon: {POOL_ERROR}")
@@ -136,6 +127,14 @@ class NetworkFailureValidatorsTests(unittest.TestCase):
         for extra in (f"Container {PROJECT}-backend-1 Created", "Container foreign Creating"):
             with self.subTest(extra=extra), self.assertRaises(BuildControlError):
                 reconcile.validate_pool_failure(output + "\n" + extra, NETWORK, PROJECT)
+
+    def test_compact_compose_pool_error_is_admissible(self):
+        terminal = f"failed to create network {NETWORK}: Error response from daemon: {POOL_ERROR}"
+        output = f"Network {NETWORK} Creating\n Network {NETWORK} {terminal} \n{terminal}"
+        self.assertEqual(reconcile.validate_pool_failure(output, NETWORK, PROJECT), terminal)
+        for bad in (output.replace(NETWORK, "foreign", 1), output + "\nContainer foreign Started"):
+            with self.subTest(output=bad), self.assertRaises(BuildControlError):
+                reconcile.validate_pool_failure(bad, NETWORK, PROJECT)
 
     def test_compose_success_or_other_error_lines_are_rejected(self):
         for text in (

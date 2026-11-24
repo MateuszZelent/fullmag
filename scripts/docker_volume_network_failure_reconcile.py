@@ -81,7 +81,7 @@ def validate_pool_failure(error: object, network_name: str, project: str) -> str
     # Compose may reject the network before announcing backend creation. Both
     # exact sequences are fenced by independent service/network absence checks.
     before_container_creation = expected[:4] + expected[5:]
-    # Compose 5.7 can render the progress error as one compact network line.
+    # Compose 5.7.1 can print the failed resource in a compact progress line.
     compact = [f"Network {network_name} Creating", f"Network {network_name} {terminal}", terminal]
     require(lines in (expected, before_container_creation, compact),
             "Original Compose output differs from the exact observed address-pool failure")
