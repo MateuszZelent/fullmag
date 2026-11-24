@@ -1279,8 +1279,13 @@ describe("MagneticTextureInspectorPanel & StageTextureAssignmentsEditor on 8-slo
       });
 
       // Receipt status !== "initial_state_ready" renders contextual Re-evaluate m₀ notice quickFix
-      const reevaluateNoticeBtn = findElement(
+      const afterContentNotices = findElement(
         container,
+        (el) => el.getAttribute("data-slot") === "inspector-notices-after-content",
+        "after-content Inspector notices",
+      );
+      const reevaluateNoticeBtn = findElement(
+        afterContentNotices,
         (el) => el.tagName === "BUTTON" && el.textContent.trim() === "Re-evaluate m₀",
         "Re-evaluate m₀ notice button",
       );

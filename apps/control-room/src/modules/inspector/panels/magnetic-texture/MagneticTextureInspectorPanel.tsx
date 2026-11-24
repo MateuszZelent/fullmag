@@ -1326,6 +1326,7 @@ export function MagneticTextureInspectorPanel({ selection }: InspectorPanelProps
           list.push({
             id: "prepared-initial-magnetization",
             tone: "info",
+            placement: "after-content",
             title: "Initial magnetization ready",
             text: appliedBannerMessage ?? "Prepared initial magnetization is ready to inspect in 3D.",
             quickFix: {
@@ -1340,6 +1341,7 @@ export function MagneticTextureInspectorPanel({ selection }: InspectorPanelProps
           list.push({
             id: "reevaluate-initial-magnetization",
             tone: "info",
+            placement: "after-content",
             title: "Initial magnetization pending evaluation",
             text:
               appliedBannerMessage ??
