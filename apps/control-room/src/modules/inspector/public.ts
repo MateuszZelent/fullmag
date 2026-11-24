@@ -23,3 +23,4 @@ export {
   useInspectorTabs,
   type InspectorTabInfo,
 } from "./InspectorTabState";
+export { DeleteObjectImpactDialogHost } from "./inspectors/objects/geometry/DeleteObjectImpactDialog";

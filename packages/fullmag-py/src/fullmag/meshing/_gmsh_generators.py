@@ -12,8 +12,10 @@ from fullmag._progress import emit_progress
 from fullmag.model.geometry import (
     ANTENNA_LAYOUT_TYPES,
     ArchWaveguide,
+    Array3D,
     Box,
     CPWAntennaLayout,
+    Cone,
     Cylinder,
     Difference,
     Ellipse,
@@ -21,9 +23,16 @@ from fullmag.model.geometry import (
     Geometry,
     ImportedGeometry,
     Intersection,
+    MAX_ARRAY_INSTANCES_FEM_OCC,
     MicrostripAntennaLayout,
+    PolygonPrism,
+    SinWaveguide,
+    SlicePlane,
+    Torus,
+    Transform,
     Translate,
     Union,
+    Xor,
 )
 
 from ._gmsh_types import (
@@ -66,6 +75,7 @@ from ._gmsh_waveguides import (
     add_antenna_layout_terminal_physical_groups,
     add_arch_waveguide_to_occ,
     add_antenna_layout_to_occ,
+    add_sin_waveguide_to_occ,
 )
 from ._gmsh_occ import _configure_axis_periodic_surfaces, _scale_periodic_boundary_pairs
 
@@ -388,13 +398,21 @@ def generate_mesh(
         geometry,
         (
             Cylinder,
+            Cone,
+            Torus,
+            PolygonPrism,
             Difference,
             Union,
             Intersection,
+            Xor,
             Translate,
+            Transform,
+            SlicePlane,
+            Array3D,
             Ellipsoid,
             Ellipse,
             ArchWaveguide,
+            SinWaveguide,
             *ANTENNA_LAYOUT_TYPES,
         ),
     ):
@@ -798,6 +816,28 @@ def _generate_csg_mesh(
         gmsh.finalize()
 
 
+def _occ_align_z_to_axis(
+    gmsh: Any,
+    dim_tags: list[tuple[int, int]],
+    axis: tuple[float, float, float],
+) -> None:
+    """Rotate OCC entities from ``+Z`` onto unit vector ``axis`` about the origin."""
+    ax, ay, az = axis
+    norm = math.sqrt(ax * ax + ay * ay + az * az)
+    if norm <= 0.0:
+        return
+    ax, ay, az = ax / norm, ay / norm, az / norm
+    if az > 1.0 - 1e-12:
+        return
+    if az < -1.0 + 1e-12:
+        gmsh.model.occ.rotate(dim_tags, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, math.pi)
+        return
+    # cross((0, 0, 1), (ax, ay, az)) = (-ay, ax, 0)
+    rx, ry, rz = -ay, ax, 0.0
+    angle = math.acos(max(-1.0, min(1.0, az)))
+    gmsh.model.occ.rotate(dim_tags, 0.0, 0.0, 0.0, rx, ry, rz, angle)
+
+
 def _add_geometry_to_occ(
     gmsh: Any,
     geometry: Geometry,
@@ -847,8 +887,46 @@ def _add_geometry_to_occ(
         fy = (geometry.ry * scale) / rmax
         gmsh.model.occ.dilate([(3, tag)], 0.0, 0.0, 0.0, fx, fy, 1.0)
         return [(3, tag)]
+    if isinstance(geometry, Cone):
+        rb = geometry.radius_bottom * scale
+        rt = geometry.radius_top * scale
+        h = geometry.height * scale
+        axis = geometry.axis
+        base = tuple(-0.5 * h * component for component in axis)
+        direction = tuple(h * component for component in axis)
+        tag = gmsh.model.occ.addCone(
+            base[0], base[1], base[2],
+            direction[0], direction[1], direction[2],
+            rb, rt,
+        )
+        return [(3, tag)]
+    if isinstance(geometry, Torus):
+        r_maj = geometry.major_radius * scale
+        r_min = geometry.minor_radius * scale
+        tag = gmsh.model.occ.addTorus(0.0, 0.0, 0.0, r_maj, r_min)
+        dim_tags = [(3, tag)]
+        _occ_align_z_to_axis(gmsh, dim_tags, geometry.axis)
+        return dim_tags
+    if isinstance(geometry, PolygonPrism):
+        t_scaled = geometry.thickness * scale
+        z_bottom = -0.5 * t_scaled
+        pts = [
+            gmsh.model.occ.addPoint(x * scale, y * scale, z_bottom)
+            for x, y in geometry.vertices_xy
+        ]
+        n_pts = len(pts)
+        lines = [
+            gmsh.model.occ.addLine(pts[i], pts[(i + 1) % n_pts])
+            for i in range(n_pts)
+        ]
+        wire = gmsh.model.occ.addWire(lines)
+        surface = gmsh.model.occ.addPlaneSurface([wire])
+        extruded = gmsh.model.occ.extrude([(2, surface)], 0.0, 0.0, t_scaled)
+        return [(int(dim), int(tag)) for dim, tag in extruded if int(dim) == 3]
     if isinstance(geometry, ArchWaveguide):
         return add_arch_waveguide_to_occ(gmsh, geometry, scale=scale)
+    if isinstance(geometry, SinWaveguide):
+        return add_sin_waveguide_to_occ(gmsh, geometry, scale=scale)
     if isinstance(geometry, ANTENNA_LAYOUT_TYPES):
         return add_antenna_layout_to_occ(gmsh, geometry, scale=scale)
     if isinstance(geometry, Difference):
@@ -866,11 +944,117 @@ def _add_geometry_to_occ(
         b_tags = _add_geometry_to_occ(gmsh, geometry.b, scale=scale)
         result, _ = gmsh.model.occ.intersect(a_tags, b_tags)
         return result
+    if isinstance(geometry, Xor):
+        left1 = _add_geometry_to_occ(gmsh, geometry.left, scale=scale)
+        right1 = _add_geometry_to_occ(gmsh, geometry.right, scale=scale)
+        a_minus_b, _ = gmsh.model.occ.cut(left1, right1)
+        right2 = _add_geometry_to_occ(gmsh, geometry.right, scale=scale)
+        left2 = _add_geometry_to_occ(gmsh, geometry.left, scale=scale)
+        b_minus_a, _ = gmsh.model.occ.cut(right2, left2)
+        if a_minus_b and b_minus_a:
+            result, _ = gmsh.model.occ.fuse(a_minus_b, b_minus_a)
+            return result
+        return list(a_minus_b) + list(b_minus_a)
     if isinstance(geometry, Translate):
         inner_tags = _add_geometry_to_occ(gmsh, geometry.geometry, scale=scale)
         ox, oy, oz = [d * scale for d in geometry.offset]
         gmsh.model.occ.translate(inner_tags, ox, oy, oz)
         return inner_tags
+    if isinstance(geometry, Transform):
+        inner_tags = _add_geometry_to_occ(gmsh, geometry.child, scale=scale)
+        px, py, pz = (c * scale for c in geometry.pivot)
+        tx, ty, tz = (c * scale for c in geometry.translation)
+        sx, sy, sz = geometry.scale
+        if px != 0.0 or py != 0.0 or pz != 0.0:
+            gmsh.model.occ.translate(inner_tags, -px, -py, -pz)
+        if sx != 1.0 or sy != 1.0 or sz != 1.0:
+            gmsh.model.occ.dilate(inner_tags, 0.0, 0.0, 0.0, sx, sy, sz)
+        qx, qy, qz, qw = geometry.rotation_quat
+        if qw < 0.0:
+            qx, qy, qz, qw = -qx, -qy, -qz, -qw
+        vec_norm = math.sqrt(qx * qx + qy * qy + qz * qz)
+        if vec_norm > 1e-15:
+            angle = 2.0 * math.atan2(vec_norm, qw)
+            if abs(angle) > 1e-15:
+                gmsh.model.occ.rotate(
+                    inner_tags, 0.0, 0.0, 0.0,
+                    qx / vec_norm, qy / vec_norm, qz / vec_norm,
+                    angle,
+                )
+        dx, dy, dz = tx + px, ty + py, tz + pz
+        if dx != 0.0 or dy != 0.0 or dz != 0.0:
+            gmsh.model.occ.translate(inner_tags, dx, dy, dz)
+        return inner_tags
+    if isinstance(geometry, SlicePlane):
+        child_tags = _add_geometry_to_occ(gmsh, geometry.child, scale=scale)
+        if not child_tags:
+            return []
+        bboxes = [gmsh.model.occ.getBoundingBox(dim, tag) for dim, tag in child_tags]
+        xmin = min(b[0] for b in bboxes)
+        ymin = min(b[1] for b in bboxes)
+        zmin = min(b[2] for b in bboxes)
+        xmax = max(b[3] for b in bboxes)
+        ymax = max(b[4] for b in bboxes)
+        zmax = max(b[5] for b in bboxes)
+        ox, oy, oz = (c * scale for c in geometry.plane_origin)
+        diag = math.sqrt((xmax - xmin) ** 2 + (ymax - ymin) ** 2 + (zmax - zmin) ** 2)
+        cx, cy, cz = 0.5 * (xmin + xmax), 0.5 * (ymin + ymax), 0.5 * (zmin + zmax)
+        dist = math.sqrt((cx - ox) ** 2 + (cy - oy) ** 2 + (cz - oz) ** 2)
+        extent = max(diag, dist, 1.0) * 4.0
+        z0_box = 0.0 if geometry.keep_side == "positive" else -extent
+        halfspace_tag = gmsh.model.occ.addBox(
+            -extent, -extent, z0_box, 2.0 * extent, 2.0 * extent, extent
+        )
+        hs_tags = [(3, halfspace_tag)]
+        _occ_align_z_to_axis(gmsh, hs_tags, geometry.plane_normal)
+        if ox != 0.0 or oy != 0.0 or oz != 0.0:
+            gmsh.model.occ.translate(hs_tags, ox, oy, oz)
+        result, _ = gmsh.model.occ.intersect(child_tags, hs_tags)
+        return result
+    if isinstance(geometry, Array3D):
+        if geometry.total_instances > MAX_ARRAY_INSTANCES_FEM_OCC:
+            raise ValueError(
+                f"array_occ_instance_limit_exceeded: Array3D has {geometry.total_instances} "
+                f"instances, exceeding OCC limit {MAX_ARRAY_INSTANCES_FEM_OCC}"
+            )
+        proto_tags = _add_geometry_to_occ(gmsh, geometry.child, scale=scale)
+        if not proto_tags:
+            return []
+        bboxes = [gmsh.model.occ.getBoundingBox(dim, tag) for dim, tag in proto_tags]
+        child_extent = (
+            (max(b[3] for b in bboxes) - min(b[0] for b in bboxes)) / scale,
+            (max(b[4] for b in bboxes) - min(b[1] for b in bboxes)) / scale,
+            (max(b[5] for b in bboxes) - min(b[2] for b in bboxes)) / scale,
+        )
+        instance_groups: list[list[tuple[int, int]]] = []
+        for (tx, ty, tz), q, (sx, sy, sz) in geometry.instance_transforms(child_extent):
+            copied = [(int(d), int(t)) for d, t in gmsh.model.occ.copy(proto_tags)]
+            if sx != 1.0 or sy != 1.0 or sz != 1.0:
+                gmsh.model.occ.dilate(copied, 0.0, 0.0, 0.0, sx, sy, sz)
+            qx, qy, qz, qw = q
+            if qw < 0.0:
+                qx, qy, qz, qw = -qx, -qy, -qz, -qw
+            vec_norm = math.sqrt(qx * qx + qy * qy + qz * qz)
+            if vec_norm > 1e-15:
+                angle = 2.0 * math.atan2(vec_norm, qw)
+                if abs(angle) > 1e-15:
+                    gmsh.model.occ.rotate(
+                        copied, 0.0, 0.0, 0.0,
+                        qx / vec_norm, qy / vec_norm, qz / vec_norm,
+                        angle,
+                    )
+            dx_s, dy_s, dz_s = tx * scale, ty * scale, tz * scale
+            if dx_s != 0.0 or dy_s != 0.0 or dz_s != 0.0:
+                gmsh.model.occ.translate(copied, dx_s, dy_s, dz_s)
+            instance_groups.append(copied)
+        gmsh.model.occ.remove(proto_tags, recursive=True)
+        if geometry.merge_overlapping and len(instance_groups) > 1:
+            fused, _ = gmsh.model.occ.fuse(
+                instance_groups[0],
+                [dt for grp in instance_groups[1:] for dt in grp],
+            )
+            return list(fused)
+        return [dt for grp in instance_groups for dt in grp]
     if isinstance(geometry, ImportedGeometry):
         # Only CAD formats (STEP/IGES/BREP) can be loaded into the OCC kernel
         # via importShapes. STL and mesh files must go through the GEO pipeline

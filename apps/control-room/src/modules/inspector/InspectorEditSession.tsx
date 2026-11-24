@@ -41,6 +41,7 @@ export type InspectorEditSessionStatusV2 =
   | "ApplyRejected";
 
 export interface InspectorEditSession {
+  allowCleanApply?: boolean;
   applyBlockReason?: string;
   apply: () => Promise<boolean> | boolean;
   applying: boolean;
@@ -48,6 +49,7 @@ export interface InspectorEditSession {
   lockReason?: string;
   mode: InspectorEditMode;
   reset: () => Promise<void> | void;
+  sessionKey?: string;
   valid: boolean;
 }
 
@@ -61,6 +63,7 @@ export interface InspectorEditSessionV2 {
   readonly sessionKey: string;
   readonly nodeTitle?: string;
   readonly mode: InspectorEditSessionModeV2;
+  readonly allowCleanApply?: boolean;
   readonly applying: boolean;
   readonly dirty: boolean;
   readonly pendingConfirmation?: boolean;
@@ -147,6 +150,9 @@ export function adaptSessionV2ToLegacy(
   session: InspectorEditSessionV2,
 ): InspectorEditSession {
   return {
+    get allowCleanApply() {
+      return session.allowCleanApply;
+    },
     apply: () => session.apply(),
     get applyBlockReason() {
       return session.applyBlockReason ?? undefined;
@@ -164,6 +170,9 @@ export function adaptSessionV2ToLegacy(
       return session.mode === "readOnly" ? "immediate" : session.mode;
     },
     reset: () => session.revertAll(),
+    get sessionKey() {
+      return session.sessionKey;
+    },
     get valid() {
       return session.valid;
     },
@@ -508,6 +517,9 @@ export function useRegisterInspectorEditSessionV2(
   const facade = useMemo<InspectorEditSessionV2 | null>(() => {
     if (!sessionKey) return null;
     return {
+      get allowCleanApply() {
+        return sessionRef.current?.allowCleanApply ?? false;
+      },
       apply: async () => (await sessionRef.current?.apply()) === true,
       get applyBlockReason() {
         return sessionRef.current?.applyBlockReason ?? null;
@@ -550,6 +562,7 @@ export function useRegisterInspectorEditSessionV2(
   }, [sessionKey]);
 
   const sessionMode = session?.mode ?? null;
+  const sessionAllowCleanApply = session?.allowCleanApply ?? false;
   const sessionDirty = session?.dirty ?? false;
   const sessionApplying = session?.applying ?? false;
   const sessionPendingConfirmation = session?.pendingConfirmation ?? false;
@@ -578,6 +591,7 @@ export function useRegisterInspectorEditSessionV2(
   }, [
     facade,
     owner,
+    sessionAllowCleanApply,
     sessionApplyBlockReason,
     sessionApplying,
     sessionDirty,

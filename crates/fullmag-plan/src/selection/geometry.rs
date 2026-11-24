@@ -429,11 +429,31 @@ fn node_from_geometry_entry(entry: &GeometryEntryIR) -> Result<GeometryNode, Sel
             Box::new(node_from_geometry_entry(base)?),
             Box::new(node_from_geometry_entry(tool)?),
         ),
+        GeometryEntryIR::Xor { left, right, .. } => GeometryNode::Xor(
+            Box::new(node_from_geometry_entry(left)?),
+            Box::new(node_from_geometry_entry(right)?),
+        ),
         GeometryEntryIR::Translate { base, by, .. } => GeometryNode::Affine {
             geometry: Box::new(node_from_geometry_entry(base)?),
             transform: AffineTransform3 {
                 translation_m: *by,
                 ..AffineTransform3::identity()
+            },
+        },
+        GeometryEntryIR::Transform {
+            child,
+            translation,
+            rotation_quat,
+            scale,
+            pivot,
+            ..
+        } => GeometryNode::Affine {
+            geometry: Box::new(node_from_geometry_entry(child)?),
+            transform: AffineTransform3 {
+                translation_m: *translation,
+                rotation_xyzw: *rotation_quat,
+                scale: *scale,
+                pivot_m: *pivot,
             },
         },
         GeometryEntryIR::ImportedGeometry { name, .. } => {

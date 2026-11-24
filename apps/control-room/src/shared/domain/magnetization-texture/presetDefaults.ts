@@ -401,6 +401,7 @@ export function createDefaultMagneticTextureDraft(
   bounds: TargetMetricBounds,
   hostContext: "object" | "region" | "stage" = "object",
 ): MagneticTextureDraft {
+  const kind = canonicalPresetKind(presetKind);
   const plane = resolveLargestFacePlane(bounds.size);
   const [lu, lv] = planeInPlaneDimensions(bounds.size, plane);
   const lMin = Math.min(lu, lv);
@@ -427,7 +428,7 @@ export function createDefaultMagneticTextureDraft(
     sourceMode: "preset",
     customUiLabel: "",
     presetVersion: 2,
-    presetKind: canonicalPresetKind(presetKind),
+    presetKind: kind,
 
     planeMode: "auto",
     resolvedPlane: plane,
@@ -438,31 +439,41 @@ export function createDefaultMagneticTextureDraft(
     circulation: 1,
     circulationAuto: true,
     corePolarity:
-      presetKind === "bloch_skyrmion" ||
-      presetKind === "neel_skyrmion" ||
-      presetKind === "antiskyrmion" ||
-      presetKind === "skyrmion_lattice"
+      kind === "bloch_skyrmion" ||
+      kind === "neel_skyrmion" ||
+      kind === "antiskyrmion" ||
+      kind === "skyrmion_lattice"
         ? -1
         : 1,
     chirality: 1,
     vorticity: 1,
     backgroundSign: 1,
     hopfCharge: 1,
-    wallKind: presetKind === "skyrmion_lattice" ? "bloch" : "neel",
-    coreRadiusM: roundSig3(Math.max(1e-9, Math.min(0.08 * lMin, 15e-9))),
-    radiusM: roundSig3(0.25 * lMin),
+    wallKind: kind === "skyrmion_lattice" ? "bloch" : "neel",
+    coreRadiusM:
+      kind === "bloch_point"
+        ? 1e-9
+        : roundSig3(Math.max(1e-9, Math.min(0.08 * lMin, 15e-9))),
+    radiusM:
+      kind === "skyrmion_lattice"
+        ? rLat
+        : kind === "hopfion"
+          ? roundSig3(0.25 * l3dXy)
+          : roundSig3(0.25 * lMin),
     innerRadiusM: roundSig3(0.16 * lMin),
     outerRadiusM: Math.max(roundSig3(0.34 * lMin), roundSig3(0.16 * lMin) * 1.5),
     wallWidthM:
-      presetKind === "domain_wall"
+      kind === "domain_wall"
         ? roundSig3(0.1 * longest.length)
-        : presetKind === "skyrmionium"
+        : kind === "skyrmionium"
           ? roundSig3(0.04 * lMin)
-          : roundSig3(0.05 * lMin),
+          : kind === "skyrmion_lattice"
+            ? roundSig3(0.025 * lMin)
+            : roundSig3(0.05 * lMin),
     wallHalfWidthM: roundSig3(0.25 * lMin),
     centerOffsetM: 0,
-    leftDomain: presetKind === "two_domain" ? [1, 0, 0] : dwLeft,
-    rightDomain: presetKind === "two_domain" ? [-1, 0, 0] : dwRight,
+    leftDomain: kind === "two_domain" ? [1, 0, 0] : dwLeft,
+    rightDomain: kind === "two_domain" ? [-1, 0, 0] : dwRight,
     lockAntiparallelRight: true,
     wallCenterMode: "auto",
     wallCenterDirection: [0, 1, 0],
@@ -706,6 +717,8 @@ export function switchDraftPresetPatch(
     sourceMode: "preset",
     resolvedPlane,
     normalAxis: fresh.normalAxis,
+    direction: fresh.direction,
+    seed: fresh.seed,
     corePolarity: fresh.corePolarity,
     wallKind: fresh.wallKind,
     coreRadiusM: fresh.coreRadiusM,
@@ -730,7 +743,14 @@ export function switchDraftPresetPatch(
     axialScale: fresh.axialScale,
     majorRadiusM: fresh.majorRadiusM,
     minorRadiusM: fresh.minorRadiusM,
+    latticeSymmetry: fresh.latticeSymmetry,
     latticeConstantM: fresh.latticeConstantM,
+    spiralKind: fresh.spiralKind,
+    spinPlaneNormal: fresh.spinPlaneNormal,
+    bpKind: fresh.bpKind,
+    bpTwistRad: fresh.bpTwistRad,
+    asiLattice: fresh.asiLattice,
+    asiVertexState: fresh.asiVertexState,
     asiPitchM: fresh.asiPitchM,
     scale: [1, 1, 1],
   };

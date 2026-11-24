@@ -6,6 +6,7 @@ import {
   invalidateAuthoringMutationDependents,
 } from "@/kernel/authoring/authoringMutationInvalidation";
 import {
+  applyArray3DTransaction,
   createObjectTransaction,
   patchObjectGeometryTransaction,
   primitiveDraftOverlayStore,
@@ -37,6 +38,7 @@ import {
 } from "./geometryShared";
 
 export interface ApplyGeometryDraftParams {
+  baseline?: ObjectGeometrySpecDraft | null;
   draft: ObjectGeometrySpecDraft;
   kernel: KernelApi;
   selection: InspectorPanelProps["selection"];
@@ -49,6 +51,7 @@ export interface ApplyGeometryDraftParams {
   canonicalSessionDraft: GeometryObjectDraft | null;
   createDraftSlugId: (draft: ObjectGeometrySpecDraft) => string;
   onSyncEditVersion: (editVersion: number) => void;
+  onAcknowledgeCommitted?: () => void;
   onSetOwnCreatePending: (pending: boolean) => void;
   onCommittedSuccess: (originPivotObjectId: string | null) => void;
   onRevisionConflict: (
@@ -58,6 +61,7 @@ export interface ApplyGeometryDraftParams {
 }
 
 export async function applyGeometryDraftMutation({
+  baseline,
   draft,
   kernel,
   selection,
@@ -70,12 +74,27 @@ export async function applyGeometryDraftMutation({
   canonicalSessionDraft,
   createDraftSlugId,
   onSyncEditVersion,
+  onAcknowledgeCommitted,
   onSetOwnCreatePending,
   onCommittedSuccess,
   onRevisionConflict,
 }: ApplyGeometryDraftParams): Promise<boolean> {
   const geometry = serializeGeometryPayload(draft);
-  const transform = serializeTransformPayload(draft);
+  const committedObject =
+    draft.mode === "committed"
+      ? sceneData?.objects?.find((item) => item.id === draft.objectId) ?? null
+      : null;
+  const existingTransform =
+    committedObject?.transform &&
+    typeof committedObject.transform === "object" &&
+    !Array.isArray(committedObject.transform)
+      ? (committedObject.transform as Record<string, unknown>)
+      : null;
+  const transform = serializeTransformPayload(
+    draft,
+    existingTransform,
+    baseline ?? null,
+  );
   const capturedScopeKey = resolveActiveScopeKey();
   const capturedCommandScopeKey = kernel.commands?.getSessionScopeKey?.();
   const historyGeneration = kernel.authoringHistory?.getGeneration?.();
@@ -162,6 +181,7 @@ export async function applyGeometryDraftMutation({
             requestOptions,
           );
           if (isCurrentSessionScope()) {
+            onAcknowledgeCommitted?.();
             kernel.selection.set(
               buildObjectSelection(newId, "object.root", createName),
               "geometry-authoring",
@@ -224,21 +244,38 @@ export async function applyGeometryDraftMutation({
     );
   }
 
+  const expandArrayToObjects =
+    draft.array3dConfig?.realization === "expand_to_objects";
+
   try {
     const response = await runAuthoringMutationWithHistory(
       historyContext,
-      `Edit geometry and placement ${draft.draftName}`,
+      expandArrayToObjects
+        ? `Expand Array 3D ${draft.draftName}`
+        : `Edit geometry and placement ${draft.draftName}`,
       ({ baseRevision }) =>
-        patchObjectGeometryTransaction(
-          kernel.api,
-          draft.objectId,
-          {
-            base_revision: baseRevision ?? sceneRevision,
-            geometry,
-            transform,
-          },
-          requestOptions,
-        ),
+        expandArrayToObjects && draft.array3dConfig
+          ? applyArray3DTransaction(
+              kernel.api,
+              {
+                axes: draft.array3dConfig.axes,
+                base_revision: baseRevision ?? sceneRevision ?? 0,
+                merge_overlapping: draft.array3dConfig.mergeOverlapping,
+                object_id: draft.objectId,
+                realization: "expand_to_objects",
+              },
+              requestOptions,
+            )
+          : patchObjectGeometryTransaction(
+              kernel.api,
+              draft.objectId,
+              {
+                base_revision: baseRevision ?? sceneRevision,
+                geometry,
+                transform,
+              },
+              requestOptions,
+            ),
       undefined,
       sceneRevision !== null ? { expectedSceneRevision: sceneRevision } : undefined,
     );

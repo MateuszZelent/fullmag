@@ -63,6 +63,7 @@ import {
 import { SCALAR_COLOR_PALETTE_ITEMS } from "@/shared/visualization/scalarColorPalette";
 import type {
   CommandQueueStatusResource,
+  FdmMultilayerLayoutResource,
   FieldCatalogResource,
   LiveStatusResource,
   MeshActiveBuildResource,
@@ -71,6 +72,7 @@ import type {
   MeshSemanticsResource,
   MeshSummaryResource,
   QuantityCatalogResource,
+  SceneResource,
   VisualizationStatePatch,
   VisualizationStateResource,
 } from "@/kernel/api/apiTypes";
@@ -88,9 +90,10 @@ import {
   resolveActiveLaneOperation,
   type ActiveLaneCapabilitySnapshot,
 } from "@/kernel/resources/useActiveLaneCapabilities";
-import type {
-  Selection,
-  VisualizationMeshPartLike,
+import {
+  canonicalVisualizationSceneObjectId,
+  type Selection,
+  type VisualizationMeshPartLike,
 } from "@/kernel/selection/selectionTypes";
 import { resolveVisualizationTargetForMeshPart } from "@/kernel/selection/visualizationTargetResolver";
 import {
@@ -101,9 +104,11 @@ import {
   displayLabelForVisualizationTarget,
   renderModePatch,
   resolveEffectiveVisualizationSettings,
+  resolveGlobalObjectVisualizationSettings,
   resolveTargetVisualization,
   resolveVisualizationTargetFromSelection,
   isFdmUniverseOutsideSupportTarget,
+  targetForFdmNativeLayer,
   visualizationTargetCapabilities,
   type ObjectVisualizationController,
   type ObjectVisualizationSnapshot,
@@ -111,6 +116,7 @@ import {
   type VisualizationColorMode,
   type VisualizationGeometryScope,
   type VisualizationRenderMode,
+  type VisualizationTargetKind,
   type VisualizationTargetPatch,
   type VisualizationTargetRef,
 } from "@/kernel/visualization/ObjectVisualizationController";
@@ -143,6 +149,7 @@ import {
   RIBBON_ANALYSIS_SHOW_CHART_AND_FIELD_COMMAND,
   RIBBON_ANALYSIS_SHOW_CHART_COMMAND,
   RIBBON_ANALYSIS_SHOW_FIELD_COMMAND,
+  RIBBON_INSPECTOR_OPEN_MAGNETIC_TEXTURE_COMMAND,
   RIBBON_PHYSICS_SELECT_INTERACTION_COMMAND,
   RIBBON_PHYSICS_CREATE_FIELD_DRIVE_COMMAND,
   RIBBON_PHYSICS_CREATE_MASK_ANTENNA_COMMAND,
@@ -157,11 +164,20 @@ import {
   RIBBON_VISUALIZATION_PATCH_TARGET_COMMAND,
   RIBBON_VISUALIZATION_RESET_AIRBOX_COMMAND,
   globalQuantityCommandInput,
+  openMagneticTextureInspectorCommandInput,
   visualizationAirboxCommandInput,
   visualizationDefaultsCommandInput,
   visualizationStateCommandInput,
   visualizationTargetCommandInput,
 } from "./ribbonCommands";
+import {
+  activeViewTargetSummary,
+  buildViewTargetUtilityActions,
+  extractRibbonSceneObjects,
+  isAirboxLikeVisualizationTarget,
+  resolveMaterialsTargetContext,
+  resolvePhysicsTargetLabel,
+} from "./ribbonTargetContext";
 
 type RibbonVisualizationApi = Pick<
   NonNullable<CommandContext["api"]>["visualization"],
@@ -300,7 +316,7 @@ const definitionsTab: RibbonTabContent = {
 const geometryTab: RibbonTabContent = {
   tabId: "geometry",
   groups: [
-    // â”€â”€ Create Object / Shape â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // ── Create Object / Shape ───────────────────────────────────────────────
     {
       id: "builder-create",
       title: "Create Object / Shape",
@@ -308,34 +324,51 @@ const geometryTab: RibbonTabContent = {
       tone: "authoring",
       actions: [
         { id: "geometry.add-box",          icon: icon(Box),      label: "Box",            iconColor: "text-emerald-400", splitButton: true, menu: menu("geometry-box", "Box primitive", ["Block", "Thin film", "Cuboid from bounds"]) },
+        { id: "geometry.add-thin-film",    icon: icon(Box),      label: "Thin Film",      iconColor: "text-lime-300" },
         { id: "geometry.add-cylinder",     icon: icon(Cylinder), label: "Cylinder",       iconColor: "text-cyan-400" },
         { id: "geometry.add-sphere",       icon: icon(Circle),   label: "Sphere",         iconColor: "text-violet-400" },
-        { id: "geometry.add-microstrip-antenna", icon: icon(RadioTower), label: "Microstrip", iconColor: "text-rose-300" },
-        { id: "geometry.add-cpw-antenna", icon: icon(RadioTower), label: "CPW", iconColor: "text-sky-400" },
-        { id: "builder-add-ellipsoid",     icon: icon(Circle),   label: "Ellipsoid",      preview: true, disabled: true, iconColor: "text-purple-300" },
-        { id: "builder-add-disk",          icon: icon(Disc),     label: "Disk",           preview: true, disabled: true, iconColor: "text-sky-400" },
-        { id: "geometry.add-thin-film",    icon: icon(Box),      label: "Thin Film",      iconColor: "text-lime-300" },
-        { id: "builder-add-pillar",        icon: icon(Cylinder), label: "Pillar",         preview: true, disabled: true, iconColor: "text-fuchsia-300" },
-        { id: "builder-add-nanowire",      icon: icon(Minus),    label: "Nanowire",       preview: true, disabled: true, iconColor: "text-rose-300" },
-        { id: "builder-add-ring",          icon: icon(Circle),   label: "Ring",           preview: true, disabled: true, iconColor: "text-amber-300" },
-        { id: "builder-add-triangular_prism", icon: icon(Triangle), label: "Tri. Prism",  preview: true, disabled: true, iconColor: "text-orange-300" },
-        { id: "builder-add-cone",          icon: icon(Triangle), label: "Cone",           preview: true, disabled: true, iconColor: "text-yellow-300" },
-        { id: "builder-add-capsule",       icon: icon(Disc),     label: "Capsule",        preview: true, disabled: true, iconColor: "text-teal-300" },
-        { id: "builder-add-tube",          icon: icon(Circle),   label: "Tube",           preview: true, disabled: true, iconColor: "text-blue-300" },
-        { id: "builder-add-wedge",         icon: icon(Box),      label: "Wedge",          preview: true, disabled: true, iconColor: "text-stone-300" },
-        { id: "builder-add-polygon_prism", icon: icon(Circle),   label: "Polygon Prism",  preview: true, disabled: true, iconColor: "text-indigo-300" },
+        { id: "geometry.add-ellipsoid",    icon: icon(Circle),   label: "Ellipsoid",      iconColor: "text-purple-300" },
+        { id: "geometry.add-cone",         icon: icon(Triangle), label: "Cone",           iconColor: "text-yellow-300" },
+        { id: "geometry.add-torus",        icon: icon(Disc),     label: "Torus",          iconColor: "text-sky-400" },
+        { id: "geometry.add-polygon-prism", icon: icon(Hexagon), label: "Polygon Prism",  iconColor: "text-indigo-300" },
+        { id: "geometry.import-stl",       icon: icon(Upload),   label: "Import STL…",    iconColor: "text-amber-300" },
       ],
     },
-    // â”€â”€ Boolean â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // ── AC/DC · Microwave Antennas (optional physics module) ────────────────
+    {
+      id: "builder-acdc-antennas",
+      title: "AC/DC · Antennas",
+      subtitle: "Microwave conductors",
+      tone: "authoring",
+      actions: [
+        { id: "geometry.add-microstrip-antenna", icon: icon(RadioTower), label: "Microstrip", iconColor: "text-rose-300" },
+        { id: "geometry.add-cpw-antenna",  icon: icon(RadioTower), label: "CPW",          iconColor: "text-sky-400" },
+      ],
+    },
+    // ── Boolean CSG ─────────────────────────────────────────────────────────
     {
       id: "builder-boolean",
       title: "Boolean",
       subtitle: "Compose object geometry",
       tone: "authoring",
       actions: [
-        { id: "builder-boolean-union",     icon: icon(Combine), label: "Union",     preview: true, disabled: true, iconColor: "text-emerald-400" },
-        { id: "builder-boolean-subtract",  icon: icon(Minus),   label: "Subtract",  preview: true, disabled: true, iconColor: "text-amber-400" },
-        { id: "builder-boolean-intersect", icon: icon(Plus),    label: "Intersect", preview: true, disabled: true, iconColor: "text-slate-400" },
+        { id: "geometry.boolean-union",           icon: icon(Combine), label: "Union A ∪ B",     iconColor: "text-emerald-400" },
+        { id: "geometry.boolean-subtract",        icon: icon(Minus),   label: "Subtract A − B",  iconColor: "text-amber-400" },
+        { id: "geometry.boolean-intersect",       icon: icon(Blend),   label: "Intersect A ∩ B", iconColor: "text-cyan-400" },
+        { id: "geometry.boolean-imprint-regions", icon: icon(Layers3), label: "Imprint Regions", iconColor: "text-violet-300" },
+      ],
+    },
+    // ── Modify ──────────────────────────────────────────────────────────────
+    {
+      id: "builder-modify",
+      title: "Modify",
+      subtitle: "Duplicate, array & separate",
+      tone: "authoring",
+      actions: [
+        { id: "geometry.duplicate-objects", icon: icon(Plus),     label: "Duplicate",       shortcut: "Ctrl+D", iconColor: "text-emerald-300" },
+        { id: "geometry.apply-array-3d",    icon: icon(Grid3X3),  label: "Array 3D",        iconColor: "text-cyan-300" },
+        { id: "geometry.split-by-plane",    icon: icon(Scissors), label: "Split by Plane",  iconColor: "text-amber-300" },
+        { id: "geometry.extract-operand",   icon: icon(Columns2), label: "Extract Operand", iconColor: "text-sky-300" },
       ],
     },
     // â”€â”€ Transform â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
@@ -362,17 +395,34 @@ const geometryTab: RibbonTabContent = {
         { id: "builder-toggle-snap",     icon: icon(Magnet),       label: "Snap",       shortcut: "G", preview: true, disabled: true, iconColor: "text-slate-400" },
       ],
     },
-    // â”€â”€ Lifecycle â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // ── Lifecycle ──────────────────────────────────────────────────────────
     {
       id: "builder-lifecycle",
       title: "Lifecycle",
-      subtitle: "Build & validate",
+      subtitle: "Realize & validate",
       tone: "neutral",
       actions: [
-        { id: "builder-build-geometry", icon: icon(Hammer),      label: "Build Geometry", iconColor: "text-emerald-400" },
-        { id: "geometry.commit-object-draft", icon: icon(Save),  label: "Apply Draft",                  iconColor: "text-emerald-400" },
-        { id: "mesh.build-selected",    icon: icon(Grid3X3),     label: "Build Mesh",                   iconColor: "text-amber-400" },
-        { id: "builder-validate",       icon: icon(CheckCircle), label: "Validate",                   iconColor: "text-emerald-400" },
+        {
+          id: "builder-build-geometry",
+          icon: icon(Hammer),
+          label: "Realize Geometry",
+          iconColor: "text-emerald-400",
+          tooltip: "Realize committed scene geometry before meshing or simulation",
+        },
+        {
+          id: "mesh.build-selected",
+          icon: icon(Grid3X3),
+          label: "Mesh Selected",
+          iconColor: "text-amber-400",
+          tooltip: "Build FEM mesh for the selected target object",
+        },
+        {
+          id: "builder-validate",
+          icon: icon(CheckCircle),
+          label: "Validate",
+          iconColor: "text-emerald-400",
+          tooltip: "Validate committed scene geometry for overlaps and bounds",
+        },
       ],
     },
     // â”€â”€ Focus â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
@@ -448,7 +498,14 @@ const materialsTab: RibbonTabContent = {
       subtitle: "initial state",
       tone: "authoring",
       actions: [
-        { id: "mat-texture-inspector", icon: icon(Eye), label: "Inspector", preview: true, disabled: true, iconColor: "var(--fm-hue-material)", menu: menu("mat-texture-inspector", "Texture inspector", ["View texture", "Texture history", "Reset texture"]) },
+        {
+          id: "mat-texture-inspector",
+          commandId: RIBBON_INSPECTOR_OPEN_MAGNETIC_TEXTURE_COMMAND,
+          icon: icon(Eye),
+          label: "Inspector",
+          iconColor: "var(--fm-hue-material)",
+          tooltip: "Open Magnetic Texture Inspector for the active Target object",
+        },
         { id: "magnetization-texture.assign-uniform", icon: icon(Magnet), label: "Uniform", iconColor: "var(--fm-hue-material)" },
         { id: "magnetization-texture.assign-random-seeded", icon: icon(Sparkles), label: "Random", iconColor: "var(--fm-hue-material)" },
         { id: "magnetization-texture.assign-vortex", icon: icon(Circle), label: "Vortex", iconColor: "var(--fm-hue-material)" },
@@ -848,6 +905,7 @@ export interface RibbonBuildContext {
   commandContext?: CommandContext;
   commandFeedback?: readonly CommandFeedbackNotice[];
   commandQueue?: CommandQueueStatusResource | null;
+  fdmMultilayerLayout?: FdmMultilayerLayoutResource | null;
   fieldCatalog?: FieldCatalogResource | null;
   quantityCatalog?: QuantityCatalogResource | null;
   commands?: CommandRegistry;
@@ -857,6 +915,7 @@ export interface RibbonBuildContext {
   meshSemantics?: MeshSemanticsResource | null;
   meshSummary?: MeshSummaryResource | null;
   resources?: RibbonResourceInvalidator;
+  scene?: SceneResource | null;
   selection: Selection;
   sessionStatus?: RibbonSessionStatus | null;
   sceneObjectIds?: ReadonlySet<string>;
@@ -883,22 +942,124 @@ function buildGeometryTabContent(
   context: RibbonBuildContext,
 ): RibbonTabContent {
   const discretization = ribbonDiscretization(context);
-  if (discretization === "fem") return content;
+  const baseGroups =
+    discretization === "fem"
+      ? content.groups
+      : content.groups.map((group) =>
+          group.id === "builder-lifecycle"
+            ? {
+                ...group,
+                // `mesh.build-selected` submits an object_mesh FEM command. Keep
+                // it out of FDM and unresolved sessions instead of relabelling it.
+                actions: group.actions.filter(
+                  (action) => action.id !== "mesh.build-selected",
+                ),
+              }
+            : group,
+        );
 
   return {
     ...content,
-    groups: content.groups.map((group) =>
-      group.id === "builder-lifecycle"
-        ? {
-            ...group,
-            // `mesh.build-selected` submits an object_mesh FEM command. Keep
-            // it out of FDM and unresolved sessions instead of relabelling it.
-            actions: group.actions.filter(
-              (action) => action.id !== "mesh.build-selected",
-            ),
+    groups: baseGroups,
+  };
+}
+
+function buildMaterialsTabContent(
+  content: RibbonTabContent,
+  context?: RibbonBuildContext,
+): RibbonTabContent {
+  const uiState = getTextureInspectorUiSnapshot();
+  const sceneObjects = context
+    ? extractRibbonSceneObjects(context.scene, context.commandContext)
+    : [];
+  const targetContext = context
+    ? resolveMaterialsTargetContext({
+        sceneObjects,
+        selection: context.selection,
+      })
+    : null;
+  const targetLabel = targetContext?.targetLabel ?? null;
+  const targetObject = targetContext?.targetObject ?? null;
+
+  const updatedGroups = content.groups.map((group) => {
+    if (group.id === "materials-magnetization") {
+      return {
+        ...group,
+        subtitle: targetLabel ? `applies to ${targetLabel}` : "initial state",
+        actions: group.actions.map((action) => {
+          if (action.id === "mat-texture-inspector") {
+            return {
+              ...action,
+              active: context?.selection?.kind === "object.magnetic-texture",
+              commandId: RIBBON_INSPECTOR_OPEN_MAGNETIC_TEXTURE_COMMAND,
+              commandInput: targetObject
+                ? openMagneticTextureInspectorCommandInput({
+                    objectId: targetObject.id,
+                    objectLabel: targetObject.label,
+                    objectRole: targetObject.role,
+                  })
+                : undefined,
+              tooltip: targetLabel
+                ? `Open Magnetic Texture Inspector for ${targetLabel}`
+                : "Open Magnetic Texture Inspector for a magnetic object",
+            };
           }
-        : group,
-    ),
+          if (action.id.startsWith("magnetization-texture.assign-")) {
+            return {
+              ...action,
+              tooltip: targetLabel
+                ? `Apply ${action.label} magnetization immediately to ${targetLabel} (supports Undo)`
+                : `Select a magnetic object in Target to apply ${action.label} magnetization`,
+            };
+          }
+          if (action.id === "mat-texture-more") {
+            return {
+              ...action,
+              tooltip: targetLabel
+                ? `Apply a magnetization texture preset immediately to ${targetLabel} (supports Undo)`
+                : "Select a magnetic object in Target to apply a magnetization preset",
+            };
+          }
+          return action;
+        }),
+      };
+    }
+    if (group.id === "materials-transform") {
+      return {
+        ...group,
+        actions: group.actions.map((action) => {
+          if (action.id === "mat-transform-scope") {
+            return {
+              ...action,
+              active: uiState.transformScope === "texture",
+              menu: action.menu?.map((node) =>
+                node.type === "radio-group"
+                  ? { ...node, value: uiState.transformScope }
+                  : node,
+              ),
+            };
+          }
+          if (action.id === "mat-transform-tool") {
+            return {
+              ...action,
+              active: uiState.gizmoEnabled,
+              menu: action.menu?.map((node) =>
+                node.type === "radio-group"
+                  ? { ...node, value: uiState.gizmoMode }
+                  : node,
+              ),
+            };
+          }
+          return action;
+        }),
+      };
+    }
+    return group;
+  });
+
+  return {
+    ...content,
+    groups: updatedGroups,
   };
 }
 
@@ -907,16 +1068,30 @@ function buildPhysicsTabContent(
   context: RibbonBuildContext,
 ): RibbonTabContent {
   const discretization = ribbonDiscretization(context);
+  const sceneObjects = extractRibbonSceneObjects(
+    context.scene,
+    context.commandContext,
+  );
+  const targetLabel = resolvePhysicsTargetLabel({
+    sceneObjects,
+    selection: context.selection ?? null,
+  });
   return {
     ...content,
     groups: content.groups.map((group) =>
       group.id === "physics-core"
         ? {
             ...group,
+            subtitle: targetLabel
+              ? `${targetLabel} · Global: Demag`
+              : "Global: Demag",
             actions: group.actions.map((action) =>
               action.id === "physics-interactions"
                 ? {
                     ...action,
+                    tooltip: targetLabel
+                      ? `Configure local Hamiltonian terms (Exchange, Anisotropy, DMI) on ${targetLabel}`
+                      : "Select a magnetic object in Target to configure local Hamiltonian terms (Exchange, Anisotropy, DMI)",
                     menu: physicsInteractionMenu(
                       discretization,
                       context.sessionStatus?.capabilities?.active_lane ?? null,
@@ -925,13 +1100,15 @@ function buildPhysicsTabContent(
                 : action.id === "physics-global"
                   ? {
                       ...action,
+                      tooltip:
+                        "Configure global model terms (Demag, External Field, Field Drives) across the whole scene",
                       menu: physicsInteractionMenu(
                         discretization,
                         context.sessionStatus?.capabilities?.active_lane ?? null,
                         "global",
                       ),
                     }
-                : action,
+                  : action,
             ),
           }
         : group,
@@ -939,15 +1116,31 @@ function buildPhysicsTabContent(
   };
 }
 
+const GLOBAL_OBJECT_TARGET_KINDS: VisualizationTargetKind[] = [
+  "object",
+  "part",
+  "fdm-native-layer",
+];
+
 export function resolveRibbonVisualizationTarget({
+  discretization,
+  fdmMultilayerLayout,
   sceneObjectIds = new Set(),
   selectedMeshPart,
   selection,
+  sessionStatus,
   visualizationState,
 }: Pick<
   RibbonBuildContext,
-  "sceneObjectIds" | "selectedMeshPart" | "selection" | "visualizationState"
->): VisualizationTargetRef | null {
+  | "fdmMultilayerLayout"
+  | "sceneObjectIds"
+  | "selectedMeshPart"
+  | "selection"
+  | "sessionStatus"
+  | "visualizationState"
+> & {
+  discretization?: "fdm" | "fem" | "unknown";
+}): VisualizationTargetRef | null {
   if (selection.ref?.type === "mesh-part" && selectedMeshPart) {
     return resolveVisualizationTargetForMeshPart({
       part: selectedMeshPart,
@@ -964,7 +1157,36 @@ export function resolveRibbonVisualizationTarget({
     };
   }
 
-  return resolveVisualizationTargetFromSelection(selection);
+  const resolved = resolveVisualizationTargetFromSelection(selection);
+  const effectiveDiscretization =
+    discretization ??
+    (sessionStatus
+      ? resolveSessionDiscretization(sessionStatus) ?? "unknown"
+      : "unknown");
+  if (
+    resolved?.kind === "object" &&
+    effectiveDiscretization === "fdm" &&
+    fdmMultilayerLayout?.layers?.length
+  ) {
+    const rawObjectId = resolved.id.startsWith("object:")
+      ? resolved.id.slice("object:".length)
+      : resolved.id;
+    const canonicalObjectId = canonicalVisualizationSceneObjectId(rawObjectId);
+    const nativeLayer = fdmMultilayerLayout.layers.find(
+      (layer) =>
+        layer.object_id === rawObjectId ||
+        canonicalVisualizationSceneObjectId(layer.object_id) ===
+          canonicalObjectId,
+    );
+    if (nativeLayer) {
+      return targetForFdmNativeLayer(
+        nativeLayer.layer_id,
+        nativeLayer.magnet_name,
+      );
+    }
+  }
+
+  return resolved;
 }
 
 function resultsQuantityCommandInput(quantityId: string) {
@@ -1099,42 +1321,7 @@ export function buildRibbonTabContent(
   }
 
   if (tabId === "materials") {
-    const uiState = getTextureInspectorUiSnapshot();
-    resolvedContent = {
-      ...content,
-      groups: content.groups.map((group) =>
-        group.id === "materials-transform"
-          ? {
-              ...group,
-              actions: group.actions.map((action) => {
-                if (action.id === "mat-transform-scope") {
-                  return {
-                    ...action,
-                    active: uiState.transformScope === "texture",
-                    menu: action.menu?.map((node) =>
-                      node.type === "radio-group"
-                        ? { ...node, value: uiState.transformScope }
-                        : node,
-                    ),
-                  };
-                }
-                if (action.id === "mat-transform-tool") {
-                  return {
-                    ...action,
-                    active: uiState.gizmoEnabled,
-                    menu: action.menu?.map((node) =>
-                      node.type === "radio-group"
-                        ? { ...node, value: uiState.gizmoMode }
-                        : node,
-                    ),
-                  };
-                }
-                return action;
-              }),
-            }
-          : group,
-      ),
-    };
+    resolvedContent = buildMaterialsTabContent(content, context);
   }
 
   if (tabId === "physics" && context) {
@@ -2055,15 +2242,31 @@ function buildViewGlobalDisplayGroup(
   group: RibbonTabContent["groups"][number],
   context: RibbonBuildContext,
 ): RibbonTabContent["groups"][number] {
+  const sceneObjects = extractRibbonSceneObjects(
+    context.scene,
+    context.commandContext,
+  );
+  const activeTarget = resolveRibbonVisualizationTarget(context);
+  const targetSummary = activeViewTargetSummary(activeTarget, sceneObjects);
+  const discretization = ribbonDiscretization(context);
+  const utilityActions = buildViewTargetUtilityActions({
+    discretization,
+    fdmMultilayerLayout: context.fdmMultilayerLayout,
+    sceneObjects,
+    target: activeTarget,
+  });
+
   return {
     ...group,
+    title: "Display",
+    subtitle: targetSummary.label,
     actions: group.actions.flatMap((action) => {
       if (action.id === "view-airbox") {
-        // The FEM airbox visualization target/state is not the FDM universe
-        // extent. FDM exposes its structured-grid extent from Grid/Inspector.
-        return ribbonDiscretization(context) === "fem"
-          ? [buildAirboxAction(context)]
-          : [];
+        // Airbox visualization is a public target on both FEM and FDM lanes;
+        // fail closed only while the discretization lane is unresolved.
+        return discretization !== "unknown"
+          ? [buildAirboxAction(context), ...utilityActions]
+          : utilityActions;
       }
       if (action.id === "view-surface") return [buildSurfaceAction(context)];
       if (action.id === "view-texture") return [buildTextureAction(context)];
@@ -2463,53 +2666,163 @@ function surfaceFieldStatus(
     : { tone: "neutral", value: "unknown" };
 }
 
+function resolveActiveRibbonTargetAndSettings(context: RibbonBuildContext) {
+  const sceneObjects = extractRibbonSceneObjects(
+    context.scene,
+    context.commandContext,
+  );
+  const rawTarget = resolveRibbonVisualizationTarget(context);
+  const isAirbox = isAirboxLikeVisualizationTarget(rawTarget);
+  const target = isAirbox ? AIRBOX_VISUALIZATION_TARGET : rawTarget;
+  const summary = activeViewTargetSummary(
+    target,
+    sceneObjects,
+    context.fdmMultilayerLayout,
+  );
+  if (!target) {
+    const baseSettings = context.visualizationState
+      ? resolveGlobalObjectVisualizationSettings(context.visualizationState)
+      : undefined;
+    const settings = context.visualization.getDefaultSettings("object", baseSettings);
+    return {
+      effectiveSettings: resolveEffectiveVisualizationSettings(settings),
+      isAirbox: false,
+      settings,
+      summary,
+      target: null,
+    };
+  }
+  const resolved = resolveTargetVisualization({
+    snapshot: context.visualizationSnapshot,
+    target,
+    visualizationState: context.visualizationState,
+  });
+  return {
+    effectiveSettings: resolved.effectiveSettings,
+    isAirbox,
+    settings: resolved.settings,
+    summary,
+    target,
+  };
+}
+
+function withVisibleIfEnabling(
+  currentlyVisible: boolean,
+  enabling: boolean,
+  patch: VisualizationTargetPatch,
+): VisualizationTargetPatch {
+  return enabling && !currentlyVisible ? { visible: true, ...patch } : patch;
+}
+
 function buildSurfaceAction(
   context: RibbonBuildContext,
 ): RibbonTabContent["groups"][number]["actions"][number] {
-  const settings = context.visualization.getDefaultSettings("object");
-  const effectiveSettings = resolveEffectiveVisualizationSettings(settings);
-  const passControlsDisabled = !settings.visible;
+  const { effectiveSettings, isAirbox, settings, summary, target } =
+    resolveActiveRibbonTargetAndSettings(context);
+  const passControlsDisabled = !target && !settings.visible;
+  const airboxRenderMode = settings.pointsVisible
+    ? "points"
+    : settings.wireframeVisible
+      ? "wireframe"
+      : "off";
+  const patchCommandId = target
+    ? RIBBON_VISUALIZATION_PATCH_TARGET_COMMAND
+    : RIBBON_VISUALIZATION_PATCH_DEFAULTS_COMMAND;
+  const patchInput = (
+    patch: VisualizationTargetPatch,
+    enablingPass = false,
+  ) =>
+    target
+      ? visualizationTargetCommandInput(
+          target,
+          withVisibleIfEnabling(settings.visible, enablingPass, patch),
+        )
+      : visualizationDefaultsCommandInput(patch, GLOBAL_OBJECT_TARGET_KINDS, {
+          clearConflictingOverrides: true,
+        });
 
   return {
     id: "view-surface",
     icon: icon(Box),
     label: "Surface",
     iconColor: "text-teal-300",
+    tooltip: target
+      ? `Display passes (Surface, Wireframe, Bounds, Points) for ${summary.label}`
+      : "Display passes (Surface, Wireframe, Bounds, Points) for All Objects",
     menu: [
       {
         type: "label",
         id: "surface:header",
-        label: "Surface display",
-        badge: effectiveSettings.shaderVisible ? "on" : "off",
+        label: target ? `Display · ${summary.label}` : "Surface display",
+        badge: isAirbox
+          ? effectiveSettings.wireframeVisible || effectiveSettings.pointsVisible
+            ? "on"
+            : "off"
+          : effectiveSettings.shaderVisible
+            ? "on"
+            : "off",
       },
       {
         type: "status",
         id: "surface:scope",
         label: "Scope",
-        value: "Global ferromagnet surface",
+        value: target
+          ? isAirbox
+            ? "Airbox (Universe)"
+            : `${summary.detail}: ${summary.label}`
+          : "All Objects (Default)",
       },
+      ...(target
+        ? [
+            {
+              type: "checkbox" as const,
+              id: "surface:target-visible",
+              label: isAirbox ? "Airbox visible" : `${summary.label} visible`,
+              checked: settings.visible,
+              commandId: RIBBON_VISUALIZATION_PATCH_TARGET_COMMAND,
+              commandInput: (checked: boolean) =>
+                visualizationTargetCommandInput(target, { visible: checked }),
+            },
+          ]
+        : []),
       {
         type: "checkbox",
         id: "surface:visible",
         label: "Surface on/off",
-        checked: effectiveSettings.shaderVisible,
-        disabled: passControlsDisabled,
-        commandId: RIBBON_VISUALIZATION_PATCH_DEFAULTS_COMMAND,
+        checked: isAirbox ? false : effectiveSettings.shaderVisible,
+        disabled: isAirbox || passControlsDisabled,
+        tooltip: isAirbox
+          ? "Airbox renders wireframe, bounds, points, and vectors (no shaded surface)."
+          : undefined,
+        commandId: patchCommandId,
         commandInput: (checked: boolean) =>
-          visualizationDefaultsCommandInput({ shaderVisible: checked }),
+          patchInput({ shaderVisible: checked }, checked),
       },
       { type: "separator", id: "surface:s0" },
       {
         type: "radio-group",
         id: "surface:mesh-display",
         label: "Render mode",
-        value: settings.renderMode,
-        items: MESH_RENDER_ITEMS,
+        value: isAirbox ? airboxRenderMode : settings.renderMode,
+        items: isAirbox
+          ? [
+              { value: "wireframe", label: "Wireframe" },
+              { value: "points", label: "Points" },
+              { value: "off", label: "Off" },
+            ]
+          : MESH_RENDER_ITEMS,
         disabled: passControlsDisabled,
-        commandId: RIBBON_VISUALIZATION_PATCH_DEFAULTS_COMMAND,
+        commandId: patchCommandId,
         commandInput: (value: string) =>
-          visualizationDefaultsCommandInput(
-            renderModePatch(value as VisualizationRenderMode),
+          patchInput(
+            value === "off"
+              ? {
+                  pointsVisible: false,
+                  shaderVisible: false,
+                  wireframeVisible: false,
+                }
+              : renderModePatch(value as VisualizationRenderMode),
+            value !== "off",
           ),
       },
       {
@@ -2518,19 +2831,19 @@ function buildSurfaceAction(
         label: "Wireframe on/off",
         checked: effectiveSettings.wireframeVisible,
         disabled: passControlsDisabled,
-        commandId: RIBBON_VISUALIZATION_PATCH_DEFAULTS_COMMAND,
+        commandId: patchCommandId,
         commandInput: (checked: boolean) =>
-          visualizationDefaultsCommandInput({ wireframeVisible: checked }),
+          patchInput({ wireframeVisible: checked }, checked),
       },
       {
         type: "checkbox",
         id: "surface:frame",
-        label: "Frame on/off",
+        label: "Bounds / Frame on/off",
         checked: effectiveSettings.boundsVisible,
         disabled: passControlsDisabled,
-        commandId: RIBBON_VISUALIZATION_PATCH_DEFAULTS_COMMAND,
+        commandId: patchCommandId,
         commandInput: (checked: boolean) =>
-          visualizationDefaultsCommandInput({ boundsVisible: checked }),
+          patchInput({ boundsVisible: checked }, checked),
       },
       {
         type: "checkbox",
@@ -2538,23 +2851,23 @@ function buildSurfaceAction(
         label: "Points on/off",
         checked: effectiveSettings.pointsVisible,
         disabled: passControlsDisabled,
-        commandId: RIBBON_VISUALIZATION_PATCH_DEFAULTS_COMMAND,
+        commandId: patchCommandId,
         commandInput: (checked: boolean) =>
-          visualizationDefaultsCommandInput({ pointsVisible: checked }),
+          patchInput({ pointsVisible: checked }, checked),
       },
       {
         type: "slider",
         id: "surface:opacity",
-        label: "Surface opacity",
+        label: isAirbox ? "Airbox opacity" : "Surface opacity",
         value: settings.surfaceOpacityPercent,
         min: 0,
         max: 100,
         step: 1,
         unit: "%",
         disabled: passControlsDisabled,
-        commandId: RIBBON_VISUALIZATION_PATCH_DEFAULTS_COMMAND,
+        commandId: patchCommandId,
         commandInput: (value: number) =>
-          visualizationDefaultsCommandInput({ surfaceOpacityPercent: value }),
+          patchInput({ surfaceOpacityPercent: value }),
       },
     ],
   };
@@ -2563,25 +2876,39 @@ function buildSurfaceAction(
 function buildTextureAction(
   context: RibbonBuildContext,
 ): RibbonTabContent["groups"][number]["actions"][number] {
-  const settings = context.visualization.getDefaultSettings("object");
+  const { isAirbox, settings, summary, target } =
+    resolveActiveRibbonTargetAndSettings(context);
   const fieldStatus = surfaceFieldStatus(
     settings.surfaceColorSource,
     context.sessionStatus,
   );
+  const patchCommandId = target
+    ? RIBBON_VISUALIZATION_PATCH_TARGET_COMMAND
+    : RIBBON_VISUALIZATION_PATCH_DEFAULTS_COMMAND;
   const patch = (patchValue: VisualizationTargetPatch) =>
-    visualizationDefaultsCommandInput(patchValue);
+    target
+      ? visualizationTargetCommandInput(target, patchValue)
+      : visualizationDefaultsCommandInput(patchValue, GLOBAL_OBJECT_TARGET_KINDS, {
+          clearConflictingOverrides: true,
+        });
 
   return {
     id: "view-texture",
     icon: icon(Sparkles),
     label: "Texture",
-    active: settings.surfaceColorSource !== "solid",
+    active: !isAirbox && settings.surfaceColorSource !== "solid",
+    disabled: isAirbox,
+    tooltip: isAirbox
+      ? "Airbox has no shaded surface — use Vectors coloring instead."
+      : target
+        ? `Surface coloring for ${summary.label}`
+        : "Surface coloring for All Objects",
     iconColor: "text-purple-300",
     menu: [
       {
         type: "label",
         id: "texture:header",
-        label: "Surface coloring",
+        label: target ? `Surface coloring · ${summary.label}` : "Surface coloring",
         badge: surfaceColorSourceLabel(settings.surfaceColorSource),
       },
       {
@@ -2590,7 +2917,8 @@ function buildTextureAction(
         label: "Color source",
         value: settings.surfaceColorSource,
         items: SURFACE_COLOR_SOURCE_ITEMS,
-        commandId: RIBBON_VISUALIZATION_PATCH_DEFAULTS_COMMAND,
+        disabled: isAirbox,
+        commandId: patchCommandId,
         commandInput: (value: string) =>
           patch({ surfaceColorSource: value as SurfaceColorSource }),
       },
@@ -2610,14 +2938,19 @@ function buildQuantityAction(
   context: RibbonBuildContext,
 ): RibbonTabContent["groups"][number]["actions"][number] {
   const state = context.visualizationState;
+  const { isAirbox, settings, summary, target } =
+    resolveActiveRibbonTargetAndSettings(context);
   const activeQuantityId = normalizeQuantityIdOrDefault(
-    state?.quantity?.active_quantity_id ?? state?.active_quantity_id,
+    target
+      ? settings.activeQuantityId
+      : state?.quantity?.active_quantity_id ?? state?.active_quantity_id,
   );
-  const targetQuantityOverrideCount =
-    state?.overrides?.filter((entry) => {
-      const quantityId = entry.quantity?.active_quantity_id;
-      return Boolean(quantityId && !sameQuantityId(quantityId, activeQuantityId));
-    }).length ?? 0;
+  const targetQuantityOverrideCount = target
+    ? 0
+    : state?.overrides?.filter((entry) => {
+        const quantityId = entry.quantity?.active_quantity_id;
+        return Boolean(quantityId && !sameQuantityId(quantityId, activeQuantityId));
+      }).length ?? 0;
   const hasMixedTargetQuantities = targetQuantityOverrideCount > 0;
   const overlayVisible = state?.layers?.quantity_overlay?.visible ?? true;
   const autoContrast = state?.quantity?.auto_contrast ?? state?.auto_contrast ?? true;
@@ -2626,7 +2959,7 @@ function buildQuantityAction(
     state?.vector_style?.color_mode ?? "orientation";
   const quantityItems = quantityItemsForVisualizationTarget(
     activeQuantityId,
-    undefined,
+    target ? (isAirbox ? "airbox" : target.kind) : undefined,
     context.fieldCatalog,
     context.quantityCatalog,
   );
@@ -2638,9 +2971,16 @@ function buildQuantityAction(
     icon: icon(hasMixedTargetQuantities ? AlertTriangle : Sigma),
     label: "Quantity",
     iconColor: hasMixedTargetQuantities ? "text-amber-300" : "text-sky-300",
-    disabled: !context.api,
+    disabled: !target && !context.api,
+    tooltip: target
+      ? `Active displayed quantity for ${summary.label}: ${activeQuantityLabel}`
+      : `Active global quantity: ${activeQuantityLabel}`,
     menu: [
-      { type: "label", id: "quantity:header", label: "Active quantity" },
+      {
+        type: "label",
+        id: "quantity:header",
+        label: target ? `Quantity · ${summary.label}` : "Active quantity",
+      },
       {
         type: "status",
         id: "quantity:current",
@@ -2679,15 +3019,21 @@ function buildQuantityAction(
         label: "Quantity source",
         value: activeQuantityId,
         items: quantityItems,
-        disabled: !context.api,
-        commandId: RIBBON_VISUALIZATION_APPLY_GLOBAL_QUANTITY_COMMAND,
+        disabled: !target && !context.api,
+        commandId: target
+          ? RIBBON_VISUALIZATION_PATCH_TARGET_COMMAND
+          : RIBBON_VISUALIZATION_APPLY_GLOBAL_QUANTITY_COMMAND,
         commandInput: (value: string) =>
-          globalQuantityCommandInput(
-            value,
-            hasMixedTargetQuantities,
-            hasMixedTargetQuantities,
-            targetQuantityOverrideCount,
-          ),
+          target
+            ? visualizationTargetCommandInput(target, {
+                activeQuantityId: normalizeQuantityIdOrDefault(value),
+              })
+            : globalQuantityCommandInput(
+                value,
+                hasMixedTargetQuantities,
+                hasMixedTargetQuantities,
+                targetQuantityOverrideCount,
+              ),
       },
       { type: "separator", id: "quantity:s1" },
       {
@@ -2753,59 +3099,110 @@ function buildVectorsAction(
   const state = context.visualizationState;
   const vectorLayer = state?.layers?.vectors;
   const vectorStyle = state?.vector_style;
+  const { effectiveSettings, isAirbox, settings, summary, target } =
+    resolveActiveRibbonTargetAndSettings(context);
   const objectVectorSettings = context.visualization.getDefaultSettings("object");
-  const objectVectorScope =
-    context.visualizationSnapshot.defaults.object?.geometryScope ?? "full";
-  const visible = vectorLayer?.visible ?? state?.vector_glyphs ?? false;
-  const density =
-    state?.sampling?.max_glyphs ??
-    vectorLayer?.density ??
-    state?.vector_density ??
-    1200;
+  const objectVectorScope = target
+    ? settings.geometryScope
+    : context.visualizationSnapshot.defaults.object?.geometryScope ?? "full";
+  const visible = target
+    ? effectiveSettings.vectorsVisible
+    : vectorLayer?.visible ?? state?.vector_glyphs ?? objectVectorSettings.vectorsVisible;
+  const density = target
+    ? settings.vectorBudget
+    : vectorLayer?.density ??
+      state?.vector_density ??
+      state?.sampling?.max_glyphs ??
+      objectVectorSettings.vectorBudget ??
+      1200;
+  const targetNativeLayer =
+    target?.kind === "fdm-native-layer"
+      ? context.fdmMultilayerLayout?.layers?.find(
+          (layer) =>
+            target.id ===
+            `fdm-native-layer:${encodeURIComponent(layer.layer_id)}`,
+        ) ?? null
+      : null;
+  const maxNativeLayerCells = (context.fdmMultilayerLayout?.layers ?? []).reduce(
+    (highest, layer) => Math.max(highest, layer.active_cell_count ?? 0),
+    0,
+  );
+  const densityMax = targetNativeLayer
+    ? Math.max(1, targetNativeLayer.active_cell_count)
+    : Math.max(
+        4096,
+        maxNativeLayerCells,
+        state?.sampling?.max_glyphs ?? 0,
+        density,
+      );
   const component = state?.field_component ?? state?.quantity?.field_component ?? "3D";
+  const toggleCommandId = target
+    ? RIBBON_VISUALIZATION_PATCH_TARGET_COMMAND
+    : RIBBON_VISUALIZATION_PATCH_DEFAULTS_COMMAND;
+  const toggleCommandInput = (checked: boolean) =>
+    target
+      ? visualizationTargetCommandInput(
+          target,
+          withVisibleIfEnabling(settings.visible, checked, {
+            vectorsVisible: checked,
+          }),
+        )
+      : visualizationDefaultsCommandInput(
+          { vectorsVisible: checked },
+          GLOBAL_OBJECT_TARGET_KINDS,
+          { clearConflictingOverrides: true },
+        );
+  const targetPatchInput = (patch: VisualizationTargetPatch) =>
+    target
+      ? visualizationTargetCommandInput(target, patch)
+      : visualizationDefaultsCommandInput(patch, GLOBAL_OBJECT_TARGET_KINDS, {
+          clearConflictingOverrides: true,
+        });
 
   return {
     id: "view-vectors",
     icon: icon(Zap),
     label: "Vectors",
+    active: visible,
+    splitButton: true,
+    commandId: toggleCommandId,
+    commandInput: toggleCommandInput(!visible),
     iconColor: "text-cyan-300",
-    disabled: !context.api,
+    disabled: !target && !context.api && !context.visualization,
+    tooltip: target
+      ? `${visible ? "Hide" : "Show"} field vectors on ${summary.label} (click arrow for options)`
+      : `${visible ? "Hide" : "Show"} field vectors on All Objects (click arrow for options)`,
     menu: [
       {
         type: "label",
         id: "vectors:header",
-        label: "Field arrows",
+        label: target ? `Field arrows · ${summary.label}` : "Field arrows · All Objects",
         badge: visible ? "on" : "off",
       },
       {
         type: "checkbox",
         id: "vectors:visible",
-        label: "Show vectors / field arrows",
+        label: target
+          ? `Show vectors (${summary.label})`
+          : "Show vectors / field arrows",
         checked: visible,
-        disabled: !context.api,
-        commandId: RIBBON_VISUALIZATION_PATCH_STATE_COMMAND,
-        commandInput: (checked: boolean) =>
-          visualizationStateCommandInput({
-            layers: { vectors: { visible: checked } },
-            vector_glyphs: checked,
-          }),
+        commandId: toggleCommandId,
+        commandInput: (checked: boolean) => toggleCommandInput(checked),
       },
       {
         type: "slider",
         id: "vectors:density",
         label: "Vector glyph budget",
         value: density,
-        min: 8,
-        max: 4096,
-        step: 8,
-        disabled: !context.api,
-        commandId: RIBBON_VISUALIZATION_PATCH_STATE_COMMAND,
+        min: 0,
+        max: densityMax,
+        step: 1,
+        disabled: !target && !context.api,
+        commandId: target
+          ? RIBBON_VISUALIZATION_PATCH_TARGET_COMMAND
+          : RIBBON_VISUALIZATION_PATCH_DEFAULTS_COMMAND,
         commandInput: (value: number) =>
-          visualizationStateCommandInput({
-            layers: { vectors: { density: value } },
-            sampling: { max_glyphs: value },
-            vector_density: value,
-          }),
+          targetPatchInput({ vectorBudget: value }),
       },
       {
         type: "radio-group",
@@ -2813,10 +3210,12 @@ function buildVectorsAction(
         label: "Arrow extent",
         value: objectVectorScope,
         items: GEOMETRY_SCOPE_ITEMS,
-        disabled: !context.api,
-        commandId: RIBBON_VISUALIZATION_PATCH_DEFAULTS_COMMAND,
+        disabled: !target && !context.api,
+        commandId: target
+          ? RIBBON_VISUALIZATION_PATCH_TARGET_COMMAND
+          : RIBBON_VISUALIZATION_PATCH_DEFAULTS_COMMAND,
         commandInput: (value: string) =>
-          visualizationDefaultsCommandInput({
+          targetPatchInput({
             geometryScope: value as VisualizationGeometryScope,
           }),
       },
@@ -2824,45 +3223,56 @@ function buildVectorsAction(
         type: "submenu",
         id: "vectors:placement",
         label: "Arrow placement",
-        disabled: !context.api,
+        disabled: !target && !context.api,
         nodes: [
           {
             type: "checkbox",
             id: "vectors:centered-anchor",
             label: "Center arrows on mesh nodes",
-            checked: objectVectorSettings.vectorCenteringEnabled,
-            commandId: RIBBON_VISUALIZATION_PATCH_DEFAULTS_COMMAND,
+            checked: settings.vectorCenteringEnabled,
+            commandId: target
+              ? RIBBON_VISUALIZATION_PATCH_TARGET_COMMAND
+              : RIBBON_VISUALIZATION_PATCH_DEFAULTS_COMMAND,
             commandInput: (checked: boolean) =>
-              visualizationDefaultsCommandInput({
+              targetPatchInput({
                 vectorCenteringEnabled: checked,
               }),
           },
-          {
-            type: "checkbox",
-            id: "vectors:surface-offset",
-            label: "Lift surface arrows",
-            checked: objectVectorSettings.vectorSurfaceOffsetEnabled,
-            commandId: RIBBON_VISUALIZATION_PATCH_DEFAULTS_COMMAND,
-            commandInput: (checked: boolean) =>
-              visualizationDefaultsCommandInput({
-                vectorSurfaceOffsetEnabled: checked,
-              }),
-          },
-          {
-            type: "slider",
-            id: "vectors:surface-offset-scale",
-            label: "Surface lift amount",
-            value: objectVectorSettings.vectorSurfaceOffsetScale,
-            min: 0.01,
-            max: 1,
-            step: 0.01,
-            disabled: !context.api || !objectVectorSettings.vectorSurfaceOffsetEnabled,
-            commandId: RIBBON_VISUALIZATION_PATCH_DEFAULTS_COMMAND,
-            commandInput: (value: number) =>
-              visualizationDefaultsCommandInput({
-                vectorSurfaceOffsetScale: value,
-              }),
-          },
+          ...(!isAirbox
+            ? [
+                {
+                  type: "checkbox" as const,
+                  id: "vectors:surface-offset",
+                  label: "Lift surface arrows",
+                  checked: settings.vectorSurfaceOffsetEnabled,
+                  commandId: target
+                    ? RIBBON_VISUALIZATION_PATCH_TARGET_COMMAND
+                    : RIBBON_VISUALIZATION_PATCH_DEFAULTS_COMMAND,
+                  commandInput: (checked: boolean) =>
+                    targetPatchInput({
+                      vectorSurfaceOffsetEnabled: checked,
+                    }),
+                },
+                {
+                  type: "slider" as const,
+                  id: "vectors:surface-offset-scale",
+                  label: "Surface lift amount",
+                  value: settings.vectorSurfaceOffsetScale,
+                  min: 0.01,
+                  max: 1,
+                  step: 0.01,
+                  disabled:
+                    (!target && !context.api) || !settings.vectorSurfaceOffsetEnabled,
+                  commandId: target
+                    ? RIBBON_VISUALIZATION_PATCH_TARGET_COMMAND
+                    : RIBBON_VISUALIZATION_PATCH_DEFAULTS_COMMAND,
+                  commandInput: (value: number) =>
+                    targetPatchInput({
+                      vectorSurfaceOffsetScale: value,
+                    }),
+                },
+              ]
+            : []),
         ],
       },
       {
@@ -2890,48 +3300,56 @@ function buildVectorsAction(
         type: "submenu",
         id: "vectors:size",
         label: "Arrow size",
-        disabled: !context.api,
+        disabled: !target && !context.api,
         nodes: [
           {
             type: "slider",
             id: "vectors:length",
             label: "Length scale",
-            value: vectorStyle?.length_scale ?? 1,
+            value: target ? settings.vectorLengthScale : vectorStyle?.length_scale ?? 1,
             min: 0.2,
             max: 4,
             step: 0.1,
-            commandId: RIBBON_VISUALIZATION_PATCH_STATE_COMMAND,
+            commandId: target
+              ? RIBBON_VISUALIZATION_PATCH_TARGET_COMMAND
+              : RIBBON_VISUALIZATION_PATCH_DEFAULTS_COMMAND,
             commandInput: (value: number) =>
-              visualizationStateCommandInput({
-                vector_style: { length_scale: value },
+              targetPatchInput({
+                vectorLengthScale: value,
               }),
           },
           {
             type: "slider",
             id: "vectors:thickness",
             label: "Thickness",
-            value: vectorStyle?.thickness ?? 1,
+            value: target ? settings.vectorThickness : vectorStyle?.thickness ?? 1,
             min: 0.2,
             max: 4,
             step: 0.1,
-            commandId: RIBBON_VISUALIZATION_PATCH_STATE_COMMAND,
+            commandId: target
+              ? RIBBON_VISUALIZATION_PATCH_TARGET_COMMAND
+              : RIBBON_VISUALIZATION_PATCH_DEFAULTS_COMMAND,
             commandInput: (value: number) =>
-              visualizationStateCommandInput({
-                vector_style: { thickness: value },
+              targetPatchInput({
+                vectorThickness: value,
               }),
           },
           {
             type: "slider",
             id: "vectors:alpha",
             label: "Alpha",
-            value: vectorStyle?.alpha ?? 0.9,
+            value: target
+              ? settings.vectorAlphaPercent / 100
+              : vectorStyle?.alpha ?? 0.9,
             min: 0,
             max: 1,
             step: 0.05,
-            commandId: RIBBON_VISUALIZATION_PATCH_STATE_COMMAND,
+            commandId: target
+              ? RIBBON_VISUALIZATION_PATCH_TARGET_COMMAND
+              : RIBBON_VISUALIZATION_PATCH_DEFAULTS_COMMAND,
             commandInput: (value: number) =>
-              visualizationStateCommandInput({
-                vector_style: { alpha: value },
+              targetPatchInput({
+                vectorAlphaPercent: Math.round(value * 100),
               }),
           },
         ],
@@ -2958,21 +3376,35 @@ function buildVectorsAction(
         type: "radio-group",
         id: "vectors:colors",
         label: "Vector colors",
-        value: vectorStyle?.color_mode ?? "orientation",
+        value: target ? settings.vectorColorMode : vectorStyle?.color_mode ?? "orientation",
         items: VECTOR_COLOR_ITEMS,
-        disabled: !context.api,
-        commandId: RIBBON_VISUALIZATION_PATCH_STATE_COMMAND,
+        disabled: !target && !context.api,
+        commandId: target
+          ? RIBBON_VISUALIZATION_PATCH_TARGET_COMMAND
+          : RIBBON_VISUALIZATION_PATCH_DEFAULTS_COMMAND,
         commandInput: (value: string) =>
-          visualizationStateCommandInput({
-            vector_style: { color_mode: value as VectorColorModePatch },
+          targetPatchInput({
+            vectorColorMode: value as VisualizationColorMode,
           }),
       },
       {
         type: "color",
         id: "vectors:mono-color",
         label: "Monochrome vector color",
-        value: vectorStyle?.mono_color ?? "var(--fm-accent)",
-        disabled: true,
+        value: target
+          ? settings.vectorMonoColor
+          : vectorStyle?.mono_color ?? "var(--fm-accent)",
+        disabled: !target,
+        ...(target
+          ? {
+              commandId: RIBBON_VISUALIZATION_PATCH_TARGET_COMMAND,
+              commandInput: (value: string) =>
+                visualizationTargetCommandInput(target, {
+                  vectorColorMode: "monochrome",
+                  vectorMonoColor: value,
+                }),
+            }
+          : {}),
       },
     ],
   };
@@ -3713,7 +4145,7 @@ function buildSelectedVisualizationGroup(
   return {
     id: "view-selected-display",
     title: "Selected Display",
-    subtitle: "Per object",
+    subtitle: target ? targetLabel : "Select a target",
     tone: "selection",
     actions: [
       {

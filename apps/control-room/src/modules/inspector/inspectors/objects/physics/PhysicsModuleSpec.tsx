@@ -82,6 +82,7 @@ import {
 import {
   asJsonRecord,
   buildModuleHelpContent,
+  commitObjectExchangeMutation,
   errorMessage,
   isRequiredModuleKind,
   isRestFetchableInteractionKind,
@@ -257,8 +258,15 @@ export function PhysicsModuleInspectorPanel({
         activeLane,
         scene.data?.objects,
         scene.data?.study,
+        scene.data?.materials,
       ),
-    [activeLane, interactionDiscretization, scene.data?.objects, scene.data?.study],
+    [
+      activeLane,
+      interactionDiscretization,
+      scene.data?.materials,
+      scene.data?.objects,
+      scene.data?.study,
+    ],
   );
 
   const spec = useMemo<InspectorSpec<PhysicsModuleDraft>>(() => {
@@ -642,27 +650,17 @@ export function PhysicsModuleInspectorPanel({
                             currentRev,
                           );
                         }
-                        const rev = await commitObjectInteractionMutation({
-                          interactionKind: "exchange",
+                        return commitObjectExchangeMutation({
                           objectId: targetObjId,
-                          patch: () =>
-                            kernel.api.model.patchObjectInteraction(
-                              targetObjId,
-                              "exchange",
-                              {
-                                base_revision: currentRev,
-                                enabled: draft.enabled,
-                                present: true,
-                              },
-                              sessionScopeKey ? { sessionScopeKey } : undefined,
-                            ),
+                          enabled: draft.enabled,
+                          baseRevision: currentRev,
+                          studyRec: asJsonRecord(scene.data?.study),
+                          sceneObjects: scene.data?.objects,
+                          sceneMaterials: scene.data?.materials,
+                          sessionScopeKey,
+                          api: kernel.api,
                           resources: kernel.resources,
                         });
-                        kernel.resources.invalidate(
-                          MODEL_PHYSICS_GRAPH_PATH,
-                          rev,
-                        );
-                        return rev;
                       },
                     );
                     return true;

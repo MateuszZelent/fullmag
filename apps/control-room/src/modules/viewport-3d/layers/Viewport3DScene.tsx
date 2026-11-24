@@ -50,6 +50,7 @@ import {
   type PerspectiveCamera as ThreePerspectiveCamera,
 } from "three";
 
+import { visualizationObjectIdForMeshPartLike } from "@/kernel/selection/selectionTypes";
 import {
   AIRBOX_VISUALIZATION_TARGET,
   type VisualizationTargetRef,
@@ -143,6 +144,8 @@ import {
 import { PostProcessingLayer } from "./PostProcessingLayer";
 import { resolveViewport3DTargetRenderPlan } from "./viewport3DTargetRenderPlan";
 import { shaderUsesVertexColors } from "./viewport3DLayerSettings";
+import { Array3DInstancedPreviewLayer } from "./Array3DInstancedPreviewLayer";
+import { GhostCutterOverlayLayer } from "./GhostCutterOverlayLayer";
 import { PrimitiveObjectLayer } from "./PrimitiveObjectLayer";
 import { buildFdmPointPositions, FdmCuboidLayer, type FdmCuboidInstanceModel } from "./FdmCuboidLayer";
 import { createFdmInspectClearArbitrator, resolveFdmCuboidGeometryScopeInstanceOrdinals } from "./FdmCuboidLayer.model";
@@ -194,8 +197,14 @@ import type { FdmAirboxPassPlan } from "./fdmAirboxPassPlan";
 import type { Viewport3DVectorBuildReference } from "../viewport3dRenderModel";
 import { FrozenSpinsOverlay } from "./FrozenSpinsOverlay";
 import { type FrozenSpinsOverlayModel } from "./FrozenSpinsOverlay.model";
-import { Viewport3DMoveToolLayer, type Translation3 } from "../MoveObjectGizmo";
 import {
+  Viewport3DMoveToolLayer,
+  type GizmoTransformPatch,
+  type Translation3,
+} from "../MoveObjectGizmo";
+import {
+  getActiveLiveTextureSurfaceKey,
+  resolveActiveAuthoredTextureSurfaceObjectIds,
   Viewport3DTextureTransformLayer,
   type Viewport3DTextureTransformModel,
 } from "../TextureTransformGizmo";
@@ -287,7 +296,10 @@ interface Viewport3DSceneProps {
   onCameraInteractionEnd?: (epoch?: number) => void;
   onCameraInteractionStart?: (epoch?: number) => void;
   onCaptureFrameReady?: () => void;
-  onSelectObject: (object: Viewport3DPrimitiveObject) => void;
+  onSelectObject: (
+    object: Viewport3DPrimitiveObject,
+    modifiers?: { ctrlKey?: boolean; metaKey?: boolean; shiftKey?: boolean },
+  ) => void;
   onSelectPlanarMonitor: (monitorId: string, isDraft: boolean) => void;
   onSelectRegion: (selection: RegionOverlaySelection) => void;
   onSelectDomain: () => void;
@@ -300,6 +312,12 @@ interface Viewport3DSceneProps {
     translation: Translation3,
     baseRevision: number,
   ) => Promise<boolean | void> | boolean | void;
+  onTransformPatchCommit?: (
+    objectId: string,
+    patch: GizmoTransformPatch,
+    baseRevision: number,
+  ) => Promise<boolean | void> | boolean | void;
+  selectedOperandId?: string | null;
   onBeginGesture?: () => boolean;
   onMoveGestureActiveChange?: (active: boolean) => void;
   moveToolObjectId: string | null;
@@ -1194,6 +1212,28 @@ export function hasActiveViewport3DFemFieldData(
   return false;
 }
 
+export function suppressVisualizationSettingsForLiveTextureEdit(
+  settings: VisualizationTargetSettings,
+  objectId: string | null | undefined,
+  liveEditingTextureObjectId: string | null,
+): VisualizationTargetSettings {
+  if (
+    !liveEditingTextureObjectId ||
+    !objectId ||
+    objectId !== liveEditingTextureObjectId
+  ) {
+    return settings;
+  }
+  if (!settings.shaderVisible && !settings.vectorsVisible) {
+    return settings;
+  }
+  return {
+    ...settings,
+    shaderVisible: false,
+    vectorsVisible: false,
+  };
+}
+
 export function resolveViewport3DLiveFieldCoveredObjectIds({
   fdmCuboidLayerEnabled,
   fdmNativeLayerViews,
@@ -1226,9 +1266,8 @@ export function resolveViewport3DLiveFieldCoveredObjectIds({
     }
     for (const view of fdmNativeLayerViews) {
       if (
-        (view.surfaceColors || view.vectorSegments?.length) &&
-        view.model &&
-        view.model.count > 0
+        (view.surfaceColors && view.model && view.model.count > 0) ||
+        Boolean(view.vectorSegments?.length)
       ) {
         ids.add(view.domain.objectId);
       }
@@ -1341,7 +1380,20 @@ export function resolveViewport3DRealizedFdmObjectIds({
     // The layout can arrive before the asynchronous native cuboid build. Keep
     // the primitive preview until the replacement has a non-empty model to
     // render; otherwise the primitive disappears during the build handoff.
-    if (view.model && view.model.count > 0) {
+    // Once the user hides the layer or switches to vectors-only (Surface/
+    // Wireframe/Points all off), the native layer still owns this object so
+    // turning Surface off does not pop the authored primitive/texture back in.
+    const surfaceGeometryRequested = view.settings
+      ? view.settings.visible &&
+        (view.settings.shaderVisible ||
+          view.settings.wireframeVisible ||
+          view.settings.pointsVisible)
+      : true;
+    if (
+      (view.model && view.model.count > 0) ||
+      Boolean(view.vectorSegments?.length) ||
+      !surfaceGeometryRequested
+    ) {
       objectIds.add(view.domain.objectId);
     }
   }
@@ -1393,8 +1445,8 @@ function Viewport3DModelLayerStack({
   fdmAirboxVectorSegments,
   fdmMultilayerAirboxView,
   fdmLaneActive,
-  fdmNativeLayerViews,
-  fdmTargetViews,
+  fdmNativeLayerViews: rawFdmNativeLayerViews,
+  fdmTargetViews: rawFdmTargetViews,
   fieldModel,
   hysteresisReplayGlyphModel,
   getObjectSettings,
@@ -1414,6 +1466,7 @@ function Viewport3DModelLayerStack({
   onInspectClear,
   onInspectSample,
   onMoveCommit,
+  onTransformPatchCommit,
   onBeginGesture,
   moveToolObjectId,
   moveDraftResetRevision,
@@ -1429,6 +1482,7 @@ function Viewport3DModelLayerStack({
   regionOverlayMode,
   regionOverlays,
   selectedObjectId,
+  selectedOperandId,
   selectedRegionId,
   textureTransformModel,
   topologyFreshness,
@@ -1481,6 +1535,8 @@ function Viewport3DModelLayerStack({
   | "onInspectClear"
   | "onInspectSample"
   | "onMoveCommit"
+  | "onTransformPatchCommit"
+  | "selectedOperandId"
   | "onBeginGesture"
   | "onMoveGestureActiveChange"
   | "moveToolObjectId"
@@ -1557,6 +1613,73 @@ function Viewport3DModelLayerStack({
   }, []);
   const topologyLayerEnabled = !savedViewportActive && !fdmLaneActive &&
     viewport3DTopologyMeshLayerEnabledFromBrowserConfig();
+  const activeLiveTextureSurfaceKey = useSyncExternalStore(
+    subscribeTextureDraftBridge,
+    getActiveLiveTextureSurfaceKey,
+    getActiveLiveTextureSurfaceKey,
+  );
+  const liveEditingTextureObjectId =
+    !savedViewportActive &&
+    activeLiveTextureSurfaceKey &&
+    activeLiveTextureSurfaceKey !== "__selected__"
+      ? activeLiveTextureSurfaceKey
+      : null;
+
+  // When an analytical live Magnetic Texture draft is open on an object,
+  // suppress stale discretized FDM/FEM surfaces and vectors on that object so
+  // ONLY the live texture surface preview + live texture vectors render (keeping
+  // GPU buffers mounted for zero-cost restore when editing ends).
+  const fdmNativeLayerViews = useMemo(
+    () =>
+      !liveEditingTextureObjectId
+        ? rawFdmNativeLayerViews
+        : rawFdmNativeLayerViews.map((view) =>
+            view.domain.objectId === liveEditingTextureObjectId
+              ? {
+                  ...view,
+                  settings: suppressVisualizationSettingsForLiveTextureEdit(
+                    view.settings,
+                    view.domain.objectId,
+                    liveEditingTextureObjectId,
+                  ),
+                }
+              : view,
+          ),
+    [liveEditingTextureObjectId, rawFdmNativeLayerViews],
+  );
+  const fdmTargetViews = useMemo(
+    () =>
+      !liveEditingTextureObjectId
+        ? rawFdmTargetViews
+        : rawFdmTargetViews.map((view) => {
+            const targetObjectId =
+              view.ownerTarget.kind === "object" &&
+              view.ownerTarget.id.startsWith("object:")
+                ? view.ownerTarget.id.slice("object:".length)
+                : null;
+            return targetObjectId === liveEditingTextureObjectId
+              ? {
+                  ...view,
+                  settings: suppressVisualizationSettingsForLiveTextureEdit(
+                    view.settings,
+                    targetObjectId,
+                    liveEditingTextureObjectId,
+                  ),
+                }
+              : view;
+          }),
+    [liveEditingTextureObjectId, rawFdmTargetViews],
+  );
+  const effectiveGetPartSettings = useCallback(
+    (part: Viewport3DMeshPart) =>
+      suppressVisualizationSettingsForLiveTextureEdit(
+        getPartSettings(part),
+        visualizationObjectIdForMeshPartLike(part),
+        liveEditingTextureObjectId,
+      ),
+    [getPartSettings, liveEditingTextureObjectId],
+  );
+
   const realizedObjectIds = useMemo(() => {
     const ids = new Set(resolveViewport3DRealizedTopologyObjectIds({
       enabled: topologyLayerEnabled && stageVisibility.baseGeometry,
@@ -1567,12 +1690,13 @@ function Viewport3DModelLayerStack({
     }));
     if (fdmCuboidLayerEnabled && stageVisibility.baseGeometry) {
       for (const id of resolveViewport3DRealizedFdmObjectIds({
-        fdmNativeLayerViews, fdmTargetViews,
+        fdmNativeLayerViews: rawFdmNativeLayerViews,
+        fdmTargetViews: rawFdmTargetViews,
       })) ids.add(id);
     }
     return ids;
   }, [committedTopologyParts, topologyLayerEnabled, stageVisibility.baseGeometry, primitiveModel, topologyModel,
-    topologyFreshness, fdmCuboidLayerEnabled, fdmNativeLayerViews, fdmTargetViews]);
+    topologyFreshness, fdmCuboidLayerEnabled, rawFdmNativeLayerViews, rawFdmTargetViews]);
 
   // Set of objectIds currently covered by an active live discretized solver field.
   // Used by Viewport3DTextureTransformLayer to suppress the static authored
@@ -1581,13 +1705,35 @@ function Viewport3DModelLayerStack({
     () =>
       resolveViewport3DLiveFieldCoveredObjectIds({
         fdmCuboidLayerEnabled,
-        fdmNativeLayerViews,
-        fdmTargetViews,
+        fdmNativeLayerViews: rawFdmNativeLayerViews,
+        fdmTargetViews: rawFdmTargetViews,
         fieldModel,
         primitiveModel,
         savedViewportActive,
       }),
-    [fdmCuboidLayerEnabled, fdmTargetViews, fdmNativeLayerViews, fieldModel, savedViewportActive, primitiveModel],
+    [fdmCuboidLayerEnabled, rawFdmTargetViews, rawFdmNativeLayerViews, fieldModel, savedViewportActive, primitiveModel],
+  );
+
+  const authoredTextureSurfaceObjectIds = useMemo(
+    () =>
+      resolveActiveAuthoredTextureSurfaceObjectIds({
+        activeLiveSurfaceKey: activeLiveTextureSurfaceKey,
+        getObjectSettings,
+        liveFieldCoveredObjectIds,
+        primitiveModel,
+        savedViewportActive,
+        selectedObjectId,
+        textureTransformModel,
+      }),
+    [
+      activeLiveTextureSurfaceKey,
+      getObjectSettings,
+      liveFieldCoveredObjectIds,
+      primitiveModel,
+      savedViewportActive,
+      selectedObjectId,
+      textureTransformModel,
+    ],
   );
 
   const textureBinding = useSyncExternalStore(
@@ -1672,7 +1818,8 @@ function Viewport3DModelLayerStack({
               settings={view.settings}
               surfaceColors={fdmTextureColors.get(view.target.id) ?? view.surfaceColors}
               tracker={tracker}
-              vectorColorMode={vectorColorMode}
+              vectorBuildReference={view.vectorBuildReference}
+              vectorColorMode={view.settings.vectorColorMode ?? vectorColorMode}
               vectorGlyphColors={view.vectorGlyphColors?.colors ?? null}
               vectorSegments={view.vectorSegments}
               vectorStyle={vectorStyle}
@@ -1799,21 +1946,38 @@ function Viewport3DModelLayerStack({
       ) : null}
       {stageVisibility.primitiveObjects &&
       viewport3DPrimitiveObjectLayerEnabledFromBrowserConfig() ? (
-        <PrimitiveObjectLayer
-          colors={colors}
-          getObjectSettings={getObjectSettings}
-          materialProfile={materialProfile}
-          onSelectObject={onSelectObject}
-          primitiveModel={primitiveModel}
-          meshReadyFallbackObjectIds={meshReadyFallbackObjectIds}
-          realizedObjectIds={realizedObjectIds}
-          tracker={tracker}
-        />
+        <>
+          <PrimitiveObjectLayer
+            colors={colors}
+            getObjectSettings={getObjectSettings}
+            materialProfile={materialProfile}
+            onSelectObject={onSelectObject}
+            primitiveModel={primitiveModel}
+            meshReadyFallbackObjectIds={meshReadyFallbackObjectIds}
+            realizedObjectIds={realizedObjectIds}
+            suppressedSolidObjectIds={authoredTextureSurfaceObjectIds}
+            tracker={tracker}
+          />
+          <Array3DInstancedPreviewLayer
+            colors={colors}
+            primitiveModel={primitiveModel}
+            suppressedSolidObjectIds={authoredTextureSurfaceObjectIds}
+            tracker={tracker}
+          />
+          <GhostCutterOverlayLayer
+            colors={colors}
+            primitiveModel={primitiveModel}
+            selectedObjectId={selectedObjectId}
+            selectedOperandId={selectedOperandId}
+            tracker={tracker}
+          />
+        </>
       ) : null}
       <Viewport3DMoveToolLayer
         moveDraftResetRevision={moveDraftResetRevision}
         moveToolObjectId={moveToolObjectId}
         onCommit={onMoveCommit}
+        onTransformPatchCommit={onTransformPatchCommit}
         onBeginGesture={onBeginGesture}
         onGestureActiveChange={onMoveGestureActiveChange}
         primitiveModel={primitiveModel}
@@ -1821,6 +1985,7 @@ function Viewport3DModelLayerStack({
       />
       <Viewport3DTextureTransformLayer
         onGestureActiveChange={onMoveGestureActiveChange}
+        onSelectObject={onSelectObject}
         primitiveModel={primitiveModel}
         selectedObjectId={selectedObjectId}
         textureTransformModel={textureTransformModel}
@@ -1840,7 +2005,7 @@ function Viewport3DModelLayerStack({
             primitiveModel={primitiveModel}
             sessionIdentity={sessionIdentity}
             fieldModel={fieldModel}
-            getPartSettings={getPartSettings}
+            getPartSettings={effectiveGetPartSettings}
             materialProfile={materialProfile}
             magnetizationTexturePreviews={magnetizationTexturePreviews}
             meshQualityColors={meshQualityColors}
@@ -2204,6 +2369,7 @@ export function Viewport3DScene({
   rotationMode,
   selectionBounds,
   selectedObjectId,
+  selectedOperandId,
   selectedRegionId,
   textureTransformModel,
   tracker,
@@ -2221,6 +2387,7 @@ export function Viewport3DScene({
   onInspectClear,
   onInspectSample,
   onMoveCommit,
+  onTransformPatchCommit,
   onBeginGesture,
   onMoveGestureActiveChange,
   moveToolObjectId,
@@ -2681,6 +2848,8 @@ export function Viewport3DScene({
         onInspectClear={inspectClearArbitrator.clear}
         onInspectSample={handleArbitratedInspectSample}
         onMoveCommit={onMoveCommit}
+        onTransformPatchCommit={onTransformPatchCommit}
+        selectedOperandId={selectedOperandId}
         onBeginGesture={onBeginGesture}
         moveToolObjectId={moveToolObjectId}
         moveDraftResetRevision={moveDraftResetRevision}

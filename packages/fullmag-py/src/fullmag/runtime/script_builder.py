@@ -68,7 +68,10 @@ from fullmag.model.geometry import (
     ANTENNA_LAYOUT_TYPES,
     CPWAntennaLayout,
     ArchWaveguide,
+    Array3D,
+    ArrayAxisSpec,
     Box,
+    Cone,
     Cylinder,
     Difference,
     Ellipse,
@@ -80,9 +83,15 @@ from fullmag.model.geometry import (
     MicrostripAntennaLayout,
     Path3DWaypoint,
     PiecewisePath3DLayout,
+    PolygonPrism,
     SinWaveguide,
+    SlicePlane,
+    Torus,
+    Transform,
     Translate,
     Union,
+    Xor,
+    quaternion_from_euler_xyz_deg,
 )
 from fullmag.model.output_storage import OutputStorage
 from fullmag.model.execution_profile import ExecutionProfile, ExecutionRequestLayer, _parallel_execution_lane
@@ -2910,37 +2919,359 @@ def _scene_float_sequence(
     return tuple(normalized) if normalized else None
 
 
+def _normalize_csg_op(raw_kind: str, params: Mapping[str, object]) -> str | None:
+    kind = raw_kind.strip().lower()
+    if kind in {"union", "difference", "intersection", "xor"}:
+        return kind
+    if kind == "csg":
+        raw_op = str(params.get("op") or params.get("operation") or "").strip().lower()
+        return {
+            "union": "union",
+            "difference": "difference",
+            "subtract": "difference",
+            "intersection": "intersection",
+            "intersect": "intersection",
+            "xor": "xor",
+        }.get(raw_op)
+    return None
+
+
+def _render_transform_dict_suffix(
+    expr: str,
+    transform: Mapping[str, object],
+) -> str:
+    """Append fluent ``.translate(...)`` / ``.rotate(...)`` / ``.scale(...)`` / ``.transform(...)``."""
+    raw_t = transform.get("translation")
+    if raw_t is None:
+        raw_t = transform.get("translate")
+    if raw_t is None:
+        raw_t = transform.get("offset")
+    if raw_t is None:
+        raw_t = transform.get("by")
+    translation = (
+        _scene_float_sequence(raw_t, count=3)
+        if raw_t is not None
+        else (0.0, 0.0, 0.0)
+    )
+    if translation is None:
+        raise ValueError("Transform translation must contain three finite coordinates.")
+
+    raw_q = transform.get("rotation_quat")
+    if raw_q is not None:
+        rotation_quat = _scene_float_sequence(raw_q, count=4)
+        if rotation_quat is None:
+            raise ValueError("Transform rotation_quat must contain four finite components.")
+    elif transform.get("euler_xyz_deg") is not None:
+        euler = _scene_float_sequence(transform.get("euler_xyz_deg"), count=3)
+        if euler is None:
+            raise ValueError("Transform euler_xyz_deg must contain three finite angles.")
+        rotation_quat = quaternion_from_euler_xyz_deg(euler)
+    else:
+        rotation_quat = (0.0, 0.0, 0.0, 1.0)
+
+    raw_s = transform.get("scale")
+    scale = (
+        _scene_float_sequence(raw_s, count=3)
+        if raw_s is not None
+        else (1.0, 1.0, 1.0)
+    )
+    if scale is None:
+        raise ValueError("Transform scale must contain three finite components.")
+
+    raw_p = transform.get("pivot")
+    pivot = (
+        _scene_float_sequence(raw_p, count=3)
+        if raw_p is not None
+        else (0.0, 0.0, 0.0)
+    )
+    if pivot is None:
+        raise ValueError("Transform pivot must contain three finite coordinates.")
+
+    has_t = any(v != 0.0 for v in translation)
+    has_q = any(abs(a - b) > 1e-15 for a, b in zip(rotation_quat, (0.0, 0.0, 0.0, 1.0)))
+    has_s = any(abs(v - 1.0) > 1e-15 for v in scale)
+    has_p = any(v != 0.0 for v in pivot)
+
+    if not (has_t or has_q or has_s or has_p):
+        return expr
+
+    def _vec3(vals: tuple[float, float, float]) -> str:
+        return (
+            f"({_py_float_roundtrip(vals[0])}, "
+            f"{_py_float_roundtrip(vals[1])}, "
+            f"{_py_float_roundtrip(vals[2])})"
+        )
+
+    def _vec4(vals: tuple[float, float, float, float]) -> str:
+        return (
+            f"({_py_float_roundtrip(vals[0])}, "
+            f"{_py_float_roundtrip(vals[1])}, "
+            f"{_py_float_roundtrip(vals[2])}, "
+            f"{_py_float_roundtrip(vals[3])})"
+        )
+
+    if has_t and not (has_q or has_s or has_p):
+        return f"{expr}.translate({_vec3(translation)})"
+    if has_q and not (has_t or has_s):
+        pivot_kw = f", pivot={_vec3(pivot)}" if has_p else ""
+        return f"{expr}.rotate(quat={_vec4(rotation_quat)}{pivot_kw})"
+    if has_s and not (has_t or has_q):
+        pivot_kw = f", pivot={_vec3(pivot)}" if has_p else ""
+        return f"{expr}.scale({_vec3(scale)}{pivot_kw})"
+
+    kwargs: list[str] = []
+    if has_t:
+        kwargs.append(f"translation={_vec3(translation)}")
+    if has_q:
+        kwargs.append(f"rotation_quat={_vec4(rotation_quat)}")
+    if has_s:
+        kwargs.append(f"scale={_vec3(scale)}")
+    if has_p:
+        kwargs.append(f"pivot={_vec3(pivot)}")
+    return f"{expr}.transform({', '.join(kwargs)})"
+
+
+def _render_polygon_vertices_literal(raw_vertices: object, *, context: str) -> str:
+    if isinstance(raw_vertices, (str, bytes)) or not isinstance(raw_vertices, Sequence) or len(raw_vertices) < 3:
+        raise ValueError(f"{context} requires at least 3 2D vertices.")
+    rendered: list[str] = []
+    for idx, pt in enumerate(raw_vertices):
+        pair = _scene_float_sequence(pt, count=2)
+        if pair is None:
+            raise ValueError(f"{context} vertices_xy[{idx}] must contain two finite numbers.")
+        rendered.append(f"({_py_float_roundtrip(pair[0])}, {_py_float_roundtrip(pair[1])})")
+    return "[" + ", ".join(rendered) + "]"
+
+
+def _fold_fluent_csg(op: str, operand_exprs: list[str]) -> str:
+    method = {
+        "union": "union",
+        "difference": "subtract",
+        "intersection": "intersect",
+        "xor": "xor",
+    }[op]
+    acc = operand_exprs[0]
+    for rhs in operand_exprs[1:]:
+        acc = f"{acc}.{method}({rhs})"
+    return acc
+
+
+def _render_array3d_suffix(
+    child_expr: str,
+    raw_axes: object,
+    *,
+    merge_overlapping: bool = False,
+) -> str:
+    if isinstance(raw_axes, (str, bytes)) or not isinstance(raw_axes, Sequence) or len(raw_axes) != 3:
+        raise ValueError("Array3D requires exactly 3 axis specifications (x, y, z).")
+    default_names = ("x", "y", "z")
+    parsed: dict[str, ArrayAxisSpec] = {}
+    for idx, raw_ax in enumerate(raw_axes):
+        if isinstance(raw_ax, ArrayAxisSpec):
+            spec = raw_ax
+        elif isinstance(raw_ax, Mapping):
+            spec = ArrayAxisSpec.from_ir(raw_ax, default_axis=default_names[idx])  # type: ignore[arg-type]
+        else:
+            raise ValueError(f"Array3D axes[{idx}] must be an ArrayAxisSpec or mapping.")
+        parsed[spec.axis] = spec
+    if set(parsed.keys()) != {"x", "y", "z"}:
+        raise ValueError("Array3D axes must cover 'x', 'y', and 'z'.")
+    ax_x, ax_y, ax_z = parsed["x"], parsed["y"], parsed["z"]
+    ordered = (ax_x, ax_y, ax_z)
+
+    def _vec3_lit(vals: tuple[float, float, float]) -> str:
+        return (
+            f"({_py_float_roundtrip(vals[0])}, "
+            f"{_py_float_roundtrip(vals[1])}, "
+            f"{_py_float_roundtrip(vals[2])})"
+        )
+
+    kwargs: list[str] = []
+    for n_key, d_key, ax in (("nx", "dx", ax_x), ("ny", "dy", ax_y), ("nz", "dz", ax_z)):
+        eff = ax.effective_count()
+        if eff > 1:
+            kwargs.append(f"{n_key}={eff}")
+        if ax.pitch_m != 0.0 or (eff > 1 and ax.spacing_mode == "lattice_step"):
+            kwargs.append(f"{d_key}={_py_float_roundtrip(ax.pitch_m)}")
+
+    dirs = tuple(ax.direction for ax in ordered)
+    if any(d != "positive" for d in dirs):
+        kwargs.append(f"direction=({_py_repr(dirs[0])}, {_py_repr(dirs[1])}, {_py_repr(dirs[2])})")
+
+    modes = tuple(ax.spacing_mode for ax in ordered)
+    if any(m != "lattice_step" for m in modes):
+        kwargs.append(f"spacing_mode=({_py_repr(modes[0])}, {_py_repr(modes[1])}, {_py_repr(modes[2])})")
+
+    gaps = tuple(ax.gap_m for ax in ordered)
+    if any(g != 0.0 for g in gaps):
+        kwargs.append(f"gap={_vec3_lit(gaps)}")
+
+    rels = tuple(ax.relative_factor for ax in ordered)
+    if any(r != 1.0 for r in rels):
+        kwargs.append(f"relative_factor={_vec3_lit(rels)}")
+
+    extras = tuple(ax.step_translation_extra_m for ax in ordered)
+    if any(any(c != 0.0 for c in vec) for vec in extras):
+        kwargs.append(
+            f"extra_step=({_vec3_lit(extras[0])}, {_vec3_lit(extras[1])}, {_vec3_lit(extras[2])})"
+        )
+
+    rots = tuple(ax.step_rotation_euler_deg for ax in ordered)
+    if any(any(c != 0.0 for c in vec) for vec in rots):
+        kwargs.append(
+            f"step_rot_deg=({_vec3_lit(rots[0])}, {_vec3_lit(rots[1])}, {_vec3_lit(rots[2])})"
+        )
+
+    scales = tuple(ax.step_scale_factor for ax in ordered)
+    if any(any(c != 1.0 for c in vec) for vec in scales):
+        kwargs.append(
+            f"step_scale=({_vec3_lit(scales[0])}, {_vec3_lit(scales[1])}, {_vec3_lit(scales[2])})"
+        )
+
+    if merge_overlapping:
+        kwargs.append("merge=True")
+
+    return f"{child_expr}.array_3d({', '.join(kwargs)})"
+
+
 def _render_shape_expression(entry: Mapping[str, object]) -> str:
-    kind = str(entry.get("geometry_kind") or "").strip().lower()
+    raw_kind = str(entry.get("geometry_kind") or entry.get("kind") or "").strip()
+    kind = raw_kind.lower()
+    object_label = str(entry.get("name") or entry.get("object_id") or "").strip()
     params = entry.get("geometry_params")
     params = params if isinstance(params, Mapping) else {}
+    csg_op = _normalize_csg_op(raw_kind, params)
+
     if kind == "box":
-        size = params.get("size") or params.get("dimensions")
-        if not _is_vector3(size):
-            raise ValueError("Box geometry requires three positive size values.")
-        expression = f"fm.Box(size={_python_literal(tuple(size))})"
+        size = params.get("size") if params.get("size") is not None else params.get("dimensions")
+        if _is_vector3(size):
+            size_tuple = tuple(float(value) for value in size)
+        else:
+            scalar = _finite_number(size)
+            if scalar is None:
+                raise ValueError("Box geometry requires three positive size values.")
+            size_tuple = (scalar, scalar, scalar)
+        expression = (
+            f"fm.Box(size=({_py_float_roundtrip(size_tuple[0])}, "
+            f"{_py_float_roundtrip(size_tuple[1])}, "
+            f"{_py_float_roundtrip(size_tuple[2])}))"
+        )
     elif kind == "cylinder":
         radius = _finite_number(params.get("radius"))
         height = _finite_number(params.get("height"))
         if radius is None or height is None:
             raise ValueError("Cylinder geometry requires finite radius and height.")
-        expression = f"fm.Cylinder(radius={radius!r}, height={height!r})"
+        axis_raw = params.get("axis")
+        axis_kw = ""
+        if axis_raw is not None:
+            axis = _scene_float_sequence(axis_raw, count=3)
+            if axis is None:
+                raise ValueError("Cylinder geometry axis must contain three finite coordinates.")
+            if axis != (0.0, 0.0, 1.0):
+                axis_kw = (
+                    f", axis=({_py_float_roundtrip(axis[0])}, "
+                    f"{_py_float_roundtrip(axis[1])}, "
+                    f"{_py_float_roundtrip(axis[2])})"
+                )
+        expression = (
+            f"fm.Cylinder(radius={_py_float_roundtrip(radius)}, "
+            f"height={_py_float_roundtrip(height)}{axis_kw})"
+        )
     elif kind in {"sphere", "ellipsoid"}:
-        radii = params.get("radii")
+        radii = _scene_float_sequence(params.get("radii"), count=3)
         if kind == "sphere" and radii is None:
             radius = _finite_number(params.get("radius"))
-            radii = (radius, radius, radius) if radius is not None else None
+            if radius is not None:
+                radii = (radius, radius, radius)
+            else:
+                radii = _scene_float_sequence(
+                    (params.get("rx"), params.get("ry"), params.get("rz")), count=3
+                )
         elif radii is None:
             radii = _scene_float_sequence(
                 (params.get("rx"), params.get("ry"), params.get("rz")), count=3
             )
-        if not _is_vector3(radii):
-            raise ValueError("Ellipsoid geometry requires three finite radii.")
-        constructor = "fm.Sphere" if kind == "sphere" and len(set(radii)) == 1 else "fm.Ellipsoid"
-        if constructor == "fm.Sphere":
-            expression = f"fm.Sphere({_python_literal(float(radii[0]))})"
+        if radii is None:
+            raise ValueError(
+                "Sphere geometry requires a finite radius."
+                if kind == "sphere"
+                else "Ellipsoid geometry requires three finite radii."
+            )
+        if kind == "sphere" and len(set(radii)) == 1:
+            expression = f"fm.Sphere({_py_float_roundtrip(radii[0])})"
         else:
-            expression = f"fm.Ellipsoid{_python_literal(tuple(radii))}"
+            expression = (
+                f"fm.Ellipsoid({_py_float_roundtrip(radii[0])}, "
+                f"{_py_float_roundtrip(radii[1])}, "
+                f"{_py_float_roundtrip(radii[2])})"
+            )
+    elif kind == "ellipse":
+        radii = _scene_float_sequence(params.get("radii"), count=2)
+        if radii is None:
+            radii = _scene_float_sequence((params.get("rx"), params.get("ry")), count=2)
+        height = _finite_number(params.get("height"))
+        if radii is None or height is None:
+            raise ValueError("Ellipse geometry requires finite radii and height.")
+        expression = (
+            f"fm.Ellipse({_py_float_roundtrip(radii[0])}, "
+            f"{_py_float_roundtrip(radii[1])}, "
+            f"{_py_float_roundtrip(height)})"
+        )
+    elif kind == "cone":
+        radius_bottom = _finite_number(params.get("radius_bottom"))
+        radius_top = _finite_number(params.get("radius_top", 0.0))
+        height = _finite_number(
+            params.get("height") if params.get("height") is not None else params.get("length")
+        )
+        if radius_bottom is None or radius_top is None or height is None:
+            raise ValueError("Cone geometry requires finite radius_bottom, radius_top, and height.")
+        axis_raw = params.get("axis")
+        axis_kw = ""
+        if axis_raw is not None:
+            axis = _scene_float_sequence(axis_raw, count=3)
+            if axis is None:
+                raise ValueError("Cone geometry axis must contain three finite coordinates.")
+            if axis != (0.0, 0.0, 1.0):
+                axis_kw = (
+                    f", axis=({_py_float_roundtrip(axis[0])}, "
+                    f"{_py_float_roundtrip(axis[1])}, {_py_float_roundtrip(axis[2])})"
+                )
+        expression = (
+            f"fm.Cone(radius_bottom={_py_float_roundtrip(radius_bottom)}, "
+            f"radius_top={_py_float_roundtrip(radius_top)}, "
+            f"height={_py_float_roundtrip(height)}{axis_kw})"
+        )
+    elif kind == "torus":
+        major_radius = _finite_number(params.get("major_radius"))
+        minor_radius = _finite_number(params.get("minor_radius"))
+        if major_radius is None or minor_radius is None:
+            raise ValueError("Torus geometry requires finite major_radius and minor_radius.")
+        axis_raw = params.get("axis")
+        axis_kw = ""
+        if axis_raw is not None:
+            axis = _scene_float_sequence(axis_raw, count=3)
+            if axis is None:
+                raise ValueError("Torus geometry axis must contain three finite coordinates.")
+            if axis != (0.0, 0.0, 1.0):
+                axis_kw = (
+                    f", axis=({_py_float_roundtrip(axis[0])}, "
+                    f"{_py_float_roundtrip(axis[1])}, {_py_float_roundtrip(axis[2])})"
+                )
+        expression = (
+            f"fm.Torus(major_radius={_py_float_roundtrip(major_radius)}, "
+            f"minor_radius={_py_float_roundtrip(minor_radius)}{axis_kw})"
+        )
+    elif kind in {"polygonprism", "polygon_prism"}:
+        verts_lit = _render_polygon_vertices_literal(
+            params.get("vertices_xy"), context="PolygonPrism geometry"
+        )
+        thickness = _finite_number(params.get("thickness"))
+        if thickness is None:
+            raise ValueError("PolygonPrism geometry requires finite thickness.")
+        expression = (
+            f"fm.PolygonPrism(vertices_xy={verts_lit}, "
+            f"thickness={_py_float_roundtrip(thickness)})"
+        )
     elif kind in {"archwaveguide", "arch_waveguide"}:
         values = [
             _finite_number(params.get(key))
@@ -2948,7 +3279,44 @@ def _render_shape_expression(entry: Mapping[str, object]) -> str:
         ]
         if any(value is None for value in values):
             raise ValueError("ArchWaveguide geometry requires finite dimensions.")
-        expression = f"fm.ArchWaveguide{_python_literal(tuple(values))}"
+        z0_raw = params.get("z0")
+        z0_kw = ""
+        if z0_raw is not None:
+            z0 = _finite_number(z0_raw)
+            if z0 is None:
+                raise ValueError("ArchWaveguide geometry requires finite z0.")
+            if z0 != 0.0:
+                z0_kw = f", z0={_py_float_roundtrip(z0)}"
+        expression = (
+            f"fm.ArchWaveguide({_py_float_roundtrip(values[0])}, "  # type: ignore[arg-type]
+            f"{_py_float_roundtrip(values[1])}, "  # type: ignore[arg-type]
+            f"{_py_float_roundtrip(values[2])}, "  # type: ignore[arg-type]
+            f"{_py_float_roundtrip(values[3])}{z0_kw})"  # type: ignore[arg-type]
+        )
+    elif kind in {"sinwaveguide", "sin_waveguide"}:
+        values = [
+            _finite_number(params.get(key))
+            for key in ("length", "width", "height", "period", "amplitude")
+        ]
+        if any(value is None for value in values):
+            raise ValueError("SinWaveguide geometry requires finite dimensions.")
+        optional_kwargs: list[str] = []
+        for opt_key in ("phase", "z0"):
+            raw_opt = params.get(opt_key)
+            if raw_opt is not None:
+                opt_val = _finite_number(raw_opt)
+                if opt_val is None:
+                    raise ValueError(f"SinWaveguide geometry requires finite {opt_key}.")
+                if opt_val != 0.0:
+                    optional_kwargs.append(f"{opt_key}={_py_float_roundtrip(opt_val)}")
+        opt_suffix = f", {', '.join(optional_kwargs)}" if optional_kwargs else ""
+        expression = (
+            f"fm.SinWaveguide({_py_float_roundtrip(values[0])}, "  # type: ignore[arg-type]
+            f"{_py_float_roundtrip(values[1])}, "  # type: ignore[arg-type]
+            f"{_py_float_roundtrip(values[2])}, "  # type: ignore[arg-type]
+            f"{_py_float_roundtrip(values[3])}, "  # type: ignore[arg-type]
+            f"{_py_float_roundtrip(values[4])}{opt_suffix})"  # type: ignore[arg-type]
+        )
     elif kind in {
         "cpw",
         "cpwantennalayout",
@@ -2956,9 +3324,18 @@ def _render_shape_expression(entry: Mapping[str, object]) -> str:
         "microstrip",
         "microstripantennalayout",
         "microstrip_antenna_layout",
+        "meander",
+        "meanderantennalayout",
+        "meander_antenna_layout",
+        "inductive_loop",
+        "inductivelooplayout",
+        "inductive_loop_layout",
+        "piecewise_3d_path",
+        "piecewisepath3dlayout",
+        "piecewise_path_3d_layout",
     }:
         expression = _render_antenna_layout_expr(
-            str(params.get("kind") or kind),
+            str(params.get("kind") or raw_kind),
             params,
             name=str(entry.get("name") or params.get("name") or "antenna"),
         )
@@ -2972,26 +3349,117 @@ def _render_shape_expression(entry: Mapping[str, object]) -> str:
                 kwargs[key] = params[key]
         expression = f"fm.ImportedGeometry({_python_keyword_args(kwargs)})"
     elif kind == "translate":
-        base = params.get("base")
-        translation = _scene_float_sequence(params.get("translation"), count=3)
+        base = params.get("child") if isinstance(params.get("child"), Mapping) else params.get("base")
+        raw_translation = params.get("offset")
+        if raw_translation is None:
+            raw_translation = params.get("translation")
+        if raw_translation is None:
+            raw_translation = params.get("translate")
+        if raw_translation is None:
+            raw_translation = params.get("by")
+        translation = _scene_float_sequence(raw_translation, count=3)
         if not isinstance(base, Mapping) or translation is None:
-            raise ValueError("Translate geometry requires a base and three finite coordinates.")
-        return f"({_render_shape_expression(base)}).translate({_python_literal(translation)})"
-    elif kind in {"difference", "union", "intersection"}:
-        operands = ("base", "tool") if kind == "difference" else ("a", "b")
-        operator = {"difference": "-", "union": "+", "intersection": "&"}[kind]
-        rendered_operands: list[str] = []
-        for operand in operands:
-            child = params.get(operand)
-            if not isinstance(child, Mapping):
-                raise ValueError(f"{kind} geometry requires a '{operand}' operand.")
-            rendered_operands.append("(" + _render_shape_expression(child) + ")")
-        expression = f"({rendered_operands[0]} {operator} {rendered_operands[1]})"
+            raise ValueError("Translate geometry requires a child/base and three finite coordinates.")
+        return (
+            f"({_render_shape_expression(base)}).translate("
+            f"({_py_float_roundtrip(translation[0])}, "
+            f"{_py_float_roundtrip(translation[1])}, "
+            f"{_py_float_roundtrip(translation[2])}))"
+        )
+    elif kind == "transform":
+        child = params.get("child") if isinstance(params.get("child"), Mapping) else params.get("base")
+        if not isinstance(child, Mapping):
+            raise ValueError("Transform geometry requires a 'child' geometry.")
+        transform_payload = (
+            params["transform"]
+            if isinstance(params.get("transform"), Mapping)
+            else params
+        )
+        return _render_transform_dict_suffix(
+            f"({_render_shape_expression(child)})",
+            transform_payload,
+        )
+    elif kind in {"sliceplane", "slice_plane"}:
+        child = params.get("child") if isinstance(params.get("child"), Mapping) else params.get("base")
+        raw_origin = (
+            params.get("plane_origin_m")
+            if params.get("plane_origin_m") is not None
+            else params.get("plane_origin")
+        )
+        origin = _scene_float_sequence(raw_origin, count=3) if raw_origin is not None else (0.0, 0.0, 0.0)
+        normal = _scene_float_sequence(params.get("plane_normal"), count=3)
+        keep_side = str(params.get("keep_side") or "positive").strip().lower()
+        if not isinstance(child, Mapping) or origin is None or normal is None:
+            raise ValueError("SlicePlane geometry requires child, plane_origin, and plane_normal.")
+        expression = (
+            f"({_render_shape_expression(child)}).slice_plane("
+            f"origin=({_py_float_roundtrip(origin[0])}, {_py_float_roundtrip(origin[1])}, {_py_float_roundtrip(origin[2])}), "
+            f"normal=({_py_float_roundtrip(normal[0])}, {_py_float_roundtrip(normal[1])}, {_py_float_roundtrip(normal[2])}), "
+            f"keep={_py_repr(keep_side)})"
+        )
+    elif kind in {"array3d", "array_3d"}:
+        child = params.get("child") if isinstance(params.get("child"), Mapping) else params.get("base")
+        if not isinstance(child, Mapping):
+            raise ValueError("Array3D geometry requires a 'child' geometry.")
+        child_expr = _render_shape_expression(child)
+        child_transform = params.get("child_transform")
+        if isinstance(child_transform, Mapping):
+            child_expr = _render_transform_dict_suffix(child_expr, child_transform)
+        expression = _render_array3d_suffix(
+            child_expr,
+            params.get("axes"),
+            merge_overlapping=bool(params.get("merge_overlapping", False)),
+        )
+    elif csg_op is not None:
+        raw_operands = params.get("operands")
+        if isinstance(raw_operands, list):
+            active_exprs: list[str] = []
+            for raw_operand in raw_operands:
+                if not isinstance(raw_operand, Mapping):
+                    raise ValueError(f"{raw_kind} operand must be a mapping.")
+                if raw_operand.get("enabled", True) is False:
+                    continue
+                op_geom = raw_operand.get("geometry") if isinstance(raw_operand.get("geometry"), Mapping) else raw_operand
+                op_expr = _render_shape_expression(op_geom)
+                op_transform = raw_operand.get("transform")
+                if isinstance(op_transform, Mapping):
+                    op_expr = _render_transform_dict_suffix(op_expr, op_transform)
+                active_exprs.append(op_expr)
+            if not active_exprs:
+                raise ValueError(f"{raw_kind} geometry requires at least one enabled operand.")
+            expression = _fold_fluent_csg(csg_op, active_exprs)
+        else:
+            if csg_op == "difference":
+                operand_keys = ("base", "tool")
+            elif csg_op == "xor":
+                operand_keys = ("left", "right") if "left" in params or "right" in params else ("a", "b")
+            else:
+                operand_keys = ("a", "b")
+            rendered_operands: list[str] = []
+            for operand in operand_keys:
+                child = params.get(operand)
+                if not isinstance(child, Mapping):
+                    raise ValueError(f"{raw_kind} geometry requires a '{operand}' operand.")
+                rendered_operands.append(_render_shape_expression(child))
+            expression = _fold_fluent_csg(csg_op, rendered_operands)
     else:
-        raise ValueError(f"SceneDocument export does not support geometry kind '{kind}'.")
-    translation = params.get("translation")
-    if _is_vector3(translation) and any(float(value) != 0.0 for value in translation):
-        expression += f".translate({_python_literal(tuple(translation))})"
+        if object_label:
+            raise ValueError(
+                f"SceneDocument export does not support geometry kind '{raw_kind}' for object '{object_label}'."
+            )
+        raise ValueError(f"SceneDocument export does not support geometry kind '{raw_kind}'.")
+    raw_translation = params.get("translation")
+    if raw_translation is None:
+        raw_translation = params.get("translate")
+    if raw_translation is None:
+        raw_translation = params.get("by")
+    translation = _scene_float_sequence(raw_translation, count=3)
+    if translation is not None and any(value != 0.0 for value in translation):
+        expression += (
+            f".translate(({_py_float_roundtrip(translation[0])}, "
+            f"{_py_float_roundtrip(translation[1])}, "
+            f"{_py_float_roundtrip(translation[2])}))"
+        )
     return expression
 
 
@@ -11606,6 +12074,31 @@ def _render_antenna_layout_expr(
     return f"{constructor}({', '.join(kwargs)})"
 
 
+def _extract_override_child_geometry(
+    raw_child: object,
+    *,
+    parent_kind: str,
+    operand_name: str,
+    object_name: str,
+) -> tuple[str, dict[str, object]]:
+    child = _normalize_mapping(raw_child)
+    child_kind = str(child.get("geometry_kind") or child.get("kind") or "").strip()
+    if not child_kind:
+        raise ValueError(
+            f"{parent_kind} geometry for object {object_name!r} requires a valid "
+            f"{operand_name!r} operand with geometry_kind"
+        )
+    if "geometry_params" in child:
+        child_params = _normalize_mapping(child.get("geometry_params"))
+    else:
+        child_params = {
+            key: value
+            for key, value in child.items()
+            if key not in {"geometry_kind", "kind", "name"}
+        }
+    return child_kind, child_params
+
+
 def _render_geometry_expr_from_override(
     kind: str,
     params: dict[str, object],
@@ -11613,77 +12106,241 @@ def _render_geometry_expr_from_override(
     name: str,
     source_root: Path,
 ) -> str:
-    if kind == "Box":
-        size = params.get("size")
-        if isinstance(size, list) and len(size) == 3:
-            args = [
-                _py_number(float(size[0])),
-                _py_number(float(size[1])),
-                _py_number(float(size[2])),
-            ]
-        elif isinstance(size, (int, float)):
-            args = [_py_number(float(size))] * 3
+    raw_kind = str(kind or "").strip()
+    normalized_kind = raw_kind.lower()
+
+    if normalized_kind == "box":
+        size = params.get("size") if params.get("size") is not None else params.get("dimensions")
+        size_vec = _scene_float_sequence(size, count=3)
+        if size_vec is not None:
+            args = [_py_float_roundtrip(component) for component in size_vec]
         else:
-            args = ["1e-9", "1e-9", "1e-9"]
+            scalar_size = _finite_number(size)
+            if scalar_size is None:
+                raise ValueError(
+                    f"Box geometry for object {name!r} requires three finite size values"
+                )
+            args = [_py_float_roundtrip(scalar_size)] * 3
         expr = f"fm.Box({', '.join(args)}, name={_py_repr(name)})"
-    elif kind == "Cylinder":
-        axis = params.get("axis")
-        axis_kw = ""
-        if isinstance(axis, list) and len(axis) == 3 and tuple(float(value) for value in axis) != (0.0, 0.0, 1.0):
-            axis_kw = (
-                f", axis=({_py_number(float(axis[0]))}, "
-                f"{_py_number(float(axis[1]))}, {_py_number(float(axis[2]))})"
+    elif normalized_kind == "cylinder":
+        radius = _finite_number(params.get("radius"))
+        height = _finite_number(params.get("height"))
+        if radius is None or height is None:
+            raise ValueError(
+                f"Cylinder geometry for object {name!r} requires finite radius and height"
             )
+        axis_raw = params.get("axis")
+        axis_kw = ""
+        if axis_raw is not None:
+            axis = _scene_float_sequence(axis_raw, count=3)
+            if axis is None:
+                raise ValueError(
+                    f"Cylinder geometry for object {name!r} requires a finite 3-vector axis"
+                )
+            if axis != (0.0, 0.0, 1.0):
+                axis_kw = (
+                    f", axis=({_py_float_roundtrip(axis[0])}, "
+                    f"{_py_float_roundtrip(axis[1])}, {_py_float_roundtrip(axis[2])})"
+                )
         expr = (
-            f"fm.Cylinder(radius={_py_number(float(str(params.get('radius', 1e-9))))}, "
-            f"height={_py_number(float(str(params.get('height', 1e-9))))}, "
+            f"fm.Cylinder(radius={_py_float_roundtrip(radius)}, "
+            f"height={_py_float_roundtrip(height)}, "
             f"name={_py_repr(name)}{axis_kw})"
         )
-    elif kind == "ArchWaveguide":
+    elif normalized_kind == "sphere":
+        radius = _finite_number(params.get("radius"))
+        if radius is not None:
+            expr = f"fm.Sphere({_py_float_roundtrip(radius)}, name={_py_repr(name)})"
+        else:
+            radii = _scene_float_sequence(params.get("radii"), count=3)
+            if radii is None:
+                radii = _scene_float_sequence(
+                    (params.get("rx"), params.get("ry"), params.get("rz")), count=3
+                )
+            if radii is None:
+                raise ValueError(
+                    f"Sphere geometry for object {name!r} requires a finite radius"
+                )
+            if radii[0] == radii[1] == radii[2]:
+                expr = f"fm.Sphere({_py_float_roundtrip(radii[0])}, name={_py_repr(name)})"
+            else:
+                expr = (
+                    f"fm.Ellipsoid({_py_float_roundtrip(radii[0])}, "
+                    f"{_py_float_roundtrip(radii[1])}, "
+                    f"{_py_float_roundtrip(radii[2])}, "
+                    f"name={_py_repr(name)})"
+                )
+    elif normalized_kind == "ellipsoid":
+        radii = _scene_float_sequence(params.get("radii"), count=3)
+        if radii is None:
+            radii = _scene_float_sequence(
+                (params.get("rx"), params.get("ry"), params.get("rz")), count=3
+            )
+        if radii is None:
+            raise ValueError(
+                f"Ellipsoid geometry for object {name!r} requires three finite radii"
+            )
         expr = (
-            f"fm.ArchWaveguide(length={_py_number(float(str(params.get('length', 1e-9))))}, "
-            f"width={_py_number(float(str(params.get('width', 1e-9))))}, "
-            f"height={_py_number(float(str(params.get('height', 1e-9))))}, "
-            f"arch_height={_py_number(float(str(params.get('arch_height', 0.0))))}, "
-            f"z0={_py_number(float(str(params.get('z0', 0.0))))}, "
+            f"fm.Ellipsoid({_py_float_roundtrip(radii[0])}, "
+            f"{_py_float_roundtrip(radii[1])}, "
+            f"{_py_float_roundtrip(radii[2])}, "
             f"name={_py_repr(name)})"
         )
-    elif kind == "SinWaveguide":
+    elif normalized_kind == "ellipse":
+        radii = _scene_float_sequence(params.get("radii"), count=2)
+        if radii is None:
+            radii = _scene_float_sequence((params.get("rx"), params.get("ry")), count=2)
+        height = _finite_number(params.get("height"))
+        if radii is None or height is None:
+            raise ValueError(
+                f"Ellipse geometry for object {name!r} requires finite radii and height"
+            )
         expr = (
-            f"fm.SinWaveguide(length={_py_number(float(str(params.get('length', 1e-9))))}, "
-            f"width={_py_number(float(str(params.get('width', 1e-9))))}, "
-            f"height={_py_number(float(str(params.get('height', 1e-9))))}, "
-            f"period={_py_number(float(str(params.get('period', 1e-9))))}, "
-            f"amplitude={_py_number(float(str(params.get('amplitude', 0.0))))}, "
-            f"phase={_py_number(float(str(params.get('phase', 0.0))))}, "
-            f"z0={_py_number(float(str(params.get('z0', 0.0))))}, "
+            f"fm.Ellipse({_py_float_roundtrip(radii[0])}, "
+            f"{_py_float_roundtrip(radii[1])}, "
+            f"{_py_float_roundtrip(height)}, "
             f"name={_py_repr(name)})"
         )
-    elif kind == "Ellipsoid":
+    elif normalized_kind == "cone":
+        radius_bottom = _finite_number(params.get("radius_bottom"))
+        radius_top = _finite_number(params.get("radius_top", 0.0))
+        height = _finite_number(
+            params.get("height") if params.get("height") is not None else params.get("length")
+        )
+        if radius_bottom is None or radius_top is None or height is None:
+            raise ValueError(
+                f"Cone geometry for object {name!r} requires finite radius_bottom, radius_top, and height"
+            )
+        axis_raw = params.get("axis")
+        axis_kw = ""
+        if axis_raw is not None:
+            axis = _scene_float_sequence(axis_raw, count=3)
+            if axis is None:
+                raise ValueError(
+                    f"Cone geometry for object {name!r} requires a finite 3-vector axis"
+                )
+            if axis != (0.0, 0.0, 1.0):
+                axis_kw = (
+                    f", axis=({_py_float_roundtrip(axis[0])}, "
+                    f"{_py_float_roundtrip(axis[1])}, {_py_float_roundtrip(axis[2])})"
+                )
         expr = (
-            f"fm.Ellipsoid({_py_number(float(str(params.get('rx', 1e-9))))}, "
-            f"{_py_number(float(str(params.get('ry', 1e-9))))}, "
-            f"{_py_number(float(str(params.get('rz', 1e-9))))}, "
+            f"fm.Cone(radius_bottom={_py_float_roundtrip(radius_bottom)}, "
+            f"radius_top={_py_float_roundtrip(radius_top)}, "
+            f"height={_py_float_roundtrip(height)}, "
+            f"name={_py_repr(name)}{axis_kw})"
+        )
+    elif normalized_kind == "torus":
+        major_radius = _finite_number(params.get("major_radius"))
+        minor_radius = _finite_number(params.get("minor_radius"))
+        if major_radius is None or minor_radius is None:
+            raise ValueError(
+                f"Torus geometry for object {name!r} requires finite major_radius and minor_radius"
+            )
+        axis_raw = params.get("axis")
+        axis_kw = ""
+        if axis_raw is not None:
+            axis = _scene_float_sequence(axis_raw, count=3)
+            if axis is None:
+                raise ValueError(
+                    f"Torus geometry for object {name!r} requires a finite 3-vector axis"
+                )
+            if axis != (0.0, 0.0, 1.0):
+                axis_kw = (
+                    f", axis=({_py_float_roundtrip(axis[0])}, "
+                    f"{_py_float_roundtrip(axis[1])}, {_py_float_roundtrip(axis[2])})"
+                )
+        expr = (
+            f"fm.Torus(major_radius={_py_float_roundtrip(major_radius)}, "
+            f"minor_radius={_py_float_roundtrip(minor_radius)}, "
+            f"name={_py_repr(name)}{axis_kw})"
+        )
+    elif normalized_kind in {"polygonprism", "polygon_prism"}:
+        verts_lit = _render_polygon_vertices_literal(
+            params.get("vertices_xy"),
+            context=f"PolygonPrism geometry for object {name!r}",
+        )
+        thickness = _finite_number(params.get("thickness"))
+        if thickness is None:
+            raise ValueError(
+                f"PolygonPrism geometry for object {name!r} requires finite thickness"
+            )
+        expr = (
+            f"fm.PolygonPrism(vertices_xy={verts_lit}, "
+            f"thickness={_py_float_roundtrip(thickness)}, "
             f"name={_py_repr(name)})"
         )
-    elif kind == "Ellipse":
+    elif normalized_kind in {"archwaveguide", "arch_waveguide"}:
+        length = _finite_number(params.get("length"))
+        width = _finite_number(params.get("width"))
+        height = _finite_number(params.get("height"))
+        arch_height = _finite_number(params.get("arch_height"))
+        z0 = _finite_number(params.get("z0", 0.0))
+        if (
+            length is None
+            or width is None
+            or height is None
+            or arch_height is None
+            or z0 is None
+        ):
+            raise ValueError(
+                f"ArchWaveguide geometry for object {name!r} requires finite dimensions"
+            )
         expr = (
-            f"fm.Ellipse({_py_number(float(str(params.get('rx', 1e-9))))}, "
-            f"{_py_number(float(str(params.get('ry', 1e-9))))}, "
-            f"{_py_number(float(str(params.get('height', 1e-9))))}, "
+            f"fm.ArchWaveguide(length={_py_float_roundtrip(length)}, "
+            f"width={_py_float_roundtrip(width)}, "
+            f"height={_py_float_roundtrip(height)}, "
+            f"arch_height={_py_float_roundtrip(arch_height)}, "
+            f"z0={_py_float_roundtrip(z0)}, "
             f"name={_py_repr(name)})"
         )
-    elif kind == "ImportedGeometry":
+    elif normalized_kind in {"sinwaveguide", "sin_waveguide"}:
+        length = _finite_number(params.get("length"))
+        width = _finite_number(params.get("width"))
+        height = _finite_number(params.get("height"))
+        period = _finite_number(params.get("period"))
+        amplitude = _finite_number(params.get("amplitude"))
+        phase = _finite_number(params.get("phase", 0.0))
+        z0 = _finite_number(params.get("z0", 0.0))
+        if (
+            length is None
+            or width is None
+            or height is None
+            or period is None
+            or amplitude is None
+            or phase is None
+            or z0 is None
+        ):
+            raise ValueError(
+                f"SinWaveguide geometry for object {name!r} requires finite dimensions"
+            )
+        expr = (
+            f"fm.SinWaveguide(length={_py_float_roundtrip(length)}, "
+            f"width={_py_float_roundtrip(width)}, "
+            f"height={_py_float_roundtrip(height)}, "
+            f"period={_py_float_roundtrip(period)}, "
+            f"amplitude={_py_float_roundtrip(amplitude)}, "
+            f"phase={_py_float_roundtrip(phase)}, "
+            f"z0={_py_float_roundtrip(z0)}, "
+            f"name={_py_repr(name)})"
+        )
+    elif normalized_kind in {"importedgeometry", "imported_geometry"}:
         source = str(params.get("source", ""))
         kwargs = [
             f"source={_py_repr(_relativize_path(source, source_root))}",
             f"name={_py_repr(name)}",
         ]
         scale = params.get("scale")
-        if isinstance(scale, list) and len(scale) == 3:
-            kwargs.append(f"scale={_py_tuple3(tuple(float(value) for value in scale))}")
-        elif isinstance(scale, (int, float)) and float(scale) != 1.0:
-            kwargs.append(f"scale={_py_number(float(scale))}")
+        scale_vec = _scene_float_sequence(scale, count=3)
+        if scale_vec is not None:
+            kwargs.append(
+                f"scale=({_py_float_roundtrip(scale_vec[0])}, "
+                f"{_py_float_roundtrip(scale_vec[1])}, {_py_float_roundtrip(scale_vec[2])})"
+            )
+        else:
+            scalar_scale = _finite_number(scale)
+            if scalar_scale is not None and scalar_scale != 1.0:
+                kwargs.append(f"scale={_py_float_roundtrip(scalar_scale)}")
         units = params.get("units")
         if isinstance(units, str):
             kwargs.append(f"units={_py_repr(units)}")
@@ -11691,63 +12348,211 @@ def _render_geometry_expr_from_override(
         if isinstance(volume, str) and volume and volume != "full":
             kwargs.append(f"volume={_py_repr(volume)}")
         expr = f"fm.ImportedGeometry({', '.join(kwargs)})"
-    elif kind in {
-        "CPWAntennaLayout",
+    elif normalized_kind in {
+        "cpwantennalayout",
         "cpw",
         "cpw_antenna_layout",
-        "MicrostripAntennaLayout",
+        "microstripantennalayout",
         "microstrip",
         "microstrip_antenna_layout",
-        "MeanderAntennaLayout",
+        "meanderantennalayout",
         "meander",
         "meander_antenna_layout",
-        "InductiveLoopLayout",
+        "inductivelooplayout",
         "inductive_loop",
         "inductive_loop_layout",
-        "PiecewisePath3DLayout",
+        "piecewisepath3dlayout",
         "piecewise_3d_path",
         "piecewise_path_3d_layout",
     }:
-        expr = _render_antenna_layout_expr(kind, params, name=name)
-    elif kind == "Translate":
-        base = _normalize_mapping(params.get("base"))
-        base_kind = str(base.get("geometry_kind", "Box"))
-        base_params = _normalize_mapping(base.get("geometry_params"))
+        expr = _render_antenna_layout_expr(raw_kind, params, name=name)
+    elif normalized_kind == "translate":
+        raw_base = params.get("child") if params.get("child") is not None else params.get("base")
+        base_kind, base_params = _extract_override_child_geometry(
+            raw_base,
+            parent_kind="Translate",
+            operand_name="child" if params.get("child") is not None else "base",
+            object_name=name,
+        )
         expr = _render_geometry_expr_from_override(
             base_kind,
             base_params,
             name=name,
             source_root=source_root,
         )
-    elif kind in {"Difference", "Union", "Intersection"}:
-        if kind == "Difference":
-            left_raw = _normalize_mapping(params.get("base"))
-            right_raw = _normalize_mapping(params.get("tool"))
-            operator = "-"
+    elif normalized_kind == "transform":
+        raw_child = params.get("child") if params.get("child") is not None else params.get("base")
+        child_kind, child_params = _extract_override_child_geometry(
+            raw_child,
+            parent_kind="Transform",
+            operand_name="child",
+            object_name=name,
+        )
+        child_expr = _render_geometry_expr_from_override(
+            child_kind,
+            child_params,
+            name=name,
+            source_root=source_root,
+        )
+        transform_payload = (
+            params["transform"]
+            if isinstance(params.get("transform"), Mapping)
+            else params
+        )
+        expr = _render_transform_dict_suffix(child_expr, transform_payload)
+        return expr
+    elif normalized_kind in {"sliceplane", "slice_plane"}:
+        raw_child = params.get("child") if params.get("child") is not None else params.get("base")
+        child_kind, child_params = _extract_override_child_geometry(
+            raw_child,
+            parent_kind="SlicePlane",
+            operand_name="child",
+            object_name=name,
+        )
+        child_expr = _render_geometry_expr_from_override(
+            child_kind,
+            child_params,
+            name=name,
+            source_root=source_root,
+        )
+        raw_origin = (
+            params.get("plane_origin_m")
+            if params.get("plane_origin_m") is not None
+            else params.get("plane_origin")
+        )
+        origin = (
+            _scene_float_sequence(raw_origin, count=3)
+            if raw_origin is not None
+            else (0.0, 0.0, 0.0)
+        )
+        normal = _scene_float_sequence(params.get("plane_normal"), count=3)
+        keep_side = str(params.get("keep_side") or "positive").strip().lower()
+        if origin is None or normal is None:
+            raise ValueError(
+                f"SlicePlane geometry for object {name!r} requires finite plane_origin and plane_normal"
+            )
+        expr = (
+            f"{child_expr}.slice_plane("
+            f"origin=({_py_float_roundtrip(origin[0])}, {_py_float_roundtrip(origin[1])}, {_py_float_roundtrip(origin[2])}), "
+            f"normal=({_py_float_roundtrip(normal[0])}, {_py_float_roundtrip(normal[1])}, {_py_float_roundtrip(normal[2])}), "
+            f"keep={_py_repr(keep_side)})"
+        )
+    elif normalized_kind in {"array3d", "array_3d"}:
+        raw_child = params.get("child") if params.get("child") is not None else params.get("base")
+        child_kind, child_params = _extract_override_child_geometry(
+            raw_child,
+            parent_kind="Array3D",
+            operand_name="child",
+            object_name=name,
+        )
+        child_expr = _render_geometry_expr_from_override(
+            child_kind,
+            child_params,
+            name=f"{name}_cell",
+            source_root=source_root,
+        )
+        child_transform = params.get("child_transform")
+        if isinstance(child_transform, Mapping):
+            child_expr = _render_transform_dict_suffix(child_expr, child_transform)
+        expr = _render_array3d_suffix(
+            child_expr,
+            params.get("axes"),
+            merge_overlapping=bool(params.get("merge_overlapping", False)),
+        )
+    elif _normalize_csg_op(raw_kind, params) is not None:
+        csg_op = _normalize_csg_op(raw_kind, params)
+        assert csg_op is not None
+        raw_operands = params.get("operands")
+        if isinstance(raw_operands, list):
+            active_exprs: list[str] = []
+            for idx, raw_operand in enumerate(raw_operands):
+                if not isinstance(raw_operand, Mapping):
+                    raise ValueError(
+                        f"{raw_kind} geometry for object {name!r} operand[{idx}] must be a mapping"
+                    )
+                if raw_operand.get("enabled", True) is False:
+                    continue
+                op_source = (
+                    raw_operand.get("geometry")
+                    if isinstance(raw_operand.get("geometry"), Mapping)
+                    else raw_operand
+                )
+                op_label = str(
+                    raw_operand.get("operand_id")
+                    or raw_operand.get("label")
+                    or f"{name}_op{idx}"
+                )
+                op_kind, op_params = _extract_override_child_geometry(
+                    op_source,
+                    parent_kind=raw_kind,
+                    operand_name=f"operands[{idx}]",
+                    object_name=name,
+                )
+                op_expr = _render_geometry_expr_from_override(
+                    op_kind,
+                    op_params,
+                    name=op_label,
+                    source_root=source_root,
+                )
+                op_transform = raw_operand.get("transform")
+                if isinstance(op_transform, Mapping):
+                    op_expr = _render_transform_dict_suffix(op_expr, op_transform)
+                active_exprs.append(op_expr)
+            if not active_exprs:
+                raise ValueError(
+                    f"{raw_kind} geometry for object {name!r} requires at least one enabled operand"
+                )
+            expr = _fold_fluent_csg(csg_op, active_exprs)
         else:
-            left_raw = _normalize_mapping(params.get("a"))
-            right_raw = _normalize_mapping(params.get("b"))
-            operator = "+" if kind == "Union" else "&"
-        left_expr = _render_geometry_expr_from_override(
-            str(left_raw.get("geometry_kind", "Box")),
-            _normalize_mapping(left_raw.get("geometry_params")),
-            name=f"{name}_{'lhs' if kind != 'Difference' else 'base'}",
-            source_root=source_root,
-        )
-        right_expr = _render_geometry_expr_from_override(
-            str(right_raw.get("geometry_kind", "Box")),
-            _normalize_mapping(right_raw.get("geometry_params")),
-            name=f"{name}_{'rhs' if kind != 'Difference' else 'tool'}",
-            source_root=source_root,
-        )
-        expr = f"({left_expr} {operator} {right_expr})"
+            if csg_op == "difference":
+                left_operand, right_operand = "base", "tool"
+            elif csg_op == "xor":
+                left_operand, right_operand = (
+                    ("left", "right")
+                    if "left" in params or "right" in params
+                    else ("a", "b")
+                )
+            else:
+                left_operand, right_operand = "a", "b"
+            left_kind, left_params = _extract_override_child_geometry(
+                params.get(left_operand),
+                parent_kind=raw_kind,
+                operand_name=left_operand,
+                object_name=name,
+            )
+            right_kind, right_params = _extract_override_child_geometry(
+                params.get(right_operand),
+                parent_kind=raw_kind,
+                operand_name=right_operand,
+                object_name=name,
+            )
+            left_expr = _render_geometry_expr_from_override(
+                left_kind,
+                left_params,
+                name=f"{name}_{'lhs' if csg_op != 'difference' else 'base'}",
+                source_root=source_root,
+            )
+            right_expr = _render_geometry_expr_from_override(
+                right_kind,
+                right_params,
+                name=f"{name}_{'rhs' if csg_op != 'difference' else 'tool'}",
+                source_root=source_root,
+            )
+            expr = _fold_fluent_csg(csg_op, [left_expr, right_expr])
     else:
-        expr = f"fm.Box(1e-9, 1e-9, 1e-9, name={_py_repr(name)})"
+        raise ValueError(
+            f"unsupported geometry kind {raw_kind!r} for object {name!r}"
+        )
 
-    translation = params.get("translation")
-    if not isinstance(translation, list):
-        translation = params.get("translate")
-    if isinstance(translation, list) and len(translation) == 3 and any(float(value) != 0 for value in translation):
+    raw_translation = params.get("translation")
+    if raw_translation is None:
+        raw_translation = params.get("translate")
+    if raw_translation is None:
+        raw_translation = params.get("offset")
+    if raw_translation is None:
+        raw_translation = params.get("by")
+    translation = _scene_float_sequence(raw_translation, count=3)
+    if translation is not None and any(value != 0.0 for value in translation):
         expr = (
             f"{expr}.translate(({_py_float_roundtrip(translation[0])}, "
             f"{_py_float_roundtrip(translation[1])}, "
@@ -11814,29 +12619,90 @@ def _render_geometry_expr(geometry: object, *, magnet_name: str, source_root: Pa
         if geometry.name in {"ellipse", f"{magnet_name}_geom"}:
             return f"fm.Ellipse({args})"
         return f"fm.Ellipse({args}, name={_py_repr(geometry.name)})"
+    if isinstance(geometry, Cone):
+        args = (
+            f"radius_bottom={_py_float_roundtrip(geometry.radius_bottom)}, "
+            f"radius_top={_py_float_roundtrip(geometry.radius_top)}, "
+            f"height={_py_float_roundtrip(geometry.height)}"
+        )
+        if geometry.axis != (0.0, 0.0, 1.0):
+            args = (
+                f"{args}, axis=({_py_float_roundtrip(geometry.axis[0])}, "
+                f"{_py_float_roundtrip(geometry.axis[1])}, {_py_float_roundtrip(geometry.axis[2])})"
+            )
+        if geometry.name in {"cone", f"{magnet_name}_geom"}:
+            return f"fm.Cone({args})"
+        return f"fm.Cone({args}, name={_py_repr(geometry.name)})"
+    if isinstance(geometry, Torus):
+        args = (
+            f"major_radius={_py_float_roundtrip(geometry.major_radius)}, "
+            f"minor_radius={_py_float_roundtrip(geometry.minor_radius)}"
+        )
+        if geometry.axis != (0.0, 0.0, 1.0):
+            args = (
+                f"{args}, axis=({_py_float_roundtrip(geometry.axis[0])}, "
+                f"{_py_float_roundtrip(geometry.axis[1])}, {_py_float_roundtrip(geometry.axis[2])})"
+            )
+        if geometry.name in {"torus", f"{magnet_name}_geom"}:
+            return f"fm.Torus({args})"
+        return f"fm.Torus({args}, name={_py_repr(geometry.name)})"
+    if isinstance(geometry, PolygonPrism):
+        verts = "[" + ", ".join(
+            f"({_py_float_roundtrip(x)}, {_py_float_roundtrip(y)})"
+            for x, y in geometry.vertices_xy
+        ) + "]"
+        args = f"vertices_xy={verts}, thickness={_py_float_roundtrip(geometry.thickness)}"
+        if geometry.name in {"polygon_prism", f"{magnet_name}_geom"}:
+            return f"fm.PolygonPrism({args})"
+        return f"fm.PolygonPrism({args}, name={_py_repr(geometry.name)})"
     if isinstance(geometry, Difference):
         base = _render_geometry_expr(geometry.base, magnet_name=magnet_name, source_root=source_root)
         tool = _render_geometry_expr(geometry.tool, magnet_name=magnet_name, source_root=source_root)
-        expr = f"{base} - {tool}"
-        if geometry.name not in {"difference", f"{magnet_name}_geom"}:
-            expr = f"({expr})"
-        return expr
+        return f"{base}.subtract({tool})"
     if isinstance(geometry, Union):
-        return (
-            f"{_render_geometry_expr(geometry.a, magnet_name=magnet_name, source_root=source_root)}"
-            f" + "
-            f"{_render_geometry_expr(geometry.b, magnet_name=magnet_name, source_root=source_root)}"
-        )
+        a = _render_geometry_expr(geometry.a, magnet_name=magnet_name, source_root=source_root)
+        b = _render_geometry_expr(geometry.b, magnet_name=magnet_name, source_root=source_root)
+        return f"{a}.union({b})"
     if isinstance(geometry, Intersection):
-        return (
-            f"{_render_geometry_expr(geometry.a, magnet_name=magnet_name, source_root=source_root)}"
-            f" & "
-            f"{_render_geometry_expr(geometry.b, magnet_name=magnet_name, source_root=source_root)}"
-        )
+        a = _render_geometry_expr(geometry.a, magnet_name=magnet_name, source_root=source_root)
+        b = _render_geometry_expr(geometry.b, magnet_name=magnet_name, source_root=source_root)
+        return f"{a}.intersect({b})"
+    if isinstance(geometry, Xor):
+        left = _render_geometry_expr(geometry.left, magnet_name=magnet_name, source_root=source_root)
+        right = _render_geometry_expr(geometry.right, magnet_name=magnet_name, source_root=source_root)
+        return f"{left}.xor({right})"
     if isinstance(geometry, Translate):
         base = _render_geometry_expr(geometry.geometry, magnet_name=magnet_name, source_root=source_root)
         offset = ", ".join(_py_float_roundtrip(value) for value in geometry.offset)
         return f"{base}.translate(({offset}))"
+    if isinstance(geometry, Transform):
+        child = _render_geometry_expr(geometry.child, magnet_name=magnet_name, source_root=source_root)
+        return _render_transform_dict_suffix(
+            child,
+            {
+                "translation": list(geometry.translation),
+                "rotation_quat": list(geometry.rotation_quat),
+                "scale": list(geometry.scale),
+                "pivot": list(geometry.pivot),
+            },
+        )
+    if isinstance(geometry, SlicePlane):
+        child = _render_geometry_expr(geometry.child, magnet_name=magnet_name, source_root=source_root)
+        o = geometry.plane_origin
+        n = geometry.plane_normal
+        return (
+            f"{child}.slice_plane("
+            f"origin=({_py_float_roundtrip(o[0])}, {_py_float_roundtrip(o[1])}, {_py_float_roundtrip(o[2])}), "
+            f"normal=({_py_float_roundtrip(n[0])}, {_py_float_roundtrip(n[1])}, {_py_float_roundtrip(n[2])}), "
+            f"keep={_py_repr(geometry.keep_side)})"
+        )
+    if isinstance(geometry, Array3D):
+        child = _render_geometry_expr(geometry.child, magnet_name=magnet_name, source_root=source_root)
+        return _render_array3d_suffix(
+            child,
+            geometry.axes,
+            merge_overlapping=geometry.merge_overlapping,
+        )
     raise ValueError(f"unsupported geometry kind for canonical rewrite: {type(geometry).__name__}")
 
 
@@ -12669,6 +13535,31 @@ def _export_geometry_descriptor(
             "geometry_kind": "Ellipse",
             "geometry_params": {"rx": geom.rx, "ry": geom.ry, "height": geom.height},
         }
+    if isinstance(geom, Cone):
+        params_cone: dict[str, object] = {
+            "radius_bottom": geom.radius_bottom,
+            "radius_top": geom.radius_top,
+            "height": geom.height,
+        }
+        if geom.axis != (0.0, 0.0, 1.0):
+            params_cone["axis"] = list(geom.axis)
+        return {"geometry_kind": "Cone", "geometry_params": params_cone}
+    if isinstance(geom, Torus):
+        params_torus: dict[str, object] = {
+            "major_radius": geom.major_radius,
+            "minor_radius": geom.minor_radius,
+        }
+        if geom.axis != (0.0, 0.0, 1.0):
+            params_torus["axis"] = list(geom.axis)
+        return {"geometry_kind": "Torus", "geometry_params": params_torus}
+    if isinstance(geom, PolygonPrism):
+        return {
+            "geometry_kind": "PolygonPrism",
+            "geometry_params": {
+                "vertices_xy": [[x, y] for x, y in geom.vertices_xy],
+                "thickness": geom.thickness,
+            },
+        }
     if isinstance(geom, ArchWaveguide):
         return {
             "geometry_kind": "ArchWaveguide",
@@ -12696,11 +13587,19 @@ def _export_geometry_descriptor(
     if isinstance(geom, Translate):
         if flatten_translation:
             base = _export_geometry_descriptor(geom.geometry, flatten_translation=True)
+            base_params = _normalize_mapping(base["geometry_params"])
+            existing = base_params.get("translation")
+            if isinstance(existing, (list, tuple)) and len(existing) == 3:
+                composed_translation = [
+                    float(existing[idx]) + float(geom.offset[idx]) for idx in range(3)
+                ]
+            else:
+                composed_translation = [float(component) for component in geom.offset]
             return {
                 "geometry_kind": str(base["geometry_kind"]),
                 "geometry_params": {
-                    **_normalize_mapping(base["geometry_params"]),
-                    "translation": list(geom.offset),
+                    **base_params,
+                    "translation": composed_translation,
                 },
             }
         return {
@@ -12732,6 +13631,46 @@ def _export_geometry_descriptor(
             "geometry_params": {
                 "a": _export_geometry_descriptor(geom.a, flatten_translation=False),
                 "b": _export_geometry_descriptor(geom.b, flatten_translation=False),
+            },
+        }
+    if isinstance(geom, Xor):
+        return {
+            "geometry_kind": "Xor",
+            "geometry_params": {
+                "left": _export_geometry_descriptor(geom.left, flatten_translation=False),
+                "right": _export_geometry_descriptor(geom.right, flatten_translation=False),
+            },
+        }
+    if isinstance(geom, Transform):
+        return {
+            "geometry_kind": "Transform",
+            "geometry_params": {
+                "child": _export_geometry_descriptor(geom.child, flatten_translation=False),
+                "transform": {
+                    "translation": list(geom.translation),
+                    "rotation_quat": list(geom.rotation_quat),
+                    "scale": list(geom.scale),
+                    "pivot": list(geom.pivot),
+                },
+            },
+        }
+    if isinstance(geom, SlicePlane):
+        return {
+            "geometry_kind": "SlicePlane",
+            "geometry_params": {
+                "child": _export_geometry_descriptor(geom.child, flatten_translation=False),
+                "plane_origin_m": list(geom.plane_origin),
+                "plane_normal": list(geom.plane_normal),
+                "keep_side": geom.keep_side,
+            },
+        }
+    if isinstance(geom, Array3D):
+        return {
+            "geometry_kind": "Array3D",
+            "geometry_params": {
+                "child": _export_geometry_descriptor(geom.child, flatten_translation=False),
+                "axes": [ax.to_ir() for ax in geom.axes],
+                "merge_overlapping": geom.merge_overlapping,
             },
         }
     return {"geometry_kind": type(geom).__name__, "geometry_params": {}}

@@ -1,6 +1,6 @@
 "use client";
 
-import { Check, Combine, Compass, Copy, Move3d } from "lucide-react";
+import { Check, Compass, Copy, Move3d } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 
 import { primitiveDraftOverlayStore } from "@/kernel/authoring/geometryLifecycleCommands";
@@ -25,8 +25,8 @@ import {
 import {
   bakeScaleIntoDraft,
   canBakeScaleIntoDraft,
+  vec3ApproxEqual,
   type ObjectGeometrySpecDraft,
-  type RevisionConflictPhase,
 } from "./geometryShared";
 
 /* ── Panel-Level Live Draft Overlay Publisher (Never Tab-Scoped) ── */
@@ -119,7 +119,7 @@ export function GeometryCodePreviewDialog({
             )}
             <span>{copiedCode ? "Copied" : "Copy"}</span>
           </Button>
-          <Button size="sm" type="button" variant="primary" onClick={onClose}>
+          <Button size="sm" type="button" variant="secondary" onClick={onClose}>
             Close
           </Button>
         </DialogFooter>
@@ -128,65 +128,10 @@ export function GeometryCodePreviewDialog({
   );
 }
 
-/* ── Revision Conflict Actions Bar ── */
+/* ── Placement (Transform) Sections ── */
 
-export function GeometryConflictActionsBar({
-  revisionConflictPhase,
-  onRefetchConflict,
-  onRebaseConflict,
-  onRetryApply,
-}: {
-  revisionConflictPhase: RevisionConflictPhase | null;
-  onRefetchConflict: () => void;
-  onRebaseConflict: () => void;
-  onRetryApply: () => void;
-}) {
-  return (
-    <div className="flex flex-wrap gap-1.5" data-revision-conflict="true">
-      <Button
-        disabled={
-          revisionConflictPhase !== "conflict" && revisionConflictPhase !== "refresh-error"
-        }
-        size="sm"
-        type="button"
-        variant="secondary"
-        onClick={onRefetchConflict}
-      >
-        Refetch Scene
-      </Button>
-      <Button
-        disabled={revisionConflictPhase !== "refetched"}
-        size="sm"
-        type="button"
-        variant="secondary"
-        onClick={onRebaseConflict}
-      >
-        Rebase Draft
-      </Button>
-      <Button
-        disabled={revisionConflictPhase !== "rebased"}
-        size="sm"
-        type="button"
-        variant="primary"
-        onClick={onRetryApply}
-      >
-        Retry Apply
-      </Button>
-    </div>
-  );
-}
-
-/* ── Transform & Boolean CSG Sections ── */
-
-export interface GeometryTransformAndCsgOptions {
-  otherObjects: readonly { value: string; label: string }[];
-}
-
-export function buildGeometryTransformAndCsgSections({
-  otherObjects,
-}: GeometryTransformAndCsgOptions): InspectorSectionSpec<ObjectGeometrySpecDraft>[] {
+export function buildGeometryTransformSections(): InspectorSectionSpec<ObjectGeometrySpecDraft>[] {
   return [
-    /* ── TAB 2: TRANSFORM ── */
     {
       id: "geometry-transform-placement",
       modeTabId: "transform",
@@ -259,6 +204,7 @@ export function buildGeometryTransformAndCsgSections({
       ],
       footer: (ctx) => {
         const bakeCheck = canBakeScaleIntoDraft(ctx.draft);
+        const isIdentityScale = vec3ApproxEqual(ctx.draft.scale, [1, 1, 1], 1e-9);
         const bakeButton = (
           <Button
             disabled={!bakeCheck.ok}
@@ -281,19 +227,23 @@ export function buildGeometryTransformAndCsgSections({
               ) : (
                 <DisabledReason reason={bakeCheck.reason}>{bakeButton}</DisabledReason>
               )}
-              <Button
-                size="sm"
-                type="button"
-                variant="ghost"
-                onClick={() => ctx.setField("scale", [1, 1, 1])}
-              >
-                Reset Scale [1, 1, 1]
-              </Button>
+              {!isIdentityScale ? (
+                <Button
+                  size="sm"
+                  type="button"
+                  variant="ghost"
+                  onClick={() => ctx.setField("scale", [1, 1, 1])}
+                >
+                  Reset Scale [1, 1, 1]
+                </Button>
+              ) : null}
             </div>
-            {!bakeCheck.ok && ctx.draft.primitiveKind === "ImportedMesh" ? (
+            {!bakeCheck.ok &&
+            (ctx.draft.primitiveKind === "ImportedMesh" ||
+              ctx.draft.compositeSummary != null) ? (
               <p
                 className="text-xs text-[var(--fm-text-muted)]"
-                data-slot="imported-mesh-bake-scale-hint"
+                data-slot="bake-scale-restriction-hint"
               >
                 {bakeCheck.reason}
               </p>
@@ -301,62 +251,6 @@ export function buildGeometryTransformAndCsgSections({
           </div>
         );
       },
-    },
-
-    /* ── TAB 3: BOOLEAN CSG ── */
-    {
-      id: "geometry-csg",
-      modeTabId: "csg",
-      title: "Constructive solid geometry (CSG)",
-      icon: Combine,
-      defaultOpen: true,
-      rows: [
-        {
-          type: "readonly",
-          label: "Authored CSG tree",
-          mono: true,
-          showWhen: (d) => Boolean(d.preservedComplexCsg),
-          format: () => "Multi-node CSG AST preserved losslessly",
-        },
-        {
-          key: "csgOperation",
-          type: "segmented",
-          label: "Boolean operation",
-          structural: true,
-          options: [
-            { value: "none", label: "Primitive" },
-            { value: "union", label: "Union" },
-            { value: "difference", label: "Subtract" },
-            { value: "intersection", label: "Intersect" },
-          ],
-        },
-        {
-          key: "csgToolObjectId",
-          type: "select",
-          label: "Tool object B",
-          showWhen: (d) => d.csgOperation !== "none",
-          options:
-            otherObjects.length > 0
-              ? otherObjects
-              : [
-                  {
-                    value: "",
-                    label: "No secondary objects available",
-                    disabledReason: "Create a second object to combine via Boolean CSG.",
-                  },
-                ],
-          validate: (val, d) =>
-            d.csgOperation !== "none" && !val.trim()
-              ? "Select a tool object B for the Boolean CSG operation."
-              : null,
-        },
-        {
-          key: "csgKeepTool",
-          type: "switch",
-          label: "Retain tool object in scene",
-          showWhen: (d) => d.csgOperation !== "none",
-        },
-      ],
     },
   ];
 }

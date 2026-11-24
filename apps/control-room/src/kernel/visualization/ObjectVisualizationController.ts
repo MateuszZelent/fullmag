@@ -1028,6 +1028,24 @@ export class ObjectVisualizationController {
     this.bump();
   }
 
+  removeTargetViewportPreferenceField(
+    target: VisualizationTargetRef,
+    field: keyof ViewportTargetRenderingPreferences,
+  ): void {
+    const key = visualizationTargetKey(target);
+    const current = this.viewportPreferences.get(key);
+    if (!current || current[field] === undefined) return;
+
+    const next: ViewportTargetRenderingPreferences = { ...current };
+    delete next[field];
+    if (Object.keys(next).length > 0) {
+      this.viewportPreferences.set(key, next);
+    } else {
+      this.viewportPreferences.delete(key);
+    }
+    this.bump();
+  }
+
   patchViewportPreferenceDefaults(
     kind: VisualizationTargetKind,
     patch: ViewportTargetRenderingPreferences,
@@ -2034,6 +2052,9 @@ export function visualizationStatePatchFromDefaultTargetPatch(
     ...(Object.keys(vectorStyle).length === 0
       ? {}
       : { vector_style: vectorStyle }),
+    ...(normalized.vectorBudget === undefined
+      ? {}
+      : { vector_density: Math.max(0, Math.floor(normalized.vectorBudget)) }),
     ...(normalized.vectorsVisible === undefined
       ? {}
       : { vector_glyphs: normalized.vectorsVisible }),

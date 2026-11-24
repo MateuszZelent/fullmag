@@ -207,6 +207,101 @@ export type FooterAntennaStage = {
   record: StageExecutionResource["stages"][number];
 };
 
+export type FooterEigensolveStage = {
+  active: boolean;
+  identityKey: string;
+  clockKey: string | null;
+  kind: string;
+  record: StageExecutionResource["stages"][number];
+};
+
+const FOOTER_EIGENSOLVE_STAGE_KINDS = new Set([
+  "eigenmodes",
+  "flat_eigenmodes",
+  "frequency_response",
+  "flat_frequency_response",
+]);
+
+export function resolveFooterEigensolveStage(
+  status: FooterTelemetryStatus | null | undefined,
+  execution: StageExecutionResource | null | undefined,
+): FooterEigensolveStage | null {
+  if (
+    !status?.sessionId ||
+    !status.sessionEpoch ||
+    !status.requestScopeEpoch ||
+    !status.run?.run_id ||
+    !execution ||
+    execution.session_id !== status.sessionId ||
+    execution.session_epoch !== status.sessionEpoch ||
+    execution.request_scope_epoch !== status.requestScopeEpoch ||
+    execution.run_id !== status.run.run_id
+  ) {
+    return null;
+  }
+
+  const activeIndex = execution.active_stage_index;
+  const activeCandidate =
+    typeof activeIndex === "number" &&
+    Number.isInteger(activeIndex) &&
+    activeIndex >= 0
+      ? execution.stages[activeIndex] ?? null
+      : null;
+  const fallbackCandidate =
+    activeCandidate &&
+    FOOTER_EIGENSOLVE_STAGE_KINDS.has((activeCandidate.kind ?? "").toLowerCase())
+      ? activeCandidate
+      : [...execution.stages]
+          .reverse()
+          .find((stage) =>
+            FOOTER_EIGENSOLVE_STAGE_KINDS.has((stage.kind ?? "").toLowerCase()),
+          ) ?? null;
+
+  const record = fallbackCandidate;
+  if (
+    !record ||
+    !record.stage_id?.trim() ||
+    !record.kind?.trim() ||
+    !FOOTER_EIGENSOLVE_STAGE_KINDS.has(record.kind.toLowerCase()) ||
+    !["pending", "running", "completed", "failed", "cancelled"].includes(
+      record.status,
+    )
+  ) {
+    return null;
+  }
+
+  const active =
+    record.status === "running" && execution.runtime_state === "running";
+  const clockKey =
+    active && validStageTimestamp(record.started_at_unix_ms)
+      ? JSON.stringify([
+          execution.session_id,
+          execution.session_epoch,
+          execution.request_scope_epoch,
+          execution.run_id,
+          record.stage_id,
+          record.kind,
+          record.started_at_unix_ms,
+        ])
+      : null;
+
+  return {
+    active,
+    clockKey,
+    identityKey: JSON.stringify([
+      execution.session_id,
+      execution.session_epoch,
+      execution.request_scope_epoch,
+      execution.run_id,
+      record.stage_id,
+      record.kind,
+      record.index,
+    ]),
+    kind: record.kind.toLowerCase(),
+    record,
+  };
+}
+
 export function resolveFooterAntennaStage(
   status: FooterTelemetryStatus | null | undefined,
   execution: StageExecutionResource | null | undefined,

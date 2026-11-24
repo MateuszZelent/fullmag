@@ -1,8 +1,22 @@
+import { MODEL_PHYSICS_GRAPH_PATH } from "@/kernel/api/apiPaths";
 import type {
   AuthoringTransactionRequest,
+  AuthoringTransactionResponse,
   ObjectInteractionKind,
+  ObjectInteractionPatchRequest,
   PhysicsGraphModuleResource,
+  SceneResource,
 } from "@/kernel/api/apiTypes";
+import type { ControlRoomApi } from "@/kernel/api/ControlRoomApi";
+import {
+  acknowledgedAuthoringSceneRevision,
+  invalidateAuthoringMutationDependents,
+} from "@/kernel/authoring/authoringMutationInvalidation";
+import {
+  publishCommittedSceneResource,
+  resolveObjectInteractionResourceKey,
+} from "@/kernel/resources/geometryLifecycleResources";
+import type { ResourceInvalidationController } from "@/kernel/resources/ResourceInvalidationController";
 import type { ActiveLaneOperationId } from "@/kernel/resources/useActiveLaneCapabilities";
 import {
   findInteractionSpec,
@@ -12,6 +26,7 @@ import {
 } from "@/shared/domain/physics/interactions";
 import type { Selection } from "@/kernel/selection/selectionTypes";
 
+import { commitObjectInteractionMutation } from "../../../panels/PhysicsInteractionPanel.model";
 import type { SceneObjectItem as SceneObject } from "../../../panels/model-roots/SpecInspectorHost";
 
 export type SceneCoupling = Extract<
@@ -182,6 +197,160 @@ export function readObjectInteractionState(
     return { present: false, enabled: implicit };
   }
   return { present: false, enabled: false };
+}
+
+/**
+ * Returns true if any magnetic object other than `excludedObjectId` currently
+ * has Symmetric exchange enabled on its object-level physics stack.
+ */
+export function hasOtherMagnetWithExchangeEnabled(
+  sceneObjects: SceneResource["objects"] | undefined,
+  sceneMaterials: SceneResource["materials"] | undefined,
+  excludedObjectId: string,
+): boolean {
+  if (!Array.isArray(sceneObjects)) return false;
+  const matPropsById = new Map<string, Record<string, unknown>>();
+  if (Array.isArray(sceneMaterials)) {
+    for (const mat of sceneMaterials) {
+      const props = asJsonRecord(mat.properties);
+      if (mat.id && props) matPropsById.set(mat.id, props);
+    }
+  }
+  for (const obj of sceneObjects) {
+    if (!obj || obj.id === excludedObjectId) continue;
+    const role = (obj as Record<string, unknown>).role;
+    if (typeof role === "string" && role !== "magnet") continue;
+    const stackEntry = findObjectPhysicsStackEntry(obj as SceneObject, "exchange");
+    const matProps = obj.material_ref
+      ? matPropsById.get(obj.material_ref) ?? {}
+      : {};
+    const stackEnabled = stackEntry
+      ? stackEntry.enabled !== false
+      : typeof matProps.Aex === "number"
+        ? matProps.Aex > 0
+        : true;
+    if (stackEnabled) return true;
+  }
+  return false;
+}
+
+/**
+ * Determines whether toggling object-scoped Symmetric exchange requires
+ * updating `study.exchange_enabled` so the study gate stays aligned with
+ * the object stack (unlocking when enabling, or disabling only when no
+ * other magnetic object keeps exchange enabled).
+ */
+export function resolveTargetStudyExchangeEnabled(input: {
+  objectId: string;
+  nextEnabled: boolean;
+  studyRec: Record<string, unknown> | null;
+  sceneObjects: SceneResource["objects"] | undefined;
+  sceneMaterials: SceneResource["materials"] | undefined;
+}): boolean | null {
+  const { objectId, nextEnabled, studyRec, sceneObjects, sceneMaterials } = input;
+  const currentStudyEnabled = studyRec?.exchange_enabled !== false;
+  if (nextEnabled) {
+    return currentStudyEnabled ? null : true;
+  }
+  if (!currentStudyEnabled) return null;
+  if (
+    !Array.isArray(sceneObjects) ||
+    !sceneObjects.some((obj) => obj.id === objectId)
+  ) {
+    return null;
+  }
+  return hasOtherMagnetWithExchangeEnabled(sceneObjects, sceneMaterials, objectId)
+    ? null
+    : false;
+}
+
+/**
+ * Patches object-level Symmetric exchange and synchronizes `study.exchange_enabled`
+ * when the global study gate would otherwise keep exchange out of sync.
+ */
+export async function commitObjectExchangeMutation(input: {
+  objectId: string;
+  enabled: boolean;
+  baseRevision: number | null;
+  studyRec: Record<string, unknown> | null;
+  sceneObjects: SceneResource["objects"] | undefined;
+  sceneMaterials: SceneResource["materials"] | undefined;
+  sessionScopeKey: string | null | undefined;
+  api: ControlRoomApi;
+  resources: ResourceInvalidationController;
+}): Promise<number | AuthoringTransactionResponse> {
+  const {
+    objectId,
+    enabled,
+    baseRevision,
+    studyRec,
+    sceneObjects,
+    sceneMaterials,
+    sessionScopeKey,
+    api,
+    resources,
+  } = input;
+  const scopeOptions = sessionScopeKey ? { sessionScopeKey } : undefined;
+  const patchPayload: ObjectInteractionPatchRequest = {
+    base_revision: baseRevision,
+    present: true,
+    enabled,
+  };
+  const committedRev = await commitObjectInteractionMutation({
+    interactionKind: "exchange",
+    objectId,
+    patch: () =>
+      api.model.patchObjectInteraction(
+        objectId,
+        "exchange",
+        patchPayload,
+        scopeOptions,
+      ),
+    resources,
+  });
+
+  const targetStudyExchange = resolveTargetStudyExchangeEnabled({
+    objectId,
+    nextEnabled: enabled,
+    studyRec,
+    sceneObjects,
+    sceneMaterials,
+  });
+  if (
+    targetStudyExchange !== null &&
+    typeof api.model.commitTransaction === "function"
+  ) {
+    const tx = await api.model.commitTransaction(
+      {
+        kind: "merge_patch",
+        base_revision: committedRev,
+        merge_patch: { study: { exchange_enabled: targetStudyExchange } },
+      },
+      scopeOptions,
+    );
+    const txRev = acknowledgedAuthoringSceneRevision(tx);
+    if (tx.committed_scene) {
+      publishCommittedSceneResource(
+        resources,
+        tx.committed_scene,
+        txRev,
+        undefined,
+        true,
+        sessionScopeKey,
+        api.resourceCacheScope,
+      );
+    }
+    resources.invalidate(
+      resolveObjectInteractionResourceKey(objectId, "exchange"),
+      txRev,
+    );
+    invalidateAuthoringMutationDependents(resources, "interaction", txRev);
+    resources.invalidate(MODEL_PHYSICS_GRAPH_PATH, txRev);
+    return tx;
+  }
+
+  resources.invalidate(MODEL_PHYSICS_GRAPH_PATH, committedRev);
+  return committedRev;
 }
 
 export function activeLaneOperationIdForModule(

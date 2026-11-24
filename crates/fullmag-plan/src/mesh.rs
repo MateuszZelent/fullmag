@@ -1447,6 +1447,14 @@ fn shared_domain_region_entries_for_problem(
     problem: &ProblemIR,
     asset: &FemDomainMeshAssetIR,
 ) -> Result<Vec<SharedDomainRegionEntry>, String> {
+    let canonical_magnet_owner_id = |magnet: &fullmag_ir::MagnetIR| {
+        magnet
+            .object_id
+            .as_deref()
+            .filter(|id| !id.trim().is_empty())
+            .unwrap_or(magnet.name.as_str())
+            .to_string()
+    };
     let object_id_for_geometry = |geometry_name: &str| {
         problem
             .regions
@@ -1458,8 +1466,22 @@ fn shared_domain_region_entries_for_problem(
                     .iter()
                     .find(|magnet| magnet.region == region.name)
             })
-            .map(|magnet| magnet.name.clone())
+            .map(&canonical_magnet_owner_id)
             .unwrap_or_else(|| geometry_name.to_string())
+    };
+    let canonical_owner_for_region = |owner_object: &str| {
+        problem
+            .magnets
+            .iter()
+            .find(|magnet| {
+                magnet.object_id.as_deref() == Some(owner_object)
+                    || magnet.name == owner_object
+                    || problem.regions.iter().any(|region| {
+                        region.name == magnet.region && region.geometry == owner_object
+                    })
+            })
+            .map(&canonical_magnet_owner_id)
+            .unwrap_or_else(|| owner_object.to_string())
     };
     let mut entries = asset
         .region_markers
@@ -1487,7 +1509,7 @@ fn shared_domain_region_entries_for_problem(
             ));
         };
         entries.push(SharedDomainRegionEntry {
-            object_id: region.owner_object.clone(),
+            object_id: canonical_owner_for_region(&region.owner_object),
             geometry_id: marker.geometry_name.clone(),
             marker: marker.marker,
         });

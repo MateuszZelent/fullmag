@@ -49,6 +49,8 @@ export interface RegionShapeDraft {
   center: [number, number, number];
   height: number;
   kind: RegionEditShapeKind;
+  /** Retained verbatim when the region shape is a CSG expression (`shape.kind === "csg"`). */
+  preservedShape?: components["schemas"]["SceneRegionShape"];
   radius: number;
   size: [number, number, number];
 }
@@ -268,12 +270,22 @@ export function ownerBoundsForObject(object: JsonRecord | null): RegionOwnerBoun
     max[2] - min[2],
   ];
   if (size.some((entry) => entry <= 0 || !Number.isFinite(entry))) return null;
+  const worldCenter: [number, number, number] = [
+    (min[0] + max[0]) / 2,
+    (min[1] + max[1]) / 2,
+    (min[2] + max[2]) / 2,
+  ];
+  const transform = asRecord(object?.transform);
+  const translation = finiteVector3(transform?.translation);
+  const center: [number, number, number] = translation
+    ? [
+        worldCenter[0] - translation[0],
+        worldCenter[1] - translation[1],
+        worldCenter[2] - translation[2],
+      ]
+    : worldCenter;
   return {
-    center: [
-      (min[0] + max[0]) / 2,
-      (min[1] + max[1]) / 2,
-      (min[2] + max[2]) / 2,
-    ],
+    center,
     size,
   };
 }
@@ -285,11 +297,20 @@ function ownerBoundsFromGeometryParams(geometry: JsonRecord | null): RegionOwner
   let size: [number, number, number] | null = null;
   if (kind === "Box") {
     size = finiteVector3(params?.size);
+  } else if (kind === "Sphere") {
+    const radius = asNumber(params?.radius);
+    if (radius && radius > 0) {
+      size = [radius * 2, radius * 2, radius * 2];
+    }
   } else if (kind === "Cylinder") {
     const radius = asNumber(params?.radius);
-    const height = asNumber(params?.height);
+    const height = asNumber(params?.height ?? params?.length);
     if (radius && height) {
-      size = [radius * 2, radius * 2, height];
+      const axis = normalizedAxis(finiteVector3(params?.axis) ?? [0, 0, 1]);
+      size = [0, 1, 2].map((index) => {
+        const component = Math.abs(axis[index]);
+        return 2 * (component * (height * 0.5) + radius * Math.sqrt(Math.max(0, 1 - component * component)));
+      }) as [number, number, number];
     }
   } else if (kind === "ArchWaveguide") {
     const length = asNumber(params?.length);
@@ -411,9 +432,15 @@ export function clampObjectRegionDraftShapeToOwnerBounds(
   ownerBounds: RegionOwnerBounds | null,
   frame = "object",
 ): RegionShapeDraft {
-  if (!ownerBounds || frame !== "object") return shape;
-  const halfExtents = halfExtentsForShape(shape, ownerBounds);
-  const center = clampCenterToOwnerBounds(shape.center, halfExtents, ownerBounds);
+  if (!ownerBounds || frame !== "object" || shape.preservedShape) return shape;
+  // Object-frame regions are authored in the owner's local centered frame
+  // ([-size/2, +size/2]), never in world-translated coordinates.
+  const localOwnerBounds: RegionOwnerBounds = {
+    center: [0, 0, 0],
+    size: ownerBounds.size,
+  };
+  const halfExtents = halfExtentsForShape(shape, localOwnerBounds);
+  const center = clampCenterToOwnerBounds(shape.center, halfExtents, localOwnerBounds);
 
   if (shape.kind === "box") {
     return {
@@ -434,7 +461,7 @@ export function clampObjectRegionDraftShapeToOwnerBounds(
     };
   }
 
-  const cylinder = clampCylinderDimensions(shape, ownerBounds);
+  const cylinder = clampCylinderDimensions(shape, localOwnerBounds);
   return {
     ...shape,
     center,
@@ -466,6 +493,10 @@ function normalizeConflictPolicy(value: string | null): RegionMaterialConflictPo
 function resolveShapeDraft(region: RegionListResource["regions"][number] | null): RegionShapeDraft {
   const shape = region?.shape;
   const kind = shape?.kind;
+  const preservedShape =
+    shape && kind === "csg"
+      ? (structuredClone(shape) as components["schemas"]["SceneRegionShape"])
+      : undefined;
   const resolvedKind: RegionEditShapeKind =
     kind === "cylinder" || kind === "sphere" ? kind : "box";
 
@@ -490,6 +521,7 @@ function resolveShapeDraft(region: RegionListResource["regions"][number] | null)
     center,
     height,
     kind: resolvedKind,
+    ...(preservedShape ? { preservedShape } : {}),
     radius,
     size,
   };
@@ -804,6 +836,9 @@ export function objectRegionDraftFromModel(
       ...model.shape,
       axis: [...model.shape.axis],
       center: [...model.shape.center],
+      ...(model.shape.preservedShape
+        ? { preservedShape: structuredClone(model.shape.preservedShape) }
+        : {}),
       size: [...model.shape.size],
     },
   };
@@ -840,6 +875,7 @@ export function objectRegionDraftKey(model: ObjectRegionPanelModel): string {
     model.shape.radius,
     model.shape.height,
     model.shape.axis.join(","),
+    model.shape.preservedShape ? JSON.stringify(model.shape.preservedShape) : "",
     model.meshPolicy.enabled ? "mesh-enabled" : "mesh-disabled",
     model.meshPolicy.maximumElementSize,
     model.meshPolicy.minimumElementSize,
@@ -873,27 +909,29 @@ export function validateObjectRegionDraft(
   if (!Number.isFinite(draft.priority) || !Number.isInteger(draft.priority)) {
     errors.push("Region priority must be an integer.");
   }
-  if (!draft.shape.center.every(Number.isFinite)) {
-    errors.push("Shape center must contain finite values.");
-  }
-  if (draft.shape.kind === "box" && !draft.shape.size.every(numberIsPositive)) {
-    errors.push("Box size values must be greater than zero.");
-  }
-  if (
-    (draft.shape.kind === "cylinder" || draft.shape.kind === "sphere") &&
-    !numberIsPositive(draft.shape.radius)
-  ) {
-    errors.push("Radius must be greater than zero.");
-  }
-  if (draft.shape.kind === "cylinder") {
-    if (!numberIsPositive(draft.shape.height)) {
-      errors.push("Height must be greater than zero.");
+  if (!draft.shape.preservedShape) {
+    if (!draft.shape.center.every(Number.isFinite)) {
+      errors.push("Shape center must contain finite values.");
     }
-    if (!draft.shape.axis.every(Number.isFinite)) {
-      errors.push("Axis must contain finite values.");
+    if (draft.shape.kind === "box" && !draft.shape.size.every(numberIsPositive)) {
+      errors.push("Box size values must be greater than zero.");
     }
-    if (draft.shape.axis.every((component) => component === 0)) {
-      errors.push("Axis must not be the zero vector.");
+    if (
+      (draft.shape.kind === "cylinder" || draft.shape.kind === "sphere") &&
+      !numberIsPositive(draft.shape.radius)
+    ) {
+      errors.push("Radius must be greater than zero.");
+    }
+    if (draft.shape.kind === "cylinder") {
+      if (!numberIsPositive(draft.shape.height)) {
+        errors.push("Height must be greater than zero.");
+      }
+      if (!draft.shape.axis.every(Number.isFinite)) {
+        errors.push("Axis must contain finite values.");
+      }
+      if (draft.shape.axis.every((component) => component === 0)) {
+        errors.push("Axis must not be the zero vector.");
+      }
     }
   }
   if ((options.meshPolicyLane ?? "fem") === "fem" && draft.meshPolicy.enabled) {
@@ -960,31 +998,34 @@ export function buildObjectRegionPatch(
   options: BuildObjectRegionPatchOptions = {},
 ): components["schemas"]["SceneObjectRegionPatch"] {
   const meshPolicyLane = options.meshPolicyLane ?? "fem";
-  const clampedShape = clampObjectRegionDraftShapeToOwnerBounds(
-    draft.shape,
-    draft.ownerBounds,
-    draft.frame,
-  );
-  const shape: components["schemas"]["SceneRegionShape"] =
-    clampedShape.kind === "cylinder"
-      ? {
-          axis: clampedShape.axis,
-          center: clampedShape.center,
-          height: clampedShape.height,
-          kind: "cylinder",
-          radius: clampedShape.radius,
-        }
-      : clampedShape.kind === "sphere"
-        ? {
-            center: clampedShape.center,
-            kind: "sphere",
-            radius: clampedShape.radius,
-          }
-        : {
-            center: clampedShape.center,
-            kind: "box",
-            size: clampedShape.size,
-          };
+  const shape: components["schemas"]["SceneRegionShape"] = draft.shape.preservedShape
+    ? structuredClone(draft.shape.preservedShape)
+    : (() => {
+        const clampedShape = clampObjectRegionDraftShapeToOwnerBounds(
+          draft.shape,
+          draft.ownerBounds,
+          draft.frame,
+        );
+        return clampedShape.kind === "cylinder"
+          ? {
+              axis: clampedShape.axis,
+              center: clampedShape.center,
+              height: clampedShape.height,
+              kind: "cylinder",
+              radius: clampedShape.radius,
+            }
+          : clampedShape.kind === "sphere"
+            ? {
+                center: clampedShape.center,
+                kind: "sphere",
+                radius: clampedShape.radius,
+              }
+            : {
+                center: clampedShape.center,
+                kind: "box",
+                size: clampedShape.size,
+              };
+      })();
   const meshPolicy: components["schemas"]["SceneRegionMeshPolicy"] | null = draft.meshPolicy.enabled
     ? {
         maximum_element_size: draft.meshPolicy.maximumElementSize,

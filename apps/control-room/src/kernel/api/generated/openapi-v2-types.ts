@@ -6654,6 +6654,7 @@ export interface components {
             name: string;
             object_id: string;
             region_name?: string | null;
+            role?: string | null;
             study_universe_mesh?: Record<string, unknown> | null;
             transform?: Record<string, unknown> | null;
             universe?: Record<string, unknown> | null;
@@ -6763,6 +6764,56 @@ export interface components {
             coupling_id: string;
             /** @enum {string} */
             kind: "delete_coupling";
+        } | {
+            /** Format: int64 */
+            base_revision?: number | null;
+            keep_tools?: boolean;
+            /** @enum {string} */
+            kind: "boolean_combine_objects";
+            op: string;
+            region_merge_policy?: string | null;
+            target_object_id: string;
+            tool_object_ids: string[];
+        } | {
+            add_operand?: null | components["schemas"]["BooleanOperandInput"];
+            /** Format: int64 */
+            base_revision?: number | null;
+            /** @enum {string} */
+            kind: "update_boolean_operands";
+            object_id: string;
+            op?: string | null;
+            remove_operand_id?: string | null;
+            reorder_operand_ids?: string[] | null;
+            toggle_operand?: null | components["schemas"]["BooleanOperandToggle"];
+        } | {
+            /** Format: int64 */
+            base_revision?: number | null;
+            keep_in_boolean?: boolean;
+            /** @enum {string} */
+            kind: "separate_object";
+            mode: string;
+            object_id: string;
+            operand_id?: string | null;
+            plane_normal?: number[] | null;
+            plane_origin_m?: number[] | null;
+        } | {
+            /** Format: int64 */
+            base_revision?: number | null;
+            copy_regions?: boolean;
+            /** @enum {string} */
+            kind: "duplicate_objects";
+            object_ids: string[];
+            offset_m?: number[] | null;
+        } | {
+            axes: components["schemas"]["SceneArrayAxisSpec"][];
+            /** Format: int64 */
+            base_revision?: number | null;
+            /** @enum {string} */
+            kind: "apply_array_3d";
+            merge_overlapping?: boolean;
+            object_id: string;
+            realization: string;
+            target_operand_id?: string | null;
         };
         AuthoringTransactionResponse: {
             committed_scene: components["schemas"]["SceneResource"];
@@ -6804,6 +6855,15 @@ export interface components {
             notes: string;
             op: string;
             status: components["schemas"]["GeometrySupportStatus"];
+        };
+        BooleanOperandInput: {
+            geometry: Record<string, unknown>;
+            label: string;
+            transform?: Record<string, unknown> | null;
+        };
+        BooleanOperandToggle: {
+            enabled: boolean;
+            operand_id: string;
         };
         Bounds2: {
             /** Format: double */
@@ -12208,6 +12268,7 @@ export interface components {
             name: string;
             object_id: string;
             region_name?: string | null;
+            role?: string | null;
             study_universe_mesh?: Record<string, unknown> | null;
             transform?: Record<string, unknown> | null;
             universe?: Record<string, unknown> | null;
@@ -14805,6 +14866,34 @@ export interface components {
             /** Format: int64 */
             total_rows: number;
         };
+        /** @description Canonical Etap C `ArrayAxisSpec` shared across `SceneGeometry { kind: "Array3D" }` and `apply_array_3d`. */
+        SceneArrayAxisSpec: {
+            axis: string;
+            /** Format: int32 */
+            count?: number;
+            direction?: components["schemas"]["SceneArrayDirection"];
+            enabled?: boolean;
+            /** Format: double */
+            gap_m?: number;
+            /** Format: double */
+            pitch_m?: number;
+            /** Format: double */
+            relative_factor?: number;
+            spacing_mode?: components["schemas"]["SceneArraySpacingMode"];
+            step_rotation_euler_deg?: number[];
+            step_scale_factor?: number[];
+            step_translation_extra_m?: number[];
+        };
+        /**
+         * @description Canonical Etap C Array3D axis direction (`+`, `-`, `±` aliases accepted on read).
+         * @enum {string}
+         */
+        SceneArrayDirection: "positive" | "negative" | "symmetric";
+        /**
+         * @description Canonical Etap C Array3D spacing mode.
+         * @enum {string}
+         */
+        SceneArraySpacingMode: "lattice_step" | "bounding_box_gap";
         SceneChargeBoundary: {
             id: string;
             /** @enum {string} */

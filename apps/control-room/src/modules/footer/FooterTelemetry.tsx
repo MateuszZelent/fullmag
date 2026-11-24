@@ -29,7 +29,7 @@ import {
   type AntennaFieldEta,
 } from "./antennaFieldEta";
 
-import { type FooterTelemetryStatus, resolveFooterSolverStatus, resolveFooterAntennaStage, resolvePrimaryTelemetryObjectId, resolveFooterMagneticModelPresent } from "./FooterTelemetry.model";
+import { type FooterTelemetryStatus, resolveFooterSolverStatus, resolveFooterAntennaStage, resolveFooterEigensolveStage, resolvePrimaryTelemetryObjectId, resolveFooterMagneticModelPresent } from "./FooterTelemetry.model";
 import { readAntennaProgress, buildFooterTelemetryModel, type FooterLiveScalarSample, type FooterAntennaProgress, isFrequencyResponseStageKind, type FooterFrequencyDomainProgress, type FooterTelemetryGroup, type FooterTelemetryMetric } from "./FooterTelemetry.presentation";
 import { resolveFooterPerformanceProgressFraction } from "./footerPerformanceProgress";
 import { resolveFooterStageSelection, resolveFooterStepCounters, type FooterStageSelection } from "./footerStepCounters";
@@ -51,9 +51,11 @@ export function FooterTelemetry({
   stageExecution: Pick<ResourceResult<StageExecutionResource | null>, "data" | "status">;
   /** Dock header slot for the run status; falls back to an in-panel strip. */
   statusHost?: HTMLElement | null;
-  view: "overview" | "antenna";
+  view: "overview" | "antenna" | "eigensolve";
 }) {
-  const solverStatus = useSolverStatusResource({ enabled: Boolean(status) && view === "overview" });
+  const solverStatus = useSolverStatusResource({
+    enabled: Boolean(status) && (view === "overview" || view === "eigensolve"),
+  });
   const solverStatusForRun = resolveFooterSolverStatus(status, solverStatus.data);
   const currentSolverIntegrator = solverStatusForRun?.integrator?.trim() || null;
   const observedStageIndex = status?.run?.stage_index;
@@ -82,10 +84,17 @@ export function FooterTelemetry({
       ? lastKnownIntegrator.value
       : null);
   const antennaStage = resolveFooterAntennaStage(status, stageExecution.data);
+  const eigensolveStage = resolveFooterEigensolveStage(status, stageExecution.data);
   const antennaNumerical = antennaStage ? readAntennaProgress(antennaStage.record) : null;
-  const antennaNowMs = useAntennaStageClock(
-    view === "antenna" && !antennaNumerical ? antennaStage?.clockKey ?? null : null,
-  );
+  const stageClockKey =
+    view === "antenna"
+      ? !antennaNumerical
+        ? antennaStage?.clockKey ?? null
+        : null
+      : view === "eigensolve"
+        ? eigensolveStage?.clockKey ?? null
+        : null;
+  const stageNowMs = useAntennaStageClock(stageClockKey);
   const antennaEta = useAntennaFieldEta(
     view === "antenna" && antennaStage?.active && antennaNumerical?.phase === "evaluating_field"
       ? {
@@ -130,7 +139,7 @@ export function FooterTelemetry({
   // Frequency-response artifacts exist only for studies with such a stage;
   // polling them elsewhere only produces 404s.
   const loadsFrequencyResponse =
-    generalTelemetryEnabled &&
+    (generalTelemetryEnabled || (Boolean(status) && view === "eigensolve")) &&
     studyHasFrequencyResponseStage(solverStatusForRun?.stage_kind, stageExecution.data);
   const responseProgress = useFrequencyDomainResponseProgressResource({
     enabled: loadsFrequencyResponse,
@@ -181,13 +190,14 @@ export function FooterTelemetry({
       currentRunStatus: currentRunForStatus?.status,
       scalarHistory: historyWindow.data,
       runtimeIntegrator,
-      nowMs: antennaNowMs,
+      nowMs: stageNowMs,
       stageExecutionUnpublished,
       stageHandoff,
       stageProgressAvailable: stageProgress?.percent !== null && stageProgress !== null,
       stageReference: stageProgress?.active && stageProgress.stageIndex !== null
         ? { stageIndex: stageProgress.stageIndex, stageId: stageProgress.stageId }
         : null,
+      telemetryView: view,
       userSolvePhase,
     },
   );
@@ -258,6 +268,14 @@ export function FooterTelemetry({
       </div>
     );
   }
+  if (view === "eigensolve" && !eigensolveStage) {
+    return (
+      <div className="fm-footer-telemetry__empty" role="region" aria-label="Eigensolve telemetry">
+        <strong>No eigensolve stage in the current execution</strong>
+        <span>Run a Study containing an Eigenmodes or Frequency Response stage to inspect modal solver counters, residuals, and publication.</span>
+      </div>
+    );
+  }
   if (view === "overview" && antennaStage) {
     return (
       <div className="fm-footer-telemetry__empty" role="region" aria-label="Simulation telemetry">
@@ -291,7 +309,17 @@ export function FooterTelemetry({
   ) : null;
 
   return (
-    <div className="fm-footer-telemetry" role="region" aria-label={view === "antenna" ? "Antenna telemetry" : "Simulation telemetry"}>
+    <div
+      className="fm-footer-telemetry"
+      role="region"
+      aria-label={
+        view === "antenna"
+          ? "Antenna telemetry"
+          : view === "eigensolve"
+            ? "Eigensolve telemetry"
+            : "Simulation telemetry"
+      }
+    >
       {statusHost ? createPortal(statusSummary, statusHost) : null}
       {!statusHost || progressStrip ? (
         <div className="fm-footer-telemetry__strip">

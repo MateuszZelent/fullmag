@@ -39,6 +39,7 @@ import {
   buildPrimitiveTransformGizmoSegments,
   releasePrimitiveObjectGeometry,
   primitiveObjectSurfaceColor,
+  resolvePrimitiveGroupTransform,
   resolvePrimitiveObjectRenderSettings,
   shouldRenderPrimitiveObject,
   shouldRenderPrimitiveTransformGizmo,
@@ -46,6 +47,12 @@ import {
 } from "./PrimitiveObjectLayerModel";
 import { createAntennaPrimitiveTextures } from "./antennaPrimitiveTextures";
 import { eventIntersectsRegionOverlay } from "./regionOverlayPicking";
+
+export interface Viewport3DPickModifiers {
+  ctrlKey?: boolean;
+  metaKey?: boolean;
+  shiftKey?: boolean;
+}
 
 export function PrimitiveObjectLayer({
   colors,
@@ -55,15 +62,20 @@ export function PrimitiveObjectLayer({
   primitiveModel,
   meshReadyFallbackObjectIds,
   realizedObjectIds,
+  suppressedSolidObjectIds,
   tracker,
 }: {
   colors: Viewport3DColors;
   getObjectSettings: (object: Viewport3DPrimitiveObject) => VisualizationTargetSettings;
   materialProfile: Viewport3DMaterialProfile;
-  onSelectObject: (object: Viewport3DPrimitiveObject) => void;
+  onSelectObject: (
+    object: Viewport3DPrimitiveObject,
+    modifiers?: Viewport3DPickModifiers,
+  ) => void;
   meshReadyFallbackObjectIds?: ReadonlySet<string>;
   primitiveModel: Viewport3DPrimitiveRenderModel | null;
   realizedObjectIds?: ReadonlySet<string>;
+  suppressedSolidObjectIds?: ReadonlySet<string>;
   tracker: Viewport3DResourceTracker;
 }) {
   const invalidate = useBatchedInvalidate();
@@ -113,25 +125,35 @@ export function PrimitiveObjectLayer({
           />
         </group>
       ) : null}
-      {primitiveModel.objects.map((object) => (
-        <PrimitiveObject
-          colors={colors}
-          key={object.geometryKey}
-          object={object}
-          onSelectObject={onSelectObject}
-          primitiveColorAssignments={primitiveColorAssignments}
-          materialProfile={materialProfile}
-          hasRealizedObjectGeometry={realizedObjectIds?.has(object.objectId) ?? false}
-          allowMeshReadyPreview={
-            object.kind === "imported-surface" ||
-            object.role === "antenna" ||
-            (isFerromagneticPrimitiveRole(object.role) &&
-              (meshReadyFallbackObjectIds?.has(object.objectId) ?? false))
-          }
-          settings={getObjectSettings(object)}
-          tracker={tracker}
-        />
-      ))}
+      {primitiveModel.objects.map((object) => {
+        // P1-FE-12: hide committed base mesh while a draft overlay for the same
+        // object is active to eliminate coplanar z-fighting.
+        const hiddenByDraftOverlay = Boolean(
+          primitiveModel.draftOverlay &&
+            primitiveModel.draftOverlay.objectId === object.objectId,
+        );
+        return (
+          <group key={object.geometryKey} visible={!hiddenByDraftOverlay}>
+            <PrimitiveObject
+              colors={colors}
+              object={object}
+              onSelectObject={onSelectObject}
+              primitiveColorAssignments={primitiveColorAssignments}
+              materialProfile={materialProfile}
+              hasRealizedObjectGeometry={realizedObjectIds?.has(object.objectId) ?? false}
+              allowMeshReadyPreview={
+                object.kind === "imported-surface" ||
+                object.role === "antenna" ||
+                (isFerromagneticPrimitiveRole(object.role) &&
+                  (meshReadyFallbackObjectIds?.has(object.objectId) ?? false))
+              }
+              settings={getObjectSettings(object)}
+              surfaceFillSuppressed={suppressedSolidObjectIds?.has(object.objectId) ?? false}
+              tracker={tracker}
+            />
+          </group>
+        );
+      })}
     </>
   );
 }
@@ -145,6 +167,7 @@ function PrimitiveObject({
   onSelectObject,
   primitiveColorAssignments,
   settings,
+  surfaceFillSuppressed = false,
   tracker,
 }: {
   colors: Viewport3DColors;
@@ -152,9 +175,13 @@ function PrimitiveObject({
   allowMeshReadyPreview: boolean;
   materialProfile: Viewport3DMaterialProfile;
   object: Viewport3DPrimitiveObject;
-  onSelectObject: (object: Viewport3DPrimitiveObject) => void;
+  onSelectObject: (
+    object: Viewport3DPrimitiveObject,
+    modifiers?: Viewport3DPickModifiers,
+  ) => void;
   primitiveColorAssignments: ReadonlyMap<string, number>;
   settings: VisualizationTargetSettings;
+  surfaceFillSuppressed?: boolean;
   tracker: Viewport3DResourceTracker;
 }) {
   if (!shouldRenderPrimitiveObject(
@@ -175,6 +202,7 @@ function PrimitiveObject({
       onSelectObject={onSelectObject}
       primitiveColorAssignments={primitiveColorAssignments}
       settings={settings}
+      surfaceFillSuppressed={surfaceFillSuppressed}
       tracker={tracker}
     />
   );
@@ -188,15 +216,20 @@ function RenderablePrimitiveObject({
   onSelectObject,
   primitiveColorAssignments,
   settings,
+  surfaceFillSuppressed = false,
   tracker,
 }: {
   colors: Viewport3DColors;
   materialProfile: Viewport3DMaterialProfile;
   object: Viewport3DPrimitiveObject;
   allowMeshReadyPreview?: boolean;
-  onSelectObject: (object: Viewport3DPrimitiveObject) => void;
+  onSelectObject: (
+    object: Viewport3DPrimitiveObject,
+    modifiers?: Viewport3DPickModifiers,
+  ) => void;
   primitiveColorAssignments: ReadonlyMap<string, number>;
   settings: VisualizationTargetSettings;
+  surfaceFillSuppressed?: boolean;
   tracker: Viewport3DResourceTracker;
 }) {
   const antennaTextures = useMemo(() => {
@@ -256,7 +289,13 @@ function RenderablePrimitiveObject({
   const handlePointerDown = (event: ThreeEvent<PointerEvent>) => {
     if (eventIntersectsRegionOverlay(event)) return;
     event.stopPropagation();
-    onSelectObject(object);
+    const native = event.nativeEvent;
+    const modifiers: Viewport3DPickModifiers = {
+      ctrlKey: Boolean(native?.ctrlKey ?? event.ctrlKey),
+      metaKey: Boolean(native?.metaKey ?? event.metaKey),
+      shiftKey: Boolean(native?.shiftKey ?? event.shiftKey),
+    };
+    onSelectObject(object, modifiers);
   };
   const renderPlan = resolveViewport3DTargetRenderPlan(
     renderSettings,
@@ -274,17 +313,35 @@ function RenderablePrimitiveObject({
     primitiveColorAssignments,
   );
 
+  const groupTransform = useMemo(
+    () => resolvePrimitiveGroupTransform(object),
+    [object],
+  );
+  const boundsBoxSize = object.localSize ?? object.bounds.size;
+  const hasVertexData = (geometry.getAttribute("position")?.count ?? 0) > 0;
+  const isInstancedArrayRoot = object.kind === "array3d";
+  const boundsLocalCenter: [number, number, number] =
+    object.kind === "composite" || object.kind === "array3d"
+      ? [
+          object.bounds.center[0] - groupTransform.position[0],
+          object.bounds.center[1] - groupTransform.position[1],
+          object.bounds.center[2] - groupTransform.position[2],
+        ]
+      : [0, 0, 0];
+
   return (
     <group
       onPointerDown={handlePointerDown}
-      position={object.bounds.center}
+      position={groupTransform.position}
+      quaternion={groupTransform.quaternion}
+      scale={groupTransform.scale}
       userData={{
         fallbackLabel: object.fallbackLabel,
         objectId: object.objectId,
         primitive: true,
       }}
     >
-      {renderPlan.primitive.visible ? (
+      {renderPlan.primitive.visible && !surfaceFillSuppressed && !isInstancedArrayRoot && hasVertexData ? (
         <mesh
           castShadow={surfaceMaterialPlan.castShadow}
           onPointerDown={handlePointerDown}
@@ -336,7 +393,7 @@ function RenderablePrimitiveObject({
           ) : null}
         </mesh>
       ) : null}
-      {renderPlan.wireframe.visible && edgeGeometry ? (
+      {renderPlan.wireframe.visible && !isInstancedArrayRoot && edgeGeometry && hasVertexData ? (
         <lineSegments
           geometry={edgeGeometry}
           onPointerDown={handlePointerDown}
@@ -354,7 +411,7 @@ function RenderablePrimitiveObject({
           />
         </lineSegments>
       ) : null}
-      {renderPlan.points.visible ? (
+      {renderPlan.points.visible && !isInstancedArrayRoot && hasVertexData ? (
         <points
           geometry={geometry}
           renderOrder={RENDER_POLICIES.points.renderOrder}
@@ -371,6 +428,7 @@ function RenderablePrimitiveObject({
       {renderPlan.bounds.visible ? (
         <mesh
           onPointerDown={handlePointerDown}
+          position={boundsLocalCenter}
           userData={{
             fallbackLabel: object.fallbackLabel,
             objectId: object.objectId,
@@ -379,9 +437,9 @@ function RenderablePrimitiveObject({
         >
           <boxGeometry
             args={[
-              Math.max(object.bounds.size[0], 1e-9),
-              Math.max(object.bounds.size[1], 1e-9),
-              Math.max(object.bounds.size[2], 1e-9),
+              Math.max(boundsBoxSize[0], 1e-9),
+              Math.max(boundsBoxSize[1], 1e-9),
+              Math.max(boundsBoxSize[2], 1e-9),
             ]}
           />
           <meshBasicMaterial

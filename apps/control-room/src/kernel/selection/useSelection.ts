@@ -20,11 +20,21 @@ export function useSelectionActions(moduleId: ModuleId) {
     [selection, moduleId],
   );
 
+  const toggleObjectSelection = useCallback(
+    (
+      objectId: string,
+      patch: Omit<SelectionPatch, "selectedObjectIds">,
+    ) => {
+      selection.toggleObjectSelection(objectId, patch, moduleId);
+    },
+    [selection, moduleId],
+  );
+
   const clear = useCallback(() => {
     selection.clear(moduleId);
   }, [selection, moduleId]);
 
-  return { select, clear } as const;
+  return { select, toggleObjectSelection, clear } as const;
 }
 
 export function useSelectionSelector<T>(

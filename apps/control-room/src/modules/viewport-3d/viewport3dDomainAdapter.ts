@@ -170,6 +170,7 @@ export interface FdmNativeLayerRenderView {
   settings: VisualizationTargetSettings;
   surfaceColors: ScalarColorBuffer | null;
   target: VisualizationTargetRef;
+  vectorBuildReference?: Viewport3DVectorBuildReference | null;
   vectorGlyphColors: ScalarColorBuffer | null;
   vectorSegments: Float32Array | null;
 }
