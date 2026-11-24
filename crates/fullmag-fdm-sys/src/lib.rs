@@ -23,6 +23,11 @@ pub const FULLMAG_FDM_CAPABILITY_HOST_MULTIPLIER_DRIVES_V1: u64 = 1_u64 << 1;
 pub const FULLMAG_FDM_PLAN_DESC_ABI_V2: u32 = 2;
 pub const FULLMAG_FDM_ROTATED_INTERFACIAL_DMI_ABI_V1: u32 = 1;
 pub const FULLMAG_FDM_ROTATED_INTERFACIAL_DMI_LAYERS_ABI_V1: u32 = 1;
+pub const FULLMAG_FDM_SINGLE_LAYER_BB_OP_EVALUATE: u32 = 0;
+pub const FULLMAG_FDM_SINGLE_LAYER_BB_OP_CAPTURE: u32 = 1;
+pub const FULLMAG_FDM_SINGLE_LAYER_BB_OP_TRIAL: u32 = 2;
+pub const FULLMAG_FDM_SINGLE_LAYER_BB_OP_RESTORE: u32 = 3;
+pub const FULLMAG_FDM_SINGLE_LAYER_BB_SCALAR_COUNT_V1: u64 = 22;
 
 // ── Return codes ──
 
@@ -2233,6 +2238,11 @@ extern "C" {
     pub fn fullmag_fdm_backend_multilayer_bb(
         handle: *mut fullmag_fdm_backend, op: u32, lambda: f64,
         layer_scalars: *mut f64, scalar_count: u64,
+    ) -> ::std::os::raw::c_int;
+
+    pub fn fullmag_fdm_backend_single_layer_bb_v1(
+        handle: *mut fullmag_fdm_backend, op: u32, lambda: f64,
+        out_scalars: *mut f64, scalar_count: u64,
     ) -> ::std::os::raw::c_int;
 
     pub fn fullmag_fdm_backend_refresh_multilayer_demag(handle: *mut fullmag_fdm_backend) -> i32;
