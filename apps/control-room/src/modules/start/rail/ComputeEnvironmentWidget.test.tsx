@@ -129,4 +129,27 @@ describe("ComputeEnvironmentWidget solver routes", () => {
     expect(html.replace(/<[^>]*>/g, "")).toContain("Host inventory · Current · 1 node");
     expect(html).toContain("Samples become stale after 30 seconds.");
   });
+
+  it("renders a discreet single-row summary when defaultCollapsed is enabled", () => {
+    const html = renderToStaticMarkup(
+      <ComputeEnvironmentWidget
+        compute={{
+          ...baseCompute,
+          gpus: [{ index: 0, name: "NVIDIA GeForce RTX 4080 SUPER", vramFreeBytes: 8e9, vramTotalBytes: 16e9 }],
+          runtimeLanes: [
+            { backend: "FDM", device: "CPU", availability: "available", precisions: ["double"] },
+            { backend: "FEM", device: "GPU", availability: "available", precisions: ["double"] },
+          ],
+        }}
+        defaultCollapsed
+        onConfigure={vi.fn()}
+      />,
+    );
+
+    expect(html).toContain('data-collapsed="true"');
+    expect(html).toContain("RTX 4080 SUPER");
+    expect(html).toContain("16T CPU");
+    expect(html).toContain("Details");
+    expect(html).not.toContain("fm-start-env__body");
+  });
 });

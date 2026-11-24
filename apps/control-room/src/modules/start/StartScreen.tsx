@@ -46,6 +46,7 @@ import { startActionDisabledReason } from "./model/startCommands";
 import { startScreenStore, type StartScreenHost } from "./model/startScreenState";
 import { startSettings } from "./model/startSettings";
 import type { RecentEntry } from "./model/types";
+import { ComputeEnvironmentWidget } from "./rail/ComputeEnvironmentWidget";
 import { StartRail } from "./rail/StartRail";
 import { useStartPreferences } from "./model/useStartPreferences";
 import { StartStatusBar } from "./ui/StartStatusBar";
@@ -550,6 +551,15 @@ export function StartScreen({ kernel }: ModuleProps) {
     />
   ) : null;
 
+  // Hide the compute dock completely while disconnected from the backend so
+  // background reconnect polling never causes layout jumps on Home.
+  const backendConnected =
+    sessions.state === "no-session" || sessions.state === "ready";
+  const showComputeDock =
+    backendConnected ||
+    compute != null ||
+    Boolean(computeProbe.nodeInventory?.hasSnapshot);
+
   return (
     <Sheet
       open={isCompact && detailsOpen && showInspector}
@@ -557,12 +567,6 @@ export function StartScreen({ kernel }: ModuleProps) {
     >
       <div className="fm-start" data-inspector={showInspector ? "visible" : "hidden"} data-section={section}>
       <StartRail
-        compute={compute}
-        nodeInventory={computeProbe.nodeInventory}
-        computeError={computeProbe.error}
-        refreshing={computeProbe.refreshing}
-        stale={computeProbe.stale}
-        onRefreshCompute={computeProbe.refresh}
         onRunCommand={runCommand}
         ref={railRef}
         section={section}
@@ -661,6 +665,20 @@ export function StartScreen({ kernel }: ModuleProps) {
             {projectInspector}
           </SheetContent>
         ) : projectInspector
+      ) : null}
+      {showComputeDock ? (
+        <div className="fm-start__compute-dock">
+          <ComputeEnvironmentWidget
+            compute={compute}
+            defaultCollapsed
+            error={computeProbe.error}
+            nodeInventory={computeProbe.nodeInventory}
+            onConfigure={() => runCommand("start.section.settings")}
+            onRefresh={computeProbe.refresh}
+            refreshing={computeProbe.refreshing}
+            stale={computeProbe.stale}
+          />
+        </div>
       ) : null}
       <StartStatusBar compute={compute} index={recent.state} preferences={preferences}
         sessionLabel={sessionIdentity ? `Simulation open: ${sessionName ?? "Untitled simulation"}` : "No active session"} />

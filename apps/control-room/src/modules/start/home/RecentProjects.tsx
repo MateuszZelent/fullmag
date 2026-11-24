@@ -665,6 +665,7 @@ export function RecentProjects({
         {recent.announcement} {scripts.announcement}
       </div>
 
+      <div className="fm-start-recent-panel">
       {showControls ? (
         <>
           {scriptsUnavailable ? null : (
@@ -925,6 +926,7 @@ export function RecentProjects({
           </Button>
         ) : null}
         <span className="fm-start-list-foot__note">{footNote}</span>
+      </div>
       </div>
     </section>
   );

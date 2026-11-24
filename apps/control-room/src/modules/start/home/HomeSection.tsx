@@ -135,13 +135,14 @@ export function HomeSection({
 
   return (
     <>
-      <div className="fm-start-page-head">
+      <header className="fm-start-page-head">
         <div className="fm-start-page-head__copy">
+          <span className="fm-start-page-head__eyebrow">Fullmag Control Room</span>
           <h1>{name ? `Welcome back, ${name}` : "Welcome to Fullmag"}</h1>
           <p>{homeSubline(recent.state, scriptCount)}</p>
         </div>
         {today ? <div className="fm-start-page-head__meta">{today}</div> : null}
-      </div>
+      </header>
       {onOpenActiveSession ? (
         <ActiveSessions onOpen={onOpenActiveSession} sessions={activeSessions} />
       ) : null}

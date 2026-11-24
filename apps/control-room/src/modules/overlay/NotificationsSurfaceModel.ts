@@ -80,7 +80,17 @@ export function pushNotificationItem(
   notifications: readonly NotificationItem[],
   notification: NotificationItem,
 ): NotificationItem[] {
-  const deduped = notifications.filter((item) => item.id !== notification.id);
+  // Collapse both identical IDs and repeated identical error messages emitted
+  // concurrently by multiple polling endpoints (e.g. runtime-unavailable 503s).
+  const deduped = notifications.filter(
+    (item) =>
+      item.id !== notification.id &&
+      !(
+        item.kind === notification.kind &&
+        item.title === notification.title &&
+        item.detail === notification.detail
+      ),
+  );
   return [...deduped, notification].slice(-3);
 }
 

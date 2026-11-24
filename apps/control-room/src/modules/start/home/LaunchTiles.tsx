@@ -53,6 +53,7 @@ export function LaunchTiles({ disabledReasons, initialFocusRef, onRunCommand }: 
               aria-labelledby={nameId}
               className={tileVariants({ tone: tile.tone })}
               data-command-id={tile.commandId}
+              data-disabled={reason !== null ? "true" : undefined}
               disabled={reason !== null}
               key={tile.id}
               onClick={() => onRunCommand(tile.commandId)}
@@ -62,7 +63,7 @@ export function LaunchTiles({ disabledReasons, initialFocusRef, onRunCommand }: 
             >
               <span className="fm-start-tile__top">
                 <span aria-hidden="true" className="fm-start-tile__glyph">
-                  <Icon size={16} />
+                  <Icon size={18} />
                 </span>
                 <span className="fm-start-tile__name" id={nameId}>
                   {tile.name}
@@ -73,7 +74,13 @@ export function LaunchTiles({ disabledReasons, initialFocusRef, onRunCommand }: 
               </span>
               {/* The shortcut sits in the foot so the title keeps the full row. */}
               <span className="fm-start-tile__foot">
-                <span id={footId}>{reason ?? tile.foot}</span>
+                <span
+                  className="fm-start-tile__foot-text"
+                  data-reason={reason !== null ? "true" : undefined}
+                  id={footId}
+                >
+                  {reason ?? tile.foot}
+                </span>
                 {tile.shortcut ? (
                   <kbd aria-hidden="true" className="fm-start-kbd">
                     {tile.shortcut}

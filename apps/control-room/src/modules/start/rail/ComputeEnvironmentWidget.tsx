@@ -1,7 +1,7 @@
 "use client";
 
 import { cva } from "class-variance-authority";
-import { Cpu, RefreshCw, Settings } from "lucide-react";
+import { ChevronDown, ChevronUp, Cpu, RefreshCw, Settings } from "lucide-react";
 import { useState } from "react";
 
 import { Button } from "@/shared/ui/Button";
@@ -80,6 +80,7 @@ function formatGigabytes(bytes: number): string {
 export interface ComputeEnvironmentWidgetProps {
   readonly className?: string;
   readonly compute: ComputeProbeState;
+  readonly defaultCollapsed?: boolean;
   readonly nodeInventory?: ComputeNodeInventorySummary;
   readonly onConfigure: () => void;
   readonly refreshing?: boolean;
@@ -92,6 +93,7 @@ export interface ComputeEnvironmentWidgetProps {
 export function ComputeEnvironmentWidget({
   className,
   compute,
+  defaultCollapsed = false,
   nodeInventory,
   onConfigure,
   refreshing = false,
@@ -101,66 +103,161 @@ export function ComputeEnvironmentWidget({
 }: ComputeEnvironmentWidgetProps) {
   const tone = resolveEnvironmentTone(compute, error);
   const sampleTime = formatTelemetrySampleTime(compute?.sampledAt);
+  const [collapsed, setCollapsed] = useState(defaultCollapsed);
+  const primaryGpu = compute?.gpus[0] ?? null;
+  const primaryGpuMem = primaryGpu ? gpuMemory(primaryGpu) : null;
+  const ram =
+    compute && compute.cpuProbeStatus !== "unavailable"
+      ? memoryReading(compute.memoryTotalBytes, compute.memoryUsedBytes)
+      : null;
+  const threadsAvailable =
+    compute != null && Number.isFinite(compute.cpuThreads) && compute.cpuThreads > 0;
 
   return (
     <section
       aria-busy={refreshing}
       aria-labelledby="fm-start-env-title"
       className={cn(environmentVariants({ tone }), className)}
+      data-collapsed={collapsed ? "true" : undefined}
       data-compute-environment=""
       data-tone={tone}
     >
       <div className="fm-start-env__heading">
-        <h2 className="fm-start-env__title" id="fm-start-env-title">
-          Compute environment
-        </h2>
-        {onRefresh ? (
+        <div className="fm-start-env__heading-main">
+          <span aria-hidden="true" className="fm-start-env__dot" />
+          <h2 className="fm-start-env__title" id="fm-start-env-title">
+            Compute environment
+          </h2>
+          {collapsed ? (
+            <div className="fm-start-env__chips">
+              {primaryGpu ? (
+                <span className="fm-start-env__chip">
+                  <span className="fm-start-env__chip-label">
+                    {primaryGpu.name.replace(/^NVIDIA\s+GeForce\s+/i, "")}
+                  </span>
+                  {primaryGpuMem ? (
+                    <>
+                      <span className="fm-start-env__chip-val">
+                        {formatGigabytes(primaryGpuMem.usedBytes)} / {formatGigabytes(primaryGpuMem.totalBytes)}
+                      </span>
+                      <span aria-hidden="true" className="fm-start-env__micro-meter">
+                        <span
+                          className="fm-start-env__meter-fill"
+                          style={{ width: `${primaryGpuMem.usedPercent}%` }}
+                        />
+                      </span>
+                    </>
+                  ) : null}
+                </span>
+              ) : null}
+              {threadsAvailable || ram ? (
+                <span className="fm-start-env__chip">
+                  {threadsAvailable ? (
+                    <span className="fm-start-env__chip-label">{compute.cpuThreads}T CPU</span>
+                  ) : null}
+                  {ram ? (
+                    <span className="fm-start-env__chip-val">
+                      RAM {formatGigabytes(ram.usedBytes)} / {formatGigabytes(ram.totalBytes)}
+                    </span>
+                  ) : null}
+                </span>
+              ) : null}
+              <span className="fm-start-env__chip-lanes" aria-label="Solver routes summary">
+                {RUNTIME_LANES.map(({ backend, device }) => {
+                  const lane = compute?.runtimeLanes?.find(
+                    (candidate) => candidate.backend === backend && candidate.device === device,
+                  );
+                  const availability = lane?.availability ?? "unknown";
+                  const diagnostic = availability === "unknown" ? lane?.diagnostic : undefined;
+                  return (
+                    <span
+                      className="fm-start-env__chip-lane"
+                      data-availability={availability}
+                      data-diagnostic-state={diagnostic?.state}
+                      key={`${backend}-${device}`}
+                    >
+                      <span aria-hidden="true" className="fm-start-env__lane-dot" />
+                      {backend} {device}
+                    </span>
+                  );
+                })}
+              </span>
+            </div>
+          ) : sampleTime ? (
+            <p className="fm-start-env__note fm-start-env__sample-note">
+              Latest available telemetry sample:{" "}
+              <time dateTime={sampleTime.dateTime}>{sampleTime.label}</time>
+            </p>
+          ) : null}
+        </div>
+        <div className="fm-start-env__heading-actions">
+          {onRefresh ? (
+            <Button
+              aria-label={refreshing ? "Refreshing host readings" : "Refresh host readings"}
+              className="fm-start-env__refresh"
+              data-refreshing={refreshing ? "true" : undefined}
+              disabled={refreshing}
+              onClick={onRefresh}
+              size="icon"
+              title={refreshing ? "Refreshing host readings" : "Refresh host readings"}
+              type="button"
+              variant="ghost"
+            >
+              <RefreshCw aria-hidden="true" size={13} />
+            </Button>
+          ) : null}
           <Button
-            aria-label={refreshing ? "Refreshing host readings" : "Refresh host readings"}
-            className="fm-start-env__refresh"
-            disabled={refreshing}
-            onClick={onRefresh}
-            size="icon"
+            aria-expanded={!collapsed}
+            aria-label={collapsed ? "Expand compute environment" : "Collapse compute environment"}
+            className="fm-start-env__collapse"
+            onClick={() => setCollapsed((current) => !current)}
+            size="sm"
+            title={collapsed ? "Show full compute details" : "Hide compute details"}
             type="button"
             variant="ghost"
           >
-            <RefreshCw aria-hidden="true" size={14} />
+            <span>{collapsed ? "Details" : "Hide"}</span>
+            {collapsed ? (
+              <ChevronUp aria-hidden="true" size={13} />
+            ) : (
+              <ChevronDown aria-hidden="true" size={13} />
+            )}
           </Button>
-        ) : null}
+          <Button
+            aria-label="Open compute environment settings"
+            className="fm-start-env__cfg"
+            onClick={onConfigure}
+            size="sm"
+            title="Open compute environment settings"
+            type="button"
+            variant="ghost"
+          >
+            <Settings aria-hidden="true" size={13} />
+            <span className="fm-start-env__cfg-label">Configure</span>
+          </Button>
+        </div>
       </div>
 
-      <div className="fm-start-env__body">
-        <ProbeStatus compute={compute} error={error} refreshing={refreshing} stale={stale} />
-        {nodeInventory ? (
-          <>
-            <ComputeNodeInventoryStatus
-              className="fm-start-env__note"
-              summary={nodeInventory}
-            />
-            <ComputeNodeOverviewSummary summary={nodeInventory} />
-          </>
-        ) : null}
-        {sampleTime ? (
-          <p className="fm-start-env__note">
-            Latest available telemetry sample: <time dateTime={sampleTime.dateTime}>{sampleTime.label}</time>
-          </p>
-        ) : null}
-        {compute ? <ProbedEnvironment compute={compute} /> : null}
-        <RuntimeLaneSummary compute={compute} />
-      </div>
-
-      <Button
-        aria-label="Open compute environment settings"
-        className="fm-start-env__cfg"
-        onClick={onConfigure}
-        size="sm"
-        title="Open compute environment settings"
-        type="button"
-        variant="ghost"
-      >
-        <Settings aria-hidden="true" size={14} />
-        <span className="fm-start-env__cfg-label">Configure compute</span>
-      </Button>
+      {!collapsed ? (
+        <div className="fm-start-env__body">
+          <div className="fm-start-env__group fm-start-env__group--hardware">
+            <ProbeStatus compute={compute} error={error} refreshing={refreshing} stale={stale} />
+            {compute ? <ProbedEnvironment compute={compute} /> : null}
+          </div>
+          {nodeInventory ? (
+            <div className="fm-start-env__group fm-start-env__group--node">
+              <ComputeNodeInventoryStatus
+                className="fm-start-env__note"
+                summary={nodeInventory}
+              />
+              <ComputeNodeOverviewSummary summary={nodeInventory} />
+            </div>
+          ) : null}
+          <div className="fm-start-env__group fm-start-env__group--routes">
+            <RuntimeLaneSummary compute={compute} />
+          </div>
+        </div>
+      ) : null}
     </section>
   );
 }
