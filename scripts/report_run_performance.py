@@ -78,30 +78,32 @@ def analyze(root: Path) -> tuple[dict[str, Any], Series]:
     first = last = None
     nonunit_gaps = 0
     previous_step = -1
-    with (root / "steps.csv").open(newline="") as stream:
-        reader = csv.DictReader(stream)
-        if not reader.fieldnames or len(reader.fieldnames) != len(set(reader.fieldnames)):
-            raise ValueError("missing or duplicate step CSV columns")
-        for row in reader:
-            step = int(row["step_index"])
-            elapsed = float(row["elapsed_monotonic_ns"]) / 1e9
-            if step <= previous_step or not math.isfinite(elapsed) or elapsed < 0:
-                raise ValueError("step rows must be unique, increasing and finite")
-            previous_step = step
-            row_count += 1
-            first = first or (elapsed, step)
-            last = (elapsed, step)
-            gap = number(row.get("step_gap_since_previous"))
-            if gap is not None and gap > 1:
-                nonunit_gaps += 1
-            series.add("step", elapsed, float(step))
-            latency = number(row.get("callback_delta_ns_per_step_gap"))
-            series.add("step_ms", elapsed, latency / 1e6 if latency is not None else None)
-            for key, raw in row.items():
-                if key.startswith("relaxation_") and "wall_time_ns" in key:
-                    value = number(raw)
-                    if value is not None and value > 0:
-                        phase_totals.setdefault(key, Aggregate()).add(value / 1e6)
+    steps_csv_enabled = (summary.get("artifacts") or {}).get("steps_csv_enabled") is not False
+    if steps_csv_enabled:
+        with (root / "steps.csv").open(newline="") as stream:
+            reader = csv.DictReader(stream)
+            if not reader.fieldnames or len(reader.fieldnames) != len(set(reader.fieldnames)):
+                raise ValueError("missing or duplicate step CSV columns")
+            for row in reader:
+                step = int(row["step_index"])
+                elapsed = float(row["elapsed_monotonic_ns"]) / 1e9
+                if step <= previous_step or not math.isfinite(elapsed) or elapsed < 0:
+                    raise ValueError("step rows must be unique, increasing and finite")
+                previous_step = step
+                row_count += 1
+                first = first or (elapsed, step)
+                last = (elapsed, step)
+                gap = number(row.get("step_gap_since_previous"))
+                if gap is not None and gap > 1:
+                    nonunit_gaps += 1
+                series.add("step", elapsed, float(step))
+                latency = number(row.get("callback_delta_ns_per_step_gap"))
+                series.add("step_ms", elapsed, latency / 1e6 if latency is not None else None)
+                for key, raw in row.items():
+                    if key.startswith("relaxation_") and "wall_time_ns" in key:
+                        value = number(raw)
+                        if value is not None and value > 0:
+                            phase_totals.setdefault(key, Aggregate()).add(value / 1e6)
     resource_metrics = {name: Aggregate() for name in ("cpu_percent", "rss_bytes", "gpu_percent", "vram_bytes", "power_watts")}
     gpu_ids: set[str] = set()
     unavailable_gpu_samples = 0
@@ -130,6 +132,7 @@ def analyze(root: Path) -> tuple[dict[str, Any], Series]:
         "schema": "fullmag.performance_report.v1", "identity": summary.get("identity"),
         "outcome": summary.get("outcome"), "realization": summary.get("realization"),
         "elapsed_monotonic_seconds": duration, "observed_step_rows": row_count,
+        "steps_csv_enabled": steps_csv_enabled,
         "observed_first_step": first[1] if first else None, "observed_last_step": last[1] if last else None,
         "observed_callback_window_seconds": window, "observed_steps_per_second": rate,
         "stage_steps_per_second": (summary.get("coverage", {}).get("accepted_step_index_span") or 0) / duration if duration else None,
@@ -188,7 +191,10 @@ def main() -> None:
         parser.error("report directory must differ from the immutable input directory")
     args.output_dir.mkdir(parents=True, exist_ok=True)
     inputs = {}
-    for name in ("summary.json", "steps.csv", "resources.csv"):
+    names = ["summary.json", "resources.csv"]
+    if report["steps_csv_enabled"]:
+        names.append("steps.csv")
+    for name in names:
         digest = hashlib.sha256()
         with (root / name).open("rb") as stream:
             while chunk := stream.read(1024 * 1024):
@@ -215,6 +221,8 @@ def main() -> None:
     text += f"Stan: `{report['outcome']}`. Realizacja: `{report['realization']}`. Identyfikacja wejścia i pokrycie znajdują się w `benchmark.json`.\n\n"
     text += "| Metryka | Wartość |\n|---|---:|\n" + "".join(f"| {key} | {display(value)} |\n" for key, value in rows)
     text += "\nCzas etapu runnera obejmuje jego inicjalizację i finalizację; przygotowanie siatki i admission mają odrębny zakres. Wykorzystanie GPU dotyczy całego urządzenia i nie jest occupancy ani pomiarem wyłącznie workera. N/A oznacza brak pomiaru. Fazy inkluzywne i czasy urządzenia mogą się nakładać; nie sumujemy ich jako rozłącznych składników. Luki callbacków nie są uzupełniane sztucznymi krokami. Narzut callbacku nie obejmuje pracy niezależnego wątku samplera.\n"
+    if not report["steps_csv_enabled"]:
+        text += "\nSzczegółowy zapis kroków był wyłączony. Tempo całego etapu pochodzi z podsumowania runnera.\n"
     if "comparison" in report:
         text += f"\nOpisowe porównanie do wskazanego baseline: iloraz szybkości {display(report['comparison']['observed_rate_ratio'])}. Zgodność stanu początkowego, tolerancji i obciążenia publikacją wymaga osobnego dowodu.\n"
     if not args.no_plots:

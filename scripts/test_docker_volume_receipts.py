@@ -235,6 +235,43 @@ class VolumeReceiptTests(IsolatedReceiptTests):
         with self.assertRaisesRegex(BuildControlError, 'digest'):
             dev._operator_probe_record_from_fields({**record, 'operator_probe_environment_sha256': '0'*64}, label='test')
 
+    def test_step_csv_opt_in_reaches_only_the_backend_and_is_pinned(self):
+        import os
+        import docker_dev as launcher
+        import docker_volume_dev as dev
+        import fullmag_docker_runtime as runtime
+
+        key = "FULLMAG_RUN_PERFORMANCE_STEP_CSV"
+        with mock.patch.dict(os.environ, {key: "1"}, clear=True):
+            values = launcher._operator_probe_environment_from_host()
+        record = dev._operator_probe_record(values)
+        self.assertEqual(values[key], "1")
+        self.assertEqual(record["operator_probe_environment_sha256"],
+                         runtime._operator_probe_environment_sha256(values))
+
+        document = {"services": {
+            "backend": {"environment": {}},
+            "frontend": {"environment": {}, "volumes": [{
+                "source": "build-control", "target": "/opt/fullmag/control",
+                "read_only": True, "volume": {"subpath": "frontend"}}]},
+        }}
+        dev._reassert_operator_probe_environment(document, record)
+        self.assertEqual(document["services"]["backend"]["environment"][key], "1")
+        self.assertNotIn(key, document["services"]["frontend"]["environment"])
+        self.assertEqual(dev._operator_probe_record_from_retained(record, document), record)
+
+        with mock.patch.dict(os.environ, {}, clear=True):
+            old = launcher._operator_probe_environment_from_host()
+        self.assertNotIn(key, old)
+        self.assertEqual(launcher._operator_probe_environment_sha256(old),
+                         runtime._operator_probe_environment_sha256(old))
+        dev._reassert_operator_probe_environment(document, dev._operator_probe_record(old))
+        self.assertNotIn(key, document["services"]["backend"]["environment"])
+
+        with mock.patch.dict(os.environ, {key: "true"}, clear=True):
+            with self.assertRaisesRegex(launcher.DirectDockerError, key):
+                launcher._operator_probe_environment_from_host()
+
     def test_previous_package_is_ignored_until_current_start_handoff(self):
         import json
         import subprocess

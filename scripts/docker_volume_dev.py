@@ -1796,13 +1796,16 @@ def _operator_probe_record_from_fields(fields, *, label):
 def _operator_probe_record_from_retained(previous, document):
     """Recover the exact controls from the retained Compose record and verify mounts."""
 
+    from docker_dev import RUN_PERFORMANCE_STEP_CSV_ENV
+
     record = _operator_probe_record_from_fields(previous, label="retained operation")
     backend = document.get("services", {}).get("backend", {})
     environment = backend.get("environment", {})
     if not isinstance(environment, Mapping):
         raise BuildControlError("retained backend environment is malformed")
     values = record["operator_probe_environment"]
-    if any(environment.get(name) != value for name, value in values.items()):
+    if (any(environment.get(name) != value for name, value in values.items())
+            or environment.get(RUN_PERFORMANCE_STEP_CSV_ENV) != values.get(RUN_PERFORMANCE_STEP_CSV_ENV)):
         raise BuildControlError("retained backend operator probe environment differs from its receipt")
     if environment.get("FULLMAG_OPERATOR_PROBE_ENVIRONMENT_SHA256") != record["operator_probe_environment_sha256"]:
         raise BuildControlError("retained backend operator probe digest differs from its receipt")
@@ -1834,10 +1837,13 @@ def _operator_probe_record_from_retained(previous, document):
 def _reassert_operator_probe_environment(document, record):
     """Reapply the frozen controls after every Compose/cache environment overlay."""
 
+    from docker_dev import RUN_PERFORMANCE_STEP_CSV_ENV
+
     backend = document["services"]["backend"]
     backend_environment = backend["environment"]
     if not isinstance(backend_environment, dict):
         raise BuildControlError("DEV backend environment is malformed")
+    backend_environment.pop(RUN_PERFORMANCE_STEP_CSV_ENV, None)
     backend_environment.update(record["operator_probe_environment"])
     backend_environment["FULLMAG_OPERATOR_PROBE_ENVIRONMENT_SHA256"] = record[
         "operator_probe_environment_sha256"
