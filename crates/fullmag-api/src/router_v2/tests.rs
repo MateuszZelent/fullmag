@@ -50554,7 +50554,9 @@ async fn router_v2_serves_openapi_json_without_swagger_ui() {
         response.headers().get(header::CONTENT_TYPE).unwrap(),
         "application/json"
     );
-    let body = body_bytes(response).await;
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("failed to read the in-process OpenAPI document");
     let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(
         payload.get("openapi").and_then(|value| value.as_str()),
