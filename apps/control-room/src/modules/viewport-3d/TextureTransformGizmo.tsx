@@ -2941,6 +2941,7 @@ export function isPersistentAuthoredTextureSurfaceEligible(
   object: Viewport3DPrimitiveObject,
   options: {
     readonly activeBindingObjectId: string | null;
+    readonly fdmSurfaceObjectIds?: ReadonlySet<string>;
     readonly getObjectSettings?: (object: Viewport3DPrimitiveObject) => VisualizationTargetSettings;
     readonly liveFieldCoveredObjectIds?: ReadonlySet<string>;
     readonly savedViewportActive?: boolean;
@@ -2950,7 +2951,12 @@ export function isPersistentAuthoredTextureSurfaceEligible(
   if (options.savedViewportActive || !options.getObjectSettings) return false;
   if (object.objectId === options.activeBindingObjectId) return false;
   if (!options.textureTransformModel.hasAuthoredMagnetization(object.objectId)) return false;
-  if (options.liveFieldCoveredObjectIds?.has(object.objectId)) return false;
+  if (
+    options.liveFieldCoveredObjectIds?.has(object.objectId) ||
+    options.fdmSurfaceObjectIds?.has(object.objectId)
+  ) {
+    return false;
+  }
   const s = options.getObjectSettings(object);
   // Before a solver/mesh field exists, resolveViewport3DPrimitiveVisualizationSettings
   // turns shaderVisible off and sets primitiveVisible = true so shaded geometry stays visible.
@@ -3057,6 +3063,7 @@ export function Viewport3DTextureTransformLayer({
   savedViewportActive = false,
   getObjectSettings,
   liveFieldCoveredObjectIds,
+  fdmSurfaceObjectIds,
 }: {
   onGestureActiveChange?: (active: boolean) => void;
   onSelectObject?: (
@@ -3081,6 +3088,7 @@ export function Viewport3DTextureTransformLayer({
    * magnetization overlay is suppressed so it does not paint on top of live results.
    */
   liveFieldCoveredObjectIds?: ReadonlySet<string>;
+  fdmSurfaceObjectIds?: ReadonlySet<string>;
 }) {
   const bridge = useSyncExternalStore(
     subscribeTextureDraftBridge,
@@ -3126,8 +3134,18 @@ export function Viewport3DTextureTransformLayer({
     return textureTransformModel.getAuthoredDraft(selectedObject.objectId);
   }, [bindingMatchesObject, bridge.activeBinding, bridge.gizmoEnabled, selectedObject, textureTransformModel]);
 
+  const selectedSettings = selectedObject && getObjectSettings?.(selectedObject);
+  const selectedSurfaceVisible = !selectedSettings || (
+    selectedSettings.visible &&
+    (selectedSettings.shaderVisible || selectedSettings.primitiveVisible) &&
+    selectedSettings.surfaceColorSource !== "solid" &&
+    (!selectedSettings.activeQuantityId || resolveCanonicalQuantityId(selectedSettings.activeQuantityId) === "m")
+  );
   const showSurfacePreview = Boolean(
     selectedObject &&
+      selectedSurfaceVisible &&
+      !savedViewportActive &&
+      !fdmSurfaceObjectIds?.has(selectedObject.objectId) &&
       (bindingMatchesObject || bridge.gizmoEnabled) &&
       effectiveDraftAndBounds?.draft.sourceMode !== "field-file",
   );
@@ -3219,6 +3237,7 @@ export function Viewport3DTextureTransformLayer({
       ? primitiveModel.objects.filter((obj) =>
           isPersistentAuthoredTextureSurfaceEligible(obj, {
             activeBindingObjectId,
+            fdmSurfaceObjectIds,
             getObjectSettings,
             liveFieldCoveredObjectIds,
             savedViewportActive,

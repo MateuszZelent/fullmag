@@ -916,6 +916,9 @@ pub(crate) struct SessionStateResponse {
     pub mesh_workspace: Option<crate::shared_json::SharedJson>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub stage_execution: Option<StageExecutionState>,
+    /// Process-local proof from the accepted catalog, scoped to its immutable run.
+    #[serde(skip)]
+    pub preclaim_cancelled_run_id: Option<String>,
     #[serde(skip_serializing)]
     pub simulation_preparation: Option<SimulationPreparationSnapshot>,
     /// Importer-issued geometry evidence; never serialized or accepted from a publisher.
@@ -2433,6 +2436,7 @@ mod tests {
         let builder = sample_builder();
         let scene_document = scene_document_from_script_builder(&builder);
         let response = SessionStateResponse {
+            preclaim_cancelled_run_id: None,
             session_protocol_version: "1".to_string(),
             capability_profile_version: "2026-04-04".to_string(),
             coupled_checkpoint: None,

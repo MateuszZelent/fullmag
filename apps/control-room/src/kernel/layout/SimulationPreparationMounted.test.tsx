@@ -456,7 +456,9 @@ describe("mounted simulation preparation UI", () => {
     );
     expect(container.textContent).not.toContain("/private/model.py");
     expect(container.textContent).toContain("Viewport module");
-    await act(async () => findButton(container, "View failure details").click());
+    await act(async () => findButton(container, "View request details").click());
+    expect(container.textContent).toContain("The preparation status request returned HTTP 500.");
+    expect(container.textContent).not.toContain("Waiting for preparation log entries.");
     expect(findButton(container, "Open full diagnostics")).toBeTruthy();
 
     await act(async () => root.unmount());

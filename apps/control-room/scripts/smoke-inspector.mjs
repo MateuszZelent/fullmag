@@ -1044,26 +1044,22 @@ try {
   const disabledFile = "visualization-overview-light-disabled-416.png";
   await panel.screenshot({ path: resolve(outputDir, disabledFile) });
   screenshotFiles.push(disabledFile);
-  if ((await resetButton.count()) > 0 && !(await resetButton.isDisabled())) {
-    await resetButton.click();
-  }
-  const resetDeadline = Date.now() + 3_000;
-  while (
-    (await resetButton.count()) > 0 &&
-    !(await resetButton.isDisabled()) &&
-    Date.now() < resetDeadline
-  ) {
-    await page.waitForTimeout(100);
-  }
-  const resetRemainingCount = await resetButton.count();
-  const resetState =
-    resetRemainingCount === 0
-      ? { ariaDisabled: "true", disabled: true, unmountedWhenClean: true }
-      : await resetButton.evaluate((button) => ({
+  const currentResetState = () => resetButton.evaluateAll(([button]) =>
+    button
+      ? {
           ariaDisabled: button.getAttribute("aria-disabled"),
           disabled: button.disabled,
           unmountedWhenClean: false,
-        }));
+        }
+      : { ariaDisabled: "true", disabled: true, unmountedWhenClean: true },
+  );
+  if (!(await currentResetState()).disabled) await resetButton.click();
+  const resetDeadline = Date.now() + 3_000;
+  let resetState = await currentResetState();
+  while (!resetState.disabled && Date.now() < resetDeadline) {
+    await page.waitForTimeout(100);
+    resetState = await currentResetState();
+  }
   assert(
     resetState.disabled,
     `Visualization Reset did not restore the applied baseline: ${JSON.stringify({
@@ -1828,43 +1824,97 @@ async function qualifyVisualizationMutationStability(page, inspector, fixture) {
 
       for (let iteration = 0; iteration < target.iterations; iteration += 1) {
         await focusControl.focus();
-        if (target.label === "Object") {
+        let beforeMutation = baseline;
+        const patchGate = target.label === "Object" ? Promise.withResolvers() : null;
+        const patchResponse = patchGate
+          ? page.waitForResponse(
+              (response) => response.request().method() === "PATCH" &&
+                new URL(response.url()).pathname === "/v2/sessions/current/visualization/state",
+              { timeout: 10_000 },
+            ).catch(() => null)
+          : null;
+        if (patchGate) fixture.visualizationPatchBarrier = patchGate.promise;
+
+        try {
+          const requestCount = fixture.visualizationMutationBodies.length;
+          // Exercise one sampled component as well as display-only changes.
+          const colorChoices = iteration === 1
+            ? [{ label: "Component X", value: "component_x" }, { label: "Component Y", value: "component_y" }]
+            : [{ label: "Solid (plain material)", value: "solid" }, { label: "HSL orientation", value: "orientation" }];
           if (mutationUsesCombobox) {
-            const nextLabel =
-              iteration % 2 === 0 ? "Component X" : "Solid (plain material)";
+            const currentLabel = (await mutationControl.innerText()).trim();
+            const nextLabel = colorChoices[currentLabel === colorChoices[0].label ? 1 : 0].label;
             await mutationControl.click();
-            await page.getByRole("option", { name: nextLabel, exact: true }).click();
+            const option = page.getByRole("option", { name: nextLabel, exact: true });
+            await option.scrollIntoViewIfNeeded();
+            // Opening the select can scroll the Inspector before any settings change.
+            beforeMutation = await captureInspectorMutationSnapshot(overview);
+            await option.click();
+            await page.waitForFunction(({ identity, label }) => {
+              const focused = document.activeElement;
+              return focused?.getAttribute("aria-label") === label &&
+                focused.getAttribute("aria-expanded") === "false" &&
+                focused.closest("[data-mutation-stability-marker]")?.dataset.mutationStabilityMarker === identity;
+            }, { identity, label: expectedFocusedLabel }, { timeout: 5_000 });
+          } else if (patchGate) {
+            const currentValue = await mutationControl.inputValue();
+            await mutationControl.selectOption(colorChoices[currentValue === colorChoices[0].value ? 1 : 0].value);
           } else {
-            const nextValue = iteration % 2 === 0 ? "component_x" : "solid";
-            await mutationControl.selectOption(nextValue);
+            await mutationControl.evaluate((control) => control.click());
           }
-        } else {
-          await mutationControl.evaluate((control) => control.click());
+          if (patchGate) {
+            await waitForFixtureCondition(
+              () => fixture.visualizationMutationBodies.length > requestCount,
+              "Object: visualization PATCH did not arrive with the response held.",
+            );
+            assert(
+              fixture.visualizationMutationBodies.length === requestCount + 1,
+              "Object: expected a single visualization PATCH while the response is held.",
+            );
+          } else {
+            await page.waitForTimeout(40);
+          }
+
+          const duringMutation = await captureInspectorMutationSnapshot(overview);
+          assert(
+            duringMutation.connected && duringMutation.marker === identity,
+            `${target.label}: Visualization Inspector remounted during mutation.`,
+          );
+          assert(
+            !(await unrelatedVisibility.isDisabled()),
+            `${target.label}: unrelated visibility control was disabled during mutation.`,
+          );
+          assert(
+            duringMutation.opacity === baseline.opacity && duringMutation.opacityAnimations === 0,
+            `${target.label}: mutation changed Inspector opacity or started an opacity animation.`,
+          );
+          assert(
+            Math.abs(duringMutation.scrollTop - beforeMutation.scrollTop) <= 1,
+            `${target.label}: mutation changed Inspector scroll position: baseline=${beforeMutation.scrollTop}, ` +
+              `during=${duringMutation.scrollTop}, delta=${duringMutation.scrollTop - beforeMutation.scrollTop}.`,
+          );
+          assert(
+            duringMutation.focusedLabel === expectedFocusedLabel,
+            `${target.label}: mutation lost control focus.`,
+          );
+        } finally {
+          patchGate?.resolve();
+          fixture.visualizationPatchBarrier = null;
         }
-        await page.waitForTimeout(40);
-        const duringMutation = await captureInspectorMutationSnapshot(overview);
-        assert(
-          duringMutation.connected && duringMutation.marker === identity,
-          `${target.label}: Visualization Inspector remounted during mutation.`,
-        );
-        assert(
-          !(await unrelatedVisibility.isDisabled()),
-          `${target.label}: unrelated visibility control was disabled during mutation.`,
-        );
-        assert(
-          duringMutation.opacity === baseline.opacity && duringMutation.opacityAnimations === 0,
-          `${target.label}: mutation changed Inspector opacity or started an opacity animation.`,
-        );
-        assert(
-          Math.abs(duringMutation.scrollTop - baseline.scrollTop) <= 1,
-          `${target.label}: mutation changed Inspector scroll position: baseline=${baseline.scrollTop}, ` +
-            `during=${duringMutation.scrollTop}, delta=${duringMutation.scrollTop - baseline.scrollTop}.`,
-        );
-        assert(
-          duringMutation.focusedLabel === expectedFocusedLabel,
-          `${target.label}: mutation lost control focus.`,
-        );
-        await page.waitForTimeout(fixture.visualizationPatchDelayMs + 80);
+
+        if (patchResponse) {
+          const response = await patchResponse;
+          const expectedStatus = iteration === 0 ? 409 : 200;
+          assert(response?.status() === expectedStatus,
+            `Object: expected visualization PATCH HTTP ${expectedStatus}, received ${response?.status()}.`);
+          await response.finished();
+          await waitForInspectorRequestQuiet(page, fixture);
+          const afterMutation = await captureInspectorMutationSnapshot(overview);
+          assert(afterMutation.focusedLabel === expectedFocusedLabel,
+            "Object: mutation lost control focus after the response.");
+        } else {
+          await page.waitForTimeout(fixture.visualizationPatchDelayMs + 80);
+        }
         assert(
           (await overview.getAttribute("data-mutation-stability-marker")) === identity,
           `${target.label}: Visualization Inspector remounted after mutation ACK.`,
@@ -4902,6 +4952,7 @@ function createInspectorFixture() {
     geometryMutationBodies: [],
     textureMutationBodies: [],
     physicsGuardEnabled: false,
+    visualizationPatchBarrier: null,
     visualizationPatchDelayMs: 0,
     visualizationPatchRejectOnce: false,
     visualization: inspectorVisualizationState(),
@@ -5203,17 +5254,19 @@ async function installInspectorFixtureApi(page, fixture) {
     if (path === "/v2/sessions/current/visualization/state" && request.method() === "PATCH") {
       const patch = request.postDataJSON() ?? {};
       fixture.visualizationMutationBodies.push(patch);
-      if (fixture.visualizationPatchRejectOnce) {
-        fixture.visualizationPatchRejectOnce = false;
-        if (fixture.visualizationPatchDelayMs > 0) {
-          await new Promise((resolveDelay) => setTimeout(resolveDelay, fixture.visualizationPatchDelayMs));
-        }
-        return fulfillJson(route, { error: { code: "fixture_visualization_reject" } }, 409);
+      const reject = fixture.visualizationPatchRejectOnce;
+      fixture.visualizationPatchRejectOnce = false;
+      if (!reject) {
+        fixture.visualization = mergeInspectorVisualizationState(fixture.visualization, patch);
+        fixture.visualization.revision += 1;
       }
-      fixture.visualization = mergeInspectorVisualizationState(fixture.visualization, patch);
-      fixture.visualization.revision += 1;
-      if (fixture.visualizationPatchDelayMs > 0) {
+      if (fixture.visualizationPatchBarrier) {
+        await fixture.visualizationPatchBarrier;
+      } else if (fixture.visualizationPatchDelayMs > 0) {
         await new Promise((resolveDelay) => setTimeout(resolveDelay, fixture.visualizationPatchDelayMs));
+      }
+      if (reject) {
+        return fulfillJson(route, { error: { code: "fixture_visualization_reject" } }, 409);
       }
       return fulfillJson(route, fixture.visualization);
     }

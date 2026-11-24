@@ -9,6 +9,7 @@ export interface TextureInspectorDraftBinding {
   readonly target: MagnetizationTextureTarget;
   readonly draft: MagneticTextureDraft;
   readonly bounds: TargetMetricBounds;
+  readonly previewDraft?: boolean;
   readonly patchDraft: (partial: Partial<MagneticTextureDraft>) => void;
   readonly fitCharacteristicSize: () => void;
   readonly resetTransform: () => void;

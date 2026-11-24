@@ -1237,6 +1237,22 @@ sesje i wyniki. Wynik starej iteracji pozostaje `interrupted-retained`; nie jest
 to potwierdzenie kompilacji, testu CUDA ani symulacji. Dalsze odtworzenie grupy
 konsumuje ten dowód przez `--offline-reconciliation` i nie powtarza starego Solve.
 
+### Przerwane potwierdzenie uruchomionego restartu w Linux/WSL
+
+Jeżeli oba serwisy zostały uruchomione po udokumentowanym drenie, a pomocnik
+nadal czeka na terminal po zapisaniu `LOGGED`, użyj
+`scripts/docker_volume_idle_restart_interrupted.py` z `--source-root`,
+`--attempt` i `--receipt-sha256`. Podgląd porównuje oryginalny drain, obie
+inkarnacje kontenerów oraz tożsamość magazynu sesji. Wykonanie wymaga
+`--apply --expected-plan-sha256` z wyniku podglądu. Zapisuje nieukończoną
+próbę pod blokadą obserwatora i zachowuje poprzedni zweryfikowany receipt.
+Oryginalny pomocnik zwalnia blokadę po odczycie terminala. Operacja nie
+uruchamia ponownie kontenerów ani obliczeń.
+
+Restart przygotowanej sesji dopuszcza zakończone polecenia Build Grid i
+Compute Fields, jeżeli solver pozostaje w czasie i kroku zero, a wszystkie
+zadania zachowały ręczne, niezwolnione bramki startu.
+
 ## Authored input after accepted recovery
 
 Accepted live runs retain the authored SceneDocument in the immutable project

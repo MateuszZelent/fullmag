@@ -1719,6 +1719,7 @@ pub(crate) fn default_current_live_state(req: &CurrentLiveSnapshotRequest) -> Se
         .unwrap_or_default();
 
     SessionStateResponse {
+        preclaim_cancelled_run_id: None,
         session_protocol_version: "2026-04-04".to_string(),
         capability_profile_version: "2026-04-04".to_string(),
         session: req.session.clone().unwrap_or(SessionManifest {
