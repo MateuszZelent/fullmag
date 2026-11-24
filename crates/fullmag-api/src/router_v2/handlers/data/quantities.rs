@@ -99,16 +99,17 @@ fn annotate_runtime_quantity_state(
     let prepared_damping = prepared_only && quantity_spec("mat_alpha").is_some_and(|spec|
         prepared_damping_carriers(snapshot, spec, spec.domain.as_str()).is_some());
     for entry in &mut response.quantities {
+        let Some(spec) = quantity_spec(&entry.id) else {
+            continue;
+        };
         if prepared_only
             && !(entry.id == "m" && prepared_m_without_runtime_capabilities
                 || entry.id == "mat_alpha" && prepared_damping
+                || prepared_evaluation_binding(snapshot, spec).is_some()
                 || super::fields::has_saved_transport_field(snapshot, &entry.id))
         {
             continue;
         }
-        let Some(spec) = quantity_spec(&entry.id) else {
-            continue;
-        };
         let preliminary = resolved_quantity_capability_for_snapshot(
             snapshot,
             spec,
@@ -117,7 +118,10 @@ fn annotate_runtime_quantity_state(
             spec.domain.as_str(),
         );
         let supported = preliminary.provider == fullmag_runner::QuantityProviderCapability::Available
-            && !matches!(preliminary.reason_code.as_deref(), Some(PREPARED_DAMPING_READ_ONLY | SAVED_TRANSPORT_READ_ONLY));
+            && !matches!(
+                preliminary.reason_code.as_deref(),
+                Some(PREPARED_DAMPING_READ_ONLY | PREPARED_FIELD_READ_ONLY | SAVED_TRANSPORT_READ_ONLY)
+            );
 
         let status = relevant_field_materialization_status(snapshot, &entry.id);
         let resolved_field = super::fields::resolve_transport_spatial_field(snapshot, &entry.id)
@@ -290,6 +294,42 @@ pub(crate) fn current_field_carriers(
 
 const PREPARED_DAMPING_READ_ONLY: &str = "prepared_damping_read_only";
 const SAVED_TRANSPORT_READ_ONLY: &str = "saved_transport_read_only";
+const PREPARED_FIELD_READ_ONLY: &str = "prepared_field_read_only";
+
+/// Read permission follows the published step-zero carrier, independently of
+/// whether a solver has resolved an execution lane for the Study.
+fn prepared_evaluation_binding<'a>(
+    snapshot: &'a SessionStateResponse,
+    spec: &QuantitySpec,
+) -> Option<&'a crate::schemas::common::FieldPublicationBinding> {
+    if !spec.ui_exposed
+        || !spec.interactive_preview
+        || !spec.supports_preview_3d
+        || !matches!(
+            spec.shape,
+            fullmag_quantities::QuantityShape::VectorField
+                | fullmag_quantities::QuantityShape::SpatialScalar
+        )
+    {
+        return None;
+    }
+    let quantity = spec.id.as_str();
+    let bundle = snapshot.field_publication_bundles.get(quantity)?;
+    let raw = snapshot.latest_fields.get(quantity)?;
+    let source = raw.pointer("/provenance/source")?.as_str()?;
+    if source != crate::prepared_observation_adoption::PROVENANCE_SOURCE
+        || bundle.observation_frame.source_step != 0
+        || !crate::live_authored_initial_state::qualifies_frame(snapshot, &bundle.observation_frame)
+    {
+        return None;
+    }
+    let ResolvedCurrentFieldSource::Latest(selected) =
+        resolved_current_field_source(snapshot, quantity, usize::from(spec.n_comp))?
+    else {
+        return None;
+    };
+    std::ptr::eq(selected, raw).then_some(&bundle.field)
+}
 
 pub(super) fn saved_transport_capability(
     snapshot: &SessionStateResponse,
@@ -297,8 +337,20 @@ pub(super) fn saved_transport_capability(
     carriers: Vec<FieldCarrierDescriptor>,
     scope: &str,
 ) -> fullmag_runner::ResolvedQuantityCapability {
-    use fullmag_runner::{QuantityProviderCapability, QuantityPublicationCapability,
-        QuantityRenderCapability, QuantityRequestCapability, ResolvedQuantityCapability};
+    read_only_spatial_capability(snapshot, spec, carriers, scope, SAVED_TRANSPORT_READ_ONLY)
+}
+
+fn read_only_spatial_capability(
+    snapshot: &SessionStateResponse,
+    spec: &QuantitySpec,
+    carriers: Vec<FieldCarrierDescriptor>,
+    scope: &str,
+    source: &str,
+) -> fullmag_runner::ResolvedQuantityCapability {
+    use fullmag_runner::{
+        QuantityProviderCapability, QuantityPublicationCapability, QuantityRenderCapability,
+        QuantityRequestCapability, ResolvedQuantityCapability,
+    };
 
     let provider = QuantityProviderCapability::Available;
     let request = QuantityRequestCapability::FieldVector;
@@ -318,7 +370,7 @@ pub(super) fn saved_transport_capability(
     ResolvedQuantityCapability {
         quantity_id: spec.id.as_str().to_string(), provider, request, materialization, render,
         publication: QuantityPublicationCapability::Interactive, scope: scope.to_string(),
-        reason_code: Some(SAVED_TRANSPORT_READ_ONLY.to_string()), lane: SAVED_TRANSPORT_READ_ONLY.to_string(),
+        reason_code: Some(source.to_owned()), lane: source.to_owned(),
         precision: snapshot.session.resolved_precision.as_deref()
             .unwrap_or(snapshot.session.precision.as_str()).to_string(),
         carriers, projections,
@@ -380,6 +432,25 @@ pub(crate) fn resolved_quantity_capability_for_snapshot(
         !(field_only && spec.domain == fullmag_quantities::QuantityDomain::MagneticOnly)
     });
     let mut carriers = carriers;
+    if capabilities.is_none() && !field_only {
+        if let Some(binding) = prepared_evaluation_binding(snapshot, spec) {
+            if carriers.is_empty() {
+                carriers = current_field_carriers(
+                    spec,
+                    &binding.scope_kind,
+                    binding.scope_id.as_deref(),
+                    &binding.carrier_id,
+                    Some(&binding.carrier_fingerprint),
+                    None,
+                );
+            }
+            if !carriers.is_empty() {
+                return read_only_spatial_capability(
+                    snapshot, spec, carriers, scope, PREPARED_FIELD_READ_ONLY,
+                );
+            }
+        }
+    }
     if super::field_resolution::current_fem_damping_uses_nodes(snapshot, spec.id.as_str()) {
         for carrier in &mut carriers { carrier.indexing = "node".to_owned(); }
     }
