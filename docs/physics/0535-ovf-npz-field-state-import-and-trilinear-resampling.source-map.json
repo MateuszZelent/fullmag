@@ -1,9 +1,9 @@
 {
   "document": {
     "path": "docs/physics/0535-ovf-npz-field-state-import-and-trilinear-resampling.md",
-    "title": "OVF 1.0/2.0 and NPZ field-state import, domain-overlap validation, and masked trilinear resampling with antipodal fallback",
+    "title": "OVF 1.0/2.0, NPZ and Zarr field-state import, domain-overlap validation, and masked trilinear resampling with antipodal fallback",
     "status": "accepted_contract_not_production_qualified",
-    "updated": "2026-11-22"
+    "updated": "2026-11-24"
   },
   "backend_matrix": [
     {
@@ -94,6 +94,24 @@
       "responsibility": "Python NPZ 4D axis-order loader"
     },
     {
+      "id": "py-zarr-read",
+      "path": "packages/fullmag-py/src/fullmag/init/state_io.py",
+      "symbol": "_read_zarr_state",
+      "responsibility": "Python Zarr state reader shared by load_magnetization and load_field_state"
+    },
+    {
+      "id": "py-zarr-layouts",
+      "path": "packages/fullmag-py/src/fullmag/init/zarr_layouts.py",
+      "symbol": "read_structured_zarr_state",
+      "responsibility": "Python MuMax3 [t,z,y,x,c] and fullmag field-series Zarr decoder (x-fastest flattening, grid metadata)"
+    },
+    {
+      "id": "py-zarr-discovery",
+      "path": "packages/fullmag-py/src/fullmag/init/zarr_layouts.py",
+      "symbol": "find_zarr_state_dataset",
+      "responsibility": "Python Zarr dataset discovery (tables skipped, ambiguity rejected)"
+    },
+    {
       "id": "py-nearest",
       "path": "packages/fullmag-py/src/fullmag/init/state_io.py",
       "symbol": "_nearest_nonzero_cell",
@@ -139,6 +157,26 @@
         "si_unit": "$1$",
         "validation": "auto, ovf, npz, npy, zarr, h5, or json",
         "meaning": "format pliku wejściowego stanu pola",
+        "backend_support": "FDM/FEM CPU/GPU",
+        "problem_ir": "magnets[].initial_magnetization[kind=sampled_field]"
+      },
+      {
+        "python": "load_field_state.dataset",
+        "type": "str or None",
+        "default": "None",
+        "si_unit": "$1$",
+        "validation": "array path inside the store, or None to find it",
+        "meaning": "array to read from a multi-array Zarr/HDF5/NPZ store",
+        "backend_support": "FDM/FEM CPU/GPU",
+        "problem_ir": "magnets[].initial_magnetization[kind=sampled_field]"
+      },
+      {
+        "python": "load_field_state.sample",
+        "type": "int",
+        "default": "-1",
+        "si_unit": "$1$",
+        "validation": "integer; negative selects the last frame",
+        "meaning": "time/sample frame of a series",
         "backend_support": "FDM/FEM CPU/GPU",
         "problem_ir": "magnets[].initial_magnetization[kind=sampled_field]"
       },
