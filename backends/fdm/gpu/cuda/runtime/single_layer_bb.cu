@@ -801,7 +801,7 @@ void invalidate_single_layer_bb_state(Context &ctx) {
     context_invalidate_observables(ctx);
 }
 
-SingleLayerBbMetricsParams make_metrics_params(const Context &ctx) {
+SingleLayerBbMetricsParams make_metrics_params(Context &ctx) {
     SingleLayerBbMetricsParams p{};
     p.m = ctx.m;
     p.h_eff = ctx.work;
