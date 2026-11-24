@@ -20,7 +20,8 @@ After the run it records:
 - the FDM CUDA preflight figures, if the preflight refused the workspace;
 - the sizes of the JSON artifacts;
 - the transfer and host-sync counters of the run receipt, of solver_steps.csv
-  and of performance/steps.csv.
+  and of performance/steps.csv. The probe enables the performance step CSV by
+  default, honoring an inherited setting or an explicit --env override.
 
 Results are appended to ``<output>/results.jsonl``. Unless ``--keep`` is given,
 the case's artifacts are deleted after they are measured.
@@ -198,6 +199,7 @@ def main() -> int:
     run_dir.mkdir(parents=True, exist_ok=True)
     env = dict(os.environ)
     env["FULLMAG_API_PORT"] = "0"
+    env.setdefault("FULLMAG_RUN_PERFORMANCE_STEP_CSV", "1")
     if not args.preview:
         env.update(PREVIEW_OFF_ENV)
     for item in args.env:
