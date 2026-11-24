@@ -1,13 +1,31 @@
 #include "device_solver.hpp"
+#include "cudss_solver.hpp"
+
+#include <cooperative_groups.h>
+
+#ifdef small
+// cooperative_groups.h may restore the Windows RPC `small` macro.
+#undef small
+#endif
 
 #include <algorithm>
 #include <cfloat>
+#include <climits>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <string>
 
 namespace fullmag::fdm::gpu::transport::charge {
 namespace {
+
+namespace cg = cooperative_groups;
+
+constexpr uint32_t kThreads = 256;
+constexpr uint32_t kMaxCoopBlocks = 1024;
+constexpr uint64_t kBlock0CellThreshold = 1024;
+constexpr uint32_t kCoarsestHalfSweeps = 16; // 16 (R,B) + 16 (B,R) symmetric sweeps
+constexpr uint64_t kHashChunkSize = 1024;
 
 bool inject_cuda_failure(CudaFailurePolicy *policy, uint32_t boundary) {
     if (policy == nullptr || boundary == 0 ||
@@ -16,6 +34,7 @@ bool inject_cuda_failure(CudaFailurePolicy *policy, uint32_t boundary) {
     policy->failed_boundary = boundary;
     return true;
 }
+
 struct LegacyChargeFaceV1 {
     uint32_t kind;
     uint32_t axis;
@@ -52,7 +71,35 @@ struct DeviceHierarchyInfo {
     uint64_t coarse_nx;
     uint64_t coarse_ny;
     uint64_t coarse_nz;
+    uint32_t level_count;
+    uint32_t reserved0;
     uint8_t digest[32];
+};
+
+struct DeviceAmgHierarchy {
+    CoarseLevel levels[kMaxAmgLevels];
+    uint32_t level_count;
+    uint32_t split_level;
+};
+
+struct DeviceAmgVectors {
+    double *rhs[kMaxAmgLevels];
+    double *u[kMaxAmgLevels];
+};
+
+struct DevicePcgState {
+    double norm_b;
+    double rho;
+    double residual_norm;
+    double alpha;
+    double beta;
+    double scalar0;
+    double scalar1;
+    double scalar2;
+    uint64_t completed;
+    uint64_t active_count;
+    uint32_t reason;
+    uint32_t changed;
 };
 
 __device__ void load_charge_face(
@@ -62,7 +109,7 @@ __device__ uint64_t load_charge_source_id(const void *, uint64_t, uint64_t);
 
 struct DeviceSha256 {
     uint32_t state[8];
-    uint8_t block[64];
+    alignas(4) uint8_t block[64];
     uint64_t bytes;
     uint32_t used;
 };
@@ -82,9 +129,11 @@ __device__ void sha_transform(DeviceSha256 *sha) {
         0x19a4c116,0x1e376c08,0x2748774c,0x34b0bcb5,0x391c0cb3,0x4ed8aa4a,0x5b9cca4f,0x682e6ff3,
         0x748f82ee,0x78a5636f,0x84c87814,0x8cc70208,0x90befffa,0xa4506ceb,0xbef9a3f7,0xc67178f2};
     uint32_t w[64];
+    #pragma unroll
     for (uint32_t i = 0; i < 16; ++i)
         w[i] = (uint32_t(sha->block[4*i]) << 24) | (uint32_t(sha->block[4*i+1]) << 16) |
                (uint32_t(sha->block[4*i+2]) << 8) | uint32_t(sha->block[4*i+3]);
+    #pragma unroll
     for (uint32_t i = 16; i < 64; ++i) {
         const uint32_t s0 = sha_rotr(w[i-15],7) ^ sha_rotr(w[i-15],18) ^ (w[i-15] >> 3);
         const uint32_t s1 = sha_rotr(w[i-2],17) ^ sha_rotr(w[i-2],19) ^ (w[i-2] >> 10);
@@ -92,6 +141,7 @@ __device__ void sha_transform(DeviceSha256 *sha) {
     }
     uint32_t a=sha->state[0],b=sha->state[1],c=sha->state[2],d=sha->state[3];
     uint32_t e=sha->state[4],f=sha->state[5],g=sha->state[6],h=sha->state[7];
+    #pragma unroll
     for (uint32_t i=0;i<64;++i) {
         const uint32_t s1=sha_rotr(e,6)^sha_rotr(e,11)^sha_rotr(e,25);
         const uint32_t ch=(e&f)^((~e)&g);
@@ -113,11 +163,33 @@ __device__ void sha_init(DeviceSha256 *sha) {
 }
 
 __device__ void sha_update(DeviceSha256 *sha, const void *source, uint64_t length) {
-    const auto *bytes=static_cast<const uint8_t *>(source);
+    const auto *bytes = static_cast<const uint8_t *>(source);
     sha->bytes += length;
-    for(uint64_t i=0;i<length;++i) {
-        sha->block[sha->used++]=bytes[i];
-        if(sha->used==64){sha_transform(sha);sha->used=0;}
+    uint64_t i = 0;
+    while (i < length && sha->used != 0) {
+        sha->block[sha->used++] = bytes[i++];
+        if (sha->used == 64) {
+            sha_transform(sha);
+            sha->used = 0;
+        }
+    }
+    if (sha->used == 0 && i + 64 <= length &&
+        ((reinterpret_cast<uintptr_t>(bytes + i) & 3u) == 0u)) {
+        auto *dst_words = reinterpret_cast<uint32_t *>(sha->block);
+        while (i + 64 <= length) {
+            const auto *src_words = reinterpret_cast<const uint32_t *>(bytes + i);
+            #pragma unroll
+            for (uint32_t word = 0; word < 16; ++word) dst_words[word] = src_words[word];
+            sha_transform(sha);
+            i += 64;
+        }
+    }
+    while (i < length) {
+        sha->block[sha->used++] = bytes[i++];
+        if (sha->used == 64) {
+            sha_transform(sha);
+            sha->used = 0;
+        }
     }
 }
 
@@ -227,12 +299,12 @@ __device__ double internal_face_conductance(
         const auto *record = reinterpret_cast<const fullmag_fdm_gpu_transport_spin_interface_v1 *>(
             reinterpret_cast<const uint8_t *>(interface_payload) + begin * interface_stride);
         if (record->axis == axis && record->canonical_face_index == canonical_face) {
-        if (record->kind == FULLMAG_FDM_GPU_TRANSPORT_SPIN_INTERFACE_TRANSPARENT)
-            return harmonic(sigma[a], sigma[b]) * area / h;
-        const double total = record->G_up + record->G_down;
-        if (total == 0.0) return 0.0;
-        return record->area /
-            (0.5 * h / sigma[a] + 1.0 / total + 0.5 * h / sigma[b]);
+            if (record->kind == FULLMAG_FDM_GPU_TRANSPORT_SPIN_INTERFACE_TRANSPARENT)
+                return harmonic(sigma[a], sigma[b]) * area / h;
+            const double total = record->G_up + record->G_down;
+            if (total == 0.0) return 0.0;
+            return record->area /
+                (0.5 * h / sigma[a] + 1.0 / total + 0.5 * h / sigma[b]);
         }
     }
     return harmonic(sigma[a], sigma[b]) * area / h;
@@ -373,13 +445,13 @@ __global__ void validate_static_payload_kernel(
             const uint64_t x_faces = 2 * ny * nz;
             const uint64_t y_faces = 2 * nx * nz;
             const uint64_t side_offset = side > 0 ? 1 : 0;
-            const uint64_t boundary_ordinal = axis == 0
+            const uint64_t boundary_ordinal_value = axis == 0
                 ? side_offset * ny * nz + y + ny * z
                 : axis == 1
                     ? x_faces + side_offset * nx * nz + x + nx * z
                     : x_faces + y_faces + side_offset * nx * ny + x + nx * y;
-            bad = boundary_ordinal >= face_count ||
-                  atomicCAS(seen_faces + boundary_ordinal, 0u, 1u) != 0u;
+            bad = boundary_ordinal_value >= face_count ||
+                  atomicCAS(seen_faces + boundary_ordinal_value, 0u, 1u) != 0u;
             if (bad) invalid_code = 5;
         }
         if (bad) atomicCAS(invalid, 0u, invalid_code);
@@ -437,66 +509,137 @@ __global__ void assemble_charge_fv_kernel(
         const uint64_t coordinates[3] = {x, y, z};
         const uint64_t extents[3] = {nx, ny, nz};
         for (uint32_t boundary_axis = 0; boundary_axis < 3; ++boundary_axis) {
-          for (int32_t boundary_side = -1; boundary_side <= 1; boundary_side += 2) {
-            if ((boundary_side < 0 && coordinates[boundary_axis] != 0) ||
-                (boundary_side > 0 && coordinates[boundary_axis] + 1 != extents[boundary_axis]))
-                continue;
-            const uint64_t f = boundary_ordinal(
-                boundary_axis, boundary_side, x, y, z, nx, ny, nz);
-            if (f >= face_count) continue;
-            uint32_t kind = 0, axis = 0;
-            int32_t side = 0;
-            uint64_t adjacent = 0;
-            double area = 0.0, value = 0.0;
-            load_charge_face(face_payload, face_stride, f, &kind, &axis, &side,
-                             &adjacent, &area, &value);
-            if (kind == FULLMAG_FDM_GPU_TRANSPORT_CHARGE_BOUNDARY_VOLTAGE) {
-                const double normal_h = axis == 0 ? hx : axis == 1 ? hy : hz;
-                const double conductance = 2.0 * sigma[i] * area / normal_h;
-                diagonal += conductance;
-                source += conductance * value;
-            } else if (kind == FULLMAG_FDM_GPU_TRANSPORT_CHARGE_BOUNDARY_EXACT_DENSITY) {
-                source -= value * area;
+            for (int32_t boundary_side = -1; boundary_side <= 1; boundary_side += 2) {
+                if ((boundary_side < 0 && coordinates[boundary_axis] != 0) ||
+                    (boundary_side > 0 && coordinates[boundary_axis] + 1 != extents[boundary_axis]))
+                    continue;
+                const uint64_t f = boundary_ordinal(
+                    boundary_axis, boundary_side, x, y, z, nx, ny, nz);
+                if (f >= face_count) continue;
+                uint32_t kind = 0, axis = 0;
+                int32_t side = 0;
+                uint64_t adjacent = 0;
+                double area = 0.0, value = 0.0;
+                load_charge_face(face_payload, face_stride, f, &kind, &axis, &side,
+                                 &adjacent, &area, &value);
+                if (kind == FULLMAG_FDM_GPU_TRANSPORT_CHARGE_BOUNDARY_VOLTAGE) {
+                    const double normal_h = axis == 0 ? hx : axis == 1 ? hy : hz;
+                    const double conductance = 2.0 * sigma[i] * area / normal_h;
+                    diagonal += conductance;
+                    source += conductance * value;
+                } else if (kind == FULLMAG_FDM_GPU_TRANSPORT_CHARGE_BOUNDARY_EXACT_DENSITY) {
+                    source -= value * area;
+                }
             }
-          }
         }
         diag[i] = diagonal;
         rhs[i] = source;
     }
 }
 
-__device__ double apply_row(uint64_t i, const double *v, const double *diag,
-                            const double *gx, const double *gy, const double *gz,
-                            uint64_t nx, uint64_t ny, uint64_t nz) {
+__device__ double apply_level_row(
+    uint64_t i, const double *v, const CoarseLevel &lvl) {
+    const uint64_t nx = lvl.nx;
+    const uint64_t ny = lvl.ny;
+    const uint64_t nz = lvl.nz;
+    const uint64_t plane = nx * ny;
     const uint64_t x = i % nx;
     const uint64_t yz = i / nx;
     const uint64_t y = yz % ny;
     const uint64_t z = yz / ny;
-    double value = diag[i] * v[i];
-    if (x > 0) value -= gx[i - 1] * v[i - 1];
-    if (x + 1 < nx) value -= gx[i] * v[i + 1];
-    if (y > 0) value -= gy[i - nx] * v[i - nx];
-    if (y + 1 < ny) value -= gy[i] * v[i + nx];
-    if (z > 0) value -= gz[i - nx * ny] * v[i - nx * ny];
-    if (z + 1 < nz) value -= gz[i] * v[i + nx * ny];
+    double value = lvl.diag[i] * v[i];
+    if (x > 0) value -= lvl.gx[i - 1] * v[i - 1];
+    if (x + 1 < nx) value -= lvl.gx[i] * v[i + 1];
+    if (y > 0) value -= lvl.gy[i - nx] * v[i - nx];
+    if (y + 1 < ny) value -= lvl.gy[i] * v[i + nx];
+    if (z > 0) value -= lvl.gz[i - plane] * v[i - plane];
+    if (z + 1 < nz) value -= lvl.gz[i] * v[i + plane];
     return value;
 }
 
-__device__ double fixed_tree_sum(double value, double *tree) {
-    tree[threadIdx.x] = value;
+__device__ double deterministic_block_reduce_sum(double value, double *shared) {
+    shared[threadIdx.x] = value;
     __syncthreads();
-    for (uint32_t width = blockDim.x / 2; width != 0; width >>= 1) {
-        if (threadIdx.x < width) tree[threadIdx.x] += tree[threadIdx.x + width];
+    for (uint32_t stride = blockDim.x / 2; stride != 0; stride >>= 1) {
+        if (threadIdx.x < stride) shared[threadIdx.x] += shared[threadIdx.x + stride];
         __syncthreads();
     }
-    return tree[0];
+    const double result = shared[0];
+    __syncthreads();
+    return result;
 }
 
-__device__ double fixed_tree_dot(const double *a, const double *b, uint64_t count,
-                                 double *tree) {
+__device__ double deterministic_block_reduce_max(double value, double *shared) {
+    shared[threadIdx.x] = value;
+    __syncthreads();
+    for (uint32_t stride = blockDim.x / 2; stride != 0; stride >>= 1) {
+        if (threadIdx.x < stride)
+            shared[threadIdx.x] = fmax(shared[threadIdx.x], shared[threadIdx.x + stride]);
+        __syncthreads();
+    }
+    const double result = shared[0];
+    __syncthreads();
+    return result;
+}
+
+__device__ double deterministic_grid_sum(
+    double local, double *partials, double *scalar_out,
+    double *shared, cg::grid_group grid) {
+    const double block_sum = deterministic_block_reduce_sum(local, shared);
+    if (threadIdx.x == 0) partials[blockIdx.x] = block_sum;
+    grid.sync();
+    if (grid.thread_rank() == 0) {
+        double total = 0.0;
+        for (uint32_t b = 0; b < gridDim.x; ++b) total += partials[b];
+        *scalar_out = total;
+    }
+    grid.sync();
+    return *scalar_out;
+}
+
+__device__ double deterministic_grid_max(
+    double local, double *partials, double *scalar_out,
+    double *shared, cg::grid_group grid) {
+    const double block_max = deterministic_block_reduce_max(local, shared);
+    if (threadIdx.x == 0) partials[blockIdx.x] = block_max;
+    grid.sync();
+    if (grid.thread_rank() == 0) {
+        double best = 0.0;
+        for (uint32_t b = 0; b < gridDim.x; ++b) best = fmax(best, partials[b]);
+        *scalar_out = best;
+    }
+    grid.sync();
+    return *scalar_out;
+}
+
+__device__ uint64_t deterministic_grid_sum_u64(
+    uint64_t local, uint64_t *partials_u64, uint64_t *scalar_out,
+    uint64_t *shared_u64, cg::grid_group grid) {
+    shared_u64[threadIdx.x] = local;
+    __syncthreads();
+    for (uint32_t stride = blockDim.x / 2; stride != 0; stride >>= 1) {
+        if (threadIdx.x < stride) shared_u64[threadIdx.x] += shared_u64[threadIdx.x + stride];
+        __syncthreads();
+    }
+    if (threadIdx.x == 0) partials_u64[blockIdx.x] = shared_u64[0];
+    grid.sync();
+    if (grid.thread_rank() == 0) {
+        uint64_t total = 0;
+        for (uint32_t b = 0; b < gridDim.x; ++b) total += partials_u64[b];
+        *scalar_out = total;
+    }
+    grid.sync();
+    return *scalar_out;
+}
+
+__device__ double deterministic_dot_coop(
+    const double *a, const double *b, uint64_t count,
+    double *partials, double *scalar_out, double *shared,
+    cg::grid_group grid) {
     double local = 0.0;
-    for (uint64_t i = threadIdx.x; i < count; i += blockDim.x) local += a[i] * b[i];
-    return fixed_tree_sum(local, tree);
+    for (uint64_t i = grid.thread_rank(); i < count; i += grid.size())
+        local += a[i] * b[i];
+    return deterministic_grid_sum(local, partials, scalar_out, shared, grid);
 }
 
 __global__ void assign_geometric_aggregates_kernel(
@@ -513,12 +656,15 @@ __global__ void assign_geometric_aggregates_kernel(
     }
 }
 
+// Builds exact Level-1 2x2x2 geometric RAP for both readback oracle compatibility
+// (coarse_diag, coarse_edge_a/b/weight) and uniform multi-level stencil storage
+// (l1_gx, l1_gy, l1_gz).
 __global__ void build_geometric_rap_kernel(
     const uint8_t *active, const double *diag, const double *gx, const double *gy,
     const double *gz, uint64_t nx, uint64_t ny, uint64_t nz,
-    uint64_t *aggregate, double *coarse_diag, uint64_t *coarse_edge_a,
+    const uint64_t *aggregate, double *coarse_diag, uint64_t *coarse_edge_a,
     uint64_t *coarse_edge_b, double *coarse_edge_weight,
-    DeviceHierarchyInfo *info) {
+    double *l1_gx, double *l1_gy, double *l1_gz) {
     const uint64_t coarse_nx = (nx + 1) / 2;
     const uint64_t coarse_ny = (ny + 1) / 2;
     const uint64_t coarse_nz = (nz + 1) / 2;
@@ -563,6 +709,9 @@ __global__ void build_geometric_rap_kernel(
             }
         }
         coarse_diag[coarse] = diagonal;
+        if (l1_gx != nullptr) l1_gx[coarse] = cx + 1 < coarse_nx ? wx : 0.0;
+        if (l1_gy != nullptr) l1_gy[coarse] = cy + 1 < coarse_ny ? wy : 0.0;
+        if (l1_gz != nullptr) l1_gz[coarse] = cz + 1 < coarse_nz ? wz : 0.0;
         if (cx + 1 < coarse_nx) {
             const uint64_t edge = cx + (coarse_nx - 1) * (cy + coarse_ny * cz);
             coarse_edge_a[edge] = coarse;
@@ -584,330 +733,1094 @@ __global__ void build_geometric_rap_kernel(
     }
 }
 
+// Exact 2x2x2 Galerkin RAP coarsening for levels l >= 2.
+__global__ void build_coarse_rap_level_kernel(CoarseLevel fine, CoarseLevel coarse) {
+    const uint64_t fplane = fine.nx * fine.ny;
+    for (uint64_t c = blockIdx.x * blockDim.x + threadIdx.x; c < coarse.cells;
+         c += static_cast<uint64_t>(blockDim.x) * gridDim.x) {
+        const uint64_t cx = c % coarse.nx;
+        const uint64_t cyz = c / coarse.nx;
+        const uint64_t cy = cyz % coarse.ny;
+        const uint64_t cz = cyz / coarse.ny;
+        double sum_diag = 0.0;
+        double d = 0.0;
+        double wx = 0.0, wy = 0.0, wz = 0.0;
+        double w_neg = 0.0;
+        for (uint64_t dz = 0; dz < 2; ++dz) {
+            const uint64_t z = 2 * cz + dz;
+            if (z >= fine.nz) continue;
+            for (uint64_t dy = 0; dy < 2; ++dy) {
+                const uint64_t y = 2 * cy + dy;
+                if (y >= fine.ny) continue;
+                for (uint64_t dx = 0; dx < 2; ++dx) {
+                    const uint64_t x = 2 * cx + dx;
+                    if (x >= fine.nx) continue;
+                    const uint64_t i = x + fine.nx * (y + fine.ny * z);
+                    const double fi = fine.diag[i];
+                    sum_diag += fi;
+                    d += fi;
+                    if (dx == 0 && x > 0) w_neg += fine.gx[i - 1];
+                    if (dy == 0 && y > 0) w_neg += fine.gy[i - fine.nx];
+                    if (dz == 0 && z > 0) w_neg += fine.gz[i - fplane];
+                    if (x + 1 < fine.nx && fine.gx[i] > 0.0) {
+                        if (dx == 0) d -= 2.0 * fine.gx[i];
+                        else if (cx + 1 < coarse.nx) wx += fine.gx[i];
+                    }
+                    if (y + 1 < fine.ny && fine.gy[i] > 0.0) {
+                        if (dy == 0) d -= 2.0 * fine.gy[i];
+                        else if (cy + 1 < coarse.ny) wy += fine.gy[i];
+                    }
+                    if (z + 1 < fine.nz && fine.gz[i] > 0.0) {
+                        if (dz == 0) d -= 2.0 * fine.gz[i];
+                        else if (cz + 1 < coarse.nz) wz += fine.gz[i];
+                    }
+                }
+            }
+        }
+        // Guard tiny cancellation roundoff on a completely disconnected pure-Neumann aggregate.
+        if (wx == 0.0 && wy == 0.0 && wz == 0.0 && w_neg == 0.0 &&
+            d <= 128.0 * DBL_EPSILON * sum_diag) {
+            d = 0.0;
+        }
+        coarse.diag[c] = d > 0.0 ? d : 0.0;
+        coarse.gx[c] = cx + 1 < coarse.nx ? wx : 0.0;
+        coarse.gy[c] = cy + 1 < coarse.ny ? wy : 0.0;
+        coarse.gz[c] = cz + 1 < coarse.nz ? wz : 0.0;
+    }
+}
+
+// Deterministic fixed-chunk parallel hierarchy digest (SM-count independent).
+__global__ void hash_hierarchy_chunks_kernel(
+    const uint64_t *aggregate, uint64_t cells,
+    const uint64_t *coarse_edge_a, const uint64_t *coarse_edge_b,
+    const double *coarse_edge_weight, uint64_t edge_count,
+    uint64_t agg_chunks, uint64_t total_chunks, uint64_t *chunk_hashes) {
+    for (uint64_t chunk = blockIdx.x * blockDim.x + threadIdx.x; chunk < total_chunks;
+         chunk += static_cast<uint64_t>(blockDim.x) * gridDim.x) {
+        uint64_t state[4] = {
+            UINT64_C(0xcbf29ce484222325) ^ chunk,
+            UINT64_C(0x9e3779b97f4a7c15) ^ (chunk << 1),
+            UINT64_C(0x6a09e667f3bcc909) ^ (chunk << 2),
+            UINT64_C(0xbb67ae8584caa73b) ^ (chunk << 3)};
+        if (chunk < agg_chunks) {
+            const uint64_t begin = chunk * kHashChunkSize;
+            const uint64_t end = begin + kHashChunkSize < cells ? begin + kHashChunkSize : cells;
+            for (uint64_t i = begin; i < end; ++i) {
+                for (uint32_t lane = 0; lane < 4; ++lane) {
+                    state[lane] ^= aggregate[i] + UINT64_C(0x100000001b3) * (lane + 1);
+                    state[lane] *= UINT64_C(0x100000001b3);
+                }
+            }
+        } else {
+            const uint64_t echunk = chunk - agg_chunks;
+            const uint64_t begin = echunk * kHashChunkSize;
+            const uint64_t end = begin + kHashChunkSize < edge_count ? begin + kHashChunkSize : edge_count;
+            for (uint64_t edge = begin; edge < end; ++edge) {
+                const uint64_t weight_bits =
+                    static_cast<uint64_t>(__double_as_longlong(coarse_edge_weight[edge]));
+                for (uint32_t lane = 0; lane < 4; ++lane) {
+                    state[lane] ^= coarse_edge_a[edge] + (coarse_edge_b[edge] << 1) + weight_bits;
+                    state[lane] *= UINT64_C(0x100000001b3);
+                }
+            }
+        }
+        for (uint32_t lane = 0; lane < 4; ++lane) chunk_hashes[4 * chunk + lane] = state[lane];
+    }
+}
+
 __global__ void finalize_geometric_rap_kernel(
-    const uint64_t *aggregate, uint64_t cells, const uint64_t *coarse_edge_a,
-    const uint64_t *coarse_edge_b, const double *coarse_edge_weight,
+    const uint64_t *chunk_hashes, uint64_t total_chunks,
     uint64_t coarse_nx, uint64_t coarse_ny, uint64_t coarse_nz,
-    DeviceHierarchyInfo *info) {
+    uint64_t edge_count, uint32_t level_count, DeviceHierarchyInfo *info) {
     if (blockIdx.x != 0 || threadIdx.x != 0) return;
-    const uint64_t coarse_cells = coarse_nx * coarse_ny * coarse_nz;
-    const uint64_t edge_count =
-        (coarse_nx > 1 ? (coarse_nx - 1) * coarse_ny * coarse_nz : 0) +
-        (coarse_ny > 1 ? coarse_nx * (coarse_ny - 1) * coarse_nz : 0) +
-        (coarse_nz > 1 ? coarse_nx * coarse_ny * (coarse_nz - 1) : 0);
     uint64_t state[4] = {
         UINT64_C(0xcbf29ce484222325), UINT64_C(0x9e3779b97f4a7c15),
         UINT64_C(0x6a09e667f3bcc909), UINT64_C(0xbb67ae8584caa73b)};
-    for (uint64_t i = 0; i < cells; ++i) {
+    for (uint32_t lane = 0; lane < 4; ++lane) {
+        state[lane] ^= static_cast<uint64_t>(level_count) + (coarse_nx << 8) +
+                       (coarse_ny << 16) + (coarse_nz << 24);
+        state[lane] *= UINT64_C(0x100000001b3);
+    }
+    for (uint64_t chunk = 0; chunk < total_chunks; ++chunk) {
         for (uint32_t lane = 0; lane < 4; ++lane) {
-            state[lane] ^= aggregate[i] + UINT64_C(0x100000001b3) * (lane + 1);
+            state[lane] ^= chunk_hashes[4 * chunk + lane];
             state[lane] *= UINT64_C(0x100000001b3);
         }
     }
-    for (uint64_t edge = 0; edge < edge_count; ++edge) {
-        const uint64_t weight_bits = __double_as_longlong(coarse_edge_weight[edge]);
-        for (uint32_t lane = 0; lane < 4; ++lane) {
-            state[lane] ^= coarse_edge_a[edge] + (coarse_edge_b[edge] << 1) + weight_bits;
-            state[lane] *= UINT64_C(0x100000001b3);
-        }
-    }
-    info->coarse_cells = coarse_cells;
+    info->coarse_cells = coarse_nx * coarse_ny * coarse_nz;
     info->edge_count = edge_count;
     info->coarse_nx = coarse_nx;
     info->coarse_ny = coarse_ny;
     info->coarse_nz = coarse_nz;
+    info->level_count = level_count;
+    info->reserved0 = 0;
     for (uint32_t lane = 0; lane < 4; ++lane)
         for (uint32_t byte = 0; byte < 8; ++byte)
             info->digest[8 * lane + byte] = static_cast<uint8_t>(state[lane] >> (8 * byte));
 }
 
-__device__ double apply_coarse_row(
-    uint64_t i, const double *v, const double *diag, const uint64_t *edge_a,
-    const uint64_t *edge_b, const double *edge_weight, uint64_t edge_count,
-    uint64_t coarse_nx, uint64_t coarse_ny, uint64_t coarse_nz) {
-    (void)edge_a; (void)edge_b; (void)edge_count;
-    const uint64_t x = i % coarse_nx;
-    const uint64_t yz = i / coarse_nx;
-    const uint64_t y = yz % coarse_ny;
-    const uint64_t z = yz / coarse_ny;
-    const uint64_t x_edges = coarse_nx > 1 ? (coarse_nx - 1) * coarse_ny * coarse_nz : 0;
-    const uint64_t y_edges = coarse_ny > 1 ? coarse_nx * (coarse_ny - 1) * coarse_nz : 0;
-    double value = diag[i] * v[i];
-    if (x > 0) value -= edge_weight[(x - 1) + (coarse_nx - 1) * (y + coarse_ny * z)] * v[i - 1];
-    if (x + 1 < coarse_nx) value -= edge_weight[x + (coarse_nx - 1) * (y + coarse_ny * z)] * v[i + 1];
-    if (y > 0) value -= edge_weight[x_edges + x + coarse_nx * ((y - 1) + (coarse_ny - 1) * z)] * v[i - coarse_nx];
-    if (y + 1 < coarse_ny) value -= edge_weight[x_edges + x + coarse_nx * (y + (coarse_ny - 1) * z)] * v[i + coarse_nx];
-    if (z > 0) value -= edge_weight[x_edges + y_edges + x + coarse_nx * (y + coarse_ny * (z - 1))] * v[i - coarse_nx * coarse_ny];
-    if (z + 1 < coarse_nz) value -= edge_weight[x_edges + y_edges + x + coarse_nx * (y + coarse_ny * z)] * v[i + coarse_nx * coarse_ny];
-    return value;
-}
-
-__device__ void device_galerkin_amg_vcycle(
-    const double *residual, double *correction, double *fine_tmp,
-    double *coarse_rhs, double *coarse_x, double *coarse_tmp,
-    const double *diag, const double *gx, const double *gy, const double *gz,
-    const uint64_t *aggregate, const double *coarse_diag,
-    const uint64_t *coarse_edge_a, const uint64_t *coarse_edge_b,
-    const double *coarse_edge_weight, uint64_t coarse_cells, uint64_t edge_count,
-    uint64_t nx, uint64_t ny, uint64_t nz) {
+// Multi-block cooperative parallel connected components (Shiloach-Vishkin union-find)
+// with canonical ascending component numbering, anchor detection, and free-component
+// RHS balance summary. Runs once per static HierarchyCache build.
+__global__ void label_reference_components_coop_kernel(
+    uint64_t nx, uint64_t ny, uint64_t nz, const uint8_t *active,
+    const void *face_payload, uint64_t face_count, uint64_t face_stride,
+    const double *gx, const double *gy, const double *gz, const double *rhs,
+    uint64_t *labels, uint8_t *component_anchored, uint32_t *component_pin_cell,
+    uint32_t *free_component_ids, uint64_t *free_component_sizes,
+    uint32_t *device_component_count, uint32_t *device_free_component_count,
+    uint32_t *device_has_unanchored, uint32_t *device_has_unbalanced_free,
+    uint64_t *aux_u64, double *comp_rhs_sum_scratch, double *comp_rhs_l1_scratch,
+    double *partials, DevicePcgState *state) {
+    extern __shared__ double shared_buf[];
+    auto *shared_u32 = reinterpret_cast<uint32_t *>(shared_buf);
+    auto *shared_u64 = reinterpret_cast<uint64_t *>(shared_buf);
+    cg::grid_group grid = cg::this_grid();
     const uint64_t cells = nx * ny * nz;
-    for (uint64_t i = threadIdx.x; i < cells; i += blockDim.x) correction[i] = 0.0;
+    const uint64_t plane = nx * ny;
+
+    // 1. Initialize each active cell as its own root.
+    for (uint64_t i = grid.thread_rank(); i < cells; i += grid.size())
+        labels[i] = active[i] ? i : UINT64_MAX;
+    grid.sync();
+
+    // 2. Parallel union-find hooking + read-only full pointer compression.
+    while (true) {
+        if (grid.thread_rank() == 0) state->changed = 0u;
+        grid.sync();
+        uint32_t local_changed = 0u;
+        for (uint64_t i = grid.thread_rank(); i < cells; i += grid.size()) {
+            if (!active[i]) continue;
+            const uint64_t x = i % nx;
+            const uint64_t yz = i / nx;
+            const uint64_t y = yz % ny;
+            const uint64_t z = yz / ny;
+            auto hook_edge = [&](uint64_t nb) {
+                uint64_t u = labels[i];
+                uint64_t v = labels[nb];
+                while (u != v) {
+                    if (u < v) {
+                        const uint64_t prev = static_cast<uint64_t>(atomicMin(
+                            reinterpret_cast<unsigned long long *>(labels + v),
+                            static_cast<unsigned long long>(u)));
+                        if (prev == v) {
+                            local_changed = 1u;
+                            break;
+                        }
+                        if (prev > u) local_changed = 1u;
+                        v = prev;
+                    } else {
+                        const uint64_t prev = static_cast<uint64_t>(atomicMin(
+                            reinterpret_cast<unsigned long long *>(labels + u),
+                            static_cast<unsigned long long>(v)));
+                        if (prev == u) {
+                            local_changed = 1u;
+                            break;
+                        }
+                        if (prev > v) local_changed = 1u;
+                        u = prev;
+                    }
+                }
+            };
+            if (x + 1 < nx && gx[i] > 0.0) hook_edge(i + 1);
+            if (y + 1 < ny && gy[i] > 0.0) hook_edge(i + nx);
+            if (z + 1 < nz && gz[i] > 0.0) hook_edge(i + plane);
+        }
+        if (local_changed != 0u) atomicOr(&state->changed, 1u);
+        grid.sync();
+        if (state->changed == 0u) break;
+        for (uint64_t i = grid.thread_rank(); i < cells; i += grid.size()) {
+            if (!active[i]) {
+                aux_u64[i] = UINT64_MAX;
+                continue;
+            }
+            uint64_t p = labels[i];
+            while (p != labels[p]) p = labels[p];
+            aux_u64[i] = p;
+        }
+        grid.sync();
+        for (uint64_t i = grid.thread_rank(); i < cells; i += grid.size())
+            labels[i] = aux_u64[i];
+        grid.sync();
+    }
+
+    // 3. Assign canonical compact component IDs [0..component_count-1] in ascending root order.
+    const uint64_t chunk_size = (cells + gridDim.x - 1) / gridDim.x;
+    const uint64_t begin = uint64_t(blockIdx.x) * chunk_size < cells
+        ? uint64_t(blockIdx.x) * chunk_size : cells;
+    const uint64_t end = begin + chunk_size < cells ? begin + chunk_size : cells;
+    uint32_t local_roots = 0u;
+    for (uint64_t i = begin + threadIdx.x; i < end; i += blockDim.x) {
+        if (active[i] && labels[i] == i) ++local_roots;
+    }
+    shared_u32[threadIdx.x] = local_roots;
     __syncthreads();
-    constexpr double omega = 2.0 / 3.0;
-    for (uint32_t sweep = 0; sweep < 2; ++sweep) {
-        for (uint64_t i = threadIdx.x; i < cells; i += blockDim.x)
-            fine_tmp[i] = correction[i] + omega *
-                (residual[i] - apply_row(i, correction, diag, gx, gy, gz, nx, ny, nz)) / diag[i];
-        __syncthreads();
-        for (uint64_t i = threadIdx.x; i < cells; i += blockDim.x) correction[i] = fine_tmp[i];
+    for (uint32_t stride = blockDim.x / 2; stride != 0; stride >>= 1) {
+        if (threadIdx.x < stride) shared_u32[threadIdx.x] += shared_u32[threadIdx.x + stride];
         __syncthreads();
     }
-    for (uint64_t i = threadIdx.x; i < cells; i += blockDim.x)
-        fine_tmp[i] = residual[i] - apply_row(i, correction, diag, gx, gy, gz, nx, ny, nz);
+    auto *block_counts = reinterpret_cast<uint32_t *>(partials);
+    auto *block_offsets = block_counts + kMaxCoopBlocks;
+    if (threadIdx.x == 0) block_counts[blockIdx.x] = shared_u32[0];
+    grid.sync();
+
+    if (grid.thread_rank() == 0) {
+        uint32_t total = 0u;
+        for (uint32_t b = 0; b < gridDim.x; ++b) {
+            block_offsets[b] = total;
+            total += block_counts[b];
+        }
+        *device_component_count = total;
+        *device_free_component_count = 0u;
+        *device_has_unanchored = 0u;
+        *device_has_unbalanced_free = 0u;
+    }
+    grid.sync();
+
+    uint32_t running_offset = block_offsets[blockIdx.x];
+    for (uint64_t tile = begin; tile < end; tile += blockDim.x) {
+        const uint64_t i = tile + threadIdx.x;
+        const uint32_t is_root = (i < end && active[i] && labels[i] == i) ? 1u : 0u;
+        shared_u32[threadIdx.x] = is_root;
+        __syncthreads();
+        // Inclusive Hillis-Steele scan in shared memory (256 threads).
+        for (uint32_t offset = 1; offset < blockDim.x; offset <<= 1) {
+            const uint32_t val = threadIdx.x >= offset
+                ? shared_u32[threadIdx.x] + shared_u32[threadIdx.x - offset]
+                : shared_u32[threadIdx.x];
+            __syncthreads();
+            shared_u32[threadIdx.x] = val;
+            __syncthreads();
+        }
+        if (is_root != 0u) {
+            const uint32_t cid = running_offset + shared_u32[threadIdx.x] - 1u;
+            aux_u64[i] = cid;
+            component_pin_cell[cid] = static_cast<uint32_t>(i);
+        }
+        running_offset += shared_u32[blockDim.x - 1];
+        __syncthreads();
+    }
+    grid.sync();
+
+    for (uint64_t i = grid.thread_rank(); i < cells; i += grid.size()) {
+        if (active[i]) labels[i] = aux_u64[labels[i]];
+        else labels[i] = UINT64_MAX;
+    }
+    grid.sync();
+
+    // 4. Detect anchored components (voltage boundary faces).
+    const uint32_t comp_count = *device_component_count;
+    for (uint64_t c = grid.thread_rank(); c < comp_count; c += grid.size()) {
+        component_anchored[c] = 0;
+        comp_rhs_sum_scratch[c] = 0.0;
+        comp_rhs_l1_scratch[c] = 0.0;
+        aux_u64[c] = 0;
+    }
+    grid.sync();
+
+    for (uint64_t f = grid.thread_rank(); f < face_count; f += grid.size()) {
+        uint32_t kind = 0, axis = 0;
+        int32_t side = 0;
+        uint64_t cell = 0;
+        double area = 0.0, value = 0.0;
+        load_charge_face(face_payload, face_stride, f, &kind, &axis, &side,
+                         &cell, &area, &value);
+        if (kind == FULLMAG_FDM_GPU_TRANSPORT_CHARGE_BOUNDARY_VOLTAGE &&
+            cell < cells && labels[cell] != UINT64_MAX) {
+            component_anchored[labels[cell]] = 1;
+        }
+    }
+    grid.sync();
+
+    // 5. Collect free components and certify RHS balance per free component.
+    if (comp_count <= 32u) {
+        if (grid.thread_rank() == 0) {
+            uint32_t fc = 0u;
+            for (uint32_t c = 0; c < comp_count; ++c) {
+                if (component_anchored[c] == 0) {
+                    free_component_ids[fc++] = c;
+                }
+            }
+            *device_free_component_count = fc;
+            *device_has_unanchored = fc > 0u ? 1u : 0u;
+        }
+        grid.sync();
+        const uint32_t fc = *device_free_component_count;
+        double *partials_sum = partials;
+        double *partials_l1 = partials + kMaxCoopBlocks;
+        auto *partials_cnt = reinterpret_cast<uint64_t *>(partials + 2 * kMaxCoopBlocks);
+        for (uint32_t k = 0; k < fc; ++k) {
+            const uint32_t c = free_component_ids[k];
+            double local_sum = 0.0, local_l1 = 0.0;
+            uint64_t local_cnt = 0;
+            for (uint64_t i = grid.thread_rank(); i < cells; i += grid.size()) {
+                if (labels[i] == c) {
+                    local_sum += rhs[i];
+                    local_l1 += fabs(rhs[i]);
+                    ++local_cnt;
+                }
+            }
+            const double b_sum = deterministic_block_reduce_sum(local_sum, shared_buf);
+            if (threadIdx.x == 0) partials_sum[blockIdx.x] = b_sum;
+            const double b_l1 = deterministic_block_reduce_sum(local_l1, shared_buf);
+            if (threadIdx.x == 0) partials_l1[blockIdx.x] = b_l1;
+            shared_u64[threadIdx.x] = local_cnt;
+            __syncthreads();
+            for (uint32_t stride = blockDim.x / 2; stride != 0; stride >>= 1) {
+                if (threadIdx.x < stride) shared_u64[threadIdx.x] += shared_u64[threadIdx.x + stride];
+                __syncthreads();
+            }
+            if (threadIdx.x == 0) partials_cnt[blockIdx.x] = shared_u64[0];
+            grid.sync();
+            if (grid.thread_rank() == 0) {
+                double rhs_sum = 0.0, rhs_l1 = 0.0;
+                uint64_t cnt = 0;
+                for (uint32_t b = 0; b < gridDim.x; ++b) {
+                    rhs_sum += partials_sum[b];
+                    rhs_l1 += partials_l1[b];
+                    cnt += partials_cnt[b];
+                }
+                free_component_sizes[k] = cnt;
+                const double tol = 64.0 * DBL_EPSILON * rhs_l1;
+                if (fabs(rhs_sum) > tol) *device_has_unbalanced_free = 1u;
+            }
+            grid.sync();
+        }
+    } else {
+        for (uint64_t i = grid.thread_rank(); i < cells; i += grid.size()) {
+            const uint64_t c = labels[i];
+            if (c == UINT64_MAX || component_anchored[c] != 0) continue;
+            atomicAdd(reinterpret_cast<unsigned long long *>(aux_u64 + c), 1ULL);
+            atomicAdd(comp_rhs_sum_scratch + c, rhs[i]);
+            atomicAdd(comp_rhs_l1_scratch + c, fabs(rhs[i]));
+        }
+        grid.sync();
+        if (grid.thread_rank() == 0) {
+            uint32_t fc = 0u;
+            for (uint32_t c = 0; c < comp_count; ++c) {
+                if (component_anchored[c] != 0) continue;
+                *device_has_unanchored = 1u;
+                free_component_ids[fc] = c;
+                free_component_sizes[fc] = aux_u64[c];
+                ++fc;
+                const double tol = 64.0 * DBL_EPSILON * comp_rhs_l1_scratch[c];
+                if (fabs(comp_rhs_sum_scratch[c]) > tol)
+                    *device_has_unbalanced_free = 1u;
+            }
+            *device_free_component_count = fc;
+        }
+        grid.sync();
+    }
+}
+
+__global__ void evaluate_gauge_policy_kernel(
+    uint32_t gauge_policy, const uint32_t *has_unanchored,
+    const uint32_t *has_unbalanced_free, uint32_t *invalid) {
+    if (blockIdx.x != 0 || threadIdx.x != 0) return;
+    uint32_t code = 0u;
+    if (*has_unanchored != 0u) {
+        if (gauge_policy ==
+            FULLMAG_FDM_GPU_TRANSPORT_GAUGE_POLICY_BOUNDARY_REFERENCE_PER_COMPONENT) {
+            code = 1u;
+        } else if (gauge_policy ==
+                   FULLMAG_FDM_GPU_TRANSPORT_GAUGE_POLICY_ZERO_MEAN_PER_FREE_COMPONENT) {
+            if (*has_unbalanced_free != 0u) code = 2u;
+        } else {
+            code = 1u;
+        }
+    }
+    *invalid = code;
+}
+
+// Parallel deterministic zero-mean projection across free components.
+__device__ void project_free_component_means_coop(
+    double *values, const uint64_t *labels,
+    const uint32_t *free_ids, const uint64_t *free_sizes,
+    uint32_t free_count, uint64_t cells,
+    double *partials, double *scalar_out, double *shared,
+    cg::grid_group grid) {
+    if (free_count == 0u) return;
+    for (uint32_t k = 0; k < free_count; ++k) {
+        const uint64_t cnt = free_sizes[k];
+        if (cnt == 0) continue;
+        const uint32_t comp = free_ids[k];
+        double local = 0.0;
+        for (uint64_t i = grid.thread_rank(); i < cells; i += grid.size()) {
+            if (labels[i] == comp) local += values[i];
+        }
+        const double sum = deterministic_grid_sum(local, partials, scalar_out, shared, grid);
+        const double mean = sum / static_cast<double>(cnt);
+        for (uint64_t i = grid.thread_rank(); i < cells; i += grid.size()) {
+            if (labels[i] == comp) values[i] -= mean;
+        }
+        grid.sync();
+    }
+}
+
+// Multi-block Red-Black Gauss-Seidel half-sweep (color 0 = red, color 1 = black).
+__device__ void rb_gs_sweep_grid(
+    const CoarseLevel &lvl, const uint8_t *active_or_null,
+    const double *rhs, double *u, uint32_t color, cg::grid_group grid) {
+    const uint64_t nx = lvl.nx;
+    const uint64_t ny = lvl.ny;
+    const uint64_t nz = lvl.nz;
+    const uint64_t plane = nx * ny;
+    for (uint64_t i = grid.thread_rank(); i < lvl.cells; i += grid.size()) {
+        const uint64_t x = i % nx;
+        const uint64_t yz = i / nx;
+        const uint64_t y = yz % ny;
+        const uint64_t z = yz / ny;
+        if (((x + y + z) & 1u) != color) continue;
+        if (active_or_null != nullptr && active_or_null[i] == 0) {
+            u[i] = 0.0;
+            continue;
+        }
+        const double d = lvl.diag[i];
+        if (d > 0.0 && isfinite(d)) {
+            double s = rhs[i];
+            if (x > 0) s += lvl.gx[i - 1] * u[i - 1];
+            if (x + 1 < nx) s += lvl.gx[i] * u[i + 1];
+            if (y > 0) s += lvl.gy[i - nx] * u[i - nx];
+            if (y + 1 < ny) s += lvl.gy[i] * u[i + nx];
+            if (z > 0) s += lvl.gz[i - plane] * u[i - plane];
+            if (z + 1 < nz) s += lvl.gz[i] * u[i + plane];
+            u[i] = s / d;
+        } else {
+            u[i] = 0.0;
+        }
+    }
+    grid.sync();
+}
+
+// Block-0 single-block Red-Black Gauss-Seidel half-sweep (uses __syncthreads only).
+__device__ void rb_gs_sweep_block0(
+    const CoarseLevel &lvl, const uint8_t *active_or_null,
+    const double *rhs, double *u, uint32_t color) {
+    const uint64_t nx = lvl.nx;
+    const uint64_t ny = lvl.ny;
+    const uint64_t nz = lvl.nz;
+    const uint64_t plane = nx * ny;
+    for (uint64_t i = threadIdx.x; i < lvl.cells; i += blockDim.x) {
+        const uint64_t x = i % nx;
+        const uint64_t yz = i / nx;
+        const uint64_t y = yz % ny;
+        const uint64_t z = yz / ny;
+        if (((x + y + z) & 1u) != color) continue;
+        if (active_or_null != nullptr && active_or_null[i] == 0) {
+            u[i] = 0.0;
+            continue;
+        }
+        const double d = lvl.diag[i];
+        if (d > 0.0 && isfinite(d)) {
+            double s = rhs[i];
+            if (x > 0) s += lvl.gx[i - 1] * u[i - 1];
+            if (x + 1 < nx) s += lvl.gx[i] * u[i + 1];
+            if (y > 0) s += lvl.gy[i - nx] * u[i - nx];
+            if (y + 1 < ny) s += lvl.gy[i] * u[i + nx];
+            if (z > 0) s += lvl.gz[i - plane] * u[i - plane];
+            if (z + 1 < nz) s += lvl.gz[i] * u[i + plane];
+            u[i] = s / d;
+        } else {
+            u[i] = 0.0;
+        }
+    }
     __syncthreads();
-    const uint64_t coarse_nx = (nx + 1) / 2;
-    const uint64_t coarse_ny = (ny + 1) / 2;
-    const uint64_t coarse_nz = (nz + 1) / 2;
-    for (uint64_t coarse = threadIdx.x; coarse < coarse_cells; coarse += blockDim.x) {
-        const uint64_t cx = coarse % coarse_nx;
-        const uint64_t cyz = coarse / coarse_nx;
-        const uint64_t cy = cyz % coarse_ny;
-        const uint64_t cz = cyz / coarse_ny;
+}
+
+// Fused residual + 2x2x2 restriction: coarse_rhs = R (fine_rhs - A_fine * fine_u).
+__device__ void fused_residual_restrict_grid(
+    const CoarseLevel &fine, const uint8_t *fine_active_or_null,
+    const double *fine_rhs, const double *fine_u,
+    const CoarseLevel &coarse, double *coarse_rhs, cg::grid_group grid) {
+    for (uint64_t c = grid.thread_rank(); c < coarse.cells; c += grid.size()) {
+        const uint64_t cx = c % coarse.nx;
+        const uint64_t cyz = c / coarse.nx;
+        const uint64_t cy = cyz % coarse.ny;
+        const uint64_t cz = cyz / coarse.ny;
         double sum = 0.0;
         for (uint64_t dz = 0; dz < 2; ++dz) {
             const uint64_t z = 2 * cz + dz;
-            if (z >= nz) continue;
+            if (z >= fine.nz) continue;
             for (uint64_t dy = 0; dy < 2; ++dy) {
                 const uint64_t y = 2 * cy + dy;
-                if (y >= ny) continue;
+                if (y >= fine.ny) continue;
                 for (uint64_t dx = 0; dx < 2; ++dx) {
                     const uint64_t x = 2 * cx + dx;
-                    if (x < nx) sum += fine_tmp[x + nx * (y + ny * z)];
+                    if (x >= fine.nx) continue;
+                    const uint64_t i = x + fine.nx * (y + fine.ny * z);
+                    if (fine_active_or_null != nullptr && fine_active_or_null[i] == 0) continue;
+                    sum += fine_rhs[i] - apply_level_row(i, fine_u, fine);
                 }
             }
         }
-        coarse_rhs[coarse] = sum;
-        coarse_x[coarse] = 0.0;
+        coarse_rhs[c] = sum;
     }
-    __syncthreads();
-    /* R=P^T and the cached coarse operator is the deterministic A_c=R A P. */
-    for (uint32_t sweep = 0; sweep < 32; ++sweep) {
-        for (uint64_t coarse = threadIdx.x; coarse < coarse_cells; coarse += blockDim.x) {
-            const double row_value = apply_coarse_row(
-                coarse, coarse_x, coarse_diag, coarse_edge_a, coarse_edge_b,
-                coarse_edge_weight, edge_count, coarse_nx, coarse_ny, coarse_nz);
-            coarse_tmp[coarse] = coarse_diag[coarse] > 0.0 && isfinite(coarse_diag[coarse])
-                ? coarse_x[coarse] + omega *
-                    (coarse_rhs[coarse] - row_value) / coarse_diag[coarse]
-                : 0.0;
+    grid.sync();
+}
+
+__device__ void fused_residual_restrict_block0(
+    const CoarseLevel &fine, const uint8_t *fine_active_or_null,
+    const double *fine_rhs, const double *fine_u,
+    const CoarseLevel &coarse, double *coarse_rhs) {
+    for (uint64_t c = threadIdx.x; c < coarse.cells; c += blockDim.x) {
+        const uint64_t cx = c % coarse.nx;
+        const uint64_t cyz = c / coarse.nx;
+        const uint64_t cy = cyz % coarse.ny;
+        const uint64_t cz = cyz / coarse.ny;
+        double sum = 0.0;
+        for (uint64_t dz = 0; dz < 2; ++dz) {
+            const uint64_t z = 2 * cz + dz;
+            if (z >= fine.nz) continue;
+            for (uint64_t dy = 0; dy < 2; ++dy) {
+                const uint64_t y = 2 * cy + dy;
+                if (y >= fine.ny) continue;
+                for (uint64_t dx = 0; dx < 2; ++dx) {
+                    const uint64_t x = 2 * cx + dx;
+                    if (x >= fine.nx) continue;
+                    const uint64_t i = x + fine.nx * (y + fine.ny * z);
+                    if (fine_active_or_null != nullptr && fine_active_or_null[i] == 0) continue;
+                    sum += fine_rhs[i] - apply_level_row(i, fine_u, fine);
+                }
+            }
         }
-        __syncthreads();
-        for (uint64_t coarse = threadIdx.x; coarse < coarse_cells; coarse += blockDim.x)
-            coarse_x[coarse] = coarse_tmp[coarse];
-        __syncthreads();
+        coarse_rhs[c] = sum;
     }
-    for (uint64_t i = threadIdx.x; i < cells; i += blockDim.x)
-        correction[i] += coarse_x[aggregate[i]];
     __syncthreads();
-    for (uint32_t sweep = 0; sweep < 2; ++sweep) {
-        for (uint64_t i = threadIdx.x; i < cells; i += blockDim.x)
-            fine_tmp[i] = correction[i] + omega *
-                (residual[i] - apply_row(i, correction, diag, gx, gy, gz, nx, ny, nz)) / diag[i];
-        __syncthreads();
-        for (uint64_t i = threadIdx.x; i < cells; i += blockDim.x) correction[i] = fine_tmp[i];
-        __syncthreads();
+}
+
+__device__ void prolong_add_grid(
+    const CoarseLevel &fine, const uint8_t *fine_active_or_null,
+    const CoarseLevel &coarse, const double *coarse_u, double *fine_u,
+    cg::grid_group grid) {
+    for (uint64_t i = grid.thread_rank(); i < fine.cells; i += grid.size()) {
+        if (fine_active_or_null != nullptr && fine_active_or_null[i] == 0) continue;
+        const uint64_t x = i % fine.nx;
+        const uint64_t yz = i / fine.nx;
+        const uint64_t y = yz % fine.ny;
+        const uint64_t z = yz / fine.ny;
+        const uint64_t c = (x / 2) + coarse.nx * ((y / 2) + coarse.ny * (z / 2));
+        fine_u[i] += coarse_u[c];
+    }
+    grid.sync();
+}
+
+__device__ void prolong_add_block0(
+    const CoarseLevel &fine, const uint8_t *fine_active_or_null,
+    const CoarseLevel &coarse, const double *coarse_u, double *fine_u) {
+    for (uint64_t i = threadIdx.x; i < fine.cells; i += blockDim.x) {
+        if (fine_active_or_null != nullptr && fine_active_or_null[i] == 0) continue;
+        const uint64_t x = i % fine.nx;
+        const uint64_t yz = i / fine.nx;
+        const uint64_t y = yz % fine.ny;
+        const uint64_t z = yz / fine.ny;
+        const uint64_t c = (x / 2) + coarse.nx * ((y / 2) + coarse.ny * (z / 2));
+        fine_u[i] += coarse_u[c];
+    }
+    __syncthreads();
+}
+
+__device__ uint8_t cycle_gamma(
+    const DeviceAmgHierarchy &h, uint32_t l, bool in_block0) {
+    if (l + 2 >= h.level_count) return 1u;
+    if (in_block0) return 2u;
+    if (h.levels[l + 1].cells * 4 <= h.levels[l].cells) return 2u;
+    return (l & 1u) == 0u ? 2u : 1u;
+}
+
+// Runs one symmetric W-cycle iteration in-place on levels [root_level .. level_count-1]
+// exclusively inside Block 0 using __syncthreads() (zero grid.sync overhead!).
+__device__ void run_subcycle_block0(
+    const DeviceAmgHierarchy &h, const uint8_t *fine_active,
+    const DeviceAmgVectors &vecs, uint32_t root_level) {
+    uint8_t stage[kMaxAmgLevels];
+    uint8_t rem[kMaxAmgLevels];
+    stage[root_level] = 0u;
+    rem[root_level] = 0u;
+    uint32_t l = root_level;
+    while (true) {
+        const CoarseLevel &lvl = h.levels[l];
+        const uint8_t *act = l == 0u ? fine_active : nullptr;
+        if (stage[l] == 0u) {
+            if (l + 1u == h.level_count) {
+                if (lvl.cells == 1u) {
+                    if (threadIdx.x == 0) {
+                        const double d = lvl.diag[0];
+                        vecs.u[l][0] = (act != nullptr && act[0] == 0)
+                            ? 0.0
+                            : (d > 0.0 && isfinite(d) ? vecs.rhs[l][0] / d : 0.0);
+                    }
+                    __syncthreads();
+                } else {
+                    for (uint32_t s = 0; s < kCoarsestHalfSweeps; ++s) {
+                        rb_gs_sweep_block0(lvl, act, vecs.rhs[l], vecs.u[l], 0u);
+                        rb_gs_sweep_block0(lvl, act, vecs.rhs[l], vecs.u[l], 1u);
+                    }
+                    for (uint32_t s = 0; s < kCoarsestHalfSweeps; ++s) {
+                        rb_gs_sweep_block0(lvl, act, vecs.rhs[l], vecs.u[l], 1u);
+                        rb_gs_sweep_block0(lvl, act, vecs.rhs[l], vecs.u[l], 0u);
+                    }
+                }
+                if (l == root_level) break;
+                --l;
+            } else {
+                rb_gs_sweep_block0(lvl, act, vecs.rhs[l], vecs.u[l], 0u);
+                rb_gs_sweep_block0(lvl, act, vecs.rhs[l], vecs.u[l], 1u);
+                const CoarseLevel &child = h.levels[l + 1u];
+                fused_residual_restrict_block0(
+                    lvl, act, vecs.rhs[l], vecs.u[l], child, vecs.rhs[l + 1u]);
+                for (uint64_t i = threadIdx.x; i < child.cells; i += blockDim.x)
+                    vecs.u[l + 1u][i] = 0.0;
+                __syncthreads();
+                rem[l + 1u] = static_cast<uint8_t>(cycle_gamma(h, l, true) - 1u);
+                stage[l] = 1u;
+                stage[l + 1u] = 0u;
+                ++l;
+            }
+        } else {
+            if (rem[l + 1u] > 0u) {
+                --rem[l + 1u];
+                stage[l + 1u] = 0u;
+                ++l;
+            } else {
+                prolong_add_block0(
+                    lvl, act, h.levels[l + 1u], vecs.u[l + 1u], vecs.u[l]);
+                rb_gs_sweep_block0(lvl, act, vecs.rhs[l], vecs.u[l], 1u);
+                rb_gs_sweep_block0(lvl, act, vecs.rhs[l], vecs.u[l], 0u);
+                if (l == root_level) break;
+                --l;
+            }
+        }
     }
 }
 
-__device__ void project_free_component_means(
-    double *values, const uint64_t *labels, const uint8_t *component_anchored,
-    uint32_t component_count, uint64_t cells) {
-    for (uint32_t component = 0; component < component_count; ++component) {
-        if (component_anchored[component] != 0) continue;
-        double sum = 0.0;
-        uint64_t count = 0;
-        for (uint64_t i = 0; i < cells; ++i) {
-            if (labels[i] == component) {
-                sum += values[i];
-                ++count;
+// Multi-block symmetric multi-level geometric AMG W-cycle preconditioner with
+// Block-0 sub-hierarchy handoff for levels <= kBlock0CellThreshold cells.
+__device__ void device_multilevel_amg_wcycle(
+    const DeviceAmgHierarchy &h, const uint8_t *fine_active,
+    const DeviceAmgVectors &vecs, cg::grid_group grid) {
+    const uint64_t fine_cells = h.levels[0].cells;
+    for (uint64_t i = grid.thread_rank(); i < fine_cells; i += grid.size())
+        vecs.u[0][i] = 0.0;
+    grid.sync();
+
+    if (h.level_count <= 1u) {
+        if (blockIdx.x == 0) run_subcycle_block0(h, fine_active, vecs, 0u);
+        grid.sync();
+        return;
+    }
+    if (h.split_level == 0u) {
+        if (blockIdx.x == 0) run_subcycle_block0(h, fine_active, vecs, 0u);
+        grid.sync();
+        return;
+    }
+
+    uint8_t stage[kMaxAmgLevels];
+    uint8_t rem[kMaxAmgLevels];
+    stage[0] = 0u;
+    rem[0] = 0u;
+    uint32_t l = 0u;
+    while (true) {
+        const CoarseLevel &lvl = h.levels[l];
+        const uint8_t *act = l == 0u ? fine_active : nullptr;
+        if (stage[l] == 0u) {
+            if (l + 1u == h.level_count) {
+                // Coarsest level reached in multi-block mode (only if coarsest > kBlock0CellThreshold).
+                for (uint32_t s = 0; s < kCoarsestHalfSweeps; ++s) {
+                    rb_gs_sweep_grid(lvl, act, vecs.rhs[l], vecs.u[l], 0u, grid);
+                    rb_gs_sweep_grid(lvl, act, vecs.rhs[l], vecs.u[l], 1u, grid);
+                }
+                for (uint32_t s = 0; s < kCoarsestHalfSweeps; ++s) {
+                    rb_gs_sweep_grid(lvl, act, vecs.rhs[l], vecs.u[l], 1u, grid);
+                    rb_gs_sweep_grid(lvl, act, vecs.rhs[l], vecs.u[l], 0u, grid);
+                }
+                if (l == 0u) break;
+                --l;
+            } else {
+                rb_gs_sweep_grid(lvl, act, vecs.rhs[l], vecs.u[l], 0u, grid);
+                rb_gs_sweep_grid(lvl, act, vecs.rhs[l], vecs.u[l], 1u, grid);
+                const CoarseLevel &child = h.levels[l + 1u];
+                fused_residual_restrict_grid(
+                    lvl, act, vecs.rhs[l], vecs.u[l], child, vecs.rhs[l + 1u], grid);
+                const uint8_t gamma = cycle_gamma(h, l, false);
+                if (l + 1u == h.split_level) {
+                    // Hand off all gamma visits of [split_level .. L-1] to Block 0 in one sync pair.
+                    if (blockIdx.x == 0) {
+                        for (uint64_t i = threadIdx.x; i < child.cells; i += blockDim.x)
+                            vecs.u[l + 1u][i] = 0.0;
+                        __syncthreads();
+                        for (uint8_t v = 0; v < gamma; ++v)
+                            run_subcycle_block0(h, fine_active, vecs, l + 1u);
+                    }
+                    grid.sync();
+                    prolong_add_grid(lvl, act, child, vecs.u[l + 1u], vecs.u[l], grid);
+                    rb_gs_sweep_grid(lvl, act, vecs.rhs[l], vecs.u[l], 1u, grid);
+                    rb_gs_sweep_grid(lvl, act, vecs.rhs[l], vecs.u[l], 0u, grid);
+                    if (l == 0u) break;
+                    --l;
+                } else {
+                    for (uint64_t i = grid.thread_rank(); i < child.cells; i += grid.size())
+                        vecs.u[l + 1u][i] = 0.0;
+                    grid.sync();
+                    rem[l + 1u] = static_cast<uint8_t>(gamma - 1u);
+                    stage[l] = 1u;
+                    stage[l + 1u] = 0u;
+                    ++l;
+                }
+            }
+        } else {
+            if (rem[l + 1u] > 0u) {
+                --rem[l + 1u];
+                stage[l + 1u] = 0u;
+                ++l;
+            } else {
+                prolong_add_grid(
+                    lvl, act, h.levels[l + 1u], vecs.u[l + 1u], vecs.u[l], grid);
+                rb_gs_sweep_grid(lvl, act, vecs.rhs[l], vecs.u[l], 1u, grid);
+                rb_gs_sweep_grid(lvl, act, vecs.rhs[l], vecs.u[l], 0u, grid);
+                if (l == 0u) break;
+                --l;
             }
         }
-        if (count == 0) continue;
-        const double mean = sum / static_cast<double>(count);
-        for (uint64_t i = 0; i < cells; ++i)
-            if (labels[i] == component) values[i] -= mean;
     }
 }
 
 __global__ void charge_pcg_device_amg_kernel(
-    const uint8_t *active, const double *diag, const double *rhs, const double *gx,
-    const double *gy,
-    const double *gz, uint64_t nx, uint64_t ny, uint64_t nz, double tolerance,
-    uint64_t max_iterations, const double *warm_potential, uint32_t warm_start_used,
+    const uint8_t *active, DeviceAmgHierarchy amg, DeviceAmgVectors amg_vecs,
+    const double *rhs, double tolerance, uint64_t max_iterations,
+    const double *warm_potential, uint32_t warm_start_used,
     uint32_t gauge_policy, const uint64_t *component_labels,
-    const uint8_t *component_anchored, const uint32_t *component_count_device,
+    const uint32_t *free_component_ids, const uint64_t *free_component_sizes,
+    const uint32_t *free_component_count_device,
     double *potential, double *r, double *z, double *p,
-    double *ap, double *fine_tmp, double *coarse_rhs, double *coarse_x,
-    double *coarse_tmp, const uint64_t *aggregate, const double *coarse_diag,
-    const uint64_t *coarse_edge_a, const uint64_t *coarse_edge_b,
-    const double *coarse_edge_weight, const DeviceHierarchyInfo *hierarchy,
-    DeviceSolveMetrics *metrics) {
-    __shared__ double tree[256];
-    __shared__ double norm_b;
-    __shared__ double rho;
-    __shared__ double residual_norm;
-    __shared__ double alpha;
-    __shared__ double beta;
-    __shared__ uint64_t completed;
-    __shared__ uint32_t reason;
-    __shared__ uint64_t active_tree[256];
-    const uint64_t cells = nx * ny * nz;
+    double *ap, double *fine_tmp, double *partials, DevicePcgState *state,
+    const DeviceHierarchyInfo *hierarchy, DeviceSolveMetrics *metrics) {
+    extern __shared__ double shared[];
+    cg::grid_group grid = cg::this_grid();
+    const CoarseLevel &fine = amg.levels[0];
+    const uint64_t cells = fine.cells;
     const bool zero_mean = gauge_policy ==
         FULLMAG_FDM_GPU_TRANSPORT_GAUGE_POLICY_ZERO_MEAN_PER_FREE_COMPONENT;
-    const uint32_t component_count = *component_count_device;
-    for (uint64_t i = threadIdx.x; i < cells; i += blockDim.x) {
-        const double initial = warm_start_used != 0 ? warm_potential[i] : 0.0;
-        potential[i] = initial;
+    const uint32_t free_count = *free_component_count_device;
+
+    amg_vecs.rhs[0] = r;
+    amg_vecs.u[0] = z;
+
+    for (uint64_t i = grid.thread_rank(); i < cells; i += grid.size()) {
+        potential[i] = (warm_start_used != 0u && active[i] != 0) ? warm_potential[i] : 0.0;
     }
-    __syncthreads();
-    if (zero_mean && threadIdx.x == 0)
-        project_free_component_means(
-            potential, component_labels, component_anchored, component_count, cells);
-    __syncthreads();
-    if (zero_mean) {
-        for (uint64_t i = threadIdx.x; i < cells; i += blockDim.x) fine_tmp[i] = rhs[i];
-        __syncthreads();
-        if (threadIdx.x == 0)
-            project_free_component_means(
-                fine_tmp, component_labels, component_anchored, component_count, cells);
-        __syncthreads();
+    grid.sync();
+    if (zero_mean && free_count > 0u) {
+        project_free_component_means_coop(
+            potential, component_labels, free_component_ids, free_component_sizes,
+            free_count, cells, partials, &state->scalar0, shared, grid);
     }
-    for (uint64_t i = threadIdx.x; i < cells; i += blockDim.x)
-        r[i] = (zero_mean ? fine_tmp[i] : rhs[i]) -
-            (warm_start_used != 0 || zero_mean
-                ? apply_row(i, potential, diag, gx, gy, gz, nx, ny, nz)
+    if (zero_mean && free_count > 0u) {
+        for (uint64_t i = grid.thread_rank(); i < cells; i += grid.size())
+            fine_tmp[i] = rhs[i];
+        grid.sync();
+        project_free_component_means_coop(
+            fine_tmp, component_labels, free_component_ids, free_component_sizes,
+            free_count, cells, partials, &state->scalar0, shared, grid);
+    }
+    const double *effective_rhs = (zero_mean && free_count > 0u) ? fine_tmp : rhs;
+    for (uint64_t i = grid.thread_rank(); i < cells; i += grid.size()) {
+        r[i] = effective_rhs[i] -
+            (warm_start_used != 0u || (zero_mean && free_count > 0u)
+                ? apply_level_row(i, potential, fine)
                 : 0.0);
-    __syncthreads();
-    if (zero_mean && threadIdx.x == 0)
-        project_free_component_means(
-            r, component_labels, component_anchored, component_count, cells);
-    __syncthreads();
-    uint64_t active_local = 0;
-    for (uint64_t i = threadIdx.x; i < cells; i += blockDim.x)
-        active_local += active[i] != 0 ? 1 : 0;
-    active_tree[threadIdx.x] = active_local;
-    __syncthreads();
-    for (uint32_t width = blockDim.x / 2; width != 0; width >>= 1) {
-        if (threadIdx.x < width)
-            active_tree[threadIdx.x] += active_tree[threadIdx.x + width];
-        __syncthreads();
     }
-    if (threadIdx.x == 0)
-        metrics->fine_unknown_count = active_tree[0];
-    const double rhs_norm_squared = fixed_tree_dot(zero_mean ? fine_tmp : rhs,
-                                                  zero_mean ? fine_tmp : rhs,
-                                                  cells, tree);
-    const double initial_residual_squared = fixed_tree_dot(r, r, cells, tree);
-    if (threadIdx.x == 0) {
-        norm_b = sqrt(rhs_norm_squared);
-        residual_norm = norm_b == 0.0
+    grid.sync();
+    if (zero_mean && free_count > 0u) {
+        project_free_component_means_coop(
+            r, component_labels, free_component_ids, free_component_sizes,
+            free_count, cells, partials, &state->scalar0, shared, grid);
+    }
+
+    uint64_t active_local = 0;
+    for (uint64_t i = grid.thread_rank(); i < cells; i += grid.size())
+        active_local += active[i] != 0 ? 1ULL : 0ULL;
+    const uint64_t active_total = deterministic_grid_sum_u64(
+        active_local, reinterpret_cast<uint64_t *>(partials), &state->active_count,
+        reinterpret_cast<uint64_t *>(shared), grid);
+    if (grid.thread_rank() == 0) metrics->fine_unknown_count = active_total;
+
+    const double rhs_norm_squared = deterministic_dot_coop(
+        effective_rhs, effective_rhs, cells, partials, &state->scalar0, shared, grid);
+    const double initial_residual_squared = deterministic_dot_coop(
+        r, r, cells, partials, &state->scalar1, shared, grid);
+    if (grid.thread_rank() == 0) {
+        state->norm_b = sqrt(rhs_norm_squared);
+        state->residual_norm = state->norm_b == 0.0
             ? sqrt(initial_residual_squared)
-            : sqrt(initial_residual_squared) / norm_b;
-        completed = 0;
-        reason = residual_norm <= tolerance
+            : sqrt(initial_residual_squared) / state->norm_b;
+        state->completed = 0;
+        state->reason = state->residual_norm <= tolerance
             ? FULLMAG_FDM_GPU_TRANSPORT_CONVERGENCE_CONVERGED
-            : norm_b == 0.0
+            : state->norm_b == 0.0
                 ? FULLMAG_FDM_GPU_TRANSPORT_CONVERGENCE_ALGEBRAIC_FAILURE
                 : FULLMAG_FDM_GPU_TRANSPORT_CONVERGENCE_MAX_ITERATIONS;
+        metrics->debug_rho = 0.0;
+        metrics->debug_denominator = 1.0;
     }
-    __syncthreads();
-    if (reason == FULLMAG_FDM_GPU_TRANSPORT_CONVERGENCE_MAX_ITERATIONS) {
-        device_galerkin_amg_vcycle(r, z, fine_tmp, coarse_rhs, coarse_x, coarse_tmp,
-                                   diag, gx, gy, gz, aggregate, coarse_diag,
-                                   coarse_edge_a, coarse_edge_b, coarse_edge_weight,
-                                   hierarchy->coarse_cells, hierarchy->edge_count, nx, ny, nz);
-        if (zero_mean && threadIdx.x == 0)
-            project_free_component_means(
-                z, component_labels, component_anchored, component_count, cells);
-        __syncthreads();
-        const double initial_rho = fixed_tree_dot(r, z, cells, tree);
-        if (threadIdx.x == 0) rho = initial_rho;
-        for (uint64_t i = threadIdx.x; i < cells; i += blockDim.x) p[i] = z[i];
-        __syncthreads();
+    grid.sync();
+
+    if (state->reason == FULLMAG_FDM_GPU_TRANSPORT_CONVERGENCE_MAX_ITERATIONS) {
+        device_multilevel_amg_wcycle(amg, active, amg_vecs, grid);
+        if (zero_mean && free_count > 0u) {
+            project_free_component_means_coop(
+                z, component_labels, free_component_ids, free_component_sizes,
+                free_count, cells, partials, &state->scalar0, shared, grid);
+        }
+        const double initial_rho = deterministic_dot_coop(
+            r, z, cells, partials, &state->scalar0, shared, grid);
+        if (grid.thread_rank() == 0) state->rho = initial_rho;
+        for (uint64_t i = grid.thread_rank(); i < cells; i += grid.size()) p[i] = z[i];
+        grid.sync();
+
         for (uint64_t iteration = 0; iteration < max_iterations; ++iteration) {
-            for (uint64_t i = threadIdx.x; i < cells; i += blockDim.x)
-                ap[i] = apply_row(i, p, diag, gx, gy, gz, nx, ny, nz);
-            __syncthreads();
-            if (zero_mean && threadIdx.x == 0)
-                project_free_component_means(
-                    ap, component_labels, component_anchored, component_count, cells);
-            __syncthreads();
-            const double denominator = fixed_tree_dot(p, ap, cells, tree);
-            if (threadIdx.x == 0) {
-                alpha = rho / denominator;
-                metrics->debug_rho = rho;
-                metrics->debug_denominator = denominator;
-                if (!isfinite(alpha) || denominator <= 0.0)
-                    reason = FULLMAG_FDM_GPU_TRANSPORT_CONVERGENCE_ALGEBRAIC_FAILURE;
+            for (uint64_t i = grid.thread_rank(); i < cells; i += grid.size())
+                ap[i] = apply_level_row(i, p, fine);
+            grid.sync();
+            if (zero_mean && free_count > 0u) {
+                project_free_component_means_coop(
+                    ap, component_labels, free_component_ids, free_component_sizes,
+                    free_count, cells, partials, &state->scalar0, shared, grid);
             }
-            __syncthreads();
-            if (reason == FULLMAG_FDM_GPU_TRANSPORT_CONVERGENCE_ALGEBRAIC_FAILURE) break;
-            for (uint64_t i = threadIdx.x; i < cells; i += blockDim.x) {
+            const double denominator = deterministic_dot_coop(
+                p, ap, cells, partials, &state->scalar0, shared, grid);
+            if (grid.thread_rank() == 0) {
+                state->alpha = state->rho / denominator;
+                metrics->debug_rho = state->rho;
+                metrics->debug_denominator = denominator;
+                if (!isfinite(state->alpha) || denominator <= 0.0)
+                    state->reason = FULLMAG_FDM_GPU_TRANSPORT_CONVERGENCE_ALGEBRAIC_FAILURE;
+            }
+            grid.sync();
+            if (state->reason == FULLMAG_FDM_GPU_TRANSPORT_CONVERGENCE_ALGEBRAIC_FAILURE)
+                break;
+            const double alpha = state->alpha;
+            for (uint64_t i = grid.thread_rank(); i < cells; i += grid.size()) {
                 potential[i] += alpha * p[i];
                 r[i] -= alpha * ap[i];
             }
-            __syncthreads();
-            if (zero_mean && threadIdx.x == 0) {
-                project_free_component_means(
-                    potential, component_labels, component_anchored, component_count, cells);
-                project_free_component_means(
-                    r, component_labels, component_anchored, component_count, cells);
+            grid.sync();
+            if (zero_mean && free_count > 0u) {
+                project_free_component_means_coop(
+                    potential, component_labels, free_component_ids, free_component_sizes,
+                    free_count, cells, partials, &state->scalar0, shared, grid);
+                project_free_component_means_coop(
+                    r, component_labels, free_component_ids, free_component_sizes,
+                    free_count, cells, partials, &state->scalar0, shared, grid);
             }
-            __syncthreads();
-            const double residual_squared = fixed_tree_dot(r, r, cells, tree);
-            if (threadIdx.x == 0) {
-                completed = iteration + 1;
-                residual_norm = sqrt(residual_squared) / norm_b;
-                if (!isfinite(residual_norm))
-                    reason = FULLMAG_FDM_GPU_TRANSPORT_CONVERGENCE_NON_FINITE;
-                else if (residual_norm <= tolerance)
-                    reason = FULLMAG_FDM_GPU_TRANSPORT_CONVERGENCE_CONVERGED;
+            const double residual_squared = deterministic_dot_coop(
+                r, r, cells, partials, &state->scalar0, shared, grid);
+            if (grid.thread_rank() == 0) {
+                state->completed = iteration + 1;
+                state->residual_norm = sqrt(residual_squared) / state->norm_b;
+                if (!isfinite(state->residual_norm))
+                    state->reason = FULLMAG_FDM_GPU_TRANSPORT_CONVERGENCE_NON_FINITE;
+                else if (state->residual_norm <= tolerance)
+                    state->reason = FULLMAG_FDM_GPU_TRANSPORT_CONVERGENCE_CONVERGED;
             }
-            __syncthreads();
-            if (reason != FULLMAG_FDM_GPU_TRANSPORT_CONVERGENCE_MAX_ITERATIONS) break;
-            device_galerkin_amg_vcycle(r, z, fine_tmp, coarse_rhs, coarse_x, coarse_tmp,
-                                       diag, gx, gy, gz, aggregate, coarse_diag,
-                                       coarse_edge_a, coarse_edge_b, coarse_edge_weight,
-                                       hierarchy->coarse_cells, hierarchy->edge_count, nx, ny, nz);
-            if (zero_mean && threadIdx.x == 0)
-                project_free_component_means(
-                    z, component_labels, component_anchored, component_count, cells);
-            __syncthreads();
-            const double next_rho = fixed_tree_dot(r, z, cells, tree);
-            if (threadIdx.x == 0) {
-                beta = next_rho / rho;
-                rho = next_rho;
+            grid.sync();
+            if (state->reason != FULLMAG_FDM_GPU_TRANSPORT_CONVERGENCE_MAX_ITERATIONS)
+                break;
+            device_multilevel_amg_wcycle(amg, active, amg_vecs, grid);
+            if (zero_mean && free_count > 0u) {
+                project_free_component_means_coop(
+                    z, component_labels, free_component_ids, free_component_sizes,
+                    free_count, cells, partials, &state->scalar0, shared, grid);
             }
-            __syncthreads();
-            for (uint64_t i = threadIdx.x; i < cells; i += blockDim.x)
+            const double next_rho = deterministic_dot_coop(
+                r, z, cells, partials, &state->scalar0, shared, grid);
+            if (grid.thread_rank() == 0) {
+                state->beta = next_rho / state->rho;
+                state->rho = next_rho;
+            }
+            grid.sync();
+            const double beta = state->beta;
+            for (uint64_t i = grid.thread_rank(); i < cells; i += grid.size())
                 p[i] = z[i] + beta * p[i];
-            __syncthreads();
-            if (zero_mean && threadIdx.x == 0)
-                project_free_component_means(
-                    p, component_labels, component_anchored, component_count, cells);
-            __syncthreads();
+            grid.sync();
+            if (zero_mean && free_count > 0u) {
+                project_free_component_means_coop(
+                    p, component_labels, free_component_ids, free_component_sizes,
+                    free_count, cells, partials, &state->scalar0, shared, grid);
+            }
         }
     }
-    if (threadIdx.x == 0) {
-        metrics->iterations = completed;
-        metrics->amg_apply_count = completed +
-            (reason == FULLMAG_FDM_GPU_TRANSPORT_CONVERGENCE_MAX_ITERATIONS ? 1 : 0);
-        metrics->reason = reason;
-        metrics->hierarchy_levels = hierarchy->coarse_cells < cells ? 2 : 1;
+
+    if (grid.thread_rank() == 0) {
+        metrics->iterations = state->completed;
+        metrics->amg_apply_count = state->completed +
+            (state->reason == FULLMAG_FDM_GPU_TRANSPORT_CONVERGENCE_MAX_ITERATIONS ? 1ULL : 0ULL);
+        metrics->reason = state->reason;
+        metrics->hierarchy_levels = hierarchy->level_count;
         metrics->coarse_unknown_count = hierarchy->coarse_cells;
         for (uint32_t byte = 0; byte < 32; ++byte)
             metrics->hierarchy_digest[byte] = hierarchy->digest[byte];
-        metrics->algebraic_residual = residual_norm;
+        metrics->algebraic_residual = state->residual_norm;
+    }
+}
+
+// Builds pinned-cell mask (1 cell per unanchored free component) on GPU.
+__global__ void build_pinned_mask_kernel(
+    uint64_t cells, const uint32_t *free_component_ids,
+    const uint32_t *free_component_count, const uint32_t *component_pin_cell,
+    uint8_t *pinned_mask) {
+    const uint32_t fc = *free_component_count;
+    for (uint32_t k = blockIdx.x * blockDim.x + threadIdx.x; k < fc;
+         k += static_cast<uint32_t>(blockDim.x) * gridDim.x) {
+        const uint32_t comp = free_component_ids[k];
+        const uint32_t pin = component_pin_cell[comp];
+        if (pin < cells) pinned_mask[pin] = 1;
+    }
+}
+
+// Assembles the symmetric lower-triangle CSR of the 7-point FV operator directly
+// on GPU in closed form (zero prefix-sum, zero host transfers).
+__global__ void assemble_cudss_lower_csr_kernel(
+    uint64_t nx, uint64_t ny, uint64_t nz, uint64_t total_nnz,
+    const uint8_t *active, const uint8_t *pinned_mask,
+    const double *diag, const double *gx, const double *gy, const double *gz,
+    int32_t *d_offsets, int32_t *d_columns, double *d_values) {
+    const uint64_t cells = nx * ny * nz;
+    const uint64_t plane = nx * ny;
+    for (uint64_t i = blockIdx.x * blockDim.x + threadIdx.x; i < cells;
+         i += static_cast<uint64_t>(blockDim.x) * gridDim.x) {
+        const uint64_t x = i % nx;
+        const uint64_t yz = i / nx;
+        const uint64_t y = yz % ny;
+        const uint64_t z = yz / ny;
+        const uint64_t before_z = i >= plane ? i - plane : 0;
+        const uint64_t before_y =
+            z * nx * (ny > 0 ? ny - 1 : 0) + (y > 0 ? (y - 1) * nx + x : 0);
+        const uint64_t before_x =
+            (y + ny * z) * (nx > 0 ? nx - 1 : 0) + (x > 0 ? x - 1 : 0);
+        const int32_t row_start = static_cast<int32_t>(i + before_z + before_y + before_x);
+        d_offsets[i] = row_start;
+        if (i + 1 == cells) d_offsets[cells] = static_cast<int32_t>(total_nnz);
+        int32_t pos = row_start;
+        const bool self_active = active[i] != 0;
+        const bool self_pinned = pinned_mask[i] != 0;
+        if (z > 0) {
+            const uint64_t nb = i - plane;
+            d_columns[pos] = static_cast<int32_t>(nb);
+            d_values[pos] = (self_active && !self_pinned && pinned_mask[nb] == 0 && gz[nb] > 0.0)
+                ? -gz[nb] : 0.0;
+            ++pos;
+        }
+        if (y > 0) {
+            const uint64_t nb = i - nx;
+            d_columns[pos] = static_cast<int32_t>(nb);
+            d_values[pos] = (self_active && !self_pinned && pinned_mask[nb] == 0 && gy[nb] > 0.0)
+                ? -gy[nb] : 0.0;
+            ++pos;
+        }
+        if (x > 0) {
+            const uint64_t nb = i - 1;
+            d_columns[pos] = static_cast<int32_t>(nb);
+            d_values[pos] = (self_active && !self_pinned && pinned_mask[nb] == 0 && gx[nb] > 0.0)
+                ? -gx[nb] : 0.0;
+            ++pos;
+        }
+        d_columns[pos] = static_cast<int32_t>(i);
+        d_values[pos] = (!self_active || self_pinned) ? 1.0 : diag[i];
+    }
+}
+
+// Prepares RHS for cuDSS direct solve (projects free-component means if zero_mean,
+// then zeroes pinned rows & inactive cells).
+__global__ void prepare_cudss_rhs_coop_kernel(
+    uint64_t cells, const uint8_t *active, const uint8_t *pinned_mask,
+    const double *rhs, uint32_t gauge_policy,
+    const uint64_t *component_labels, const uint32_t *free_component_ids,
+    const uint64_t *free_component_sizes, const uint32_t *free_component_count_device,
+    double *rhs_eff, double *rhs_pinned, double *partials, DevicePcgState *state) {
+    extern __shared__ double shared[];
+    cg::grid_group grid = cg::this_grid();
+    const bool zero_mean = gauge_policy ==
+        FULLMAG_FDM_GPU_TRANSPORT_GAUGE_POLICY_ZERO_MEAN_PER_FREE_COMPONENT;
+    const uint32_t free_count = *free_component_count_device;
+    for (uint64_t i = grid.thread_rank(); i < cells; i += grid.size())
+        rhs_eff[i] = active[i] != 0 ? rhs[i] : 0.0;
+    grid.sync();
+    if (zero_mean && free_count > 0u) {
+        project_free_component_means_coop(
+            rhs_eff, component_labels, free_component_ids, free_component_sizes,
+            free_count, cells, partials, &state->scalar0, shared, grid);
+    }
+    for (uint64_t i = grid.thread_rank(); i < cells; i += grid.size()) {
+        rhs_pinned[i] = (active[i] != 0 && pinned_mask[i] == 0) ? rhs_eff[i] : 0.0;
+    }
+    grid.sync();
+}
+
+// Post-processes cuDSS direct solution: subtracts free-component means, zeroes inactive
+// cells, and computes exact deterministic FP64 algebraic residual & solve metrics.
+__global__ void finalize_cudss_solution_coop_kernel(
+    CoarseLevel fine, const uint8_t *active, const double *rhs_eff,
+    double tolerance, uint32_t gauge_policy,
+    const uint64_t *component_labels, const uint32_t *free_component_ids,
+    const uint64_t *free_component_sizes, const uint32_t *free_component_count_device,
+    double *potential, double *r, double *partials, DevicePcgState *state,
+    const DeviceHierarchyInfo *hierarchy, DeviceSolveMetrics *metrics) {
+    extern __shared__ double shared[];
+    cg::grid_group grid = cg::this_grid();
+    const uint64_t cells = fine.cells;
+    const bool zero_mean = gauge_policy ==
+        FULLMAG_FDM_GPU_TRANSPORT_GAUGE_POLICY_ZERO_MEAN_PER_FREE_COMPONENT;
+    const uint32_t free_count = *free_component_count_device;
+    for (uint64_t i = grid.thread_rank(); i < cells; i += grid.size()) {
+        if (active[i] == 0) potential[i] = 0.0;
+    }
+    grid.sync();
+    if (zero_mean && free_count > 0u) {
+        project_free_component_means_coop(
+            potential, component_labels, free_component_ids, free_component_sizes,
+            free_count, cells, partials, &state->scalar0, shared, grid);
+    }
+    for (uint64_t i = grid.thread_rank(); i < cells; i += grid.size()) {
+        r[i] = rhs_eff[i] - apply_level_row(i, potential, fine);
+    }
+    grid.sync();
+    if (zero_mean && free_count > 0u) {
+        project_free_component_means_coop(
+            r, component_labels, free_component_ids, free_component_sizes,
+            free_count, cells, partials, &state->scalar0, shared, grid);
+    }
+    uint64_t active_local = 0;
+    for (uint64_t i = grid.thread_rank(); i < cells; i += grid.size())
+        active_local += active[i] != 0 ? 1ULL : 0ULL;
+    const uint64_t active_total = deterministic_grid_sum_u64(
+        active_local, reinterpret_cast<uint64_t *>(partials), &state->active_count,
+        reinterpret_cast<uint64_t *>(shared), grid);
+    const double rhs_norm_sq = deterministic_dot_coop(
+        rhs_eff, rhs_eff, cells, partials, &state->scalar0, shared, grid);
+    const double res_norm_sq = deterministic_dot_coop(
+        r, r, cells, partials, &state->scalar1, shared, grid);
+    if (grid.thread_rank() == 0) {
+        const double norm_b = sqrt(rhs_norm_sq);
+        const double res_norm = norm_b == 0.0
+            ? sqrt(res_norm_sq)
+            : sqrt(res_norm_sq) / norm_b;
+        metrics->fine_unknown_count = active_total;
+        metrics->coarse_unknown_count = hierarchy->coarse_cells;
+        metrics->hierarchy_levels = hierarchy->level_count;
+        for (uint32_t byte = 0; byte < 32; ++byte)
+            metrics->hierarchy_digest[byte] = hierarchy->digest[byte];
+        metrics->iterations = 1;
+        metrics->amg_apply_count = 0;
+        metrics->algebraic_residual = res_norm;
+        metrics->debug_rho = 0.0;
+        metrics->debug_denominator = 1.0;
+        if (!isfinite(res_norm)) {
+            metrics->reason = FULLMAG_FDM_GPU_TRANSPORT_CONVERGENCE_NON_FINITE;
+        } else if (res_norm <= tolerance) {
+            metrics->reason = FULLMAG_FDM_GPU_TRANSPORT_CONVERGENCE_CONVERGED;
+        } else {
+            metrics->reason = FULLMAG_FDM_GPU_TRANSPORT_CONVERGENCE_ALGEBRAIC_FAILURE;
+        }
     }
 }
 
@@ -1065,79 +1978,11 @@ __global__ void validate_candidate_finite_kernel(
             atomicExch(&metrics->candidate_nonfinite, 1u);
 }
 
-__global__ void label_reference_components_kernel(
-    uint64_t nx, uint64_t ny, uint64_t nz, const uint8_t *active,
-    const void *face_payload, uint64_t face_count, uint64_t face_stride,
-    const double *gx, const double *gy, const double *gz, const double *rhs,
-    uint32_t gauge_policy, uint64_t *labels, uint8_t *component_anchored,
-    uint32_t *component_count, uint32_t *invalid) {
-    if (blockIdx.x != 0 || threadIdx.x != 0) return;
-    const uint64_t cells = nx * ny * nz;
-    const uint64_t plane = nx * ny;
-    *component_count = 0;
-    *invalid = 0;
-    for (uint64_t i = 0; i < cells; ++i) labels[i] = UINT64_MAX;
-    uint64_t component = 0;
-    for (uint64_t seed = 0; seed < cells; ++seed) {
-        if (!active[seed] || labels[seed] != UINT64_MAX) continue;
-        labels[seed] = component;
-        bool changed = true;
-        while (changed) {
-            changed = false;
-            for (uint64_t i = 0; i < cells; ++i) {
-                if (!active[i] || labels[i] != UINT64_MAX) continue;
-                const uint64_t x = i % nx;
-                const uint64_t yz = i / nx;
-                const uint64_t y = yz % ny;
-                const uint64_t z = yz / ny;
-                const bool linked =
-                    (x > 0 && gx[i - 1] > 0.0 && labels[i - 1] == component) ||
-                    (x + 1 < nx && gx[i] > 0.0 && labels[i + 1] == component) ||
-                    (y > 0 && gy[i - nx] > 0.0 && labels[i - nx] == component) ||
-                    (y + 1 < ny && gy[i] > 0.0 && labels[i + nx] == component) ||
-                    (z > 0 && gz[i - plane] > 0.0 && labels[i - plane] == component) ||
-                    (z + 1 < nz && gz[i] > 0.0 && labels[i + plane] == component);
-                if (linked) { labels[i] = component; changed = true; }
-            }
-        }
-        bool is_anchored = false;
-        for (uint64_t f = 0; f < face_count; ++f) {
-            uint32_t kind = 0, axis = 0; int32_t side = 0; uint64_t cell = 0;
-            double area = 0.0, value = 0.0;
-            load_charge_face(face_payload, face_stride, f, &kind, &axis, &side,
-                             &cell, &area, &value);
-            if (kind == FULLMAG_FDM_GPU_TRANSPORT_CHARGE_BOUNDARY_VOLTAGE &&
-                cell < cells && labels[cell] == component) is_anchored = true;
-        }
-        component_anchored[component] = is_anchored ? 1 : 0;
-        double rhs_sum = 0.0, rhs_l1 = 0.0;
-        if (!is_anchored) {
-            for (uint64_t i = 0; i < cells; ++i) {
-                if (labels[i] != component) continue;
-                rhs_sum += rhs[i];
-                rhs_l1 += fabs(rhs[i]);
-            }
-            const double tolerance = 64.0 * DBL_EPSILON * rhs_l1;
-            if (gauge_policy ==
-                    FULLMAG_FDM_GPU_TRANSPORT_GAUGE_POLICY_BOUNDARY_REFERENCE_PER_COMPONENT)
-                *invalid = 1;
-            else if (gauge_policy ==
-                     FULLMAG_FDM_GPU_TRANSPORT_GAUGE_POLICY_ZERO_MEAN_PER_FREE_COMPONENT &&
-                     fabs(rhs_sum) > tolerance)
-                *invalid = 2;
-            else if (gauge_policy !=
-                     FULLMAG_FDM_GPU_TRANSPORT_GAUGE_POLICY_ZERO_MEAN_PER_FREE_COMPONENT)
-                *invalid = 1;
-        }
-        ++component;
-    }
-    *component_count = static_cast<uint32_t>(component);
-}
-
 __device__ double integrated_cell_flux(
     uint64_t i, uint64_t nx, uint64_t ny, uint64_t nz,
     double ax, double ay, double az, const double *jx, const double *jy,
     const double *jz, double *scale) {
+    (void)nz;
     const uint64_t x = i % nx;
     const uint64_t yz = i / nx;
     const uint64_t y = yz % ny, z = yz / ny;
@@ -1152,19 +1997,26 @@ __device__ double integrated_cell_flux(
            (jz[fz0 + nx * ny] - jz[fz0]) * az;
 }
 
-__global__ void charge_balance_kernel(
+// Multi-block cooperative physical, component, and electrode flux-balance certification
+// with deterministic FP64 block-tree reductions.
+__global__ void charge_balance_coop_kernel(
     uint64_t nx, uint64_t ny, uint64_t nz, double hx, double hy, double hz,
-    const uint8_t *active, const uint64_t *labels, const double *jx,
-    const double *jy, const double *jz, DeviceSolveMetrics *metrics) {
-    __shared__ double residual_tree[256];
-    __shared__ double scale_tree[256];
-    __shared__ double transverse_tree[256];
-    double local_residual_squared = 0.0;
-    double local_scale_squared = 0.0;
-    double local_transverse = 0.0;
+    const uint8_t *active, const uint64_t *labels, const uint32_t *component_count_device,
+    const double *jx, const double *jy, const double *jz,
+    double *comp_net_scratch, double *comp_scale_scratch,
+    double *partials, DevicePcgState *state, DeviceSolveMetrics *metrics) {
+    extern __shared__ double shared[];
+    cg::grid_group grid = cg::this_grid();
     const double ax = hy * hz, ay = hx * hz, az = hx * hy;
     const uint64_t cells = nx * ny * nz;
-    for (uint64_t i = threadIdx.x; i < cells; i += blockDim.x) {
+    const uint32_t comp_count = *component_count_device;
+
+    double local_res2 = 0.0;
+    double local_scale2 = 0.0;
+    double local_trans = 0.0;
+    double local_c0_net = 0.0;
+    double local_c0_scale = 0.0;
+    for (uint64_t i = grid.thread_rank(); i < cells; i += grid.size()) {
         if (!active[i]) continue;
         const uint64_t x = i % nx;
         const uint64_t yz = i / nx;
@@ -1174,72 +2026,143 @@ __global__ void charge_balance_kernel(
         double scale = 0.0;
         const double net = integrated_cell_flux(
             i, nx, ny, nz, ax, ay, az, jx, jy, jz, &scale);
-        local_residual_squared += net * net;
-        local_scale_squared += scale * scale;
-        local_transverse = fmax(local_transverse, fmax(fabs(jy[fy0]), fabs(jy[fy0 + nx])));
-        local_transverse = fmax(local_transverse, fmax(fabs(jz[fz0]), fabs(jz[fz0 + nx * ny])));
-    }
-    residual_tree[threadIdx.x] = local_residual_squared;
-    scale_tree[threadIdx.x] = local_scale_squared;
-    transverse_tree[threadIdx.x] = local_transverse;
-    __syncthreads();
-    for (uint32_t width = blockDim.x / 2; width != 0; width >>= 1) {
-        if (threadIdx.x < width) {
-            residual_tree[threadIdx.x] += residual_tree[threadIdx.x + width];
-            scale_tree[threadIdx.x] += scale_tree[threadIdx.x + width];
-            transverse_tree[threadIdx.x] = fmax(transverse_tree[threadIdx.x],
-                                                transverse_tree[threadIdx.x + width]);
+        local_res2 += net * net;
+        local_scale2 += scale * scale;
+        local_trans = fmax(local_trans, fmax(fabs(jy[fy0]), fabs(jy[fy0 + nx])));
+        local_trans = fmax(local_trans, fmax(fabs(jz[fz0]), fabs(jz[fz0 + nx * ny])));
+        if (comp_count == 1u && labels[i] == 0) {
+            local_c0_net += net;
+            local_c0_scale += scale;
         }
-        __syncthreads();
     }
-    if (threadIdx.x == 0) {
-        metrics->physical_residual = scale_tree[0] == 0.0
-            ? (residual_tree[0] == 0.0 ? 0.0 : INFINITY)
-            : sqrt(residual_tree[0] / scale_tree[0]);
-        uint64_t component_count = 0;
-        for (uint64_t i = 0; i < cells; ++i)
-            if (active[i] && labels[i] != UINT64_MAX)
-                component_count = component_count > labels[i] + 1
-                    ? component_count : labels[i] + 1;
-        double component_max = 0.0;
-        for (uint64_t component = 0; component < component_count; ++component) {
-            double net_sum = 0.0, component_scale = 0.0;
-            for (uint64_t i = 0; i < cells; ++i) {
-                if (!active[i] || labels[i] != component) continue;
+    const double total_res2 = deterministic_grid_sum(
+        local_res2, partials, &state->scalar0, shared, grid);
+    const double total_scale2 = deterministic_grid_sum(
+        local_scale2, partials, &state->scalar1, shared, grid);
+    const double total_trans = deterministic_grid_max(
+        local_trans, partials, &state->scalar2, shared, grid);
+
+    double component_max = 0.0;
+    if (comp_count == 1u) {
+        const double c0_net = deterministic_grid_sum(
+            local_c0_net, partials, &state->scalar0, shared, grid);
+        const double c0_scale = deterministic_grid_sum(
+            local_c0_scale, partials, &state->scalar1, shared, grid);
+        component_max = c0_scale == 0.0
+            ? (c0_net == 0.0 ? 0.0 : INFINITY)
+            : fabs(c0_net) / c0_scale;
+    } else if (comp_count <= 32u) {
+        for (uint32_t comp = 0; comp < comp_count; ++comp) {
+            double local_net = 0.0, local_scale = 0.0;
+            for (uint64_t i = grid.thread_rank(); i < cells; i += grid.size()) {
+                if (!active[i] || labels[i] != comp) continue;
                 double scale = 0.0;
-                net_sum += integrated_cell_flux(
+                local_net += integrated_cell_flux(
                     i, nx, ny, nz, ax, ay, az, jx, jy, jz, &scale);
-                component_scale += scale;
+                local_scale += scale;
             }
-            const double ratio = component_scale == 0.0
+            const double net_sum = deterministic_grid_sum(
+                local_net, partials, &state->scalar0, shared, grid);
+            const double comp_scale = deterministic_grid_sum(
+                local_scale, partials, &state->scalar1, shared, grid);
+            const double ratio = comp_scale == 0.0
                 ? (net_sum == 0.0 ? 0.0 : INFINITY)
-                : fabs(net_sum) / component_scale;
+                : fabs(net_sum) / comp_scale;
             component_max = fmax(component_max, ratio);
         }
-        metrics->component_balance = component_max;
-        double electrode = 0.0, electrode_scale = 0.0;
-        for (uint64_t z = 0; z < nz; ++z) for (uint64_t y = 0; y < ny; ++y) {
-            const uint64_t left = (nx + 1) * (y + ny * z);
-            const uint64_t right = nx + (nx + 1) * (y + ny * z);
-            electrode += (-jx[left] + jx[right]) * ax;
-            electrode_scale += (fabs(jx[left]) + fabs(jx[right])) * ax;
+    } else {
+        for (uint64_t c = grid.thread_rank(); c < comp_count; c += grid.size()) {
+            comp_net_scratch[c] = 0.0;
+            comp_scale_scratch[c] = 0.0;
         }
-        for (uint64_t z = 0; z < nz; ++z) for (uint64_t x = 0; x < nx; ++x) {
+        grid.sync();
+        for (uint64_t i = grid.thread_rank(); i < cells; i += grid.size()) {
+            if (!active[i]) continue;
+            const uint64_t c = labels[i];
+            if (c >= comp_count) continue;
+            double scale = 0.0;
+            const double net = integrated_cell_flux(
+                i, nx, ny, nz, ax, ay, az, jx, jy, jz, &scale);
+            atomicAdd(comp_net_scratch + c, net);
+            atomicAdd(comp_scale_scratch + c, scale);
+        }
+        grid.sync();
+        double local_cmax = 0.0;
+        for (uint64_t c = grid.thread_rank(); c < comp_count; c += grid.size()) {
+            const double net_sum = comp_net_scratch[c];
+            const double comp_scale = comp_scale_scratch[c];
+            const double ratio = comp_scale == 0.0
+                ? (net_sum == 0.0 ? 0.0 : INFINITY)
+                : fabs(net_sum) / comp_scale;
+            local_cmax = fmax(local_cmax, ratio);
+        }
+        component_max = deterministic_grid_max(
+            local_cmax, partials, &state->scalar0, shared, grid);
+    }
+
+    // Parallel external-face electrode balance.
+    const uint64_t yz_pairs = ny * nz;
+    const uint64_t xz_pairs = nx * nz;
+    const uint64_t xy_pairs = nx * ny;
+    const uint64_t total_pairs = yz_pairs + xz_pairs + xy_pairs;
+    double local_elec = 0.0;
+    double local_elec_scale = 0.0;
+    for (uint64_t idx = grid.thread_rank(); idx < total_pairs; idx += grid.size()) {
+        if (idx < yz_pairs) {
+            const uint64_t y = idx % ny;
+            const uint64_t z = idx / ny;
+            const uint64_t left = (nx + 1) * (y + ny * z);
+            const uint64_t right = nx + left;
+            local_elec += (-jx[left] + jx[right]) * ax;
+            local_elec_scale += (fabs(jx[left]) + fabs(jx[right])) * ax;
+        } else if (idx < yz_pairs + xz_pairs) {
+            const uint64_t k = idx - yz_pairs;
+            const uint64_t x = k % nx;
+            const uint64_t z = k / nx;
             const uint64_t lower = x + nx * ((ny + 1) * z);
             const uint64_t upper = x + nx * (ny + (ny + 1) * z);
-            electrode += (-jy[lower] + jy[upper]) * ay;
-            electrode_scale += (fabs(jy[lower]) + fabs(jy[upper])) * ay;
-        }
-        for (uint64_t y = 0; y < ny; ++y) for (uint64_t x = 0; x < nx; ++x) {
+            local_elec += (-jy[lower] + jy[upper]) * ay;
+            local_elec_scale += (fabs(jy[lower]) + fabs(jy[upper])) * ay;
+        } else {
+            const uint64_t k = idx - yz_pairs - xz_pairs;
+            const uint64_t x = k % nx;
+            const uint64_t y = k / nx;
             const uint64_t back = x + nx * y;
             const uint64_t front = x + nx * (y + ny * nz);
-            electrode += (-jz[back] + jz[front]) * az;
-            electrode_scale += (fabs(jz[back]) + fabs(jz[front])) * az;
+            local_elec += (-jz[back] + jz[front]) * az;
+            local_elec_scale += (fabs(jz[back]) + fabs(jz[front])) * az;
         }
-        metrics->electrode_balance = electrode_scale == 0.0 ? 0.0 : fabs(electrode) / electrode_scale;
-        metrics->debug_transverse_max = transverse_tree[0];
+    }
+    const double total_elec = deterministic_grid_sum(
+        local_elec, partials, &state->scalar0, shared, grid);
+    const double total_elec_scale = deterministic_grid_sum(
+        local_elec_scale, partials, &state->scalar1, shared, grid);
+
+    if (grid.thread_rank() == 0) {
+        metrics->physical_residual = total_scale2 == 0.0
+            ? (total_res2 == 0.0 ? 0.0 : INFINITY)
+            : sqrt(total_res2 / total_scale2);
+        metrics->component_balance = component_max;
+        metrics->electrode_balance =
+            total_elec_scale == 0.0 ? 0.0 : fabs(total_elec) / total_elec_scale;
+        metrics->debug_transverse_max = total_trans;
     }
 }
+
+uint32_t resolve_coop_blocks(
+    const void *kernel, uint64_t work_items, int sm_count, bool allow_multi) {
+    if (!allow_multi || work_items <= kBlock0CellThreshold) return 1u;
+    int active_blocks_per_sm = 0;
+    if (cudaOccupancyMaxActiveBlocksPerMultiprocessor(
+            &active_blocks_per_sm, kernel, kThreads, kThreads * sizeof(double)) != cudaSuccess ||
+        active_blocks_per_sm <= 0) {
+        return 0u;
+    }
+    const uint64_t needed = std::max<uint64_t>(1, (work_items + kThreads - 1) / kThreads);
+    const uint64_t max_resident = static_cast<uint64_t>(active_blocks_per_sm) * sm_count;
+    return static_cast<uint32_t>(std::min<uint64_t>({needed, max_resident, kMaxCoopBlocks}));
+}
+
 } // namespace
 
 uint64_t solve_metrics_bytes() noexcept {
@@ -1262,6 +2185,26 @@ void release(Buffers &buffers) noexcept {
 }
 
 void release(HierarchyCache &cache) noexcept {
+    if (cache.cudss_solver) {
+        destroy_charge_cudss_direct_solver(
+            static_cast<CudssDirectSolver *>(cache.cudss_solver));
+    }
+    if (cache.pinned_mask) (void)cudaFree(cache.pinned_mask);
+    for (uint32_t l = 1; l < kMaxAmgLevels; ++l) {
+        if (l >= 2 && cache.levels[l].diag) (void)cudaFree(cache.levels[l].diag);
+        if (cache.levels[l].gx) (void)cudaFree(cache.levels[l].gx);
+        if (cache.levels[l].gy) (void)cudaFree(cache.levels[l].gy);
+        if (cache.levels[l].gz) (void)cudaFree(cache.levels[l].gz);
+    }
+    if (cache.component_labels) (void)cudaFree(cache.component_labels);
+    if (cache.component_anchored) (void)cudaFree(cache.component_anchored);
+    if (cache.component_pin_cell) (void)cudaFree(cache.component_pin_cell);
+    if (cache.free_component_ids) (void)cudaFree(cache.free_component_ids);
+    if (cache.free_component_sizes) (void)cudaFree(cache.free_component_sizes);
+    if (cache.device_component_count) (void)cudaFree(cache.device_component_count);
+    if (cache.device_free_component_count) (void)cudaFree(cache.device_free_component_count);
+    if (cache.device_has_unanchored) (void)cudaFree(cache.device_has_unanchored);
+    if (cache.device_has_unbalanced_free) (void)cudaFree(cache.device_has_unbalanced_free);
     if (cache.active) (void)cudaFree(cache.active);
     if (cache.conductivity) (void)cudaFree(cache.conductivity);
     if (cache.diag) (void)cudaFree(cache.diag);
@@ -1290,7 +2233,7 @@ uint32_t materialize_static_state(
         release(*buffers);
         return FULLMAG_FDM_GPU_TRANSPORT_ERROR_OUT_OF_MEMORY;
     }
-    constexpr uint32_t threads = 256;
+    constexpr uint32_t threads = kThreads;
     const uint32_t blocks = static_cast<uint32_t>(std::min<uint64_t>(
         (cells + threads - 1) / threads, 65535));
     const auto &mask_view = input.views[0];
@@ -1333,7 +2276,7 @@ uint32_t validate_static_payload_device(
     }
     const auto &mask = input.views[0];
     const auto &faces = input.views[3];
-    constexpr uint32_t threads = 256;
+    constexpr uint32_t threads = kThreads;
     const uint32_t blocks = static_cast<uint32_t>(std::min<uint64_t>(
         (face_count + threads - 1) / threads, 65535));
     validate_static_payload_kernel<<<blocks, threads, 0, input.stream>>>(
@@ -1369,6 +2312,12 @@ uint32_t validate_static_payload_device(
 uint32_t solve_device(const SolveInput &input, SolveOutput *output) noexcept {
     if (output == nullptr || input.hierarchy_cache == nullptr)
         return FULLMAG_FDM_GPU_TRANSPORT_ERROR_INVALID_DESCRIPTOR;
+    const bool use_cudss = charge_cudss_direct_requested();
+    if (use_cudss && !charge_cudss_compiled()) {
+        std::fprintf(stderr,
+                     "FULLMAG_FDM_CHARGE_GPU_DIRECT_SOLVER=cudss requires an FDM GPU build with cuDSS\n");
+        return FULLMAG_FDM_GPU_TRANSPORT_ERROR_UNSUPPORTED;
+    }
     output->transfer_bytes = solve_metrics_bytes() + sizeof(uint32_t);
     const uint64_t nx = input.grid[0], ny = input.grid[1], nz = input.grid[2];
     const uint64_t cells = nx * ny * nz;
@@ -1385,33 +2334,51 @@ uint32_t solve_device(const SolveInput &input, SolveOutput *output) noexcept {
     const bool cache_hit = cache.valid;
     if (cache_hit && cache.cells != cells)
         return FULLMAG_FDM_GPU_TRANSPORT_ERROR_INVALID_STATE;
-    double *r = nullptr, *z = nullptr, *p = nullptr, *ap = nullptr;
-    double *fine_tmp = nullptr, *coarse_rhs = nullptr, *coarse_x = nullptr, *coarse_tmp = nullptr;
-    uint64_t *component_labels = nullptr;
-    uint8_t *component_anchored = nullptr;
-    uint32_t *device_component_count = nullptr;
-    uint32_t *device_gauge_invalid = nullptr;
-    DeviceSolveMetrics *device_metrics = nullptr;
-    auto cleanup = [&]() {
-        if (r) (void)cudaFree(r);
-        if (z) (void)cudaFree(z);
-        if (p) (void)cudaFree(p);
-        if (ap) (void)cudaFree(ap);
-        if (fine_tmp) (void)cudaFree(fine_tmp);
-        if (coarse_rhs) (void)cudaFree(coarse_rhs);
-        if (coarse_x) (void)cudaFree(coarse_x);
-        if (coarse_tmp) (void)cudaFree(coarse_tmp);
-        if (component_labels) (void)cudaFree(component_labels);
-        if (component_anchored) (void)cudaFree(component_anchored);
-        if (device_component_count) (void)cudaFree(device_component_count);
-        if (device_gauge_invalid) (void)cudaFree(device_gauge_invalid);
-        if (device_metrics) (void)cudaFree(device_metrics);
-    };
-    auto alloc = [](void **pointer, uint64_t bytes) {
-        return cudaMalloc(pointer, static_cast<size_t>(bytes)) == cudaSuccess;
-    };
-    const uint64_t fine_bytes = cells * sizeof(double);
-    const uint64_t max_coarse_edges = 3 * cells;
+
+    int device = 0;
+    cudaDeviceProp prop{};
+    if (cudaGetDevice(&device) != cudaSuccess ||
+        cudaGetDeviceProperties(&prop, device) != cudaSuccess)
+        return FULLMAG_FDM_GPU_TRANSPORT_ERROR_CUDA_RUNTIME_ERROR;
+    if (!prop.cooperativeLaunch)
+        return FULLMAG_FDM_GPU_TRANSPORT_ERROR_UNSUPPORTED;
+
+    // Plan multi-level 2x2x2 geometric hierarchy dimensions up front.
+    std::array<uint64_t, kMaxAmgLevels> lvl_nx{}, lvl_ny{}, lvl_nz{}, lvl_cells{};
+    lvl_nx[0] = nx; lvl_ny[0] = ny; lvl_nz[0] = nz; lvl_cells[0] = cells;
+    uint32_t planned_levels = 1;
+    const uint64_t l1_nx = (nx + 1) / 2;
+    const uint64_t l1_ny = (ny + 1) / 2;
+    const uint64_t l1_nz = (nz + 1) / 2;
+    const uint64_t l1_cells = l1_nx * l1_ny * l1_nz;
+    const uint64_t l1_edges =
+        (l1_nx > 1 ? (l1_nx - 1) * l1_ny * l1_nz : 0) +
+        (l1_ny > 1 ? l1_nx * (l1_ny - 1) * l1_nz : 0) +
+        (l1_nz > 1 ? l1_nx * l1_ny * (l1_nz - 1) : 0);
+    if (l1_cells < cells) {
+        lvl_nx[1] = l1_nx; lvl_ny[1] = l1_ny; lvl_nz[1] = l1_nz; lvl_cells[1] = l1_cells;
+        planned_levels = 2;
+        while (planned_levels < kMaxAmgLevels) {
+            const uint32_t prev = planned_levels - 1;
+            if (lvl_nx[prev] <= 2 && lvl_ny[prev] <= 2 && lvl_nz[prev] <= 2) break;
+            const uint64_t nnx = (lvl_nx[prev] + 1) / 2;
+            const uint64_t nny = (lvl_ny[prev] + 1) / 2;
+            const uint64_t nnz = (lvl_nz[prev] + 1) / 2;
+            const uint64_t ncells = nnx * nny * nnz;
+            if (ncells >= lvl_cells[prev]) break;
+            lvl_nx[planned_levels] = nnx;
+            lvl_ny[planned_levels] = nny;
+            lvl_nz[planned_levels] = nnz;
+            lvl_cells[planned_levels] = ncells;
+            ++planned_levels;
+        }
+    }
+    uint64_t total_coarse_cells = 0;
+    for (uint32_t l = 1; l < planned_levels; ++l) total_coarse_cells += lvl_cells[l];
+    const uint64_t agg_chunks = (cells + kHashChunkSize - 1) / kHashChunkSize;
+    const uint64_t edge_chunks = l1_edges > 0 ? (l1_edges + kHashChunkSize - 1) / kHashChunkSize : 0;
+    const uint64_t total_hash_chunks = std::max<uint64_t>(1, agg_chunks + edge_chunks);
+
     auto checked_add = [](uint64_t a, uint64_t b, uint64_t *sum) {
         if (a > UINT64_MAX - b) return false;
         *sum = a + b;
@@ -1422,20 +2389,41 @@ uint32_t solve_device(const SolveInput &input, SolveOutput *output) noexcept {
         *product = value * scale;
         return true;
     };
+
+    const uint64_t fine_bytes = cells * sizeof(double);
+    const uint64_t l1_edge_alloc = std::max<uint64_t>(l1_edges, 1);
+    const uint64_t partials_count = 4 * static_cast<uint64_t>(kMaxCoopBlocks);
     uint64_t workspace_bytes = 0, cache_bytes = 0, candidate_bytes = 0;
-    uint64_t edge_bytes = 0, face_values = 0, face_bytes = 0, interface_bytes = 0,
-             total_peak_bytes = 0;
+    uint64_t coarse_vec_bytes = 0, coarse_op_bytes = 0, edge_bytes = 0;
+    uint64_t comp_cache_bytes = 0, hash_chunk_bytes = 0;
+    uint64_t face_values = 0, face_bytes = 0, interface_bytes = 0, total_peak_bytes = 0;
+
+    uint64_t extra_level_cells = 0;
+    for (uint32_t l = 2; l < planned_levels; ++l) extra_level_cells += lvl_cells[l];
+    const uint64_t l1_stencil_bytes = planned_levels >= 2 ? l1_cells * 3 * sizeof(double) : 0;
+
     const bool sizes_valid =
-        checked_scaled(fine_bytes, 9, &workspace_bytes) &&
-        checked_add(workspace_bytes, cells, &workspace_bytes) &&
-        checked_add(workspace_bytes, sizeof(uint32_t), &workspace_bytes) &&
-        checked_add(workspace_bytes, sizeof(DeviceSolveMetrics) + sizeof(uint32_t),
+        checked_scaled(fine_bytes, 5, &workspace_bytes) &&
+        checked_scaled(total_coarse_cells, 2 * sizeof(double), &coarse_vec_bytes) &&
+        checked_add(workspace_bytes, coarse_vec_bytes, &workspace_bytes) &&
+        checked_add(workspace_bytes, partials_count * sizeof(double), &workspace_bytes) &&
+        checked_add(workspace_bytes, sizeof(DevicePcgState) + sizeof(DeviceSolveMetrics) + sizeof(uint32_t),
                     &workspace_bytes) &&
-        checked_scaled(max_coarse_edges, 3 * sizeof(uint64_t), &edge_bytes) &&
-        checked_scaled(fine_bytes, 10, &cache_bytes) &&
+        checked_scaled(total_hash_chunks, 4 * sizeof(uint64_t), &hash_chunk_bytes) &&
+        checked_add(workspace_bytes, cache_hit ? 0 : hash_chunk_bytes, &workspace_bytes) &&
+        checked_scaled(fine_bytes, 8, &cache_bytes) &&
         checked_add(cache_bytes, cells, &cache_bytes) &&
+        checked_add(cache_bytes, l1_cells * sizeof(double), &cache_bytes) &&
+        checked_add(cache_bytes, cells * sizeof(uint64_t), &cache_bytes) &&
+        checked_scaled(l1_edge_alloc, 2 * sizeof(uint64_t) + sizeof(double), &edge_bytes) &&
         checked_add(cache_bytes, edge_bytes, &cache_bytes) &&
-        checked_add(cache_bytes, sizeof(DeviceHierarchyInfo), &cache_bytes) &&
+        checked_add(cache_bytes, l1_stencil_bytes, &cache_bytes) &&
+        checked_scaled(extra_level_cells, 4 * sizeof(double), &coarse_op_bytes) &&
+        checked_add(cache_bytes, coarse_op_bytes, &cache_bytes) &&
+        checked_scaled(cells, sizeof(uint64_t) + sizeof(uint8_t) + 2 * sizeof(uint32_t) + sizeof(uint64_t) + sizeof(uint8_t),
+                       &comp_cache_bytes) &&
+        checked_add(cache_bytes, comp_cache_bytes, &cache_bytes) &&
+        checked_add(cache_bytes, 4 * sizeof(uint32_t) + sizeof(DeviceHierarchyInfo), &cache_bytes) &&
         checked_add(jx_count, jy_count, &face_values) &&
         checked_add(face_values, jz_count, &face_values) &&
         checked_scaled(face_values, sizeof(double), &face_bytes) &&
@@ -1444,17 +2432,21 @@ uint32_t solve_device(const SolveInput &input, SolveOutput *output) noexcept {
         checked_add(candidate_bytes, cells, &candidate_bytes) &&
         checked_add(candidate_bytes, face_bytes, &candidate_bytes) &&
         checked_add(candidate_bytes, interface_bytes, &candidate_bytes) &&
-        checked_add(input.static_owned_bytes, cache_bytes, &total_peak_bytes) &&
+        checked_add(input.static_owned_bytes, cache_hit ? cache.cached_bytes : cache_bytes,
+                    &total_peak_bytes) &&
         checked_add(total_peak_bytes, candidate_bytes, &total_peak_bytes) &&
         checked_add(total_peak_bytes, workspace_bytes, &total_peak_bytes);
+
     if (!sizes_valid ||
         (input.workspace_limit != 0 && workspace_bytes > input.workspace_limit) ||
         (input.allocator_limit != 0 && total_peak_bytes > input.allocator_limit))
         return FULLMAG_FDM_GPU_TRANSPORT_ERROR_OUT_OF_RESOURCES;
+
     uint64_t required_new_bytes = candidate_bytes;
     if (!checked_add(required_new_bytes, workspace_bytes, &required_new_bytes) ||
         (!cache_hit && !checked_add(required_new_bytes, cache_bytes, &required_new_bytes)))
         return FULLMAG_FDM_GPU_TRANSPORT_ERROR_OUT_OF_RESOURCES;
+
     size_t free_device_bytes = 0, total_device_bytes = 0;
     if (cudaMemGetInfo(&free_device_bytes, &total_device_bytes) != cudaSuccess)
         return FULLMAG_FDM_GPU_TRANSPORT_ERROR_CUDA_RUNTIME_ERROR;
@@ -1465,10 +2457,42 @@ uint32_t solve_device(const SolveInput &input, SolveOutput *output) noexcept {
         ? static_cast<uint64_t>(free_device_bytes) - safety_reserve : 0;
     if (required_new_bytes > usable_device_bytes)
         return FULLMAG_FDM_GPU_TRANSPORT_ERROR_OUT_OF_RESOURCES;
+
+    double *r = nullptr, *z = nullptr, *p = nullptr, *ap = nullptr, *fine_tmp = nullptr;
+    double *coarse_pool = nullptr;
+    double *partials = nullptr;
+    uint64_t *hash_chunks = nullptr;
+    DevicePcgState *pcg_state = nullptr;
+    uint32_t *device_gauge_invalid = nullptr;
+    DeviceSolveMetrics *device_metrics = nullptr;
+    auto cleanup = [&]() {
+        if (r) (void)cudaFree(r);
+        if (z) (void)cudaFree(z);
+        if (p) (void)cudaFree(p);
+        if (ap) (void)cudaFree(ap);
+        if (fine_tmp) (void)cudaFree(fine_tmp);
+        if (coarse_pool) (void)cudaFree(coarse_pool);
+        if (partials) (void)cudaFree(partials);
+        if (hash_chunks) (void)cudaFree(hash_chunks);
+        if (pcg_state) (void)cudaFree(pcg_state);
+        if (device_gauge_invalid) (void)cudaFree(device_gauge_invalid);
+        if (device_metrics) (void)cudaFree(device_metrics);
+    };
+    auto alloc = [](void **pointer, uint64_t bytes) {
+        if (bytes == 0) {
+            *pointer = nullptr;
+            return true;
+        }
+        return cudaMalloc(pointer, static_cast<size_t>(bytes)) == cudaSuccess;
+    };
+
     bool cache_allocated = true;
     if (!cache_hit) {
         cache.cells = cells;
-        cache.coarse_cells = cells;
+        cache.coarse_cells = l1_cells;
+        cache.level_count = planned_levels;
+        cache.level1_edge_count = l1_edges;
+        cache.cached_bytes = cache_bytes;
         cache_allocated =
             alloc(reinterpret_cast<void **>(&cache.active), cells) &&
             alloc(reinterpret_cast<void **>(&cache.conductivity), fine_bytes) &&
@@ -1477,18 +2501,50 @@ uint32_t solve_device(const SolveInput &input, SolveOutput *output) noexcept {
             alloc(reinterpret_cast<void **>(&cache.gx), fine_bytes) &&
             alloc(reinterpret_cast<void **>(&cache.gy), fine_bytes) &&
             alloc(reinterpret_cast<void **>(&cache.gz), fine_bytes) &&
-            alloc(reinterpret_cast<void **>(&cache.coarse_diag), fine_bytes) &&
+            alloc(reinterpret_cast<void **>(&cache.coarse_diag), l1_cells * sizeof(double)) &&
             alloc(reinterpret_cast<void **>(&cache.aggregate), cells * sizeof(uint64_t)) &&
             alloc(reinterpret_cast<void **>(&cache.coarse_edge_a),
-                  max_coarse_edges * sizeof(uint64_t)) &&
+                  l1_edge_alloc * sizeof(uint64_t)) &&
             alloc(reinterpret_cast<void **>(&cache.coarse_edge_b),
-                  max_coarse_edges * sizeof(uint64_t)) &&
+                  l1_edge_alloc * sizeof(uint64_t)) &&
             alloc(reinterpret_cast<void **>(&cache.coarse_edge_weight),
-                  max_coarse_edges * sizeof(double)) &&
+                  l1_edge_alloc * sizeof(double)) &&
             alloc(&cache.hierarchy_info, sizeof(DeviceHierarchyInfo)) &&
             alloc(reinterpret_cast<void **>(&cache.warm_potential), fine_bytes) &&
-            alloc(reinterpret_cast<void **>(&cache.warm_potential_staging), fine_bytes);
+            alloc(reinterpret_cast<void **>(&cache.warm_potential_staging), fine_bytes) &&
+            alloc(reinterpret_cast<void **>(&cache.component_labels), cells * sizeof(uint64_t)) &&
+            alloc(reinterpret_cast<void **>(&cache.component_anchored), cells) &&
+            alloc(reinterpret_cast<void **>(&cache.component_pin_cell), cells * sizeof(uint32_t)) &&
+            alloc(reinterpret_cast<void **>(&cache.free_component_ids), cells * sizeof(uint32_t)) &&
+            alloc(reinterpret_cast<void **>(&cache.free_component_sizes), cells * sizeof(uint64_t)) &&
+            alloc(reinterpret_cast<void **>(&cache.device_component_count), sizeof(uint32_t)) &&
+            alloc(reinterpret_cast<void **>(&cache.device_free_component_count), sizeof(uint32_t)) &&
+            alloc(reinterpret_cast<void **>(&cache.device_has_unanchored), sizeof(uint32_t)) &&
+            alloc(reinterpret_cast<void **>(&cache.device_has_unbalanced_free), sizeof(uint32_t)) &&
+            alloc(reinterpret_cast<void **>(&cache.pinned_mask), cells);
+        if (cache_allocated) {
+            cache.levels[0] = {nx, ny, nz, cells, cache.diag, cache.gx, cache.gy, cache.gz};
+            if (planned_levels >= 2) {
+                cache.levels[1] = {l1_nx, l1_ny, l1_nz, l1_cells,
+                                   cache.coarse_diag, nullptr, nullptr, nullptr};
+                cache_allocated =
+                    alloc(reinterpret_cast<void **>(&cache.levels[1].gx), l1_cells * sizeof(double)) &&
+                    alloc(reinterpret_cast<void **>(&cache.levels[1].gy), l1_cells * sizeof(double)) &&
+                    alloc(reinterpret_cast<void **>(&cache.levels[1].gz), l1_cells * sizeof(double));
+            }
+            for (uint32_t l = 2; l < planned_levels && cache_allocated; ++l) {
+                cache.levels[l] = {lvl_nx[l], lvl_ny[l], lvl_nz[l], lvl_cells[l],
+                                   nullptr, nullptr, nullptr, nullptr};
+                const uint64_t bytes_l = lvl_cells[l] * sizeof(double);
+                cache_allocated =
+                    alloc(reinterpret_cast<void **>(&cache.levels[l].diag), bytes_l) &&
+                    alloc(reinterpret_cast<void **>(&cache.levels[l].gx), bytes_l) &&
+                    alloc(reinterpret_cast<void **>(&cache.levels[l].gy), bytes_l) &&
+                    alloc(reinterpret_cast<void **>(&cache.levels[l].gz), bytes_l);
+            }
+        }
     }
+
     const bool allocated = cache_allocated &&
         alloc(reinterpret_cast<void **>(&candidate.potential), fine_bytes) &&
         alloc(reinterpret_cast<void **>(&candidate.jx), jx_count * sizeof(double)) &&
@@ -1510,12 +2566,10 @@ uint32_t solve_device(const SolveInput &input, SolveOutput *output) noexcept {
         alloc(reinterpret_cast<void **>(&p), fine_bytes) &&
         alloc(reinterpret_cast<void **>(&ap), fine_bytes) &&
         alloc(reinterpret_cast<void **>(&fine_tmp), fine_bytes) &&
-        alloc(reinterpret_cast<void **>(&coarse_rhs), fine_bytes) &&
-        alloc(reinterpret_cast<void **>(&coarse_x), fine_bytes) &&
-        alloc(reinterpret_cast<void **>(&coarse_tmp), fine_bytes) &&
-        alloc(reinterpret_cast<void **>(&component_labels), cells * sizeof(uint64_t)) &&
-        alloc(reinterpret_cast<void **>(&component_anchored), cells) &&
-        alloc(reinterpret_cast<void **>(&device_component_count), sizeof(uint32_t)) &&
+        alloc(reinterpret_cast<void **>(&coarse_pool), coarse_vec_bytes) &&
+        alloc(reinterpret_cast<void **>(&partials), partials_count * sizeof(double)) &&
+        (cache_hit || alloc(reinterpret_cast<void **>(&hash_chunks), hash_chunk_bytes)) &&
+        alloc(reinterpret_cast<void **>(&pcg_state), sizeof(DevicePcgState)) &&
         alloc(reinterpret_cast<void **>(&device_gauge_invalid), sizeof(uint32_t)) &&
         alloc(reinterpret_cast<void **>(&device_metrics), sizeof(DeviceSolveMetrics));
     if (!allocated) {
@@ -1525,18 +2579,21 @@ uint32_t solve_device(const SolveInput &input, SolveOutput *output) noexcept {
         return FULLMAG_FDM_GPU_TRANSPORT_ERROR_OUT_OF_MEMORY;
     }
     if (cudaMemsetAsync(device_metrics, 0, sizeof(DeviceSolveMetrics), input.stream) != cudaSuccess ||
-        cudaMemsetAsync(device_component_count, 0, sizeof(uint32_t), input.stream) != cudaSuccess ||
-        cudaMemsetAsync(device_gauge_invalid, 0, sizeof(uint32_t), input.stream) != cudaSuccess) {
+        cudaMemsetAsync(device_gauge_invalid, 0, sizeof(uint32_t), input.stream) != cudaSuccess ||
+        (!cache_hit &&
+         cudaMemsetAsync(cache.pinned_mask, 0, cells, input.stream) != cudaSuccess)) {
         cleanup();
         release(candidate);
         if (!cache_hit) release(cache);
         return FULLMAG_FDM_GPU_TRANSPORT_ERROR_CUDA_RUNTIME_ERROR;
     }
-    constexpr uint32_t threads = 256;
+
+    constexpr uint32_t threads = kThreads;
     const uint32_t blocks = static_cast<uint32_t>(std::min<uint64_t>((cells + threads - 1) / threads, 65535));
     const auto &mask_view = input.views[0];
     const auto &material_view = input.views[1];
     const auto &face_view = input.views[3];
+
     if (!cache_hit) {
         normalize_charge_payload_kernel<<<blocks, threads, 0, input.stream>>>(
             input.payloads[0], mask_view.byte_stride, mask_view.element_type,
@@ -1548,29 +2605,69 @@ uint32_t solve_device(const SolveInput &input, SolveOutput *output) noexcept {
             face_view.byte_stride, input.payloads[2], input.views[2].element_count,
             input.views[2].byte_stride, cache.diag, cache.rhs, cache.gx, cache.gy,
             cache.gz);
-        const uint64_t coarse_nx = (nx + 1) / 2;
-        const uint64_t coarse_ny = (ny + 1) / 2;
-        const uint64_t coarse_nz = (nz + 1) / 2;
-        const uint64_t coarse_cells = coarse_nx * coarse_ny * coarse_nz;
         const uint32_t coarse_blocks = static_cast<uint32_t>(std::min<uint64_t>(
-            (coarse_cells + threads - 1) / threads, 65535));
+            (l1_cells + threads - 1) / threads, 65535));
         assign_geometric_aggregates_kernel<<<blocks, threads, 0, input.stream>>>(
-            nx, ny, nz, coarse_nx, coarse_ny, cache.aggregate);
+            nx, ny, nz, l1_nx, l1_ny, cache.aggregate);
         build_geometric_rap_kernel<<<coarse_blocks, threads, 0, input.stream>>>(
             cache.active, cache.diag, cache.gx, cache.gy, cache.gz, nx, ny, nz,
             cache.aggregate, cache.coarse_diag, cache.coarse_edge_a, cache.coarse_edge_b,
             cache.coarse_edge_weight,
-            reinterpret_cast<DeviceHierarchyInfo *>(cache.hierarchy_info));
-        finalize_geometric_rap_kernel<<<1, 1, 0, input.stream>>>(
+            cache.level_count >= 2 ? cache.levels[1].gx : nullptr,
+            cache.level_count >= 2 ? cache.levels[1].gy : nullptr,
+            cache.level_count >= 2 ? cache.levels[1].gz : nullptr);
+        for (uint32_t l = 2; l < cache.level_count; ++l) {
+            const uint32_t lvl_blocks = static_cast<uint32_t>(std::min<uint64_t>(
+                (cache.levels[l].cells + threads - 1) / threads, 65535));
+            build_coarse_rap_level_kernel<<<lvl_blocks, threads, 0, input.stream>>>(
+                cache.levels[l - 1], cache.levels[l]);
+        }
+        const uint32_t hash_blocks = static_cast<uint32_t>(std::min<uint64_t>(
+            (total_hash_chunks + threads - 1) / threads, 65535));
+        hash_hierarchy_chunks_kernel<<<hash_blocks, threads, 0, input.stream>>>(
             cache.aggregate, cells, cache.coarse_edge_a, cache.coarse_edge_b,
-            cache.coarse_edge_weight, coarse_nx, coarse_ny, coarse_nz,
+            cache.coarse_edge_weight, l1_edges, agg_chunks, total_hash_chunks, hash_chunks);
+        finalize_geometric_rap_kernel<<<1, 1, 0, input.stream>>>(
+            hash_chunks, total_hash_chunks, l1_nx, l1_ny, l1_nz, l1_edges,
+            cache.level_count,
             reinterpret_cast<DeviceHierarchyInfo *>(cache.hierarchy_info));
+
+        const uint32_t label_blocks = resolve_coop_blocks(
+            reinterpret_cast<const void *>(label_reference_components_coop_kernel),
+            cells, prop.multiProcessorCount, true);
+        if (label_blocks == 0u) {
+            cleanup(); release(candidate); release(cache);
+            return FULLMAG_FDM_GPU_TRANSPORT_ERROR_CUDA_RUNTIME_ERROR;
+        }
+        uint64_t nx_arg = nx, ny_arg = ny, nz_arg = nz;
+        const void *face_payload_arg = input.payloads[3];
+        uint64_t face_count_arg = face_view.element_count;
+        uint64_t face_stride_arg = face_view.byte_stride;
+        auto *aux_u64 = reinterpret_cast<uint64_t *>(r);
+        void *label_args[] = {
+            &nx_arg, &ny_arg, &nz_arg, &cache.active,
+            &face_payload_arg, &face_count_arg, &face_stride_arg,
+            &cache.gx, &cache.gy, &cache.gz, &cache.rhs,
+            &cache.component_labels, &cache.component_anchored, &cache.component_pin_cell,
+            &cache.free_component_ids, &cache.free_component_sizes,
+            &cache.device_component_count, &cache.device_free_component_count,
+            &cache.device_has_unanchored, &cache.device_has_unbalanced_free,
+            &aux_u64, &z, &p, &partials, &pcg_state};
+        if (cudaLaunchCooperativeKernel(
+                reinterpret_cast<void *>(label_reference_components_coop_kernel),
+                label_blocks, kThreads, label_args,
+                kThreads * sizeof(double), input.stream) != cudaSuccess) {
+            cleanup(); release(candidate); release(cache);
+            return FULLMAG_FDM_GPU_TRANSPORT_ERROR_CUDA_RUNTIME_ERROR;
+        }
+        build_pinned_mask_kernel<<<blocks, threads, 0, input.stream>>>(
+            cells, cache.free_component_ids, cache.device_free_component_count,
+            cache.component_pin_cell, cache.pinned_mask);
     }
-    label_reference_components_kernel<<<1, 1, 0, input.stream>>>(
-        nx, ny, nz, cache.active, input.payloads[3], face_view.element_count,
-        face_view.byte_stride, cache.gx, cache.gy, cache.gz, cache.rhs,
-        input.gauge_policy, component_labels, component_anchored,
-        device_component_count, device_gauge_invalid);
+
+    evaluate_gauge_policy_kernel<<<1, 1, 0, input.stream>>>(
+        input.gauge_policy, cache.device_has_unanchored,
+        cache.device_has_unbalanced_free, device_gauge_invalid);
     uint32_t gauge_invalid = 0;
     const cudaError_t gauge_launch = cudaGetLastError();
     if (gauge_launch == cudaSuccess && inject_cuda_failure(
@@ -1612,49 +2709,224 @@ uint32_t solve_device(const SolveInput &input, SolveOutput *output) noexcept {
         if (!cache_hit) release(cache);
         return FULLMAG_FDM_GPU_TRANSPORT_ERROR_CUDA_RUNTIME_ERROR;
     }
-    const bool warm_start_used = cache.warm_valid &&
+
+    const bool warm_start_used = !use_cudss && cache.warm_valid &&
         cache.warm_potential != nullptr && cache.cells == cells &&
         cache.warm_descriptor_revision == input.descriptor_revision &&
         cache.warm_source_revision == input.source_revision;
-    if (cache.warm_valid && !warm_start_used)
+    if (cache.warm_valid && !use_cudss && !warm_start_used)
         cache.warm_valid = false;
-    charge_pcg_device_amg_kernel<<<1, threads, 0, input.stream>>>(
-        cache.active, cache.diag, cache.rhs, cache.gx, cache.gy, cache.gz, nx, ny, nz,
-        0.1 * input.relative_tolerance,
-        input.max_iterations, cache.warm_potential, warm_start_used ? 1u : 0u,
-        input.gauge_policy, component_labels, component_anchored, device_component_count,
-        candidate.potential, r, z, p, ap, fine_tmp,
-        coarse_rhs, coarse_x, coarse_tmp, cache.aggregate, cache.coarse_diag,
-        cache.coarse_edge_a, cache.coarse_edge_b, cache.coarse_edge_weight,
-        reinterpret_cast<const DeviceHierarchyInfo *>(cache.hierarchy_info), device_metrics);
+
+    cudaError_t solver_launch = cudaSuccess;
+    if (use_cudss) {
+        // Lazy factor-once cuDSS direct Cholesky realization on cached operator.
+        if (cache.cudss_solver == nullptr) {
+            const uint64_t lower_nnz = cells +
+                (nx > 1 ? (nx - 1) * ny * nz : 0) +
+                (ny > 1 ? nx * (ny - 1) * nz : 0) +
+                (nz > 1 ? nx * ny * (nz - 1) : 0);
+            if (cells > static_cast<uint64_t>(INT32_MAX) ||
+                lower_nnz > static_cast<uint64_t>(INT32_MAX)) {
+                cleanup(); release(candidate);
+                if (!cache_hit) release(cache);
+                return FULLMAG_FDM_GPU_TRANSPORT_ERROR_OUT_OF_RESOURCES;
+            }
+            const uint64_t csr_bytes =
+                (cells + 1) * sizeof(int32_t) +
+                lower_nnz * (sizeof(int32_t) + sizeof(double));
+            uint64_t with_csr_peak = 0;
+            if (!checked_add(total_peak_bytes, csr_bytes, &with_csr_peak) ||
+                (input.allocator_limit != 0 && with_csr_peak > input.allocator_limit)) {
+                cleanup(); release(candidate);
+                if (!cache_hit) release(cache);
+                return FULLMAG_FDM_GPU_TRANSPORT_ERROR_OUT_OF_RESOURCES;
+            }
+            int32_t *d_offsets = nullptr;
+            int32_t *d_columns = nullptr;
+            double *d_values = nullptr;
+            if (!alloc(reinterpret_cast<void **>(&d_offsets), (cells + 1) * sizeof(int32_t)) ||
+                !alloc(reinterpret_cast<void **>(&d_columns), lower_nnz * sizeof(int32_t)) ||
+                !alloc(reinterpret_cast<void **>(&d_values), lower_nnz * sizeof(double))) {
+                if (d_offsets) (void)cudaFree(d_offsets);
+                if (d_columns) (void)cudaFree(d_columns);
+                if (d_values) (void)cudaFree(d_values);
+                cleanup(); release(candidate);
+                if (!cache_hit) release(cache);
+                return FULLMAG_FDM_GPU_TRANSPORT_ERROR_OUT_OF_MEMORY;
+            }
+            assemble_cudss_lower_csr_kernel<<<blocks, threads, 0, input.stream>>>(
+                nx, ny, nz, lower_nnz, cache.active, cache.pinned_mask,
+                cache.diag, cache.gx, cache.gy, cache.gz,
+                d_offsets, d_columns, d_values);
+            if (cudaGetLastError() != cudaSuccess) {
+                (void)cudaFree(d_offsets);
+                (void)cudaFree(d_columns);
+                (void)cudaFree(d_values);
+                cleanup(); release(candidate);
+                if (!cache_hit) release(cache);
+                return FULLMAG_FDM_GPU_TRANSPORT_ERROR_CUDA_RUNTIME_ERROR;
+            }
+            const uint64_t allocator_remaining = input.allocator_limit != 0
+                ? (input.allocator_limit > with_csr_peak
+                       ? input.allocator_limit - with_csr_peak : 1)
+                : 0;
+            CudssDirectSolver *direct = nullptr;
+            CudssDirectStats stats{};
+            std::string cudss_error;
+            const uint32_t create_status = create_charge_cudss_direct_solver(
+                static_cast<int64_t>(cells), static_cast<int64_t>(lower_nnz),
+                d_offsets, d_columns, d_values, input.stream,
+                allocator_remaining, &direct, &stats, cudss_error);
+            if (create_status != FULLMAG_FDM_GPU_TRANSPORT_ERROR_OK) {
+                (void)cudaFree(d_offsets);
+                (void)cudaFree(d_columns);
+                (void)cudaFree(d_values);
+                std::fprintf(stderr, "charge cuDSS setup failed: %s\n", cudss_error.c_str());
+                cleanup(); release(candidate);
+                if (!cache_hit) release(cache);
+                return create_status;
+            }
+            cache.cudss_solver = direct;
+        }
+        const uint64_t cudss_bytes = charge_cudss_owned_bytes(
+            static_cast<const CudssDirectSolver *>(cache.cudss_solver));
+        (void)checked_add(total_peak_bytes, cudss_bytes, &total_peak_bytes);
+
+        const uint32_t prep_blocks = resolve_coop_blocks(
+            reinterpret_cast<const void *>(prepare_cudss_rhs_coop_kernel),
+            cells, prop.multiProcessorCount, true);
+        const uint32_t fin_blocks = resolve_coop_blocks(
+            reinterpret_cast<const void *>(finalize_cudss_solution_coop_kernel),
+            cells, prop.multiProcessorCount, true);
+        if (prep_blocks == 0u || fin_blocks == 0u) {
+            cleanup(); release(candidate);
+            if (!cache_hit) release(cache);
+            return FULLMAG_FDM_GPU_TRANSPORT_ERROR_CUDA_RUNTIME_ERROR;
+        }
+        uint64_t cells_arg = cells;
+        uint32_t gauge_arg = input.gauge_policy;
+        void *prep_args[] = {
+            &cells_arg, &cache.active, &cache.pinned_mask, &cache.rhs, &gauge_arg,
+            &cache.component_labels, &cache.free_component_ids,
+            &cache.free_component_sizes, &cache.device_free_component_count,
+            &fine_tmp, &p, &partials, &pcg_state};
+        solver_launch = cudaLaunchCooperativeKernel(
+            reinterpret_cast<void *>(prepare_cudss_rhs_coop_kernel),
+            prep_blocks, kThreads, prep_args, kThreads * sizeof(double), input.stream);
+        if (solver_launch == cudaSuccess) {
+            std::string solve_error;
+            const uint32_t solve_status = solve_charge_cudss_direct(
+                static_cast<CudssDirectSolver *>(cache.cudss_solver),
+                input.stream, p, candidate.potential, solve_error);
+            if (solve_status != FULLMAG_FDM_GPU_TRANSPORT_ERROR_OK) {
+                std::fprintf(stderr, "charge cuDSS solve failed: %s\n", solve_error.c_str());
+                cleanup(); release(candidate);
+                if (!cache_hit) release(cache);
+                return solve_status;
+            }
+            CoarseLevel fine_lvl = cache.levels[0];
+            double tol_arg = input.relative_tolerance;
+            const auto *hinfo = reinterpret_cast<const DeviceHierarchyInfo *>(cache.hierarchy_info);
+            void *fin_args[] = {
+                &fine_lvl, &cache.active, &fine_tmp, &tol_arg, &gauge_arg,
+                &cache.component_labels, &cache.free_component_ids,
+                &cache.free_component_sizes, &cache.device_free_component_count,
+                &candidate.potential, &r, &partials, &pcg_state,
+                &hinfo, &device_metrics};
+            solver_launch = cudaLaunchCooperativeKernel(
+                reinterpret_cast<void *>(finalize_cudss_solution_coop_kernel),
+                fin_blocks, kThreads, fin_args, kThreads * sizeof(double), input.stream);
+        }
+    } else {
+        // Multi-block cooperative-groups PCG + multi-level geometric AMG W-cycle.
+        DeviceAmgHierarchy amg{};
+        amg.level_count = cache.level_count;
+        amg.split_level = cache.level_count;
+        for (uint32_t l = 0; l < cache.level_count; ++l) {
+            amg.levels[l] = cache.levels[l];
+            if (amg.split_level == cache.level_count &&
+                amg.levels[l].cells <= kBlock0CellThreshold) {
+                amg.split_level = l;
+            }
+        }
+        DeviceAmgVectors amg_vecs{};
+        double *cursor = coarse_pool;
+        for (uint32_t l = 1; l < cache.level_count; ++l) {
+            amg_vecs.rhs[l] = cursor;
+            cursor += cache.levels[l].cells;
+            amg_vecs.u[l] = cursor;
+            cursor += cache.levels[l].cells;
+        }
+        const uint32_t pcg_blocks = resolve_coop_blocks(
+            reinterpret_cast<const void *>(charge_pcg_device_amg_kernel),
+            cells, prop.multiProcessorCount, true);
+        if (pcg_blocks == 0u) {
+            cleanup(); release(candidate);
+            if (!cache_hit) release(cache);
+            return FULLMAG_FDM_GPU_TRANSPORT_ERROR_CUDA_RUNTIME_ERROR;
+        }
+        double tol_arg = 0.1 * input.relative_tolerance;
+        uint64_t max_iter_arg = input.max_iterations;
+        uint32_t warm_flag = warm_start_used ? 1u : 0u;
+        uint32_t gauge_arg = input.gauge_policy;
+        const auto *hinfo = reinterpret_cast<const DeviceHierarchyInfo *>(cache.hierarchy_info);
+        void *pcg_args[] = {
+            &cache.active, &amg, &amg_vecs, &cache.rhs, &tol_arg, &max_iter_arg,
+            &cache.warm_potential, &warm_flag, &gauge_arg,
+            &cache.component_labels, &cache.free_component_ids,
+            &cache.free_component_sizes, &cache.device_free_component_count,
+            &candidate.potential, &r, &z, &p, &ap, &fine_tmp,
+            &partials, &pcg_state, &hinfo, &device_metrics};
+        solver_launch = cudaLaunchCooperativeKernel(
+            reinterpret_cast<void *>(charge_pcg_device_amg_kernel),
+            pcg_blocks, kThreads, pcg_args, kThreads * sizeof(double), input.stream);
+    }
+
     const uint64_t max_faces = std::max({jx_count, jy_count, jz_count});
     const uint32_t face_blocks = static_cast<uint32_t>(
         std::min<uint64_t>((max_faces + threads - 1) / threads, 65535));
-    reconstruct_charge_flux_kernel<<<face_blocks, threads, 0, input.stream>>>(
-        nx, ny, nz, input.cell_size[0], input.cell_size[1], input.cell_size[2],
-        candidate.active, candidate.conductivity, candidate.potential, input.payloads[3], face_view.element_count,
-        face_view.byte_stride, input.payloads[2], input.views[2].element_count,
-        input.views[2].byte_stride, candidate.jx, candidate.jy, candidate.jz);
-    if (candidate.interface_count != 0) {
-        const uint32_t interface_blocks = static_cast<uint32_t>(std::min<uint64_t>(
-            (candidate.interface_count + threads - 1) / threads, 65535));
-        materialize_interface_traces_kernel<<<interface_blocks, threads, 0, input.stream>>>(
-            static_cast<const fullmag_fdm_gpu_transport_spin_interface_v1 *>(input.payloads[2]),
-            candidate.interface_count, input.views[2].byte_stride, input.cell_size[0],
-            input.cell_size[1], input.cell_size[2],
-            candidate.conductivity, candidate.potential, candidate.jx, candidate.jy,
-            candidate.jz, candidate.interface_from_trace_v, candidate.interface_to_trace_v,
-            candidate.interface_delta_trace_v,
-            candidate.interface_charge_current_density);
+    if (solver_launch == cudaSuccess) {
+        reconstruct_charge_flux_kernel<<<face_blocks, threads, 0, input.stream>>>(
+            nx, ny, nz, input.cell_size[0], input.cell_size[1], input.cell_size[2],
+            candidate.active, candidate.conductivity, candidate.potential, input.payloads[3], face_view.element_count,
+            face_view.byte_stride, input.payloads[2], input.views[2].element_count,
+            input.views[2].byte_stride, candidate.jx, candidate.jy, candidate.jz);
+        if (candidate.interface_count != 0) {
+            const uint32_t interface_blocks = static_cast<uint32_t>(std::min<uint64_t>(
+                (candidate.interface_count + threads - 1) / threads, 65535));
+            materialize_interface_traces_kernel<<<interface_blocks, threads, 0, input.stream>>>(
+                static_cast<const fullmag_fdm_gpu_transport_spin_interface_v1 *>(input.payloads[2]),
+                candidate.interface_count, input.views[2].byte_stride, input.cell_size[0],
+                input.cell_size[1], input.cell_size[2],
+                candidate.conductivity, candidate.potential, candidate.jx, candidate.jy,
+                candidate.jz, candidate.interface_from_trace_v, candidate.interface_to_trace_v,
+                candidate.interface_delta_trace_v,
+                candidate.interface_charge_current_density);
+        }
+        validate_candidate_finite_kernel<<<face_blocks, threads, 0, input.stream>>>(
+            candidate, device_metrics);
+        const uint32_t bal_blocks = resolve_coop_blocks(
+            reinterpret_cast<const void *>(charge_balance_coop_kernel),
+            cells, prop.multiProcessorCount, true);
+        if (bal_blocks == 0u) {
+            solver_launch = cudaErrorInvalidConfiguration;
+        } else {
+            uint64_t nx_arg = nx, ny_arg = ny, nz_arg = nz;
+            double hx_arg = input.cell_size[0], hy_arg = input.cell_size[1], hz_arg = input.cell_size[2];
+            void *bal_args[] = {
+                &nx_arg, &ny_arg, &nz_arg, &hx_arg, &hy_arg, &hz_arg,
+                &candidate.active, &cache.component_labels, &cache.device_component_count,
+                &candidate.jx, &candidate.jy, &candidate.jz,
+                &z, &p, &partials, &pcg_state, &device_metrics};
+            solver_launch = cudaLaunchCooperativeKernel(
+                reinterpret_cast<void *>(charge_balance_coop_kernel),
+                bal_blocks, kThreads, bal_args, kThreads * sizeof(double), input.stream);
+        }
     }
-    validate_candidate_finite_kernel<<<face_blocks, threads, 0, input.stream>>>(
-        candidate, device_metrics);
-    charge_balance_kernel<<<1, threads, 0, input.stream>>>(
-        nx, ny, nz, input.cell_size[0], input.cell_size[1], input.cell_size[2],
-        candidate.active, component_labels, candidate.jx, candidate.jy, candidate.jz,
-        device_metrics);
+
     DeviceSolveMetrics metrics{};
-    const cudaError_t launch_status = cudaGetLastError();
+    const cudaError_t launch_status =
+        solver_launch != cudaSuccess ? solver_launch : cudaGetLastError();
     if (launch_status == cudaSuccess && inject_cuda_failure(
             input.failure_policy, 13)) {
         cleanup(); release(candidate);
@@ -1698,7 +2970,8 @@ uint32_t solve_device(const SolveInput &input, SolveOutput *output) noexcept {
     output->warm_start_used = warm_start_used;
     if (metrics.reason != FULLMAG_FDM_GPU_TRANSPORT_CONVERGENCE_CONVERGED) {
         std::fprintf(stderr,
-                     "charge device PCG failed: reason=%u iterations=%llu residual=%.17g amg_applies=%llu levels=%u rho=%.17g denominator=%.17g\\n",
+                     "charge device solver failed: mode=%s reason=%u iterations=%llu residual=%.17g amg_applies=%llu levels=%u rho=%.17g denominator=%.17g\n",
+                     use_cudss ? "cudss" : "pcg_amg",
                      metrics.reason, static_cast<unsigned long long>(metrics.iterations),
                      metrics.algebraic_residual,
                      static_cast<unsigned long long>(metrics.amg_apply_count),
