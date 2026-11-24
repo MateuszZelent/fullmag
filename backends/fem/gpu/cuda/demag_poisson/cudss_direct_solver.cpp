@@ -2,7 +2,9 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cerrno>
 #include <chrono>
+#include <cstdio>
 #include <cstdlib>
 #include <string>
 #include <utility>
@@ -37,7 +39,89 @@ bool demag_gpu_direct_solver_requested()
 namespace {
 constexpr const char *kCudssUnavailable =
     "FULLMAG_FEM_DEMAG_GPU_DIRECT_SOLVER=cudss requires a FEM GPU build with cuDSS";
+constexpr uint64_t kMinimumBudgetMarginBytes = UINT64_C(512) * 1024 * 1024;
+
+std::string format_bytes(uint64_t bytes)
+{
+    char text[96];
+    std::snprintf(text, sizeof(text), "%.2f GiB (%llu bytes)",
+                  static_cast<double>(bytes) / (1024.0 * 1024.0 * 1024.0),
+                  static_cast<unsigned long long>(bytes));
+    return text;
+}
 } // namespace
+
+bool resolve_demag_cudss_device_budget(
+    uint64_t free_bytes,
+    uint64_t total_bytes,
+    const char *cap_value,
+    GpuDemagCudssDeviceBudget &budget,
+    std::string &error)
+{
+    budget = GpuDemagCudssDeviceBudget{};
+    budget.free_bytes = free_bytes;
+    budget.total_bytes = total_bytes;
+    budget.margin_bytes = std::max(kMinimumBudgetMarginBytes, total_bytes / 20);
+    budget.budget_bytes = free_bytes > budget.margin_bytes ? free_bytes - budget.margin_bytes : 0;
+    std::string cap;
+    if (cap_value != nullptr) {
+        for (const char *c = cap_value; *c != '\0'; ++c) {
+            if (!std::isspace(static_cast<unsigned char>(*c))) {
+                cap.push_back(*c);
+            }
+        }
+    }
+    if (cap.empty()) {
+        return true;
+    }
+    const bool digits_only = std::all_of(cap.begin(), cap.end(), [](char c) {
+        return std::isdigit(static_cast<unsigned char>(c)) != 0;
+    });
+    errno = 0;
+    const unsigned long long parsed = digits_only ? std::strtoull(cap.c_str(), nullptr, 10) : 0;
+    if (!digits_only || errno == ERANGE || parsed == 0) {
+        error = std::string(kDemagCudssDeviceBudgetCapEnv) +
+                " must be a positive integer number of bytes, got '" + cap_value + "'";
+        return false;
+    }
+    budget.cap_bytes = static_cast<uint64_t>(parsed);
+    budget.budget_bytes = std::min(budget.budget_bytes, budget.cap_bytes);
+    return true;
+}
+
+bool check_demag_cudss_factor_fits(
+    int64_t estimated_device_peak_bytes,
+    const GpuDemagCudssDeviceBudget &budget,
+    int64_t rows,
+    int64_t estimated_factor_nnz,
+    std::string &error)
+{
+    if (estimated_device_peak_bytes <= 0) {
+        error = "cuDSS Poisson demag memory preflight got no device peak estimate "
+                "(CUDSS_DATA_MEMORY_ESTIMATES[1] = " +
+                std::to_string(estimated_device_peak_bytes) +
+                "); the factorization was not started";
+        return false;
+    }
+    if (static_cast<uint64_t>(estimated_device_peak_bytes) <= budget.budget_bytes) {
+        return true;
+    }
+    error = "cuDSS Poisson demag factorization needs an estimated device peak of " +
+            format_bytes(static_cast<uint64_t>(estimated_device_peak_bytes)) +
+            ", above the device budget of " + format_bytes(budget.budget_bytes) +
+            " (free device memory after analysis " + format_bytes(budget.free_bytes) +
+            " minus a margin of " + format_bytes(budget.margin_bytes);
+    if (budget.cap_bytes != 0) {
+        error += ", capped by " + std::string(kDemagCudssDeviceBudgetCapEnv) + "=" +
+                 std::to_string(budget.cap_bytes);
+    }
+    error += "); rows=" + std::to_string(rows) + ", estimated factor nonzeros=" +
+             (estimated_factor_nnz >= 0 ? std::to_string(estimated_factor_nnz)
+                                        : std::string("unavailable")) +
+             ". The factorization was not started. Unset FULLMAG_FEM_DEMAG_GPU_DIRECT_SOLVER "
+             "to use the default CG/AMG solve.";
+    return false;
+}
 
 #if FULLMAG_DEMAG_CUDSS_ACTIVE
 
@@ -201,6 +285,8 @@ bool create_demag_cudss_direct_solver(
     }
     const int64_t n = static_cast<int64_t>(csr.offsets.size()) - 1;
     const int64_t nnz = static_cast<int64_t>(csr.columns.size());
+    stats.rows = n;
+    stats.lower_nnz = nnz;
 
     size_t free_before = 0;
     size_t free_after = 0;
@@ -260,6 +346,40 @@ bool create_demag_cudss_direct_solver(
     }
     stats.analysis_ms = milliseconds_since(phase_start);
 
+    // Memory preflight (docs/physics/0997, eq-direct-memory-budget). Under WDDM
+    // an allocation beyond dedicated memory is paged to host memory instead of
+    // failing, so the factorization runs only when the estimated device peak
+    // fits the budget. In cuDSS 0.8 entries 0/1 are the device stable/peak bytes.
+    size_t written = 0;
+    int64_t memory_estimates[16] = {0};
+    if (!cudss_step(cudssDataGet(owned->handle, owned->data, CUDSS_DATA_MEMORY_ESTIMATES,
+                                 memory_estimates, sizeof(memory_estimates), &written),
+                    "memory estimate query", error)) {
+        error += "; the factorization was not started";
+        return false;
+    }
+    stats.estimated_device_stable_bytes = memory_estimates[0];
+    stats.estimated_device_peak_bytes = memory_estimates[1];
+    int64_t estimated_factor_nnz = -1;
+    if (cudssDataGet(owned->handle, owned->data, CUDSS_DATA_LU_NNZ, &estimated_factor_nnz,
+                     sizeof(estimated_factor_nnz), &written) != CUDSS_STATUS_SUCCESS) {
+        estimated_factor_nnz = -1;
+    }
+    size_t free_after_analysis = 0;
+    if (!cuda_step(cudaMemGetInfo(&free_after_analysis, &total), "memory query", error) ||
+        !resolve_demag_cudss_device_budget(
+            static_cast<uint64_t>(free_after_analysis), static_cast<uint64_t>(total),
+            std::getenv(kDemagCudssDeviceBudgetCapEnv), stats.budget, error) ||
+        !check_demag_cudss_factor_fits(stats.estimated_device_peak_bytes, stats.budget, n,
+                                       estimated_factor_nnz, error)) {
+        char analysis_time[64];
+        std::snprintf(analysis_time, sizeof(analysis_time), " Analysis took %.1f s.",
+                      stats.analysis_ms / 1000.0);
+        error += analysis_time;
+        return false;
+    }
+
+    stats.factorization_started = true;
     phase_start = std::chrono::steady_clock::now();
     if (!cudss_step(cudssExecute(owned->handle, CUDSS_PHASE_FACTORIZATION, owned->config,
                                  owned->data, owned->matrix, owned->solution, owned->rhs),
@@ -270,7 +390,6 @@ bool create_demag_cudss_direct_solver(
     stats.factorization_ms = milliseconds_since(phase_start);
 
     int info = -1;
-    size_t written = 0;
     if (!cudss_step(cudssDataGet(owned->handle, owned->data, CUDSS_DATA_INFO, &info, sizeof(info),
                                  &written),
                     "factorization status query", error)) {
@@ -290,8 +409,6 @@ bool create_demag_cudss_direct_solver(
         return false;
     }
 
-    stats.rows = n;
-    stats.lower_nnz = nnz;
     stats.factor_nnz = factor_nnz;
     stats.device_bytes = free_before > free_after ? static_cast<uint64_t>(free_before - free_after) : 0;
     solver = std::move(owned);

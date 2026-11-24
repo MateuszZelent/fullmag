@@ -1862,6 +1862,32 @@ add_test(
     COMMAND fem_gpu_strict_execution_contract
 )
 
+# Memory preflight of the opt-in cuDSS Poisson solve (docs/physics/0997). The
+# budget arithmetic always runs; the factorization part needs cuDSS and a GPU.
+add_executable(
+    fem_cudss_poisson_budget_contract
+    tests/cudss_poisson_budget_contract.cpp
+)
+target_link_libraries(fem_cudss_poisson_budget_contract PRIVATE fullmag_fem)
+target_include_directories(fem_cudss_poisson_budget_contract PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${CMAKE_CURRENT_SOURCE_DIR}
+)
+if(FULLMAG_FEM_CUDSS_SHIFT_SUPPORTED)
+    target_compile_definitions(fem_cudss_poisson_budget_contract
+        PRIVATE FULLMAG_FEM_CUDSS_POISSON_ENABLED=1)
+    target_link_libraries(fem_cudss_poisson_budget_contract PRIVATE CUDA::cudart)
+    if(TARGET MFEM::mfem)
+        target_link_libraries(fem_cudss_poisson_budget_contract PRIVATE MFEM::mfem)
+    else()
+        target_link_libraries(fem_cudss_poisson_budget_contract PRIVATE mfem)
+    endif()
+endif()
+add_test(
+    NAME fem_cudss_poisson_budget_contract
+    COMMAND fem_cudss_poisson_budget_contract
+)
+
 add_executable(fem_state_io_contract tests/state_io_contract.cpp)
 target_link_libraries(fem_state_io_contract PRIVATE fullmag_fem)
 target_include_directories(fem_state_io_contract PRIVATE

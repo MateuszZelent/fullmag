@@ -230,9 +230,12 @@ bool initialize_demag_poisson_cudss_direct_solver(
     std::fprintf(stderr,
                  "fullmag: FEM GPU Poisson demag uses the cuDSS direct solve "
                  "(FULLMAG_FEM_DEMAG_GPU_DIRECT_SOLVER=cudss): rows=%lld lower_nnz=%lld "
-                 "factor_nnz=%lld device_bytes=%llu analysis_ms=%.1f factorization_ms=%.1f\n",
+                 "factor_nnz=%lld estimated_device_peak_bytes=%lld device_budget_bytes=%llu "
+                 "device_bytes=%llu analysis_ms=%.1f factorization_ms=%.1f\n",
                  static_cast<long long>(stats.rows), static_cast<long long>(stats.lower_nnz),
                  static_cast<long long>(stats.factor_nnz),
+                 static_cast<long long>(stats.estimated_device_peak_bytes),
+                 static_cast<unsigned long long>(stats.budget.budget_bytes),
                  static_cast<unsigned long long>(stats.device_bytes), stats.analysis_ms,
                  stats.factorization_ms);
     workspace.solver_setup_count += 1;
