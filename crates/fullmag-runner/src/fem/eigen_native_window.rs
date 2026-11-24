@@ -1,5 +1,6 @@
 use super::eigen_capability::{
     native_cpu_modal_window_has_floquet_dynamic_demag_path,
+    native_gpu_modal_window_has_floquet_dynamic_demag_path,
     native_shared_domain_cpu_modal_supported,
 };
 use super::eigen_constants::{
@@ -28,7 +29,7 @@ use super::eigen_native_result::{
     diagnostics_number, is_native_poisson_airbox_modal_adapter,
     merge_poisson_airbox_modal_result_diagnostics, native_bloch_floquet_modes_from_typed_result,
     native_modal_modes_from_result_json, native_modal_modes_from_typed_result,
-    normalize_native_window_subwindows,
+    normalize_native_window_subwindows, validate_native_floquet_gpu_result_identity,
 };
 use super::eigen_output::{json_artifact, k_vector_json, requested_mode_indices_for_result};
 use super::eigen_physical_potential::{
@@ -589,7 +590,8 @@ pub(super) fn execute_native_modal_window(
     }
 
     let shared_domain_requested = shared_domain_k0_modal_requested(plan)
-        || native_cpu_modal_window_has_floquet_dynamic_demag_path(plan);
+        || native_cpu_modal_window_has_floquet_dynamic_demag_path(plan)
+        || native_gpu_modal_window_has_floquet_dynamic_demag_path(plan);
     let shared_domain_linearization_state = if shared_domain_requested {
         Some(build_shared_domain_linearization_state(
             plan,
@@ -1046,6 +1048,134 @@ pub(super) fn execute_native_modal_window(
             ),
         });
     }
+    if execution_target == native_fem::NativeModalExecutionTarget::ProductionGpu
+        && native_gpu_modal_window_has_floquet_dynamic_demag_path(plan)
+        && native_interrupted
+    {
+        let native_diagnostics =
+            serde_json::from_str::<serde_json::Value>(&native_result.diagnostics_json).map_err(
+                |error| RunError {
+                    message: format!(
+                        "failed to parse interrupted native Floquet GPU diagnostics JSON: {error}"
+                    ),
+                },
+            )?;
+        if native_diagnostics.get("status").and_then(|value| value.as_str())
+            != Some("interrupted")
+            || native_diagnostics
+                .get("complete")
+                .and_then(serde_json::Value::as_bool)
+                != Some(false)
+        {
+            return Err(RunError {
+                message: "native_gpu_floquet_interruption_status_mismatch".to_string(),
+            });
+        }
+
+
+        let terminal_state = NativeModalTerminalState::resolve(
+            true,
+            NativeModalControlRequest::from_atomic_value(requested_control.load(Ordering::Relaxed)),
+        );
+        let mut solver_diagnostics = native_solver_diagnostics_json_with_expected_digest(
+            plan,
+            &native_result.diagnostics_json,
+            None,
+            None,
+            None,
+        )?;
+        solver_diagnostics["solver_model"] =
+            serde_json::json!("floquet_airbox_gpu_augmented_cudss");
+        solver_diagnostics["resolved_solver_family"] =
+            serde_json::json!("device_resident_block_ritz_shift_invert");
+        solver_diagnostics["spectral_transform"] = serde_json::json!("shift_invert");
+        solver_diagnostics["algebraic_form"] = serde_json::json!("full_coupled_descriptor");
+        solver_diagnostics["matrix_equation"] =
+            serde_json::json!("A x = lambda B x; x = [q, phi]");
+        if let Some(execution) = planned_execution {
+            let resolution = execution.resolution().ok_or_else(|| RunError {
+                message: "planned_fem_eigen_resolution_missing_at_native_boundary".to_string(),
+            })?;
+            let resolved_target = native_result
+                .modal_eigen
+                .as_ref()
+                .map(|result| result.resolved_execution_target);
+            native_fem::validate_planned_modal_execution_attestation(
+                resolution.resolved_engine,
+                execution_target,
+                resolved_target,
+                native_result.resolved_fallback_state,
+                &native_result.resolved_engine_id,
+            )
+            .map_err(|message| RunError { message })?;
+            let attestation = execution.native_attestation(
+                resolved_target,
+                &native_result.resolved_engine_id,
+                native_result.resolved_fallback_state,
+                &native_result.resolved_fallback_reason,
+            );
+            bind_planned_execution_diagnostics(
+                &mut solver_diagnostics,
+                plan,
+                execution,
+                &attestation,
+            )?;
+        }
+        apply_native_modal_terminal_diagnostics(&mut solver_diagnostics, terminal_state)?;
+        let stop_reason = terminal_state.partial_stop_reason().ok_or_else(|| RunError {
+            message: "interrupted native Floquet GPU state is missing a partial stop reason"
+                .to_string(),
+        })?;
+        let auxiliary_artifacts = vec![
+            json_artifact("eigen/diagnostics/solver.v1.json", &solver_diagnostics)?,
+            json_artifact(
+                "eigen/partial.v1.json",
+                &serde_json::json!({
+                    "schema_version": "fem_floquet_modal_partial.v1",
+                    "complete": false,
+                    "stop_reason": stop_reason,
+                    "sample_index": artifact_sample_index,
+                    "preserved_mode_count": 0,
+                }),
+            )?,
+        ];
+        let stats = StepStats {
+            step: relaxation_steps,
+            time: 0.0,
+            dt: 0.0,
+            e_ex: observables.exchange_energy_joules,
+            e_demag: observables.demag_energy_joules,
+            e_ext: observables.external_energy_joules,
+            e_total: observables.total_energy_joules,
+            max_dm_dt: observables.max_rhs_amplitude,
+            max_h_eff: observables.max_effective_field_amplitude,
+            max_h_demag: observables.max_demag_field_amplitude,
+            ..StepStats::default()
+        };
+        let mut provenance = native_gpu_modal_shared_domain_execution_provenance(plan, None);
+        if let Some(execution) = planned_execution {
+            execution.bind_execution_provenance(&mut provenance);
+        }
+        return Ok(ExecutedRun {
+            result: native_modal_run_result(terminal_state.run_status(), stats, equilibrium),
+            initial_magnetization,
+            field_snapshots: Vec::new(),
+            field_snapshot_count: 0,
+            auxiliary_artifacts,
+            provenance,
+        });
+    }
+    if execution_target == native_fem::NativeModalExecutionTarget::ProductionGpu
+        && native_gpu_modal_window_has_floquet_dynamic_demag_path(plan)
+        && !native_interrupted
+    {
+        validate_native_floquet_gpu_result_identity(
+            plan,
+            &native_result.result_json,
+            Some(&native_result.diagnostics_json),
+            native_result.modal_gpu_attestation.as_ref(),
+        )?;
+    }
     if let Some(identity) = open_airbox_boundary_identity.as_ref() {
         let gpu_attestation = native_result.modal_gpu_attestation.as_ref();
         if execution_target == native_fem::NativeModalExecutionTarget::ProductionGpu
@@ -1202,7 +1332,9 @@ pub(super) fn execute_native_modal_window(
                 )
             })
         });
-        if execution_target == native_fem::NativeModalExecutionTarget::ProductionCpu {
+        if execution_target == native_fem::NativeModalExecutionTarget::ProductionCpu
+            || native_gpu_modal_window_has_floquet_dynamic_demag_path(plan)
+        {
             native_modal_modes_from_typed_result(
                 plan,
                 &native_result.result_json,
@@ -2909,10 +3041,23 @@ fn native_poisson_airbox_execution_contract(
     gpu: bool,
 ) -> Result<NativePoissonAirboxExecutionContract, RunError> {
     let floquet_plan = native_cpu_modal_window_has_floquet_dynamic_demag_path(plan);
+    let floquet_gpu_plan = native_gpu_modal_window_has_floquet_dynamic_demag_path(plan);
     if adapter == "floquet_airbox_cpu_schur_slepc" {
         if !floquet_plan {
             return Err(RunError {
                 message: "native_poisson_airbox_floquet_adapter_plan_mismatch".to_string(),
+            });
+        }
+        return Ok(NativePoissonAirboxExecutionContract {
+            magnetostatic_bc: "floquet_airbox",
+            production_periodic_airbox_claim: false,
+            validated_scope: None,
+        });
+    }
+    if adapter == "floquet_airbox_gpu_augmented_cudss" {
+        if !gpu || !floquet_gpu_plan {
+            return Err(RunError {
+                message: "native_poisson_airbox_floquet_gpu_adapter_plan_mismatch".to_string(),
             });
         }
         return Ok(NativePoissonAirboxExecutionContract {
@@ -2961,12 +3106,20 @@ fn native_poisson_airbox_execution_contract(
 fn require_poisson_airbox_gpu_operator(
     adapter: &str,
     attestation: Option<&native_fem::NativeModalGpuAttestation>,
+    interrupted: bool,
 ) -> Result<(), RunError> {
-    let typed = attestation.ok_or_else(|| RunError {
-        message: "k0_poisson_airbox_gpu_attestation_missing".to_string(),
-    })?;
+    let Some(typed) = attestation else {
+        if interrupted && adapter == "floquet_airbox_gpu_augmented_cudss" {
+            return Ok(());
+        }
+        return Err(RunError {
+            message: "k0_poisson_airbox_gpu_attestation_missing".to_string(),
+        });
+    };
     let expected = if adapter == "k0_poisson_airbox_gpu_augmented_cudss" {
         native_fem::NativeModalGpuOperatorKind::AugmentedRobinCudssCuda
+    } else if adapter == "floquet_airbox_gpu_augmented_cudss" {
+        native_fem::NativeModalGpuOperatorKind::AugmentedFloquetCudssCuda
     } else {
         native_fem::NativeModalGpuOperatorKind::MatrixFreeSchurCuda
     };
@@ -2995,13 +3148,23 @@ fn insert_native_poisson_airbox_execution_provenance(
     }
     let gpu = matches!(
         adapter.as_str(),
-        "k0_poisson_airbox_gpu_petsc_slepc" | "k0_poisson_airbox_gpu_modal_device_krylov" | "k0_poisson_airbox_gpu_augmented_cudss"
+        "k0_poisson_airbox_gpu_petsc_slepc"
+            | "k0_poisson_airbox_gpu_modal_device_krylov"
+            | "k0_poisson_airbox_gpu_augmented_cudss"
+            | "floquet_airbox_gpu_augmented_cudss"
     );
     let contract = native_poisson_airbox_execution_contract(plan, &adapter, gpu)?;
     if gpu {
-        require_poisson_airbox_gpu_operator(&adapter, gpu_attestation)?;
+        let interrupted = diagnostics
+            .get("status")
+            .and_then(serde_json::Value::as_str)
+            == Some("interrupted");
+        require_poisson_airbox_gpu_operator(&adapter, gpu_attestation, interrupted)?;
     }
-    let cudss = adapter == "k0_poisson_airbox_gpu_augmented_cudss";
+    let cudss = matches!(
+        adapter.as_str(),
+        "k0_poisson_airbox_gpu_augmented_cudss" | "floquet_airbox_gpu_augmented_cudss"
+    );
 
     let mut requested = diagnostics
         .get("requested_execution")
@@ -3048,7 +3211,11 @@ fn insert_native_poisson_airbox_execution_provenance(
             .entry("engine".to_string())
             .or_insert_with(|| {
                 serde_json::json!(if cudss {
-                    "gpu_cudss_augmented_robin_cuda"
+                    if adapter == "floquet_airbox_gpu_augmented_cudss" {
+                        "gpu_cudss_augmented_floquet_cuda"
+                    } else {
+                        "gpu_cudss_augmented_robin_cuda"
+                    }
                 } else if gpu {
                     "gpu_petsc_slepc_cuda"
                 } else {
@@ -3118,10 +3285,25 @@ fn insert_native_poisson_airbox_hardened_contract(
     if !is_native_poisson_airbox_modal_adapter(Some(adapter.as_str())) {
         return Ok(());
     }
-    let production_implication = diagnostics
+    let floquet_gpu = adapter == "floquet_airbox_gpu_augmented_cudss";
+    let interrupted = diagnostics
+        .get("status")
+        .and_then(serde_json::Value::as_str)
+        == Some("interrupted");
+    let production_implication = !interrupted
+        && diagnostics
         .get("production_implication")
         .and_then(|value| value.as_bool())
         .unwrap_or(false);
+    if floquet_gpu && !production_implication && !interrupted {
+        return Err(RunError {
+            message: "native GPU Floquet diagnostics lack production implication".to_string(),
+        });
+    }
+    if interrupted {
+        diagnostics.insert("production_implication".to_string(), serde_json::json!(false));
+        diagnostics.insert("full_residual_certified".to_string(), serde_json::json!(false));
+    }
     if production_implication {
         let required_string_fields = [
             "assembly_kind",
@@ -3170,11 +3352,22 @@ fn insert_native_poisson_airbox_hardened_contract(
                 });
             }
         }
-        for field in [
+        let mut required_residual_fields = vec![
             "magnetic_block_backward_error",
             "poisson_block_backward_error",
-            "gauge_constraint_backward_error",
-        ] {
+        ];
+        if !floquet_gpu {
+            required_residual_fields.push("gauge_constraint_backward_error");
+        } else if diagnostics
+            .get("gauge_constraint_backward_error")
+            .is_none_or(|value| !value.is_null())
+        {
+            return Err(RunError {
+                message: "native GPU Floquet diagnostics must represent the absent gauge residual as null"
+                    .to_string(),
+            });
+        }
+        for field in required_residual_fields {
             let value = diagnostics_number(diagnostics, field).unwrap_or(f64::NAN);
             if !value.is_finite() || value < 0.0 {
                 return Err(RunError {
@@ -3197,13 +3390,19 @@ fn insert_native_poisson_airbox_hardened_contract(
     }
     let gpu = matches!(
         adapter.as_str(),
-        "k0_poisson_airbox_gpu_petsc_slepc" | "k0_poisson_airbox_gpu_modal_device_krylov" | "k0_poisson_airbox_gpu_augmented_cudss"
+        "k0_poisson_airbox_gpu_petsc_slepc"
+            | "k0_poisson_airbox_gpu_modal_device_krylov"
+            | "k0_poisson_airbox_gpu_augmented_cudss"
+            | "floquet_airbox_gpu_augmented_cudss"
     );
     let contract = native_poisson_airbox_execution_contract(plan, &adapter, gpu)?;
     if gpu {
-        require_poisson_airbox_gpu_operator(&adapter, gpu_attestation)?;
+        require_poisson_airbox_gpu_operator(&adapter, gpu_attestation, interrupted)?;
     }
-    let cudss = adapter == "k0_poisson_airbox_gpu_augmented_cudss";
+    let cudss = matches!(
+        adapter.as_str(),
+        "k0_poisson_airbox_gpu_augmented_cudss" | "floquet_airbox_gpu_augmented_cudss"
+    );
     let cpu_schur = adapter == "k0_poisson_airbox_cpu_schur_slepc";
     let eps_q = diagnostics_number(diagnostics, "magnetic_block_backward_error");
     let eps_phi = diagnostics_number(diagnostics, "poisson_block_backward_error");
@@ -3239,7 +3438,9 @@ fn insert_native_poisson_airbox_hardened_contract(
     let target_omega = diagnostics_number(diagnostics, "target_omega_rad_s")
         .unwrap_or_else(|| native_modal_target_frequency_hz(&plan.target) * std::f64::consts::TAU);
     let requested_device = if gpu { "gpu" } else { "cpu" };
-    let engine = if cudss {
+    let engine = if floquet_gpu {
+        "gpu_cudss_augmented_floquet_cuda"
+    } else if cudss {
         "gpu_cudss_augmented_robin_cuda"
     } else if gpu {
         "gpu_petsc_slepc_cuda"
@@ -3446,8 +3647,10 @@ fn insert_native_poisson_airbox_hardened_contract(
 
 #[cfg(test)]
 mod tests {
-    use super::native_poisson_airbox_execution_contract;
-    use crate::fem::eigen_tests::bounded_open_airbox_k0_execution_plan;
+    use super::{native_poisson_airbox_execution_contract, require_poisson_airbox_gpu_operator};
+    use crate::fem::eigen_tests::{
+        bounded_floquet_gpu_execution_plan, bounded_open_airbox_k0_execution_plan,
+    };
 
     #[test]
     fn native_open_airbox_gpu_contract_never_makes_periodic_validation_claim() {
@@ -3465,6 +3668,60 @@ mod tests {
         assert!(native_poisson_airbox_execution_contract(
             &plan,
             "k0_poisson_airbox_gpu_modal_device_krylov",
+            true,
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn native_floquet_gpu_contract_keeps_signed_k_lane_unqualified() {
+        let plan = bounded_floquet_gpu_execution_plan();
+        let contract = native_poisson_airbox_execution_contract(
+            &plan,
+            "floquet_airbox_gpu_augmented_cudss",
+            true,
+        )
+        .expect("bounded nonzero-k Floquet cuDSS adapter should bind to its plan");
+        assert_eq!(contract.magnetostatic_bc, "floquet_airbox");
+        assert!(!contract.production_periodic_airbox_claim);
+        assert_eq!(contract.validated_scope, None);
+
+        let mut cpu_plan = plan.clone();
+        cpu_plan.target = fullmag_ir::EigenTargetIR::FrequencyWindow {
+            frequency_min_hz: 1.0e8,
+            frequency_max_hz: 5.0e9,
+        };
+        assert!(native_poisson_airbox_execution_contract(
+            &cpu_plan,
+            "floquet_airbox_gpu_augmented_cudss",
+            true,
+        )
+        .is_err());
+        assert!(native_poisson_airbox_execution_contract(
+            &plan,
+            "floquet_airbox_gpu_augmented_cudss",
+            false,
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn unattested_gpu_floquet_is_allowed_only_for_an_interrupted_result() {
+        assert!(require_poisson_airbox_gpu_operator(
+            "floquet_airbox_gpu_augmented_cudss",
+            None,
+            true,
+        )
+        .is_ok());
+        assert!(require_poisson_airbox_gpu_operator(
+            "floquet_airbox_gpu_augmented_cudss",
+            None,
+            false,
+        )
+        .is_err());
+        assert!(require_poisson_airbox_gpu_operator(
+            "k0_poisson_airbox_gpu_augmented_cudss",
+            None,
             true,
         )
         .is_err());

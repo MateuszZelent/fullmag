@@ -288,7 +288,7 @@ wykonanie w runtime wymagają oddzielnych dowodów.
 | $f$ | cyclic frequency | $\mathrm{Hz}$ |
 | $L$ | dynamic restoring operator | $\mathrm{m^3\,s^{-1}}$ |
 | $B_\alpha$ | damped gyrotropic or mass operator | $\mathrm{m^3}$ |
-| $A_{qq}$, $A_{q\phi}$, $A_{\phi q}$, $P$ | descriptor magnetic, coupling and scalar blocks | $\mathrm{m^3\,s^{-1}}$, $\mathrm{m^3\,A^{-1}\,s^{-1}}$, $\mathrm{A\,m}$, $\mathrm{m}$ |
+| $A_{qq}$ | Hermitian magnetic stiffness block in the volume-tested dynamic weak form | $\mathrm{m^3\,s^{-1}}$ |
 | $A_{q\phi}$ | potential-to-magnetic coupling block | $\mathrm{m^3\,A^{-1}\,s^{-1}}$ |
 | $A_{\phi q}$ | magnetic-to-potential coupling block | $\mathrm{A\,m}$ |
 | $P$ | scalar Poisson block | $\mathrm{m}$ |
@@ -296,6 +296,13 @@ wykonanie w runtime wymagają oddzielnych dowodów.
 | $r_q$, $r_\phi$, $r_g$ | original magnetic, scalar and gauge residuals | $\mathrm{m^3\,s^{-1}}$, $\mathrm{A\,m}$, $\mathrm{A\,m^3}$ |
 | $\epsilon_q$, $\epsilon_\phi$, $\epsilon_g$, $\epsilon_{\mathrm{full}}$ | normalized residuals | $1$ |
 | $\operatorname{Re}$, $\exp$, $\mathrm{i}$, $\pi$, $(\cdot)^\mathsf{T}$, $(\cdot)^\mathsf{H}$, $(\cdot)^\ast$, $\cdot$, $\max$ | real part, exponential, imaginary unit, circle constant, transpose, Hermitian transpose, conjugation, contraction and maximum | $1$ |
+| $B_{qq}$ | undamped gyrotropic block of the generalized magnetic pencil | $\mathrm{m^3}$ |
+| $\mu_0$ | vacuum permeability | $\mathrm{T\,m\,A^{-1}}$ |
+| $s$ | operator normalization scale from `operator_scale` | $\mathrm{s\,m^{-3}}$ |
+| $c_\sigma$ | real shift coefficient $s\omega_\sigma$ for the gyrotropic block | $\mathrm{m^{-3}}$ |
+| $\omega_\sigma$ | real shift angular frequency | $\mathrm{rad\,s^{-1}}$ |
+| $f_\sigma$ | real shift cyclic frequency | $\mathrm{Hz}$ |
+| $H_{\sigma,qq}$, $H_{\sigma,q\phi}$, $H_{\sigma,\phi q}$, $H_{\sigma,\phi\phi}$ | scaled augmented shift blocks in the order of {eq}`eq-0828-floquet-gpu-cudss-augmented-shift` | $1$, $\mathrm{A^{-1}}$, $\mathrm{T\,s\,m^{-1}}$, $\mathrm{T\,s\,A^{-1}\,m^{-1}}$ |
 
 (assumptions-and-validity)=
 ## 3. Assumptions and validity
@@ -350,6 +357,115 @@ Potencjał i magnetyzacja zachowują wspólną normalizację i fazę. Weryfikacj
 wymaga porównania masy z referencją, testu faz na szwach, gradientu pola
 liniowego oraz residuali oryginalnego układu po natywnym solve.
 
+(floquet-gpu-cudss-modal-scope)=
+### 4.1.1 Planowany FEM GPU cuDSS: modalne Single-k
+
+Status: wąski adapter natywny i jego fail-closed memory admission są widoczne
+w źródle; integracja routingu Rust, managed runtime i kwalifikacja fizyczna
+pozostają osobnymi bramkami. Dopóki nie przejdą, publiczny status GPU pozostaje
+unsupported i jawne GPU nie może przejść na CPU. Ten opis nie twierdzi parytetu
+z CPU.
+
+Pierwsza realizacja dotyczy istniejącego `StudyIR::Eigenmodes` i dokładnie
+jednego skończonego, niezerowego wektora `KSamplingIR::Single`, zachowując
+jego znak i kolejność składowych. Wymaga jawnego `study.device("gpu",
+precision="double")`, trybu strict, `operator="full_2x2"`, FEM P1/FP64,
+materialowego `alpha=0` i `damping_policy="ignore"`. Istniejące pola
+`FloquetBC`, `magnetostatic_bc="floquet_airbox"` i `study.pbc(...)` niosą
+pełną fazową topologię; nie dodaje się nowego DSL ani pola ProblemIR.
+`KSamplingIR::Path`, także ścieżka z jedną próbką, pozostaje poza zakresem tej
+bramki GPU i nie wymaga teraz zmiany parsera k-path.
+
+Domena magnetyczna i powietrzna muszą być jedną certyfikowaną shared-domain
+siatką. Zestaw żądanych `pair_ids` musi dokładnie odpowiadać kompletnym parom
+siatki i brzegów magnetycznych oraz powietrznych; faza musi zamykać się w
+każdym cyklu naroży/krawędzi, a rama tangentowa zachowuje fizyczną mapę pary.
+Co najmniej jedna faza na aktywnym magnetic seam musi być nietrywialna;
+niezerowy wektor k, który daje wyłącznie fazy równe jedności, nie otwiera tej
+ścieżki. Na nieparowanych otwartych ścianach stosuje się dokładnie warunek
+brzegowy potencjału z bounded CPU FloquetAirbox, w szczególności obsługiwane
+warianty Robin lub Dirichlet. Pure Neumann jest dopuszczalny tylko gdy native
+preflight potwierdzi, że $P$ jest odwracalne (`require_invertible`); w tej
+ścieżce nie dodaje się wektora gauge ani mnożnika. Nieudowodniona
+odwracalność/nullspace kończy plan kontrolowanym błędem.
+
+cuDSS otrzymuje pięć niezmienionych zespolonych bloków z tego samego MFEM
+układu i signed-$\mathbf k$ constraint: $A_{qq}$, $B_{qq}$, $A_{q\phi}$,
+$A_{\phi q}$ i $P$. Dla rzeczywistego shiftu $\omega_\sigma=2\pi f_\sigma$
+normalizacja istniejącego pencil daje $s=\mathrm{operator\_scale}$ oraz
+$c_\sigma=s\omega_\sigma$. Faktoryzowany operator ma postać:
+
+```{math}
+:label: eq-0828-floquet-gpu-cudss-augmented-shift
+H_\sigma(\mathbf k)=
+\begin{bmatrix}
+s A_{qq}(\mathbf k)-\mathrm{i}c_\sigma B_{qq}(\mathbf k) & s A_{q\phi}(\mathbf k)\\
+-s\mu_0 A_{\phi q}(\mathbf k) & -s\mu_0 P(\mathbf k)
+\end{bmatrix},
+\qquad
+s=\mathrm{operator\_scale},\quad
+c_\sigma=s\omega_\sigma,\quad
+\omega_\sigma=2\pi f_\sigma\in\mathbb R.
+```
+
+Jest to warunek użycia hermitowskiej faktoryzacji, a nie zgoda na naprawianie
+wejścia: $A_{qq}$ i $P$ muszą być Hermitian, $B_{qq}$ anti-Hermitian, a
+sprzężenie musi spełniać równoważność skali SI:
+
+```{math}
+:label: eq-0828-floquet-gpu-cudss-block-identities
+A_{qq}^{\mathsf H}=A_{qq},\qquad
+P^{\mathsf H}=P,\qquad
+B_{qq}^{\mathsf H}=-B_{qq},\qquad
+A_{q\phi}=-\mu_0 A_{\phi q}^{\mathsf H}.
+```
+
+Przy rzeczywistym $c_\sigma$ warunki te czynią $H_\sigma$ Hermitowskim.
+Implementacja sprawdza bloki oryginalne i odrzuca niezgodność; nie uśrednia
+$A$ z $A^{\mathsf H}$, nie kopiuje jednego bloku sprzężenia do drugiego i nie
+zmienia fazy, aby wymusić Hermitowskość. $H_\sigma$ jest układem shift dla
+factorization/selected-spectrum, nie zastępuje pencil {eq}`eq-0828-modal-pencil`.
+W projected Rayleigh--Ritz solve cuDSS Cholesky działa na Hermitowskim
+augmentowanym shifted stiffness $H_\sigma$ (po kondensacji projekcji), a nie na
+gyrotropic mass $G$ jako samodzielnym argumencie dodatnio-określonej
+faktoryzacji. Indefiniteness $G$ nie wymaga dodatniej określoności tej metryki;
+warunek anti-Hermitian w {eq}`eq-0828-floquet-gpu-cudss-block-identities`
+nadal jest wymagany dla hermitowskiego shiftu.
+
+Kontrola prognozy pamięci cuDSS po analysis i reserve VRAM jest wspólna z K0;
+szczegóły oraz ograniczenia tej prognozy opisuje {ref}`k0-cudss-memory-budget`
+w nocie [0830](0830-fem-poisson-airbox-modal-eigen.md#k0-cudss-memory-budget).
+Źródłowy cache bezwładności dla dokładnego scaled shift jest lokalny dla
+jednego wywołania okna i nie deklaruje poprawy czasu.
+
+Slice jest konserwatywna i wzajemna: materiał ma dokładnie `alpha=0`,
+`damping_policy="ignore"`, a składowe operatora muszą spełniać wszystkie
+tożsamości hermitowskie poniżej. Nie jest to założenie, by symetryzować
+macierz. Każdy kandydat zachowuje niezależne certyfikaty oryginalnego zespolonego
+równania magnetycznego i równania Poissona z {eq}`eq-0828-original-residual`,
+obok signed wektora $\mathbf k$, konwencji
+$p=\exp(-\mathrm{i}\mathbf k\cdot\Delta\mathbf r)$, fazy/frame seamów i
+ciągłości potencjału. Sam residual przeskalowanego $H_\sigma$ ani residual
+po eliminacji Schura nie wystarcza do publikacji. Niezgodny blok, faza,
+open-face boundary, nullspace, residual lub budżet pamięci kończy wymuszone
+GPU jawnie; fallbacku do CPU nie ma. Limit pamięci jest wspólnym kontraktem
+`CudssModalShift` z noty [0830](0830-fem-poisson-airbox-modal-eigen.md).
+
+Wynik native jest przenoszony przez istniejący typed ABI v18: wektor $q$ ma
+fizyczną, zespoloną reprezentację interleaved, a wynik zachowuje wszystkie
+osiem istniejących pól residuali/flag certyfikatu Floqueta. Wariant operatora
+GPU jest oznaczony w C ABI jako kind 4 i w attestacji jako
+`augmented_floquet_cudss_cuda`; nie wolno opisać go jako ogólnego GPU Krylov
+albo jako adaptera K0.
+
+Kwalifikacja wymaga przypadków in-budget i over-limit oraz kontrolowanego
+małego periodic-cell porównania CPU/GPU dla obu $+\mathbf k$ i $-\mathbf k$.
+Porównuje częstotliwości, profile po fazowym wyrównaniu, seam residuale,
+oryginalne residuale magnetyczny i Poissona, wall time i zmierzone VRAM.
+Dla tego konserwatywnego zakresu test ma sprawdzić wzajemną zgodność obu
+znaków k, ale nie zastępuje niezależnej oceny poprawności fizycznej. Do
+ukończenia managed qualification GPU nie jest deklarowane jako obsługiwane.
+
 ### 4.2 FEM 2.5D waveguide
 
 (waveguide-envelope-contract)=
@@ -371,7 +487,7 @@ FFT peak is not a modal eigenvalue.
 | Solver | Device | Status | Boundary |
 |---|---|---|---|
 | FEM | CPU | source_visible / unvalidated | Natywna assemblacja Floqueta i połączenie sparse SLEPc są obecne w źródłach; wykonanie i fizyka B4–B6 pozostają niezweryfikowane. |
-| FEM | GPU | source_visible / unvalidated | Shared physics is specified; device operator, residency, parity and runtime are not qualified. |
+| FEM | GPU | unsupported; narrow Single-k cuDSS slice source-visible, not qualified | The native adapter and source-level memory gate exist; managed compile/runtime and physical parity remain open, and forced GPU cannot fall back to CPU. |
 | FDM | CPU | not-applicable | This page owns an FEM scalar-potential realization; FDM needs a separate convolution-k owner. |
 | FDM | GPU | not-applicable | This page owns an FEM scalar-potential realization; FDM needs a separate convolution-k owner. |
 
@@ -451,6 +567,37 @@ use the modal stage-first example in
 `0831-fem-dynamic-pencil-modal-response-and-krylov.md` and retain the same
 `pbc` topology, k sampling and Floquet phase contract.
 
+The cuDSS implementation uses a modal request through that existing API. The
+following is the eigenmode-stage fragment for a study whose accepted
+equilibrium and shared-domain P1 mesh have already been prepared; it introduces
+no new Python method or option:
+
+```python
+# %% Existing modal intent for one nonzero signed-k sample
+study.engine("fem")
+study.device("gpu", precision="double")
+study.mode("strict")
+study.stages.add_eigenmodes(
+    count=1,
+    target="nearest",
+    target_frequency=4.0e9,
+    operator="full_2x2",
+    include_demag=True,
+    equilibrium_source="relax",
+    damping_policy="ignore",
+    k_sampling=fm.KPoint("X", (1.0e6, 0.0, 0.0)),
+    bc=fm.FloquetBC(pair_ids=("x_faces", "y_faces")),
+    magnetostatic_bc="floquet_airbox",
+)
+```
+
+The planner admits this strict GPU request when the mesh and boundary
+conditions meet the constraints below. Public `target="nearest"` with a positive `target_frequency`
+lowers through the existing `EigenTargetIR::Nearest` and native
+`target_kind="nearest_frequency"`. `KPoint` lowers to one
+`KSamplingIR::Single`; its signed finite vector is retained. The GPU contract
+accepts no `KSamplingIR::Path`, including a one-sample path.
+
 The relevant existing parameters are:
 
 | Python parameter | Type | Default | SI unit | Validation domain and errors | Meaning | Backend support | ProblemIR destination |
@@ -464,6 +611,19 @@ The relevant existing parameters are:
 | add_frequency_response.magnetostatic_bc | str | open | $1$ | open, periodic_airbox_k0 or floquet_airbox; unsupported combinations fail closed. | Dynamic scalar-potential boundary model. | FEM CPU/GPU authoring; nonzero-k gated | study.magnetostatic_bc. |
 | add_frequency_response.damping_policy | str | ignore | $1$ | ignore or include; invalid values raise ValueError. | Gilbert-damping participation in the pencil. | FEM CPU/GPU authoring; runtime gated | study.damping_policy. |
 | study.pbc(x, y, z, demag, images) | bool axes plus optional image tuple | all false, demag=open, images=None | $1$ and $1$ | The selected axes must span matching periodic seams; `demag` is open, truncated_images or periodic_airbox_k0; invalid combinations raise ValueError. | Declare cell topology and generate the default FEM pair IDs `x_faces`, `y_faces`, `z_faces` before `build_domain_mesh`. | FEM CPU/GPU authoring; Floquet dynamic demag remains gated | study.periodic_boundary_conditions; study.default_mesh.periodic_pair_ids. |
+
+For the modal slice above, the existing fields and their IR destinations are:
+
+| Python parameter | Type | Default | SI unit | Validation domain and errors | Meaning | Backend support | ProblemIR destination |
+|---|---|---|---|---|---|---|---|
+| `add_eigenmodes.target` | `str` | `"lowest"` | $1$ | nearest requires a finite positive target_frequency; other target values raise ValueError. | Select modes nearest one requested frequency. | Existing authoring; the narrow GPU implementation requires managed end-to-end qualification. | study.target.kind |
+| `add_eigenmodes.target_frequency` | `float \| None` | `None` | $\mathrm{Hz}$ | Required and positive for target="nearest". | Requested cyclic frequency for nearest selection. | Existing authoring; the narrow GPU implementation requires managed end-to-end qualification. | study.target.frequency_hz |
+| `add_eigenmodes.operator` | `str` | `"linearized_llg"` | $1$ | full_2x2 is the required operator for this slice. | Full magnetic/scalar-potential modal operator. | Existing authoring; the narrow GPU implementation requires managed end-to-end qualification. | study.operator.kind |
+| `add_eigenmodes.include_demag` | `bool` | `True` | $1$ | Must remain true for this coupled airbox slice. | Include the dynamic demagnetization derivative. | Existing authoring; the narrow GPU implementation requires managed end-to-end qualification. | study.operator.include_demag |
+| `add_eigenmodes.damping_policy` | `str` | `"ignore"` | $1$ | ignore is required; include is outside this Hermitian slice. | Exclude Gilbert damping from the modal pencil. | Existing authoring; the narrow GPU implementation requires managed end-to-end qualification. | study.damping_policy |
+| `add_eigenmodes.k_sampling` | `object \| None` | `None` | $1$ | KPoint or one finite 3-vector is one sample; KPath is rejected by this GPU slice. | Preserve the requested signed Bloch vector. | Existing authoring; GPU Floquet slice is KSamplingIR::Single only. | study.k_sampling |
+| `add_eigenmodes.bc` | `str \| PeriodicBC \| FloquetBC \| dict` | `"free"` | $1$ | Explicit pair IDs must match the complete certified mesh pair sets. | Magnetic seam and phase constraints. | Existing authoring; the narrow GPU implementation requires managed end-to-end qualification. | study.spin_wave_bc |
+| `add_eigenmodes.magnetostatic_bc` | `str` | `"open"` | $1$ | Must be floquet_airbox; non-paired open faces use the existing CPU lane's boundary condition. | Shared-domain complex scalar-potential boundary model. | Existing authoring; the narrow GPU implementation requires managed end-to-end qualification. | study.magnetostatic_bc |
 
 (problem-ir)=
 ## 6. ProblemIR and normalization
@@ -506,6 +666,34 @@ an alias and cannot be supplied together with a non-equivalent sampling. SI
 values remain in rad/m and A/m at the IR boundary. The planner adds resolved
 representation and execution fields to provenance; it must not rewrite
 floquet_airbox to periodic_airbox_k0 or to an isolated airbox.
+
+For natural modes, `Eigenmodes.to_ir` already stores the modal intent in
+`StudyIR::Eigenmodes`. The relevant existing fields are `study.operator`,
+`study.target`, `study.k_sampling`, `study.spin_wave_bc`,
+`study.magnetostatic_bc`, and `study.damping_policy`; the outer
+`problem_meta.runtime_metadata.runtime_selection` preserves requested device,
+precision and strict execution mode. Planner resolution remains separate and
+must record the actual resolved device and engine. The GPU slice adds no
+`ProblemIR` schema field and does not rewrite the requested signed k or
+boundary model.
+
+Its modal portion is represented by the existing schema:
+
+```json
+{
+  "kind": "eigenmodes",
+  "operator": {"kind": "full_2x2", "include_demag": true},
+  "target": {"kind": "nearest", "frequency_hz": 4000000000.0},
+  "k_sampling": {"kind": "single", "k_vector": [1000000.0, 0.0, 0.0]},
+  "spin_wave_bc": {
+    "kind": "floquet",
+    "pair_ids": ["x_faces", "y_faces"],
+    "phase_convention": "exp_minus_i_k_dot_delta_r"
+  },
+  "magnetostatic_bc": "floquet_airbox",
+  "damping_policy": "ignore"
+}
+```
 
 (round-trip-and-failure-semantics)=
 ## 7. Round-trip and failure semantics
@@ -550,14 +738,28 @@ W źródłach istnieją bounded providery, rekonstrukcja potencjału, certyfikac
 algebraiczna oraz publikacja wyników. Połączenie wspólnego operatora
 MFEM z modalnym sparse SLEPc jest zaimplementowane w źródłach CPU.
 Obecna polityka PETSc jest jednoprocesowa; nie stanowi dowodu skalowania MPI.
-Wiersze planned dla 2.5D/GPU pozostają otwarte; żaden wpis nie stanowi kwalifikacji
-pełnego benchmarku COMSOL. Bieżące kryteria wykonania B0–B6 zapisano w
+Źródła zawierają addytywny adapter `floquet_airbox_gpu_augmented_cudss`, engine
+`native_fem.frequency_domain.floquet_airbox_gpu_augmented_cudss.v1`, attestation
+operatora `augmented_floquet_cudss_cuda` oraz C ABI operator kind 4
+`FULLMAG_FEM_MODAL_OPERATOR_AUGMENTED_FLOQUET_CUDSS_CUDA`. Adapter konsumuje
+oryginalne zespolone bloki shared-domain przez augmentowany Hermitian shift;
+nie dodaje publicznej opcji solvera. Source presence nie jest dowodem managed
+kompilacji, routingu, runtime, parytetu ani kwalifikacji. Capability pozostaje
+unsupported, a wymuszone GPU nie może przejść na CPU. Wiersze planned dla 2.5D
+i pozostałych GPU pozostają otwarte; żaden wpis nie stanowi kwalifikacji
+pełnego benchmarku COMSOL. Bieżące kryteria
+wykonania B0–B6 zapisano w
 `docs/superpowers/plans/2026-09-12-eigensolve-dispersion-implementation-status.md`.
 
 | Claim | Lane | Repository path + stable symbol | Responsibility | Evidence status |
 |---|---|---|---|---|
 | Public response stage | common | packages/fullmag-py/src/fullmag/world.py + frequency_response_stage | Capture stage-first frequency, k and boundary intent. | source visible; runtime unvalidated |
 | Response IR | common | packages/fullmag-py/src/fullmag/model/study.py + class FrequencyResponse | Validate and normalize k sampling and magnetostatic boundary. | source visible; source tests exist |
+| Modal Python intent and IR | common | packages/fullmag-py/src/fullmag/model/study.py + class Eigenmodes | Reuse existing Eigenmodes, nearest target, signed single-k, FloquetBC and shared-domain fields; no schema change. | source visible; Python/IR round-trip tests exist |
+| cuDSS Floquet native adapter | FEM GPU | backends/fem/src/frequency_domain/modal_eigen_solver.cpp + `solve_gpu_floquet_shared_domain` | Consume the five original complex shared-domain blocks, preserve signed k, and emit the dedicated adapter/engine/operator identity plus original Floquet certificates. | source visible; managed native test passed, full workflow and physical qualification pending |
+| GPU planner fail-closed gate | FEM GPU | crates/fullmag-plan/src/fem.rs + floquet_airbox_dynamic_demag_gpu_plan_supported | Admit the narrow signed single-k configuration and reject unsupported GPU requests. | source visible; workflow qualification pending |
+| Current execution fail-closed gate | FEM GPU | crates/fullmag-plan/src/fem.rs + resolve_floquet_airbox_dynamic_demag_execution | Resolve the dedicated CUDA engine for supported requests without CPU fallback. | source visible; workflow qualification pending |
+| Current runner adapter gate | FEM GPU | crates/fullmag-runner/src/fem/eigen_capability.rs + native_gpu_modal_window_has_floquet_dynamic_demag_path | Require the matching Floquet mesh, phase and GPU capability. | source visible; workflow qualification pending |
 | Phase contract | common | crates/fullmag-ir/src/eigen_contract.rs + PhaseConventionIR | Preserve exp_minus_i_k_dot_delta_r. | source visible |
 | K-path expansion | common | crates/fullmag-runner/src/eigen/path.rs + expand_k_sampling | Expand declared k points and paths. | source visible; runtime unvalidated |
 | Existing Floquet checks | FEM response | backends/fem/src/frequency_domain/driven_response_solver.cpp + validate_driven_response_floquet_phase_constraints | Check seam phase, frame and cycle consistency. | source visible; nonzero-k demag bridge exists, managed execution and physics unverified |
@@ -589,9 +791,19 @@ The following gates are required before capability promotion:
 8. COMSOL/TetraX comparisons use exported results with exact SI parameters,
    topology, boundary policy, version and mesh; manuals and plots alone are
    not numerical evidence.
-9. CPU/GPU requires device identity, residency, per-k parity, complex residuals
-   and zero fallback. Source presence or a standalone algebra test is not
-   runtime or production qualification.
+9. The cuDSS slice requires an in-budget run and an over-budget refusal before
+   factorization, with stable fail-closed errors and no CPU fallback. Record
+   requested GPU versus resolved engine/device in provenance and attest the
+   actual operator as `augmented_floquet_cudss_cuda`.
+10. On one small shared-domain periodic cell, compare explicit CPU and GPU
+    results at both signed samples $+\mathbf k$ and $-\mathbf k$. Check
+    frequencies, phase-aligned magnetic and scalar profiles, magnetic and
+    Poisson original-equation residuals, complete pair sets, phase/seam
+    constraints, device identity, wall time and measured VRAM. Establish the
+    error budget before the comparison.
+11. Source presence, an isolated algebra test, successful planning or a
+    managed run without those numerical and device artifacts is not runtime
+    or production qualification.
 
 (limitations)=
 ## 10. Limitations and deferred work
@@ -678,6 +890,10 @@ visibility into runtime or physical qualification.
 | Pełny potencjał i gradient | FEM CPU postprocessing | crates/fullmag-runner/src/fem/eigen_physical_potential.rs + physical_potential_artifacts | Rekonstrukcja fazowa oraz gradient elementowy z tą samą skalą co dm | Test rekonstrukcji; pełny benchmark pozostaje wymagany | source visible; runtime unvalidated |
 
 | Natywny modalny sparse Floquet | FEM CPU | backends/fem/cpu/frequency_domain/modal/floquet_modal_solver.cpp + solve_floquet_shared_domain_sparse_modal_spectrum_reusing_context | MatShell Schura, SLEPc i diagnostyka obu układów KSP | Test kontraktu źródłowego; kompilacja testów nieuruchomiona | implemented in source; managed execution and physics NOT VERIFIED |
+| source-floquet-gpu-cudss-contract | FEM GPU planned | docs/physics/0828-fem-frequency-domain-floquet-demag.md + DOC-ANCHOR:floquet-gpu-cudss-modal-scope | Specify the narrow Single-k Hermitian augmented-shift slice; preserve unsupported status pending qualification. | Contract only | planned contract; no runtime evidence |
+| source-floquet-cudss-factorization | FEM GPU | backends/fem/gpu/frequency_domain/modal_augmented_ritz.cu + solve_floquet_airbox_augmented_ritz | Factor the Hermitian augmented shift while retaining the gyrotropic mass as a separate projected block. | Managed native complex pencil test passed | source visible; workflow qualification pending |
+| source-floquet-cudss-memory-admission | FEM GPU planned | docs/physics/0830-fem-poisson-airbox-modal-eigen.md + DOC-ANCHOR:k0-cudss-memory-budget | Specify shared post-analysis cuDSS memory admission for K0 and Floquet. | Contract only | planned contract; runtime pending |
+| source-floquet-cudss-inertia-cache | FEM GPU | backends/fem/gpu/frequency_domain/modal_augmented_window_count.cpp + count_airbox_augmented_window | Reuse successful unperturbed inertia at an exact scaled shift within one solve; make no timing claim. | Managed native contract passed | source visible; workflow qualification pending |
 
 
 | Kontrakt | Realizacja | Plik i symbol | Odpowiedzialność | Dowód | Status |

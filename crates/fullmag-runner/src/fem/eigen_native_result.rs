@@ -7,6 +7,7 @@ use super::eigen_solve::{
 use super::eigen_types::{NativeBlochFloquetDensePayload, SharedDomainModeContext};
 use crate::native_fem::{
     NativeModalComplex64, NativeModalEigenTypedResult, NativeModalGpuAttestation,
+    NativeModalGpuOperatorKind,
 };
 use crate::types::RunError;
 use fullmag_ir::EigenNormalizationIR;
@@ -523,6 +524,8 @@ pub(super) fn normalize_native_window_subwindows(
     diagnostics.remove("executed_subwindows");
 }
 
+const FLOQUET_GPU_CUDSS_ADAPTER: &str = "floquet_airbox_gpu_augmented_cudss";
+
 pub(super) fn merge_poisson_airbox_modal_result_diagnostics(
     diagnostics: &mut serde_json::Map<String, serde_json::Value>,
     result_raw: &str,
@@ -542,8 +545,12 @@ pub(super) fn merge_poisson_airbox_modal_result_diagnostics(
         Some("k0_poisson_airbox_gpu_petsc_slepc")
             | Some("k0_poisson_airbox_gpu_modal_device_krylov")
             | Some("k0_poisson_airbox_gpu_augmented_cudss")
+            | Some(FLOQUET_GPU_CUDSS_ADAPTER)
     );
-    let cudss = solver_adapter == Some("k0_poisson_airbox_gpu_augmented_cudss");
+    let cudss = matches!(
+        solver_adapter,
+        Some("k0_poisson_airbox_gpu_augmented_cudss" | FLOQUET_GPU_CUDSS_ADAPTER)
+    );
     let floquet_cpu_schur = solver_adapter == Some("floquet_airbox_cpu_schur_slepc");
     let cpu_schur =
         floquet_cpu_schur || solver_adapter == Some("k0_poisson_airbox_cpu_schur_slepc");
@@ -873,7 +880,7 @@ fn parse_prefixed_sha256(value: &str) -> Option<[u8; 32]> {
 pub(super) fn is_native_poisson_airbox_modal_adapter(adapter: Option<&str>) -> bool {
     matches!(
         adapter,
-        Some("floquet_airbox_cpu_schur_slepc")
+        Some("floquet_airbox_cpu_schur_slepc" | FLOQUET_GPU_CUDSS_ADAPTER)
             | Some("k0_poisson_airbox_cpu_full_coupled_slepc")
             | Some("k0_poisson_airbox_cpu_schur_slepc")
             | Some("k0_poisson_airbox_gpu_petsc_slepc")
@@ -1047,7 +1054,7 @@ pub(super) fn native_modal_modes_from_typed_result(
     shared_domain_context: Option<&SharedDomainModeContext<'_>>,
 ) -> Result<Vec<NativeModalEigenpair>, RunError> {
     let typed = typed.ok_or_else(|| RunError {
-        message: "native CPU modal result is missing its owned typed ABI v18 buffers".to_string(),
+        message: "native modal result is missing its owned typed ABI v18 buffers".to_string(),
     })?;
     let result = serde_json::from_str::<serde_json::Value>(raw).map_err(|error| RunError {
         message: format!("failed to parse native modal result metadata JSON: {error}"),
@@ -1074,11 +1081,29 @@ fn native_modal_modes_from_result_value(
             message: "native modal result JSON is missing complete modes[] payload".to_string(),
         });
     };
-    let poisson_airbox = is_native_poisson_airbox_modal_adapter(
-        result
-            .get("solver_adapter")
-            .and_then(|value| value.as_str()),
-    );
+    let adapter = result.get("solver_adapter").and_then(serde_json::Value::as_str);
+    let gpu_floquet = adapter == Some(FLOQUET_GPU_CUDSS_ADAPTER);
+    if gpu_floquet {
+        validate_gpu_floquet_result_metadata(plan, result)?;
+        if typed_modes.is_none() || shared_domain_context.is_none() {
+            return Err(RunError {
+                message: "native GPU Floquet requires typed v18 vectors and a shared-domain mass context"
+                    .to_string(),
+            });
+        }
+        if modes.iter().any(|mode| {
+            mode.get("floquet_mode_vector_physical_complex")
+                .and_then(serde_json::Value::as_bool)
+                != Some(true)
+                || mode.get("potential_representation").and_then(serde_json::Value::as_str)
+                    != Some("complex_coefficients")
+        }) {
+            return Err(RunError {
+                message: "native GPU Floquet result requires physical complex q and phi".to_string(),
+            });
+        }
+    }
+    let poisson_airbox = is_native_poisson_airbox_modal_adapter(adapter);
     if typed_modes.is_some() && !poisson_airbox {
         for (index, mode) in modes.iter().enumerate() {
             if !matches!(
@@ -1130,8 +1155,108 @@ fn native_modal_modes_from_result_value(
             }
         })
         .collect::<Result<Vec<_>, _>>()?;
+    if gpu_floquet
+        && modes.iter().any(|mode| {
+            !mode.floquet_full_descriptor_certified
+                || !mode.floquet_seam_frame_certified
+                || !mode.floquet_gauge_policy_satisfied
+        })
+    {
+        return Err(RunError {
+            message: "native GPU Floquet mode lacks a full physical descriptor certificate"
+                .to_string(),
+        });
+    }
     assign_modal_frequency_clusters(&mut modes);
     Ok(modes)
+}
+
+pub(super) fn validate_native_floquet_gpu_result_identity(
+    plan: &FemEigenPlanIR,
+    result_raw: &str,
+    diagnostics_raw: Option<&str>,
+    gpu_attestation: Option<&NativeModalGpuAttestation>,
+) -> Result<(), RunError> {
+    if !gpu_attestation.is_some_and(|attestation| {
+        attestation.operator_kind == NativeModalGpuOperatorKind::AugmentedFloquetCudssCuda
+            && attestation.production_shared_domain
+            && attestation.device_residency_verified
+            && !attestation.validation_only
+    }) {
+        return Err(RunError {
+            message: "native GPU Floquet result requires measured cuDSS Floquet operator identity"
+                .to_string(),
+        });
+    }
+    let result = serde_json::from_str(result_raw).map_err(|error| RunError {
+        message: format!("failed to parse native GPU Floquet result JSON: {error}"),
+    })?;
+    validate_gpu_floquet_result_metadata(plan, &result)?;
+
+    let diagnostics = diagnostics_raw
+        .ok_or_else(|| RunError {
+            message: "native GPU Floquet result is missing production diagnostics".to_string(),
+        })
+        .and_then(|raw| {
+            serde_json::from_str::<serde_json::Value>(raw).map_err(|error| RunError {
+                message: format!("failed to parse native GPU Floquet diagnostics JSON: {error}"),
+            })
+        })?;
+    for key in ["solver_adapter", "execution_lane", "demag_kind", "k_vector_rad_m", "fallback_used"] {
+        if diagnostics.get(key) != result.get(key) {
+            return Err(RunError {
+                message: format!("native GPU Floquet result and diagnostics disagree on {key}"),
+            });
+        }
+    }
+    Ok(())
+}
+
+fn validate_gpu_floquet_result_metadata(
+    plan: &FemEigenPlanIR,
+    result: &serde_json::Value,
+) -> Result<(), RunError> {
+    let Some(fullmag_ir::KSamplingIR::Single { k_vector }) = plan.k_sampling.as_ref() else {
+        return Err(RunError {
+            message: "native GPU Floquet result requires one planned wavevector".to_string(),
+        });
+    };
+    let k_matches = result
+        .get("k_vector_rad_m")
+        .and_then(serde_json::Value::as_array)
+        .is_some_and(|values| {
+            values.len() == k_vector.len()
+                && values
+                    .iter()
+                    .zip(k_vector)
+                    .all(|(value, expected)| value.as_f64() == Some(*expected))
+        });
+    if !k_matches || result.get("k_vector_len").and_then(serde_json::Value::as_u64) != Some(3) {
+        return Err(RunError {
+            message: "native GPU Floquet result signed wavevector differs from the plan".to_string(),
+        });
+    }
+    if result.get("solver_adapter").and_then(serde_json::Value::as_str)
+        != Some(FLOQUET_GPU_CUDSS_ADAPTER)
+        || result.get("status").and_then(serde_json::Value::as_str) != Some("ok")
+        || result.get("complete").and_then(serde_json::Value::as_bool) != Some(true)
+        || result.get("accepted_mode_count").and_then(serde_json::Value::as_u64)
+            != Some(u64::from(plan.count))
+        || result.get("execution_lane").and_then(serde_json::Value::as_str)
+            != Some("production_gpu")
+        || result.get("demag_kind").and_then(serde_json::Value::as_str) != Some("floquet_airbox")
+        || result.get("fallback_used").and_then(serde_json::Value::as_bool) != Some(false)
+        || result.get("cpu_fallback").and_then(serde_json::Value::as_str) != Some("disabled")
+        || result.get("spectrum_completeness").and_then(serde_json::Value::as_str)
+            != Some("selected_only")
+        || result.get("window_complete").and_then(serde_json::Value::as_bool) != Some(false)
+    {
+        return Err(RunError {
+            message: "native GPU Floquet result has incompatible execution or spectrum metadata"
+                .to_string(),
+        });
+    }
+    Ok(())
 }
 
 /// Assign deterministic multiplicity clusters from the accepted spectrum.
@@ -2300,6 +2425,43 @@ pub(super) fn gyrotropic_pencil_residual_norms(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn gpu_floquet_result_metadata_requires_the_signed_wavevector_and_exact_execution() {
+        let mut plan = crate::fem::eigen_tests::minimal_native_modal_plan();
+        plan.count = 1;
+        plan.k_sampling = Some(fullmag_ir::KSamplingIR::Single {
+            k_vector: [0.0, -3.0e6, 0.0],
+        });
+        let result = serde_json::json!({
+            "solver_adapter": FLOQUET_GPU_CUDSS_ADAPTER,
+            "status": "ok",
+            "complete": true,
+            "accepted_mode_count": 1,
+            "execution_lane": "production_gpu",
+            "demag_kind": "floquet_airbox",
+            "k_vector_len": 3,
+            "k_vector_rad_m": [0.0, -3.0e6, 0.0],
+            "fallback_used": false,
+            "cpu_fallback": "disabled",
+            "spectrum_completeness": "selected_only",
+            "window_complete": false,
+        });
+        validate_gpu_floquet_result_metadata(&plan, &result).unwrap();
+
+        for (key, value) in [
+            ("k_vector_rad_m", serde_json::json!([0.0, 3.0e6, 0.0])),
+            ("status", serde_json::json!("interrupted")),
+            ("complete", serde_json::json!(false)),
+            ("accepted_mode_count", serde_json::json!(2)),
+            ("fallback_used", serde_json::json!(true)),
+            ("execution_lane", serde_json::json!("production_cpu")),
+        ] {
+            let mut rejected = result.clone();
+            rejected[key] = value;
+            assert!(validate_gpu_floquet_result_metadata(&plan, &rejected).is_err(), "{key}");
+        }
+    }
 
     fn native_complex(real: f64, imag: f64) -> NativeModalComplex64 {
         NativeModalComplex64 { real, imag }

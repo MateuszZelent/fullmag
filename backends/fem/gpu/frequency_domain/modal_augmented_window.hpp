@@ -3,14 +3,25 @@
 #include "cpu/frequency_domain/poisson_airbox_modal_eigen.hpp"
 #include "gpu/frequency_domain/modal_augmented_ritz.hpp"
 
+#include <array>
 #include <optional>
 #include <vector>
 
 namespace fullmag::fem::frequency_domain {
 inline constexpr char kAugmentedRobinGpuAdapter[] = "k0_poisson_airbox_gpu_augmented_cudss";
+inline constexpr char kAugmentedFloquetGpuAdapter[] = "floquet_airbox_gpu_augmented_cudss";
+
+namespace gpu {
+struct FloquetAirboxAugmentedPencilView;
+} // namespace gpu
 
 FrequencyDomainStatus solve_poisson_airbox_modal_eigen_gpu_augmented_robin(
     const PoissonAirboxEigenBlockProblem &problem, double mu0,
+    PoissonAirboxModalEigenResult *result) noexcept;
+FrequencyDomainStatus solve_floquet_airbox_modal_eigen_gpu_augmented(
+    const PoissonAirboxEigenBlockProblem &problem,
+    const gpu::FloquetAirboxAugmentedPencilView &blocks,
+    const std::array<double, 3> &k_rad_per_m, double mu0,
     PoissonAirboxModalEigenResult *result) noexcept;
 } // namespace fullmag::fem::frequency_domain
 
@@ -43,6 +54,8 @@ struct CertifiedOpenAirboxWindow {
     int negative_at_lower = 0;
     int negative_at_upper = 0;
     std::uint64_t certified_mode_count = 0;
+    std::size_t certified_inertia_factorizations = 0;
+    std::size_t reused_inertia_probes = 0;
     bool truncated_by_requested_count = false;
 };
 
@@ -58,5 +71,10 @@ std::optional<CertifiedOpenAirboxWindow> solve_open_airbox_augmented_window(
 std::optional<CertifiedOpenAirboxWindow> solve_open_airbox_augmented_nearest(
     const PoissonAirboxEigenBlockProblem &problem, double operator_scale,
     double mass_scale, double angular_frequency_scale, double mu0, const char **failure);
+
+std::optional<CertifiedOpenAirboxWindow> solve_floquet_airbox_augmented_nearest(
+    const PoissonAirboxEigenBlockProblem &problem, const FloquetAirboxAugmentedPencilView &blocks,
+    double operator_scale, double mass_scale, double angular_frequency_scale, double mu0,
+    const char **failure);
 
 } // namespace fullmag::fem::frequency_domain::gpu

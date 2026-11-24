@@ -21,6 +21,17 @@ struct OpenAirboxAugmentedPencil {
     double potential_row_scale = 0.0;
 };
 
+// Non-owning view over the original phase-reduced complex Floquet blocks.
+// Their dimensions define q and phi; their values remain owned by the CPU
+// shared-domain assembly result for the duration of assembly/Ritz evaluation.
+struct FloquetAirboxAugmentedPencilView {
+    const PoissonAirboxSharedDomainComplexCsrMatrix &a_qq;
+    const PoissonAirboxSharedDomainComplexCsrMatrix &b_qq;
+    const PoissonAirboxSharedDomainComplexCsrMatrix &p;
+    const PoissonAirboxSharedDomainComplexCsrMatrix &a_qphi;
+    const PoissonAirboxSharedDomainComplexCsrMatrix &a_phiq;
+};
+
 namespace augmented_pencil_detail {
 
 inline bool token_is(const char *value, std::string_view expected) noexcept
@@ -45,6 +56,100 @@ inline bool valid_ordered_csr(const CsrMatrixView &block, std::uint64_t rows, st
         for (auto entry = begin; entry < end; ++entry) {
             if (block.column_indices[entry] >= columns || !std::isfinite(block.values[entry]) ||
                 (entry > begin && block.column_indices[entry - 1] >= block.column_indices[entry])) {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
+inline bool valid_ordered_complex_csr(
+    const PoissonAirboxSharedDomainComplexCsrMatrix &block,
+    std::uint64_t rows,
+    std::uint64_t columns) noexcept
+{
+    if (block.row_count != rows || block.column_count != columns ||
+        block.row_offsets.size() != rows + 1u || block.row_offsets.empty() ||
+        block.row_offsets.front() != 0u ||
+        block.column_indices.size() != block.values.size() ||
+        block.row_offsets.back() != block.values.size()) {
+        return false;
+    }
+    for (std::uint64_t row = 0; row < rows; ++row) {
+        const auto begin = block.row_offsets[static_cast<std::size_t>(row)];
+        const auto end = block.row_offsets[static_cast<std::size_t>(row + 1u)];
+        if (begin > end || end > block.values.size()) {
+            return false;
+        }
+        for (auto entry = begin; entry < end; ++entry) {
+            const auto index = static_cast<std::size_t>(entry);
+            const auto value = block.values[index];
+            if (block.column_indices[index] >= columns ||
+                !std::isfinite(value.real()) || !std::isfinite(value.imag()) ||
+                (entry > begin &&
+                 block.column_indices[index - 1u] >= block.column_indices[index])) {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
+inline std::complex<double> complex_csr_value(
+    const PoissonAirboxSharedDomainComplexCsrMatrix &matrix,
+    std::uint64_t row,
+    std::uint32_t column) noexcept
+{
+    const auto begin = matrix.column_indices.begin() +
+        matrix.row_offsets[static_cast<std::size_t>(row)];
+    const auto end = matrix.column_indices.begin() +
+        matrix.row_offsets[static_cast<std::size_t>(row + 1u)];
+    const auto found = std::lower_bound(begin, end, column);
+    return found != end && *found == column
+        ? matrix.values[static_cast<std::size_t>(found - matrix.column_indices.begin())]
+        : std::complex<double>{};
+}
+
+inline bool complex_csr_adjoint_identity(
+    const PoissonAirboxSharedDomainComplexCsrMatrix &left,
+    const PoissonAirboxSharedDomainComplexCsrMatrix &right,
+    double adjoint_scale) noexcept
+{
+    if (!std::isfinite(adjoint_scale) ||
+        left.row_count != right.column_count || left.column_count != right.row_count) {
+        return false;
+    }
+    double scale = 0.0;
+    for (const auto value : left.values) {
+        scale = std::max(scale, std::abs(value));
+    }
+    for (const auto value : right.values) {
+        scale = std::max(scale, std::abs(adjoint_scale * value));
+    }
+    scale = std::max(scale, std::numeric_limits<double>::min());
+    const double tolerance = 256.0 * std::numeric_limits<double>::epsilon() * scale;
+    for (std::uint64_t row = 0; row < left.row_count; ++row) {
+        for (auto entry = left.row_offsets[static_cast<std::size_t>(row)];
+             entry < left.row_offsets[static_cast<std::size_t>(row + 1u)]; ++entry) {
+            const auto index = static_cast<std::size_t>(entry);
+            const auto column = left.column_indices[index];
+            const auto expected = adjoint_scale * std::conj(complex_csr_value(right, column,
+                static_cast<std::uint32_t>(row)));
+            if (!std::isfinite(std::abs(left.values[index] - expected)) ||
+                std::abs(left.values[index] - expected) > tolerance) {
+                return false;
+            }
+        }
+    }
+    for (std::uint64_t row = 0; row < right.row_count; ++row) {
+        for (auto entry = right.row_offsets[static_cast<std::size_t>(row)];
+             entry < right.row_offsets[static_cast<std::size_t>(row + 1u)]; ++entry) {
+            const auto index = static_cast<std::size_t>(entry);
+            const auto column = right.column_indices[index];
+            const auto expected = adjoint_scale * std::conj(right.values[index]);
+            const auto actual = complex_csr_value(left, column, static_cast<std::uint32_t>(row));
+            if (!std::isfinite(std::abs(actual - expected)) ||
+                std::abs(actual - expected) > tolerance) {
                 return false;
             }
         }
@@ -179,6 +284,107 @@ inline std::optional<OpenAirboxAugmentedPencil> assemble_open_airbox_augmented_p
     for (std::uint64_t row = 0; row < phi; ++row) {
         append_real_row(problem.A_phiq, row, 0, result.potential_row_scale);
         append_real_row(problem.A_phiphi, row, q_offset, result.potential_row_scale);
+        if (!commit_row()) {
+            return std::nullopt;
+        }
+    }
+    if (!equilibrate_and_check_hermitian(result)) {
+        return std::nullopt;
+    }
+    return result;
+}
+
+// Assemble the phase-reduced Floquet shift directly from the five original
+// complex CSR blocks. No dense Schur complement is formed. The original
+// blocks are independently checked before the Hermitian CSR is equilibrated.
+inline std::optional<OpenAirboxAugmentedPencil> assemble_floquet_airbox_augmented_pencil(
+    const FloquetAirboxAugmentedPencilView &blocks,
+    double operator_scale,
+    double shifted_mass_coefficient,
+    double mu0)
+{
+    using namespace augmented_pencil_detail;
+    constexpr auto limit = static_cast<std::uint64_t>(std::numeric_limits<std::int32_t>::max());
+    const auto q = blocks.a_qq.row_count;
+    const auto phi = blocks.p.row_count;
+    if (q == 0u || phi == 0u || q > limit || phi > limit - q ||
+        !std::isfinite(operator_scale) || operator_scale <= 0.0 ||
+        !std::isfinite(shifted_mass_coefficient) || !std::isfinite(mu0) || mu0 <= 0.0 ||
+        !valid_ordered_complex_csr(blocks.a_qq, q, q) ||
+        !valid_ordered_complex_csr(blocks.b_qq, q, q) ||
+        !valid_ordered_complex_csr(blocks.p, phi, phi) ||
+        !valid_ordered_complex_csr(blocks.a_qphi, q, phi) ||
+        !valid_ordered_complex_csr(blocks.a_phiq, phi, q) ||
+        !complex_csr_adjoint_identity(blocks.a_qq, blocks.a_qq, 1.0) ||
+        !complex_csr_adjoint_identity(blocks.b_qq, blocks.b_qq, -1.0) ||
+        !complex_csr_adjoint_identity(blocks.p, blocks.p, 1.0) ||
+        !complex_csr_adjoint_identity(blocks.a_qphi, blocks.a_phiq, -mu0)) {
+        return std::nullopt;
+    }
+
+    OpenAirboxAugmentedPencil result;
+    result.potential_row_scale = -operator_scale * mu0;
+    if (!std::isfinite(result.potential_row_scale) || result.potential_row_scale == 0.0) {
+        return std::nullopt;
+    }
+    auto &matrix = result.complex_csr;
+    matrix.row_count = matrix.column_count = q + phi;
+    matrix.row_offsets.reserve(static_cast<std::size_t>(q + phi + 1u));
+    matrix.row_offsets.push_back(0u);
+
+    const auto append = [&matrix](std::uint32_t column, std::complex<double> value) {
+        if (value != std::complex<double>{}) {
+            matrix.column_indices.push_back(column);
+            matrix.values.push_back(value);
+        }
+    };
+    const auto append_complex_row = [&append](
+        const PoissonAirboxSharedDomainComplexCsrMatrix &block,
+        std::uint64_t row,
+        std::uint32_t column_offset,
+        double scale) {
+        for (auto entry = block.row_offsets[static_cast<std::size_t>(row)];
+             entry < block.row_offsets[static_cast<std::size_t>(row + 1u)]; ++entry) {
+            const auto index = static_cast<std::size_t>(entry);
+            append(column_offset + block.column_indices[index], scale * block.values[index]);
+        }
+    };
+    const auto commit_row = [&matrix] {
+        if (matrix.values.size() > static_cast<std::size_t>(std::numeric_limits<std::uint32_t>::max())) {
+            return false;
+        }
+        matrix.row_offsets.push_back(static_cast<std::uint32_t>(matrix.values.size()));
+        return true;
+    };
+
+    const auto q_offset = static_cast<std::uint32_t>(q);
+    const std::complex<double> minus_i_shift(0.0, -shifted_mass_coefficient);
+    for (std::uint64_t row = 0; row < q; ++row) {
+        auto ai = blocks.a_qq.row_offsets[static_cast<std::size_t>(row)];
+        auto bi = blocks.b_qq.row_offsets[static_cast<std::size_t>(row)];
+        const auto a_end = blocks.a_qq.row_offsets[static_cast<std::size_t>(row + 1u)];
+        const auto b_end = blocks.b_qq.row_offsets[static_cast<std::size_t>(row + 1u)];
+        while (ai < a_end || bi < b_end) {
+            const auto ac = ai < a_end ? blocks.a_qq.column_indices[static_cast<std::size_t>(ai)] : q_offset;
+            const auto bc = bi < b_end ? blocks.b_qq.column_indices[static_cast<std::size_t>(bi)] : q_offset;
+            const auto column = std::min(ac, bc);
+            std::complex<double> value{};
+            if (ac == column) {
+                value += operator_scale * blocks.a_qq.values[static_cast<std::size_t>(ai++)];
+            }
+            if (bc == column) {
+                value += minus_i_shift * blocks.b_qq.values[static_cast<std::size_t>(bi++)];
+            }
+            append(column, value);
+        }
+        append_complex_row(blocks.a_qphi, row, q_offset, operator_scale);
+        if (!commit_row()) {
+            return std::nullopt;
+        }
+    }
+    for (std::uint64_t row = 0; row < phi; ++row) {
+        append_complex_row(blocks.a_phiq, row, 0u, result.potential_row_scale);
+        append_complex_row(blocks.p, row, q_offset, result.potential_row_scale);
         if (!commit_row()) {
             return std::nullopt;
         }

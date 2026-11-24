@@ -81,11 +81,52 @@ std::vector<PoissonAirboxModalEigenResult::AcceptedMode> accept_block(
     return modes;
 }
 
-} // namespace
+struct AugmentedWindowSolves {
+    double operator_scale;
+    double mass_scale;
+    double angular_frequency_scale;
+    double mu0;
+    const FloquetAirboxAugmentedPencilView *floquet = nullptr;
+    AugmentedWindowInertiaCache inertia_cache{};
 
-std::optional<CertifiedOpenAirboxWindow> solve_open_airbox_augmented_window(
-    const PoissonAirboxEigenBlockProblem &problem, double operator_scale,
-    double mass_scale, double angular_frequency_scale, double mu0, const char **failure)
+    std::optional<AugmentedWindowCount> count(
+        const PoissonAirboxEigenBlockProblem &problem, double low, double high,
+        const char **failure)
+    {
+        if (floquet != nullptr) {
+            return count_floquet_airbox_augmented_window(
+                problem, *floquet, operator_scale, mass_scale, angular_frequency_scale,
+                mu0, low, high, inertia_cache, failure);
+        }
+        return count_open_airbox_augmented_window(
+            problem, operator_scale, mass_scale, angular_frequency_scale, mu0,
+            low, high, inertia_cache, failure);
+    }
+
+    std::optional<AugmentedRitzBlock> ritz(
+        const PoissonAirboxEigenBlockProblem &problem, double shift, int columns,
+        const char **failure) const
+    {
+        if (floquet != nullptr) {
+            return solve_floquet_airbox_augmented_ritz(
+                problem, *floquet, operator_scale, mass_scale, shift, mu0, columns, failure);
+        }
+        return solve_open_airbox_augmented_ritz(
+            problem, operator_scale, mass_scale, shift, mu0, columns, failure);
+    }
+};
+
+bool is_factor_memory_admission_failure(const char *reason)
+{
+    return reason != nullptr &&
+        (std::strcmp(reason, "cudss_peak_memory_estimate_unavailable") == 0 ||
+         std::strcmp(reason, "cudss_device_memory_budget_unavailable") == 0 ||
+         std::strcmp(reason, "cudss_peak_memory_budget_exceeded") == 0);
+}
+
+std::optional<CertifiedOpenAirboxWindow> solve_airbox_augmented_window(
+    const PoissonAirboxEigenBlockProblem &problem, AugmentedWindowSolves &backend,
+    const char **failure)
 {
     if (!failure) {
         return std::nullopt;
@@ -99,8 +140,7 @@ std::optional<CertifiedOpenAirboxWindow> solve_open_airbox_augmented_window(
     }
 
     const auto count = [&](double low, double high, const char **reason) {
-        return count_open_airbox_augmented_window(
-            problem, operator_scale, mass_scale, angular_frequency_scale, mu0, low, high, reason);
+        return backend.count(problem, low, high, reason);
     };
     const auto root = count(problem.frequency_min_hz, problem.frequency_max_hz, failure);
     if (!root) {
@@ -146,17 +186,16 @@ std::optional<CertifiedOpenAirboxWindow> solve_open_airbox_augmented_window(
             // than some candidates inside this (possibly asymmetric) window.
             const int width_columns = std::clamp(2 * expected + 6, 16, projection_capacity);
             const int columns = std::min(capacity, width_columns);
-            const double shift = (midpoint / angular_frequency_scale) * two_pi;
+            const double shift = (midpoint / backend.angular_frequency_scale) * two_pi;
             auto child = poisson_airbox_modal_progress_with_elapsed(
                 problem, std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count());
             child.progress_current_subwindow = solves;
             poisson_airbox_modal_emit_progress(
                 child, "frequency_window_base_subwindow", "production_gpu", 0, 0, 0, 0,
                 std::numeric_limits<double>::quiet_NaN());
-            auto block = solve_open_airbox_augmented_ritz(child, operator_scale, mass_scale,
-                                                          shift, mu0, columns, &local_failure);
+            auto block = backend.ritz(child, shift, columns, &local_failure);
             if (block) {
-                auto modes = accept_block(*block, interval, angular_frequency_scale,
+                auto modes = accept_block(*block, interval, backend.angular_frequency_scale,
                                           problem.residual_tolerance, dimension);
                 result.subsolves.push_back({interval.lower, interval.upper, midpoint, expected,
                     static_cast<int>(modes.size()), columns, block->native_trace, block->measurements});
@@ -197,7 +236,8 @@ std::optional<CertifiedOpenAirboxWindow> solve_open_airbox_augmented_window(
             const char *split_failure = nullptr;
             const auto left = count(interval.lower, boundary, &split_failure);
             if (!left) {
-                if (poisson_airbox_modal_cancel_requested(problem)) {
+                if (poisson_airbox_modal_cancel_requested(problem) ||
+                    is_factor_memory_admission_failure(split_failure)) {
                     *failure = split_failure;
                     return std::nullopt;
                 }
@@ -228,19 +268,22 @@ std::optional<CertifiedOpenAirboxWindow> solve_open_airbox_augmented_window(
         *failure = "cudss_ritz_window_incomplete";
         return std::nullopt;
     }
+    result.certified_inertia_factorizations = backend.inertia_cache.negative_by_scaled_shift.size();
+    result.reused_inertia_probes = backend.inertia_cache.reused_probes;
     result.truncated_by_requested_count = result.modes.size() < result.certified_mode_count;
     return result;
 }
 
-std::optional<CertifiedOpenAirboxWindow> solve_open_airbox_augmented_nearest(
-    const PoissonAirboxEigenBlockProblem &problem, double operator_scale,
-    double mass_scale, double angular_frequency_scale, double mu0, const char **failure)
+std::optional<CertifiedOpenAirboxWindow> solve_airbox_augmented_nearest(
+    const PoissonAirboxEigenBlockProblem &problem, AugmentedWindowSolves &backend,
+    const char **failure)
 {
     if (!failure) {
         return std::nullopt;
     }
     *failure = nullptr;
     const auto target = problem.target_frequency_hz;
+    const auto angular_frequency_scale = backend.angular_frequency_scale;
     if (!problem.target_kind || std::strcmp(problem.target_kind, "nearest_frequency") != 0 ||
         !std::isfinite(target) || target < 0.0 || problem.requested_mode_count == 0 ||
         problem.requested_mode_count > problem.q_dof_count ||
@@ -257,9 +300,8 @@ std::optional<CertifiedOpenAirboxWindow> solve_open_airbox_augmented_nearest(
         if (!std::isfinite(bracket.frequency_max_hz)) {
             break;
         }
-        const auto count = count_open_airbox_augmented_window(
-            bracket, operator_scale, mass_scale, angular_frequency_scale, mu0,
-            bracket.frequency_min_hz, bracket.frequency_max_hz, failure);
+        const auto count = backend.count(
+            bracket, bracket.frequency_min_hz, bracket.frequency_max_hz, failure);
         if (!count) {
             if (*failure && std::strcmp(*failure, "cudss_window_endpoint_indeterminate") == 0) {
                 continue;
@@ -273,8 +315,7 @@ std::optional<CertifiedOpenAirboxWindow> solve_open_airbox_augmented_nearest(
         // Every positive mode outside the bracket is farther from the target
         // than every mode inside it. Select only after accounting for all inside.
         bracket.requested_mode_count = inside;
-        auto result = solve_open_airbox_augmented_window(
-            bracket, operator_scale, mass_scale, angular_frequency_scale, mu0, failure);
+        auto result = solve_airbox_augmented_window(bracket, backend, failure);
         if (!result) {
             return std::nullopt;
         }
@@ -290,6 +331,33 @@ std::optional<CertifiedOpenAirboxWindow> solve_open_airbox_augmented_nearest(
     }
     *failure = "cudss_ritz_nearest_bracket_exhausted";
     return std::nullopt;
+}
+
+} // namespace
+
+std::optional<CertifiedOpenAirboxWindow> solve_open_airbox_augmented_window(
+    const PoissonAirboxEigenBlockProblem &problem, double operator_scale,
+    double mass_scale, double angular_frequency_scale, double mu0, const char **failure)
+{
+    AugmentedWindowSolves backend{operator_scale, mass_scale, angular_frequency_scale, mu0};
+    return solve_airbox_augmented_window(problem, backend, failure);
+}
+
+std::optional<CertifiedOpenAirboxWindow> solve_open_airbox_augmented_nearest(
+    const PoissonAirboxEigenBlockProblem &problem, double operator_scale,
+    double mass_scale, double angular_frequency_scale, double mu0, const char **failure)
+{
+    AugmentedWindowSolves backend{operator_scale, mass_scale, angular_frequency_scale, mu0};
+    return solve_airbox_augmented_nearest(problem, backend, failure);
+}
+
+std::optional<CertifiedOpenAirboxWindow> solve_floquet_airbox_augmented_nearest(
+    const PoissonAirboxEigenBlockProblem &problem, const FloquetAirboxAugmentedPencilView &blocks,
+    double operator_scale, double mass_scale, double angular_frequency_scale, double mu0,
+    const char **failure)
+{
+    AugmentedWindowSolves backend{operator_scale, mass_scale, angular_frequency_scale, mu0, &blocks};
+    return solve_airbox_augmented_nearest(problem, backend, failure);
 }
 
 } // namespace fullmag::fem::frequency_domain::gpu

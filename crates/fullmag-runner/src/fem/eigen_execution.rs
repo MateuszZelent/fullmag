@@ -1,6 +1,7 @@
 use super::eigen_capability::{
     modal_solver_policy_has_controls, modal_solver_policy_native_path_supported,
     native_cpu_modal_window_enabled, native_cpu_modal_window_has_floquet_dynamic_demag_path,
+    native_gpu_modal_window_has_floquet_dynamic_demag_path,
     native_gpu_k0_kittel_modal_supported, native_gpu_shared_domain_modal_supported,
 };
 use super::eigen_certificate::{modal_participation_for_mode, modal_participation_mesh_context};
@@ -753,6 +754,7 @@ fn validate_planned_execution(
     }
     let bounded_k0 = shared_domain_k0_modal_requested(plan);
     let bounded_floquet = native_cpu_modal_window_has_floquet_dynamic_demag_path(plan);
+    let bounded_floquet_gpu = native_gpu_modal_window_has_floquet_dynamic_demag_path(plan);
     let dynamic_resolution_scope = execution.resolution().is_some_and(|resolution| {
         resolution
             .selection_reason
@@ -761,12 +763,21 @@ fn validate_planned_execution(
     let resolution_engine = execution
         .resolution()
         .map(|resolution| resolution.resolved_engine);
+    let explicit_gpu_floquet_resolution = execution.resolution().is_some_and(|resolution| {
+        resolution.selection_reason
+            == "fem_eigen.floquet_airbox_dynamic_demag.explicit_gpu"
+            && resolution.requested_device == fullmag_ir::ExecutionDevice::Gpu
+            && resolution.resolved_device == fullmag_ir::ExecutionDevice::Gpu
+            && bounded_floquet_gpu
+    });
     let scope_matches = match resolution_engine {
         Some(fullmag_ir::FemEigenEngineIR::K0PoissonAirboxCpuSchurSlepc) => bounded_k0,
         Some(fullmag_ir::FemEigenEngineIR::FloquetAirboxCpuSchurSlepc) => {
             bounded_floquet || (bounded_k0 && dynamic_resolution_scope)
         }
-        Some(fullmag_ir::FemEigenEngineIR::GpuModalDeviceKrylov) => bounded_k0,
+        Some(fullmag_ir::FemEigenEngineIR::GpuModalDeviceKrylov) => {
+            bounded_k0 || explicit_gpu_floquet_resolution
+        }
         Some(fullmag_ir::FemEigenEngineIR::Auto) | None => false,
     };
     if !scope_matches {
@@ -1968,6 +1979,20 @@ pub(super) fn execute_fem_eigen_inner_with_potential_publication(
         }
         return Err(error);
     }
+    if use_native_modal_production
+        && try_gpu
+        && native_gpu_modal_window_has_floquet_dynamic_demag_path(plan)
+        && !native_shared_domain_magnetic_assembly_available(plan)
+    {
+        let mut error = RunError {
+            message: "native_gpu_floquet_shared_domain_assembly_unavailable".to_string(),
+        };
+        if let Some(detail) = native_shared_domain_magnetic_assembly_error(plan) {
+            error.message.push_str("; producer validation: ");
+            error.message.push_str(&detail);
+        }
+        return Err(error);
+    }
     // Keep the executor tied to the same complete capability predicate as the
     // planner.  This admits nearest-frequency diagnostics beside the existing
     // window route without allowing a caller to bypass the Floquet airbox,
@@ -1977,7 +2002,13 @@ pub(super) fn execute_fem_eigen_inner_with_potential_publication(
         use_native_modal_production
             && !try_gpu
             && native_cpu_modal_window_has_floquet_dynamic_demag_path(plan);
-    if !native_nonzero_k_shared_domain_provider_requested {
+    let native_gpu_nonzero_k_shared_domain_provider_requested =
+        use_native_modal_production
+            && try_gpu
+            && native_gpu_modal_window_has_floquet_dynamic_demag_path(plan);
+    if !native_nonzero_k_shared_domain_provider_requested
+        && !native_gpu_nonzero_k_shared_domain_provider_requested
+    {
         reject_unsupported_floquet_dynamic_demag(&plan.spin_wave_bc, plan.operator.include_demag)?;
     }
     let num_modes = plan.count as usize;
@@ -2131,7 +2162,9 @@ pub(super) fn execute_fem_eigen_inner_with_potential_publication(
     let bases = tangent_bases(&equilibrium);
     let mut dense_orthogonality = None;
 
-    if native_nonzero_k_shared_domain_provider_requested {
+    if native_nonzero_k_shared_domain_provider_requested
+        || native_gpu_nonzero_k_shared_domain_provider_requested
+    {
         // Native MFEM owns both the magnetic and magnetostatic sparse blocks.
         // Do not materialize a dense runner K/M pair before crossing this boundary.
         return execute_native_modal_window(
@@ -2153,7 +2186,11 @@ pub(super) fn execute_fem_eigen_inner_with_potential_publication(
             effective_dof,
             artifact_sample_index,
             state_artifact_sample_index,
-            native_fem::NativeModalExecutionTarget::ProductionCpu,
+            if native_gpu_nonzero_k_shared_domain_provider_requested {
+                native_fem::NativeModalExecutionTarget::ProductionGpu
+            } else {
+                native_fem::NativeModalExecutionTarget::ProductionCpu
+            },
             planned_execution,
             expected_handoff,
             potential_publication,

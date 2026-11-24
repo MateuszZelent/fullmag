@@ -15,14 +15,16 @@
 #include "frequency_domain/modal_gpu_krylov.hpp"
 #if FULLMAG_FEM_CUDSS_SHIFT_ENABLED
 #include "fem_common.hpp"
+#include "gpu/frequency_domain/modal_augmented_pencil.hpp"
 #include "gpu/frequency_domain/modal_augmented_window.hpp"
 #endif
 #include "cpu/frequency_domain/window_partition.hpp"
 #include "frequency_domain/solver_progress.hpp"
 #include "frequency_domain/linearized_dynamic_pencil.hpp"
 
-#include <cmath>
+#include <algorithm>
 #include <array>
+#include <cmath>
 #include <complex>
 #include <cstddef>
 #include <cstdint>
@@ -2135,6 +2137,218 @@ bool apply_poisson_airbox_iteration_policy(
     return true;
 }
 
+#if FULLMAG_FEM_CUDSS_SHIFT_ENABLED && FULLMAG_HAS_MFEM_STACK
+namespace {
+
+constexpr char kFloquetCudssEngine[] =
+    "native_fem.frequency_domain.floquet_airbox_gpu_augmented_cudss.v1";
+
+FrequencyDomainContractResult floquet_cudss_request_error(
+    const ModalEigenRequest &request, const char *reason, const char *message)
+{
+    auto result = validation_error_result(
+        "modal_eigen", message, reason, request.operator_request.operator_diagnostics_json);
+    set_modal_execution(result, ModalExecutionTarget::production_gpu,
+                        ModalSpectralTransformKind::shift_invert, kFloquetCudssEngine);
+    return result;
+}
+
+bool floquet_cudss_request_is_conservative(const ModalEigenRequest &request)
+{
+    return request.operator_request.alpha == 0.0 &&
+        request.operator_request.damping_policy != nullptr &&
+        std::strcmp(request.operator_request.damping_policy, "ignore") == 0 &&
+        request.phase_convention == FrequencyDomainPhaseConvention::exp_i_omega_t &&
+        request.scalar_representation == ModalScalarRepresentation::complex_double &&
+        request.target_kind != nullptr &&
+        std::strcmp(request.target_kind, "nearest_frequency") == 0 &&
+        request.requested_mode_count > 0;
+}
+
+FrequencyDomainContractResult solve_gpu_floquet_shared_domain(
+    const ModalEigenRequest &request,
+    const FloquetSharedDomainSparseModalOperator &phase_operator,
+    const PoissonAirboxSharedDomainAssemblyResult &assembly,
+    const std::string &assembly_provenance)
+{
+    const auto &payload = *request.poisson_airbox_shared_domain_payload;
+    const auto &k = phase_operator.k_rad_per_m;
+    constexpr double two_pi = 6.283185307179586476925286766559;
+    const bool has_nontrivial_magnetic_phase = std::any_of(
+        assembly.floquet_periodic_pairs.begin(), assembly.floquet_periodic_pairs.end(),
+        [&](const FloquetDescriptorPeriodicPair &pair) {
+            const auto phase = k[0] * pair.translation_m[0] + k[1] * pair.translation_m[1] +
+                k[2] * pair.translation_m[2];
+            return pair.magnetic_active && std::isfinite(phase) &&
+                std::abs(std::remainder(phase, two_pi)) > 1.0e-12;
+        });
+    const bool coercive_boundary =
+        std::strcmp(assembly.boundary_kind, "poisson_robin") == 0 ||
+        std::strcmp(assembly.boundary_kind, "poisson_dirichlet") == 0;
+    const bool gauge_supported = coercive_boundary
+        ? std::strcmp(assembly.gauge_policy, "none") == 0
+        : std::strcmp(assembly.boundary_kind, "pure_neumann") == 0 &&
+          std::strcmp(assembly.gauge_policy, "require_invertible") == 0;
+    if (!has_nontrivial_magnetic_phase || !gauge_supported) {
+        return floquet_cudss_request_error(
+            request, "cudss_floquet_phase_or_gauge_unsupported",
+            "FEM GPU cuDSS Floquet needs a nontrivial signed phase on a magnetic seam and an invertible potential block");
+    }
+
+    PoissonAirboxEigenBlockProblem problem;
+    problem.q_dof_count = phase_operator.q_complex_dof_count;
+    problem.phi_dof_count = phase_operator.phi_dof_count;
+    problem.target_kind = "nearest_frequency";
+    problem.target_frequency_hz = request.target_frequency_hz;
+    problem.requested_mode_count = static_cast<std::uint32_t>(request.requested_mode_count);
+    constexpr double descriptor_tolerance = 1.0e-8;
+    if (!apply_poisson_airbox_iteration_policy(problem, request) ||
+        !std::isfinite(request.residual_tolerance) || request.residual_tolerance < 0.0) {
+        return floquet_cudss_request_error(
+            request, "cudss_floquet_iteration_policy_invalid", "Invalid GPU Floquet iteration or residual policy");
+    }
+    if (request.residual_tolerance != 0.0) {
+        problem.residual_tolerance = request.residual_tolerance;
+    }
+    problem.residual_tolerance = std::min(problem.residual_tolerance, descriptor_tolerance);
+    problem.demag_kind = "floquet_airbox";
+    problem.assembly_kind = "mfem_weak_form_shared_domain";
+    problem.outer_boundary_kind = assembly.boundary_kind;
+    problem.gauge_policy = assembly.gauge_policy;
+    problem.gauge_reason = coercive_boundary ? "coercive_outer_boundary" : "invertible_nonzero_k_phase";
+    problem.robin_beta = payload.robin_beta;
+    problem.production_shared_domain = true;
+    problem.mesh_generation_identity = payload.mesh_generation_identity;
+    problem.equilibrium_digest = payload.equilibrium_digest;
+    problem.bias_field_sample_signature = payload.bias_field_sample_signature;
+    problem.boundary_gauge_digest = payload.boundary_gauge_digest;
+    problem.operator_input_digest = assembly.operator_digest;
+    problem.cancel_requested = request.cancel_requested;
+    problem.cancel_user_data = request.cancel_user_data;
+    problem.progress_callback = request.progress_callback;
+    problem.progress_user_data = request.progress_user_data;
+
+    const gpu::FloquetAirboxAugmentedPencilView blocks{
+        *phase_operator.a_qq, *phase_operator.b_qq, *phase_operator.p,
+        *phase_operator.a_qphi, *phase_operator.a_phiq};
+    auto solved = std::make_unique<PoissonAirboxModalEigenResult>();
+    FrequencyDomainContractResult result;
+    result.status = solve_floquet_airbox_modal_eigen_gpu_augmented(
+        problem, blocks, k, phase_operator.mu0_T_m_A, solved.get());
+    set_modal_execution(result, ModalExecutionTarget::production_gpu,
+                        ModalSpectralTransformKind::shift_invert, kFloquetCudssEngine);
+    result.error_message = solved->error_message;
+    result.diagnostics_json = solved->diagnostics_json;
+    result.modal_gpu_attestation = std::move(solved->gpu_execution_attestation);
+    const std::string k_field = modal_request_k_vector_json_field(request);
+    result.diagnostics_json = append_json_field(std::move(result.diagnostics_json), k_field);
+    if (result.status != FrequencyDomainStatus::ok) {
+        result.result_json = result.diagnostics_json;
+        append_shared_domain_operator_provenance(result, assembly_provenance);
+        return result;
+    }
+
+    const std::size_t q_count = solved->q_dof_count;
+    const std::size_t phi_count = solved->phi_dof_count;
+    result.modal_eigen.q_dof_count = q_count;
+    result.modal_eigen.phi_dof_count = phi_count;
+    std::string modes_json = R"json("modes":[)json";
+    const auto mode_failure = [&](const char *reason) {
+        result.status = FrequencyDomainStatus::operator_error;
+        result.modal_eigen = {};
+        result.error_message = reason;
+        replace_json_status(result.diagnostics_json, "operator_error");
+        result.diagnostics_json = append_json_field(
+            std::move(result.diagnostics_json), R"json("mode_vector_transport_error":")json" +
+                escape_json_string(reason) + '"');
+        result.result_json = result.diagnostics_json;
+        append_shared_domain_operator_provenance(result, assembly_provenance);
+        return result;
+    };
+    if (solved->accepted_modes.size() != problem.requested_mode_count) {
+        return mode_failure("cudss_floquet_mode_count_mismatch");
+    }
+    for (const auto &mode : solved->accepted_modes) {
+        if (mode.full_vector.size() != q_count + phi_count) {
+            return mode_failure("cudss_floquet_mode_shape_invalid");
+        }
+        const auto phi_begin = mode.full_vector.begin() + static_cast<std::ptrdiff_t>(q_count);
+        std::vector<std::complex<double>> q(mode.full_vector.begin(), phi_begin);
+        std::vector<std::complex<double>> phi(phi_begin, mode.full_vector.end());
+        const std::complex<double> lambda(mode.eigenvalue_real, mode.eigenvalue_imag);
+        FloquetDeviceModeCertificate certificate;
+        if (!certify_floquet_device_mode(
+                phase_operator, q, phi, lambda, problem.residual_tolerance, certificate)) {
+            return mode_failure("cudss_floquet_full_descriptor_certificate_failed");
+        }
+        const double residual = std::max({mode.relative_residual, certificate.magnetic_relative_residual,
+            certificate.potential_relative_residual, certificate.scalar_phase_seam_relative_residual,
+            certificate.tangent_frame_seam_relative_residual,
+            certificate.cartesian_magnetic_seam_relative_residual, certificate.equilibrium_pair_relative_residual});
+        result.modal_eigen.mode_lambda.push_back(lambda);
+        result.modal_eigen.mode_residuals.push_back(residual);
+        result.modal_eigen.mode_q_complex.insert(result.modal_eigen.mode_q_complex.end(), q.begin(), q.end());
+        result.modal_eigen.mode_phi_complex.insert(result.modal_eigen.mode_phi_complex.end(), phi.begin(), phi.end());
+        result.modal_eigen.mode_delta_m_xyz_complex.insert(
+            result.modal_eigen.mode_delta_m_xyz_complex.end(),
+            certificate.cartesian_delta_m.begin(), certificate.cartesian_delta_m.end());
+        if (mode.eigenpair_index != 0) {
+            modes_json += ',';
+        }
+        modes_json += R"json({"mode_vector_transport":"typed_abi_v18","mode_index":)json" +
+            std::to_string(mode.eigenpair_index) +
+            R"json(,"q_dof_count":)json" + std::to_string(q_count) +
+            R"json(,"phi_dof_count":)json" + std::to_string(phi_count) +
+            R"json(,"potential_dof_count":)json" + std::to_string(phi_count) +
+            R"json(,"floquet_mode_vector_physical_complex":true,)json"
+            R"json("q_layout":"interleaved_node_component","phi_layout":"complex_coefficients",)json"
+            R"json("potential_representation":"complex_coefficients",)json"
+            R"json("floquet_descriptor_certified":true,"floquet_full_descriptor_certified":true,)json"
+            R"json("floquet_seam_frame_certified":true,"floquet_gauge_policy_satisfied":true,)json"
+            R"json("floquet_geometric_bc_certified":false,"gauge_constraint_backward_error":null,)json"
+            R"json("gauge_constraint_policy":"nonzero_k_poisson_without_mean_constraint",)json"
+            R"json("poisson_boundary_kind":")json" + std::string(assembly.boundary_kind) +
+            R"json(","poisson_gauge_policy":")json" + assembly.gauge_policy +
+            R"json(","eigenvalue_real":)json" + format_double(lambda.real()) +
+            R"json(,"eigenvalue_imag":)json" + format_double(lambda.imag()) +
+            R"json(,"omega_rad_s":)json" + format_double(mode.omega_rad_s) +
+            R"json(,"frequency_hz":)json" + format_double(mode.frequency_hz) +
+            R"json(,"relative_residual":)json" + format_double(residual) +
+            R"json(,"magnetic_block_backward_error":)json" + format_double(mode.magnetic_block_backward_error) +
+            R"json(,"poisson_block_backward_error":)json" + format_double(mode.poisson_block_backward_error) +
+            R"json(,"magnetic_relative_residual":)json" + format_double(mode.magnetic_block_backward_error) +
+            R"json(,"potential_relative_residual":)json" + format_double(mode.poisson_block_backward_error) +
+            R"json(,"floquet_full_magnetic_relative_residual":)json" +
+                format_double(certificate.magnetic_relative_residual) +
+            R"json(,"floquet_full_potential_relative_residual":)json" +
+                format_double(certificate.potential_relative_residual) +
+            R"json(,"floquet_scalar_phase_seam_relative_residual":)json" +
+                format_double(certificate.scalar_phase_seam_relative_residual) +
+            R"json(,"floquet_tangent_frame_seam_relative_residual":)json" +
+                format_double(certificate.tangent_frame_seam_relative_residual) +
+            R"json(,"floquet_cartesian_magnetic_seam_relative_residual":)json" +
+                format_double(certificate.cartesian_magnetic_seam_relative_residual) +
+            R"json(,"floquet_equilibrium_pair_relative_residual":)json" +
+                format_double(certificate.equilibrium_pair_relative_residual) + '}';
+    }
+    modes_json += ']';
+    result.result_json = R"json({"schema_version":"frequency_domain_modal_result.v1",)json"
+        R"json("study_product":"modal_eigen","status":"ok","complete":true,)json"
+        R"json("solver_adapter":"floquet_airbox_gpu_augmented_cudss",)json"
+        R"json("execution_lane":"production_gpu","cpu_fallback":"disabled",)json"
+        R"json("fallback_used":false,"demag_kind":"floquet_airbox",)json"
+        R"json("phasor_convention":"exp_i_omega_t","lambda_convention":"lambda_eq_i_omega",)json"
+        R"json("spectrum_completeness":"selected_only","window_complete":false,)json"
+        R"json("accepted_mode_count":)json" + std::to_string(solved->accepted_modes.size()) +
+        ',' + modes_json + '}';
+    result.result_json = append_json_field(std::move(result.result_json), k_field);
+    append_shared_domain_operator_provenance(result, assembly_provenance);
+    return result;
+}
+
+} // namespace
+#endif
+
 FrequencyDomainContractResult solve_modal_eigen_contract(
     const ModalEigenRequest &request) noexcept
 {
@@ -2277,12 +2491,24 @@ FrequencyDomainContractResult solve_modal_eigen_contract(
         request.mfem_tangent_dof_count > 0 &&
         request.mfem_stiffness_matrix_row_major != nullptr &&
         request.mfem_gyrotropic_matrix_row_major != nullptr;
-    if (modal_request_is_nonzero_k_floquet(request) &&
-        request.execution_target == ModalExecutionTarget::production_cpu &&
+    const bool shared_domain_floquet = modal_request_is_nonzero_k_floquet(request) &&
         request.operator_request.include_demag != 0 &&
         request.poisson_airbox_shared_domain_enabled != 0 &&
         request.poisson_airbox_shared_domain_payload != nullptr &&
-        !has_legacy_dense_magnetic_descriptor) {
+        !has_legacy_dense_magnetic_descriptor;
+#if FULLMAG_FEM_CUDSS_SHIFT_ENABLED
+    const bool gpu_floquet = shared_domain_floquet &&
+        request.execution_target == ModalExecutionTarget::production_gpu;
+    if (gpu_floquet && !floquet_cudss_request_is_conservative(request)) {
+        return floquet_cudss_request_error(
+            request, "cudss_floquet_requires_conservative_single_k_nearest",
+            "FEM GPU cuDSS Floquet requires one complex FP64 k point, ignored damping and a nearest-frequency target");
+    }
+#else
+    constexpr bool gpu_floquet = false;
+#endif
+    if (shared_domain_floquet &&
+        (request.execution_target == ModalExecutionTarget::production_cpu || gpu_floquet)) {
         std::array<double, 3> floquet_k{};
         if (!modal_request_floquet_k_vector(request, floquet_k)) {
             FrequencyDomainContractResult result = validation_error_result(
@@ -2294,7 +2520,8 @@ FrequencyDomainContractResult solve_modal_eigen_contract(
                 result,
                 request.execution_target,
                 request.spectral_transform_kind,
-                "production_cpu_floquet_airbox_sparse_shared_domain_validation");
+                gpu_floquet ? "native_fem.frequency_domain.floquet_airbox_gpu_augmented_cudss.v1"
+                            : "production_cpu_floquet_airbox_sparse_shared_domain_validation");
             return result;
         }
         const FrequencyDomainStatus provider_status =
@@ -2323,7 +2550,8 @@ FrequencyDomainContractResult solve_modal_eigen_contract(
                 result,
                 request.execution_target,
                 request.spectral_transform_kind,
-                "production_cpu_floquet_airbox_sparse_shared_domain_provider");
+                gpu_floquet ? "native_fem.frequency_domain.floquet_airbox_gpu_augmented_cudss.v1"
+                            : "production_cpu_floquet_airbox_sparse_shared_domain_provider");
             return result;
         }
         assembled_operator_provenance =
@@ -2359,6 +2587,13 @@ FrequencyDomainContractResult solve_modal_eigen_contract(
             native_floquet_sparse_assembly.boundary_kind;
         native_floquet_sparse_operator.gauge_policy =
             native_floquet_sparse_assembly.gauge_policy;
+#if FULLMAG_FEM_CUDSS_SHIFT_ENABLED
+        if (gpu_floquet) {
+            return solve_gpu_floquet_shared_domain(
+                request, native_floquet_sparse_operator, native_floquet_sparse_assembly,
+                assembled_operator_provenance);
+        }
+#endif
         effective_request.floquet_shared_domain_operator =
             &native_floquet_sparse_operator;
         effective_request.mfem_sparse_operator_enabled = 1;

@@ -2,6 +2,7 @@
 
 #include <cuda_runtime_api.h>
 
+#include <cstddef>
 #include <memory>
 #include <optional>
 
@@ -15,7 +16,8 @@ class CudssModalShift {
 public:
     static std::unique_ptr<CudssModalShift> create(
         const OpenAirboxAugmentedPencil &pencil, int block_columns, cudaStream_t stream,
-        const char **failure);
+        const char **failure,
+        std::optional<std::size_t> device_budget_cap_bytes = std::nullopt);
     ~CudssModalShift();
 
     CudssModalShift(const CudssModalShift &) = delete;
