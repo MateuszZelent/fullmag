@@ -1,7 +1,7 @@
 {
   "document": {
     "path": "docs/physics/0997-fem-gpu-poisson-direct-cudss.md",
-    "reviewed_revision": "e11d3137d547e8a9b823b753f78842c23784ae2f"
+    "reviewed_revision": "96d6a49a7fb9be445a466ede823681d8da6cf414"
   },
   "backend_matrix": [
     {
@@ -82,7 +82,9 @@
         "Mpeak"
       ],
       "sources": [
-        "cudss-factor"
+        "cudss-factor",
+        "cudss-budget",
+        "cudss-fit"
       ]
     }
   ],
@@ -260,6 +262,83 @@
       "symbol": "FemPlanIR",
       "responsibility": "Resolved policy passed to native execution.",
       "evidence_status": "unchanged"
+    },
+    {
+      "id": "cudss-budget",
+      "path": "backends/fem/gpu/cuda/demag_poisson/cudss_direct_solver.cpp",
+      "symbol": "resolve_demag_cudss_device_budget",
+      "responsibility": "Evaluates the device budget B of eq-direct-memory-budget from free and total device memory and the optional cap.",
+      "evidence_status": "contract_test"
+    },
+    {
+      "id": "cudss-fit",
+      "path": "backends/fem/gpu/cuda/demag_poisson/cudss_direct_solver.cpp",
+      "symbol": "check_demag_cudss_factor_fits",
+      "responsibility": "Compares the estimated device peak with the budget and writes the rejection message.",
+      "evidence_status": "contract_test"
+    },
+    {
+      "id": "linear-solver-report",
+      "path": "backends/fem/gpu/cuda/demag_poisson/poisson.cpp",
+      "symbol": "gpu_demag_poisson_linear_solver",
+      "responsibility": "Reports the linear-solve realization of the initialized device Poisson workspace.",
+      "evidence_status": "contract_test"
+    },
+    {
+      "id": "required-mask",
+      "path": "backends/fem/gpu/cuda/integrators/rk/rk_plan.cpp",
+      "symbol": "gpu_rk_required_operator_mask",
+      "responsibility": "Builds the required operator mask with the resolved linear-solve bit.",
+      "evidence_status": "contract_test"
+    },
+    {
+      "id": "receipt-plan-check",
+      "path": "backends/fem/gpu/cuda/runtime/execution_receipt.cpp",
+      "symbol": "plan_masks_are_valid",
+      "responsibility": "Rejects conflicting or orphan linear-solve bits in a receipt plan.",
+      "evidence_status": "contract_test"
+    },
+    {
+      "id": "abi-query",
+      "path": "backends/fem/src/api.cpp",
+      "symbol": "fullmag_fem_backend_get_gpu_demag_linear_solver_v1",
+      "responsibility": "C ABI query of the resolved linear-solve realization.",
+      "evidence_status": "contract_test"
+    },
+    {
+      "id": "abi-header",
+      "path": "native/include/fullmag_fem.h",
+      "symbol": "fullmag_fem_backend_get_gpu_demag_linear_solver_v1",
+      "responsibility": "Public declaration of the query, the DIRECT_SOLVE bit and the realization values.",
+      "evidence_status": "abi"
+    },
+    {
+      "id": "ffi-mirror",
+      "path": "crates/fullmag-fem-sys/src/lib.rs",
+      "symbol": "FULLMAG_FEM_GPU_OPERATOR_DIRECT_SOLVE",
+      "responsibility": "Rust mirror of the bit and the realization values.",
+      "evidence_status": "mirror_test"
+    },
+    {
+      "id": "rust-receipt",
+      "path": "crates/fullmag-runner/src/native_fem/runtime_info.rs",
+      "symbol": "linear_solve_operator_bits_are_consistent",
+      "responsibility": "Rust receipt parser rejects conflicting linear-solve bits.",
+      "evidence_status": "unit_test"
+    },
+    {
+      "id": "rust-provenance",
+      "path": "crates/fullmag-runner/src/dispatch.rs",
+      "symbol": "apply_native_fem_gpu_demag_linear_solver",
+      "responsibility": "Writes resolved_linear_solver into run provenance.",
+      "evidence_status": "runtime_evidence"
+    },
+    {
+      "id": "provenance-type",
+      "path": "crates/fullmag-runner/src/types.rs",
+      "symbol": "FemPoissonDemagProvenance",
+      "responsibility": "Requested policy and resolved realization in run provenance.",
+      "evidence_status": "unit_test"
     }
   ],
   "public_api": {

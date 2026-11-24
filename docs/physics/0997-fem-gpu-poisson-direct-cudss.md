@@ -344,6 +344,17 @@ memory.
 | `backends/fem/gpu/cuda/demag_poisson/cudss_direct_solver.cpp` | `demag_gpu_direct_solver_requested` | Reads the opt-in override | FEM GPU; proof of concept |
 | `backends/fem/gpu/cuda/demag_poisson/cudss_direct_solver.cpp` | `create_demag_cudss_direct_solver` | Lower CSR, analysis, factorization, status and memory | FEM GPU; proof of concept |
 | `backends/fem/gpu/cuda/demag_poisson/cudss_direct_solver.cpp` | `solve_demag_cudss_direct` | Solve phase on the hypre stream | FEM GPU; proof of concept |
+| `backends/fem/gpu/cuda/demag_poisson/cudss_direct_solver.cpp` | `resolve_demag_cudss_device_budget` | Device budget of {eq}`eq-direct-memory-budget` and the cap | FEM GPU; contract test |
+| `backends/fem/gpu/cuda/demag_poisson/cudss_direct_solver.cpp` | `check_demag_cudss_factor_fits` | Compares the estimated peak with the budget; rejection message | FEM GPU; contract test |
+| `backends/fem/gpu/cuda/demag_poisson/poisson.cpp` | `gpu_demag_poisson_linear_solver` | Reports the resolved realization of the device workspace | FEM GPU; contract test |
+| `backends/fem/gpu/cuda/integrators/rk/rk_plan.cpp` | `gpu_rk_required_operator_mask` | Required mask with the resolved linear-solve bit | FEM GPU; contract test |
+| `backends/fem/gpu/cuda/runtime/execution_receipt.cpp` | `plan_masks_are_valid` | Rejects conflicting or orphan linear-solve bits | FEM GPU; contract test |
+| `backends/fem/src/api.cpp` | `fullmag_fem_backend_get_gpu_demag_linear_solver_v1` | C ABI query of the resolved realization | FEM GPU; contract test |
+| `native/include/fullmag_fem.h` | `fullmag_fem_backend_get_gpu_demag_linear_solver_v1` | Public declaration, `DIRECT_SOLVE` bit and realization values | FEM GPU; ABI |
+| `crates/fullmag-fem-sys/src/lib.rs` | `FULLMAG_FEM_GPU_OPERATOR_DIRECT_SOLVE` | Rust mirror of the bit and the realization values | FEM GPU; mirror test |
+| `crates/fullmag-runner/src/native_fem/runtime_info.rs` | `linear_solve_operator_bits_are_consistent` | Rust receipt parser rejects conflicting bits | FEM GPU; unit test |
+| `crates/fullmag-runner/src/dispatch.rs` | `apply_native_fem_gpu_demag_linear_solver` | Writes `resolved_linear_solver` into run provenance | FEM GPU; runtime evidence |
+| `crates/fullmag-runner/src/types.rs` | `FemPoissonDemagProvenance` | Requested policy and resolved realization in provenance | FEM; unit test |
 | `backends/fem/gpu/cuda/demag_poisson/hypre_device_solver.cpp` | `initialize_demag_poisson_hypre_device_solver` | Realization selection at setup | FEM GPU; existing owner |
 | `backends/fem/gpu/cuda/demag_poisson/stage_compute.cpp` | `compute_device_demag_for_device_stage_impl` | Applies the solve between the stream fences | FEM GPU; existing owner |
 | `backends/fem/gpu/cuda/demag_poisson/hypre_device_solver.cpp` | `validate_demag_poisson_hypre_device_solve` | Independent residual certification | FEM GPU; existing check |
