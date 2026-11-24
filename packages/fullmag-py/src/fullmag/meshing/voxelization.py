@@ -9,7 +9,9 @@ from numpy.typing import NDArray
 
 from fullmag.model.geometry import (
     ArchWaveguide,
+    Array3D,
     Box,
+    Cone,
     Cylinder,
     Difference,
     Ellipse,
@@ -17,9 +19,16 @@ from fullmag.model.geometry import (
     Geometry,
     ImportedGeometry,
     Intersection,
+    MAX_ARRAY_FDM_CANDIDATES_PER_QUERY,
+    PolygonPrism,
     SinWaveguide,
+    SlicePlane,
+    Torus,
+    Transform,
     Translate,
     Union,
+    Xor,
+    rotation_matrix_from_quaternion,
 )
 
 
@@ -411,6 +420,28 @@ def _geometry_bounds(
     if isinstance(geometry, Ellipse):
         half_height = geometry.height / 2.0
         return (-geometry.rx, -geometry.ry, -half_height), (geometry.rx, geometry.ry, half_height)
+    if isinstance(geometry, Cone):
+        half_height = geometry.height / 2.0
+        mins = []
+        maxs = []
+        for comp in geometry.axis:
+            perp = float(np.sqrt(max(0.0, 1.0 - comp * comp)))
+            c_bot = -half_height * comp
+            c_top = half_height * comp
+            mins.append(min(c_bot - geometry.radius_bottom * perp, c_top - geometry.radius_top * perp))
+            maxs.append(max(c_bot + geometry.radius_bottom * perp, c_top + geometry.radius_top * perp))
+        return tuple(mins), tuple(maxs)
+    if isinstance(geometry, Torus):
+        extents = tuple(
+            geometry.major_radius * float(np.sqrt(max(0.0, 1.0 - comp * comp))) + geometry.minor_radius
+            for comp in geometry.axis
+        )
+        return tuple(-v for v in extents), extents
+    if isinstance(geometry, PolygonPrism):
+        xs = [pt[0] for pt in geometry.vertices_xy]
+        ys = [pt[1] for pt in geometry.vertices_xy]
+        half_t = geometry.thickness / 2.0
+        return (min(xs), min(ys), -half_t), (max(xs), max(ys), half_t)
     if isinstance(geometry, Difference):
         return _geometry_bounds(geometry.base)
     if isinstance(geometry, Union):
@@ -420,13 +451,23 @@ def _geometry_bounds(
             tuple(min(a_min[i], b_min[i]) for i in range(3)),
             tuple(max(a_max[i], b_max[i]) for i in range(3)),
         )
+    if isinstance(geometry, Xor):
+        l_min, l_max = _geometry_bounds(geometry.left)
+        r_min, r_max = _geometry_bounds(geometry.right)
+        return (
+            tuple(min(l_min[i], r_min[i]) for i in range(3)),
+            tuple(max(l_max[i], r_max[i]) for i in range(3)),
+        )
     if isinstance(geometry, Intersection):
         a_min, a_max = _geometry_bounds(geometry.a)
         b_min, b_max = _geometry_bounds(geometry.b)
-        return (
-            tuple(max(a_min[i], b_min[i]) for i in range(3)),
-            tuple(min(a_max[i], b_max[i]) for i in range(3)),
-        )
+        c_min = tuple(max(a_min[i], b_min[i]) for i in range(3))
+        c_max = tuple(min(a_max[i], b_max[i]) for i in range(3))
+        if any(c_max[i] <= c_min[i] for i in range(3)):
+            raise ValueError(
+                f"empty_geometry_intersection: Intersection '{geometry.geometry_name}' operands do not overlap"
+            )
+        return c_min, c_max
     if isinstance(geometry, Translate):
         inner_min, inner_max = _geometry_bounds(geometry.geometry)
         ox, oy, oz = geometry.offset
@@ -438,6 +479,125 @@ def _geometry_bounds(
             inner_max[0] + ox,
             inner_max[1] + oy,
             inner_max[2] + oz,
+        )
+    if isinstance(geometry, Transform):
+        child_min, child_max = _geometry_bounds(geometry.child)
+        rot = rotation_matrix_from_quaternion(geometry.rotation_quat)
+        tx, ty, tz = geometry.translation
+        sx, sy, sz = geometry.scale
+        px, py, pz = geometry.pivot
+        pts: list[tuple[float, float, float]] = []
+        for x in (child_min[0], child_max[0]):
+            for y in (child_min[1], child_max[1]):
+                for z in (child_min[2], child_max[2]):
+                    lx = (x - px) * sx
+                    ly = (y - py) * sy
+                    lz = (z - pz) * sz
+                    pts.append(
+                        (
+                            rot[0][0] * lx + rot[0][1] * ly + rot[0][2] * lz + px + tx,
+                            rot[1][0] * lx + rot[1][1] * ly + rot[1][2] * lz + py + ty,
+                            rot[2][0] * lx + rot[2][1] * ly + rot[2][2] * lz + pz + tz,
+                        )
+                    )
+        return (
+            tuple(min(pt[i] for pt in pts) for i in range(3)),
+            tuple(max(pt[i] for pt in pts) for i in range(3)),
+        )
+    if isinstance(geometry, SlicePlane):
+        child_min, child_max = _geometry_bounds(geometry.child)
+        ox, oy, oz = geometry.plane_origin
+        nx, ny, nz = geometry.plane_normal
+        sign = 1.0 if geometry.keep_side == "positive" else -1.0
+        corners = [
+            (x, y, z)
+            for x in (child_min[0], child_max[0])
+            for y in (child_min[1], child_max[1])
+            for z in (child_min[2], child_max[2])
+        ]
+        signed = [
+            sign * ((pt[0] - ox) * nx + (pt[1] - oy) * ny + (pt[2] - oz) * nz)
+            for pt in corners
+        ]
+        kept = [pt for pt, d in zip(corners, signed) if d >= -1e-18]
+        for i in range(8):
+            for bit in (1, 2, 4):
+                j = i ^ bit
+                if j > i:
+                    di, dj = signed[i], signed[j]
+                    if (di < 0.0 < dj) or (dj < 0.0 < di):
+                        t = di / (di - dj)
+                        pi, pj = corners[i], corners[j]
+                        kept.append(
+                            (
+                                pi[0] + t * (pj[0] - pi[0]),
+                                pi[1] + t * (pj[1] - pi[1]),
+                                pi[2] + t * (pj[2] - pi[2]),
+                            )
+                        )
+        if not kept:
+            raise ValueError(
+                f"empty_geometry_slice: SlicePlane '{geometry.geometry_name}' clips the entire geometry"
+            )
+        c_min = tuple(min(pt[i] for pt in kept) for i in range(3))
+        c_max = tuple(max(pt[i] for pt in kept) for i in range(3))
+        if any(c_max[i] <= c_min[i] for i in range(3)):
+            raise ValueError(
+                f"empty_geometry_slice: SlicePlane '{geometry.geometry_name}' leaves zero-volume geometry"
+            )
+        return c_min, c_max
+    if isinstance(geometry, Array3D):
+        child_min, child_max = _geometry_bounds(geometry.child)
+        extent = (
+            child_max[0] - child_min[0],
+            child_max[1] - child_min[1],
+            child_max[2] - child_min[2],
+        )
+        if not geometry.has_step_rotation_or_scale:
+            v0 = geometry.axes[0].step_vector(extent)
+            v1 = geometry.axes[1].step_vector(extent)
+            v2 = geometry.axes[2].step_vector(extent)
+            k_ranges = [
+                (min(ax.canonical_indices()), max(ax.canonical_indices()))
+                for ax in geometry.axes
+            ]
+            offsets = [
+                (
+                    kx * v0[0] + ky * v1[0] + kz * v2[0],
+                    kx * v0[1] + ky * v1[1] + kz * v2[1],
+                    kx * v0[2] + ky * v1[2] + kz * v2[2],
+                )
+                for kx in k_ranges[0]
+                for ky in k_ranges[1]
+                for kz in k_ranges[2]
+            ]
+            off_min = tuple(min(o[i] for o in offsets) for i in range(3))
+            off_max = tuple(max(o[i] for o in offsets) for i in range(3))
+            return (
+                tuple(child_min[i] + off_min[i] for i in range(3)),
+                tuple(child_max[i] + off_max[i] for i in range(3)),
+            )
+        corners = [
+            (x, y, z)
+            for x in (child_min[0], child_max[0])
+            for y in (child_min[1], child_max[1])
+            for z in (child_min[2], child_max[2])
+        ]
+        all_pts: list[tuple[float, float, float]] = []
+        for (tx, ty, tz), q, (sx, sy, sz) in geometry.instance_transforms(extent):
+            rot = rotation_matrix_from_quaternion(q)
+            for cx, cy, cz in corners:
+                lx, ly, lz = cx * sx, cy * sy, cz * sz
+                all_pts.append(
+                    (
+                        rot[0][0] * lx + rot[0][1] * ly + rot[0][2] * lz + tx,
+                        rot[1][0] * lx + rot[1][1] * ly + rot[1][2] * lz + ty,
+                        rot[2][0] * lx + rot[2][1] * ly + rot[2][2] * lz + tz,
+                    )
+                )
+        return (
+            tuple(min(pt[i] for pt in all_pts) for i in range(3)),
+            tuple(max(pt[i] for pt in all_pts) for i in range(3)),
         )
     if isinstance(geometry, ImportedGeometry):
         raise TypeError(
@@ -518,6 +678,48 @@ def _contains(
         rx, ry, h = geometry.rx, geometry.ry, geometry.height
         return ((xx / rx) ** 2 + (yy / ry) ** 2 <= 1.0) & (np.abs(zz) <= h / 2.0)
 
+    if isinstance(geometry, Cone):
+        half_h = geometry.height / 2.0
+        ax, ay, az = geometry.axis
+        axial = xx * ax + yy * ay + zz * az
+        radial_sq = np.maximum(0.0, (xx * xx + yy * yy + zz * zz) - axial * axial)
+        t = (axial + half_h) / geometry.height
+        r_at_t = geometry.radius_bottom * (1.0 - t) + geometry.radius_top * t
+        return (np.abs(axial) <= half_h) & (radial_sq <= r_at_t * r_at_t)
+
+    if isinstance(geometry, Torus):
+        ax, ay, az = geometry.axis
+        axial = xx * ax + yy * ay + zz * az
+        radial = np.sqrt(np.maximum(0.0, (xx * xx + yy * yy + zz * zz) - axial * axial))
+        return (radial - geometry.major_radius) ** 2 + axial * axial <= geometry.minor_radius ** 2
+
+    if isinstance(geometry, PolygonPrism):
+        in_z = np.abs(zz) <= geometry.thickness / 2.0
+        inside = np.zeros(xx.shape, dtype=np.bool_)
+        on_edge = np.zeros(xx.shape, dtype=np.bool_)
+        verts = geometry.vertices_xy
+        n_verts = len(verts)
+        scale_ref = max(max(abs(x), abs(y)) for x, y in verts)
+        edge_tol_sq = (max(scale_ref, 1.0) * 1e-12) ** 2
+        for i in range(n_verts):
+            x1, y1 = verts[i]
+            x2, y2 = verts[(i + 1) % n_verts]
+            # Ray-casting crossing test
+            cond = (y1 > yy) != (y2 > yy)
+            dy = y2 - y1
+            if dy != 0.0:
+                x_intersect = x1 + (yy - y1) * (x2 - x1) / dy
+                inside ^= cond & (xx < x_intersect)
+            # Point-on-segment boundary test
+            dx_e = x2 - x1
+            dy_e = y2 - y1
+            len_sq = dx_e * dx_e + dy_e * dy_e
+            if len_sq > 0.0:
+                proj = np.clip(((xx - x1) * dx_e + (yy - y1) * dy_e) / len_sq, 0.0, 1.0)
+                dist_sq = (xx - (x1 + proj * dx_e)) ** 2 + (yy - (y1 + proj * dy_e)) ** 2
+                on_edge |= dist_sq <= edge_tol_sq
+        return in_z & (inside | on_edge)
+
     if isinstance(geometry, Difference):
         base_mask = _contains(geometry.base, xx, yy, zz)
         tool_mask = _contains(geometry.tool, xx, yy, zz)
@@ -529,11 +731,224 @@ def _contains(
     if isinstance(geometry, Intersection):
         return _contains(geometry.a, xx, yy, zz) & _contains(geometry.b, xx, yy, zz)
 
+    if isinstance(geometry, Xor):
+        return _contains(geometry.left, xx, yy, zz) ^ _contains(geometry.right, xx, yy, zz)
+
     if isinstance(geometry, Translate):
         ox, oy, oz = geometry.offset
         return _contains(geometry.geometry, xx - ox, yy - oy, zz - oz)
 
+    if isinstance(geometry, Transform):
+        # Exact inverse of M = T(t + p) R S T(-p):
+        # q_local = p + S^{-1} * (R^T @ (q_world - t - p))
+        rot = rotation_matrix_from_quaternion(geometry.rotation_quat)
+        tx, ty, tz = geometry.translation
+        px, py, pz = geometry.pivot
+        sx, sy, sz = geometry.scale
+        dx = xx - (tx + px)
+        dy = yy - (ty + py)
+        dz = zz - (tz + pz)
+        rx = rot[0][0] * dx + rot[1][0] * dy + rot[2][0] * dz
+        ry = rot[0][1] * dx + rot[1][1] * dy + rot[2][1] * dz
+        rz = rot[0][2] * dx + rot[1][2] * dy + rot[2][2] * dz
+        lx = px + rx / sx
+        ly = py + ry / sy
+        lz = pz + rz / sz
+        return _contains(geometry.child, lx, ly, lz)
+
+    if isinstance(geometry, SlicePlane):
+        ox, oy, oz = geometry.plane_origin
+        nx, ny, nz = geometry.plane_normal
+        signed = (xx - ox) * nx + (yy - oy) * ny + (zz - oz) * nz
+        halfspace = signed >= 0.0 if geometry.keep_side == "positive" else signed <= 0.0
+        return _contains(geometry.child, xx, yy, zz) & halfspace
+
+    if isinstance(geometry, Array3D):
+        return _contains_array3d(geometry, xx, yy, zz)
+
     raise TypeError(f"unsupported geometry type for containment test: {type(geometry)!r}")
+
+
+def _complete_orthonormal_basis(
+    active_columns: dict[int, NDArray[np.float64]],
+) -> NDArray[np.float64] | None:
+    """Complete a 3x3 basis matrix with Gram-Schmidt orthonormal vectors for inactive axes."""
+    basis = np.zeros((3, 3), dtype=np.float64)
+    orthonormal: list[NDArray[np.float64]] = []
+    for col_idx in sorted(active_columns.keys()):
+        vec = active_columns[col_idx]
+        basis[:, col_idx] = vec
+        # Gram-Schmidt check for linear independence of active lattice vectors
+        proj = vec.copy()
+        for prev in orthonormal:
+            proj = proj - float(np.dot(proj, prev)) * prev
+        norm_p = float(np.linalg.norm(proj))
+        norm_v = float(np.linalg.norm(vec))
+        if norm_v <= 0.0 or norm_p <= 1e-12 * norm_v:
+            return None
+        orthonormal.append(proj / norm_p)
+
+    # Fill inactive columns (N_a == 1) with an orthonormal complement
+    inactive = [idx for idx in (0, 1, 2) if idx not in active_columns]
+    unit_axes = [
+        np.array([1.0, 0.0, 0.0], dtype=np.float64),
+        np.array([0.0, 1.0, 0.0], dtype=np.float64),
+        np.array([0.0, 0.0, 1.0], dtype=np.float64),
+    ]
+    for col_idx in inactive:
+        chosen: NDArray[np.float64] | None = None
+        # Prefer standard axis matching col_idx first for well-conditioned diagonal blocks
+        candidates = [unit_axes[col_idx]] + [u for i, u in enumerate(unit_axes) if i != col_idx]
+        for cand in candidates:
+            proj = cand.copy()
+            for prev in orthonormal:
+                proj = proj - float(np.dot(proj, prev)) * prev
+            norm_p = float(np.linalg.norm(proj))
+            if norm_p > 1e-6:
+                chosen = proj / norm_p
+                break
+        if chosen is None:
+            return None
+        basis[:, col_idx] = chosen
+        orthonormal.append(chosen)
+    return basis
+
+
+def _contains_array3d(
+    geometry: Array3D,
+    xx: NDArray[np.float64],
+    yy: NDArray[np.float64],
+    zz: NDArray[np.float64],
+) -> NDArray[np.bool_]:
+    """O(1 + K * C) vectorized inverse lattice evaluator for Array3D."""
+    cmin, cmax = _geometry_bounds(geometry.child)
+    extent = (cmax[0] - cmin[0], cmax[1] - cmin[1], cmax[2] - cmin[2])
+
+    # Non-translational (stepped rotation/scale): direct instance evaluation
+    if geometry.has_step_rotation_or_scale:
+        result = np.zeros(xx.shape, dtype=np.bool_)
+        for (tx, ty, tz), q, (sx, sy, sz) in geometry.instance_transforms(extent):
+            inst = Transform(
+                child=geometry.child,
+                translation=(tx, ty, tz),
+                rotation_quat=q,
+                scale=(sx, sy, sz),
+            )
+            result |= _contains(inst, xx, yy, zz)
+        return result
+
+    counts = tuple(ax.effective_count() for ax in geometry.axes)
+    active_axes = [idx for idx in (0, 1, 2) if counts[idx] > 1]
+    if not active_axes:
+        return _contains(geometry.child, xx, yy, zz)
+
+    step_vecs = tuple(np.asarray(ax.step_vector(extent), dtype=np.float64) for ax in geometry.axes)
+    k_starts = tuple(ax.index_min_offset() for ax in geometry.axes)
+    o_base = (
+        k_starts[0] * step_vecs[0]
+        + k_starts[1] * step_vecs[1]
+        + k_starts[2] * step_vecs[2]
+    )
+    c_child = np.array(
+        [
+            0.5 * (cmin[0] + cmax[0]),
+            0.5 * (cmin[1] + cmax[1]),
+            0.5 * (cmin[2] + cmax[2]),
+        ],
+        dtype=np.float64,
+    )
+    h_child = np.array(
+        [0.5 * extent[0], 0.5 * extent[1], 0.5 * extent[2]],
+        dtype=np.float64,
+    )
+
+    basis = _complete_orthonormal_basis({idx: step_vecs[idx] for idx in active_axes})
+    if basis is None:
+        # Degenerate/collinear active lattice vectors: fall back only within candidate budget
+        if geometry.total_instances > MAX_ARRAY_FDM_CANDIDATES_PER_QUERY:
+            raise ValueError(
+                f"degenerate_array_basis: Array3D '{geometry.geometry_name}' has linearly dependent "
+                f"active lattice vectors with {geometry.total_instances} instances "
+                f"(exceeds fallback budget {MAX_ARRAY_FDM_CANDIDATES_PER_QUERY})"
+            )
+        result = np.zeros(xx.shape, dtype=np.bool_)
+        for (tx, ty, tz), _q, _s in geometry.instance_transforms(extent):
+            result |= _contains(geometry.child, xx - tx, yy - ty, zz - tz)
+        return result
+
+    b_inv = np.linalg.inv(basis)
+    radii = [
+        (
+            float(np.sum(np.abs(b_inv[a, :]) * h_child))
+            + 1e-9 * max(1.0, float(counts[a]))
+            if a in active_axes
+            else 0.0
+        )
+        for a in range(3)
+    ]
+
+    dx = xx - float(o_base[0] + c_child[0])
+    dy = yy - float(o_base[1] + c_child[1])
+    dz = zz - float(o_base[2] + c_child[2])
+
+    m_lo: list[NDArray[np.int64]] = []
+    m_hi: list[NDArray[np.int64]] = []
+    spans: list[NDArray[np.int64]] = []
+    for a in range(3):
+        if a in active_axes:
+            xi_a = b_inv[a, 0] * dx + b_inv[a, 1] * dy + b_inv[a, 2] * dz
+            lo_a = np.maximum(0, np.ceil(xi_a - radii[a]).astype(np.int64))
+            hi_a = np.minimum(counts[a] - 1, np.floor(xi_a + radii[a]).astype(np.int64))
+            m_lo.append(lo_a)
+            m_hi.append(hi_a)
+            spans.append(np.maximum(0, hi_a - lo_a + 1))
+        else:
+            zeros = np.zeros(xx.shape, dtype=np.int64)
+            m_lo.append(zeros)
+            m_hi.append(zeros)
+            spans.append(np.ones(xx.shape, dtype=np.int64))
+
+    cand_counts = spans[0] * spans[1] * spans[2]
+    max_cand = int(np.max(cand_counts)) if cand_counts.size else 0
+    if max_cand > MAX_ARRAY_FDM_CANDIDATES_PER_QUERY:
+        raise ValueError(
+            f"array_candidate_budget_exceeded: Array3D '{geometry.geometry_name}' requires up to "
+            f"{max_cand} candidates per query (limit {MAX_ARRAY_FDM_CANDIDATES_PER_QUERY})"
+        )
+    if max_cand == 0:
+        return np.zeros(xx.shape, dtype=np.bool_)
+
+    max_span_0 = int(np.max(spans[0]))
+    max_span_1 = int(np.max(spans[1]))
+    max_span_2 = int(np.max(spans[2]))
+    v0, v1, v2 = step_vecs
+    result = np.zeros(xx.shape, dtype=np.bool_)
+
+    for dm0 in range(max_span_0):
+        m0 = m_lo[0] + dm0
+        valid0 = m0 <= m_hi[0]
+        for dm1 in range(max_span_1):
+            m1 = m_lo[1] + dm1
+            valid01 = valid0 & (m1 <= m_hi[1])
+            for dm2 in range(max_span_2):
+                m2 = m_lo[2] + dm2
+                active = valid01 & (m2 <= m_hi[2]) & (~result)
+                if not np.any(active):
+                    continue
+                m0_a = m0[active].astype(np.float64)
+                m1_a = m1[active].astype(np.float64)
+                m2_a = m2[active].astype(np.float64)
+                ox = o_base[0] + m0_a * v0[0] + m1_a * v1[0] + m2_a * v2[0]
+                oy = o_base[1] + m0_a * v0[1] + m1_a * v1[1] + m2_a * v2[1]
+                oz = o_base[2] + m0_a * v0[2] + m1_a * v1[2] + m2_a * v2[2]
+                hit = _contains(
+                    geometry.child,
+                    xx[active] - ox,
+                    yy[active] - oy,
+                    zz[active] - oz,
+                )
+                result[active] |= hit
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -556,6 +971,10 @@ def voxelize_geometry(
     sx = bounds_max[0] - bounds_min[0]
     sy = bounds_max[1] - bounds_min[1]
     sz = bounds_max[2] - bounds_min[2]
+    if sx <= 0.0 or sy <= 0.0 or sz <= 0.0:
+        raise ValueError(
+            f"empty_geometry_bounds: geometry '{geometry.geometry_name}' has non-positive bounding box ({sx}, {sy}, {sz})"
+        )
     dx, dy, dz = cell_size
     nx = max(1, int(round(sx / dx)))
     ny = max(1, int(round(sy / dy)))
@@ -575,6 +994,11 @@ def voxelize_geometry(
     ).copy()
 
     mask = _contains(geometry, xx, yy, zz)
+    if not np.any(mask):
+        raise ValueError(
+            f"empty_voxel_mask: geometry '{geometry.geometry_name}' produced zero active cells "
+            f"at cell_size={cell_size}"
+        )
 
     return VoxelMaskData(
         mask=mask,

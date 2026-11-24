@@ -3200,6 +3200,16 @@ pub(crate) fn plan_fdm(
         .as_ref()
         .map(|mask| mask.iter().filter(|&&active| active).count())
         .unwrap_or(n_cells);
+    if active_count == 0 {
+        return Err(PlanError {
+            reasons: vec![format!(
+                "fdm_empty_active_mask: geometry '{}' produced 0 active cells on grid {:?} (cell_size={:?}); check CSG subtraction/intersection or refine cell_size",
+                geometry.name(),
+                grid_cells,
+                cell_size
+            )],
+        });
+    }
     let owner_names = fdm_owner_names(magnet, geometry.name());
     let (region_mask, region_index_by_id) = materialize_object_region_mask(
         problem,
@@ -3404,6 +3414,34 @@ pub(crate) fn plan_fdm(
             "Ellipsoid (radii=[{:.3e}, {:.3e}, {:.3e}]) voxelized to {}x{}x{} grid, {}/{} active cells",
             radii[0], radii[1], radii[2], grid_cells[0], grid_cells[1], grid_cells[2], active_count, n_cells
         ),
+        GeometryShape::Ellipse { radii, height } => format!(
+            "Ellipse (radii=[{:.3e}, {:.3e}], h={:.3e}) voxelized to {}x{}x{} grid, {}/{} active cells",
+            radii[0], radii[1], height, grid_cells[0], grid_cells[1], grid_cells[2], active_count, n_cells
+        ),
+        GeometryShape::Cone {
+            radius_bottom,
+            radius_top,
+            height,
+            ..
+        } => format!(
+            "Cone (r0={:.3e}, r1={:.3e}, h={:.3e}) voxelized to {}x{}x{} grid, {}/{} active cells",
+            radius_bottom, radius_top, height, grid_cells[0], grid_cells[1], grid_cells[2], active_count, n_cells
+        ),
+        GeometryShape::Torus {
+            major_radius,
+            minor_radius,
+            ..
+        } => format!(
+            "Torus (R={:.3e}, r={:.3e}) voxelized to {}x{}x{} grid, {}/{} active cells",
+            major_radius, minor_radius, grid_cells[0], grid_cells[1], grid_cells[2], active_count, n_cells
+        ),
+        GeometryShape::PolygonPrism {
+            vertices_xy,
+            thickness,
+        } => format!(
+            "PolygonPrism (n={}, t={:.3e}) voxelized to {}x{}x{} grid, {}/{} active cells",
+            vertices_xy.len(), thickness, grid_cells[0], grid_cells[1], grid_cells[2], active_count, n_cells
+        ),
         GeometryShape::SinWaveguide {
             period, amplitude, ..
         } => format!(
@@ -3432,6 +3470,22 @@ pub(crate) fn plan_fdm(
         ),
         GeometryShape::Translate { .. } => format!(
             "Translated geometry voxelized to {}x{}x{} grid, {}/{} active cells",
+            grid_cells[0], grid_cells[1], grid_cells[2], active_count, n_cells
+        ),
+        GeometryShape::Transform { .. } => format!(
+            "Transformed geometry voxelized to {}x{}x{} grid, {}/{} active cells",
+            grid_cells[0], grid_cells[1], grid_cells[2], active_count, n_cells
+        ),
+        GeometryShape::SlicePlane { .. } => format!(
+            "Sliced geometry voxelized to {}x{}x{} grid, {}/{} active cells",
+            grid_cells[0], grid_cells[1], grid_cells[2], active_count, n_cells
+        ),
+        GeometryShape::Xor { .. } => format!(
+            "CSG Xor voxelized to {}x{}x{} grid, {}/{} active cells",
+            grid_cells[0], grid_cells[1], grid_cells[2], active_count, n_cells
+        ),
+        GeometryShape::Array3D { .. } => format!(
+            "Array3D lattice voxelized to {}x{}x{} grid, {}/{} active cells",
             grid_cells[0], grid_cells[1], grid_cells[2], active_count, n_cells
         ),
     };
@@ -4832,6 +4886,15 @@ pub(crate) fn plan_fdm_multilayer(
             } else {
                 let (bbox, mask, cells, local_origin) =
                     voxelize_shape(&placed.shape, cell_size, &mut errors);
+                if mask
+                    .as_ref()
+                    .is_some_and(|values| !values.iter().any(|&active| active))
+                {
+                    errors.push(format!(
+                        "fdm_empty_active_mask: geometry '{}' produced 0 active cells on grid {:?} (cell_size={:?})",
+                        geometry_name, cells, cell_size
+                    ));
+                }
                 validate_realized_grid(
                     &format!("geometry '{}'", geometry_name),
                     bbox,

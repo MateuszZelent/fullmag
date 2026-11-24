@@ -788,3 +788,111 @@
   -webkit-line-clamp: 2;
   text-wrap: pretty;
 }
+
+/* ── Array 3D lattice responsive semantic table ── */
+.fm-array3d-section {
+  container-type: inline-size;
+  container-name: fm-array3d;
+  min-inline-size: 0;
+}
+
+.fm-array3d-table-wrap {
+  min-inline-size: 0;
+  max-inline-size: 100%;
+}
+
+.fm-array3d-table {
+  min-inline-size: 0;
+}
+
+@container fm-array3d (max-width: 460px) {
+  .fm-array3d-table thead {
+    position: absolute;
+    inline-size: 1px;
+    block-size: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+
+  .fm-array3d-table,
+  .fm-array3d-table tbody {
+    display: block;
+    inline-size: 100%;
+  }
+
+  .fm-array3d-table .fm-array3d-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: var(--fm-space-1);
+    padding: var(--fm-space-2);
+  }
+
+  .fm-array3d-table .fm-array3d-axis-cell {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: var(--fm-space-1) var(--fm-space-2);
+    border-radius: var(--fm-radius-field);
+    background: var(--fm-field-bg);
+    color: var(--fm-text-primary);
+    font-weight: var(--fm-font-weight-semibold);
+  }
+
+  .fm-array3d-table .fm-array3d-axis-cell::before {
+    content: "Axis";
+    color: var(--fm-text-muted);
+    font-weight: var(--fm-font-weight-medium);
+  }
+
+  .fm-array3d-table .fm-array3d-cell {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--fm-space-2);
+    min-inline-size: 0;
+    padding: 2px var(--fm-space-1);
+  }
+
+  .fm-array3d-table .fm-array3d-cell::before {
+    content: attr(data-label);
+    flex: 0 1 auto;
+    color: var(--fm-text-secondary);
+    font-size: var(--fm-text-xs);
+    font-weight: var(--fm-font-weight-medium);
+    white-space: nowrap;
+  }
+
+  .fm-array3d-table .fm-array3d-cell--stacked {
+    flex-direction: column;
+    align-items: stretch;
+    gap: var(--fm-space-1);
+  }
+
+  .fm-array3d-table .fm-array3d-pitch-group {
+    flex: 0 1 auto;
+    min-inline-size: 0;
+  }
+
+  .fm-array3d-table .fm-array3d-input--count {
+    inline-size: 4.5rem;
+    max-inline-size: 100%;
+  }
+
+  .fm-array3d-table .fm-array3d-input--pitch {
+    inline-size: 5.5rem;
+    max-inline-size: 100%;
+  }
+
+  .fm-array3d-table .fm-array3d-tuple-grid {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: var(--fm-space-1);
+    inline-size: 100%;
+  }
+
+  .fm-array3d-table .fm-array3d-tuple-grid input {
+    inline-size: 100%;
+    min-inline-size: 0;
+  }
+}

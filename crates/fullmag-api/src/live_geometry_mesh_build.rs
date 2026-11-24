@@ -5,12 +5,13 @@
 //! read, and no RunIntent is created. The published mesh records the inputs
 //! needed to revalidate its topology after later edits.
 
+use std::collections::BTreeMap;
 use std::path::Path;
 use std::sync::Arc;
 
 use fullmag_authoring::{SceneDocument, ScriptBuilderMeshState};
 use fullmag_ir::{
-    FemDomainMeshAssetIR, FemDomainRegionMarkerIR, FemSharedDomainBuildReportIR, MeshIR,
+    FemDomainMeshAssetIR, FemDomainRegionMarkerIR, FemSharedDomainBuildReportIR, MeshIR, ProblemIR,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
@@ -346,6 +347,94 @@ pub(crate) fn is_supported_geometry_only_p1_domain(
         })
 }
 
+fn geometry_names_by_owner(
+    problem: &ProblemIR,
+    asset: &FemDomainMeshAssetIR,
+) -> Option<BTreeMap<String, String>> {
+    let mut names = BTreeMap::new();
+    let mut used = std::collections::BTreeSet::new();
+    for magnet in &problem.magnets {
+        let owner = magnet.object_id.as_ref()?;
+        let region = problem
+            .regions
+            .iter()
+            .find(|region| region.name == magnet.region)?;
+        if names.insert(owner.clone(), region.geometry.clone()).is_some()
+            || !used.insert(region.geometry.as_str())
+        {
+            return None;
+        }
+    }
+    (names.len() == asset.region_markers.len()
+        && names.len() == problem.geometry.entries.len()
+        && asset
+            .region_markers
+            .iter()
+            .all(|marker| names.contains_key(&marker.geometry_name)))
+        .then_some(names)
+}
+
+fn bind_mesh_asset(
+    problem: &mut ProblemIR,
+    mut asset: FemDomainMeshAssetIR,
+    names: &BTreeMap<String, String>,
+    provenance: &Value,
+) {
+    for marker in &mut asset.region_markers {
+        marker.geometry_name = names[&marker.geometry_name].clone();
+    }
+    problem.geometry_assets = Some(fullmag_ir::GeometryAssetsIR {
+        fem_domain_mesh_asset: Some(asset),
+        ..Default::default()
+    });
+    problem
+        .problem_meta
+        .runtime_metadata
+        .insert("live_geometry_mesh_reuse".into(), provenance.clone());
+}
+
+/// Bind the authenticated mesh for an observation on the published carrier.
+/// The caller has already qualified the scene and asset against the live mesh.
+pub(crate) fn bind_geometry_for_prepared_fields(
+    problem: &mut ProblemIR,
+    scene: &SceneDocument,
+    asset: FemDomainMeshAssetIR,
+    provenance: &Value,
+) -> Result<(), ApiError> {
+    let mismatch =
+        || ApiError::conflict("The FEM field input does not match the published mesh objects.");
+    if problem.backend_policy.requested_backend != fullmag_ir::BackendTarget::Fem
+        || problem.geometry_assets.is_some()
+        || !problem.object_regions.is_empty()
+    {
+        return Err(mismatch());
+    }
+    let names = geometry_names_by_owner(problem, &asset).ok_or_else(mismatch)?;
+    // The Python script's literals can round SI values from the Inspector.
+    // The mesher used the exact scene geometry, including object mesh policies.
+    // Preserve those dimensions and the authored universe when planning on it.
+    let mut entries = fullmag_authoring::scene_solve_objects(scene)
+        .map(|object| {
+            let name = names.get(&object.id).ok_or_else(mismatch)?;
+            Ok((name.as_str(), scene_object_geometry_entry(object, name)?))
+        })
+        .collect::<Result<BTreeMap<_, _>, ApiError>>()?;
+    for entry in &mut problem.geometry.entries {
+        *entry = entries.remove(entry.name()).ok_or_else(mismatch)?;
+    }
+    if !entries.is_empty() {
+        return Err(mismatch());
+    }
+    if let Some(universe) = study_universe_for_problem_patch(scene)? {
+        problem
+            .problem_meta
+            .runtime_metadata
+            .insert("study_universe".into(), universe);
+    }
+    bind_mesh_asset(problem, asset, &names, provenance);
+    Ok(())
+}
+
 pub(crate) fn bind_reused_geometry_to_inputs(
     repo_root: &Path,
     scene: &SceneDocument,
@@ -382,38 +471,13 @@ pub(crate) fn bind_reused_geometry_to_inputs(
         else {
             return Ok(false);
         };
-        let mut owner_to_geometry = std::collections::BTreeMap::new();
-        let mut geometry_to_owner = std::collections::BTreeMap::new();
-        for magnet in &problem.magnets {
-            let Some(owner) = magnet.object_id.as_ref() else {
-                return Ok(false);
-            };
-            let Some(region) = problem
-                .regions
-                .iter()
-                .find(|region| region.name == magnet.region)
-            else {
-                return Ok(false);
-            };
-            if owner_to_geometry
-                .insert(owner.clone(), region.geometry.clone())
-                .is_some()
-                || geometry_to_owner
-                    .insert(region.geometry.clone(), owner.clone())
-                    .is_some()
-            {
-                return Ok(false);
-            }
-        }
-        if owner_to_geometry.len() != asset.region_markers.len()
-            || owner_to_geometry.len() != problem.geometry.entries.len()
-            || asset
-                .region_markers
-                .iter()
-                .any(|marker| !owner_to_geometry.contains_key(&marker.geometry_name))
-        {
+        let Some(owner_to_geometry) = geometry_names_by_owner(problem, asset) else {
             return Ok(false);
-        }
+        };
+        let geometry_to_owner = owner_to_geometry
+            .iter()
+            .map(|(owner, name)| (name, owner))
+            .collect::<BTreeMap<_, _>>();
         let metadata = &problem.problem_meta.runtime_metadata;
         recipes.push(json!({
             "order": hints.order,
@@ -453,19 +517,7 @@ pub(crate) fn bind_reused_geometry_to_inputs(
     }
 
     for (input, names) in inputs.iter_mut().zip(geometry_names) {
-        let mut mesh = asset.clone();
-        for marker in &mut mesh.region_markers {
-            marker.geometry_name = names[&marker.geometry_name].clone();
-        }
-        input.problem.geometry_assets = Some(fullmag_ir::GeometryAssetsIR {
-            fem_domain_mesh_asset: Some(mesh),
-            ..Default::default()
-        });
-        input
-            .problem
-            .problem_meta
-            .runtime_metadata
-            .insert("live_geometry_mesh_reuse".into(), provenance.clone());
+        bind_mesh_asset(&mut input.problem, asset.clone(), &names, provenance);
     }
     Ok(true)
 }
@@ -886,6 +938,63 @@ mod tests {
         assert!(!options.contains_key("hmin"));
         assert!(!options.contains_key("order"));
         assert_eq!(options.get("optimize"), Some(&json!("Netgen")));
+    }
+
+    #[test]
+    fn prepared_fields_bind_the_built_geometry_for_custom_object_mesh_sizes() {
+        let disk_radius = 150.0_f64 * 1e-9;
+        let airbox_x = 600.0_f64 * 1e-9;
+        let scene: SceneDocument = serde_json::from_value(json!({
+            "version":"scene.v2",
+            "objects":[{
+                "id":"disk", "name":"Disk", "role":"magnet",
+                "geometry":{"geometry_kind":"Cylinder", "geometry_params":{
+                    "radius":disk_radius,"height":1e-8,"axis":[0.0,0.0,1.0]
+                }},
+                "object_mesh":{"mode":"custom", "maximum_element_size":"1.25e-8"}
+            }],
+            "universe":{"mode":"manual","size":[airbox_x,airbox_x,1e-7]}
+        }))
+        .unwrap();
+        let mut problem = ProblemIR::bootstrap_example();
+        problem.backend_policy.requested_backend = fullmag_ir::BackendTarget::Fem;
+        problem.magnets[0].object_id = Some("disk".into());
+        let solver_name = problem.geometry.entries[0].name().to_owned();
+        problem.geometry.entries[0] = fullmag_ir::GeometryEntryIR::Cylinder {
+            name: solver_name.clone(),
+            radius: 1.5e-7,
+            height: 1e-8,
+            axis: [0.0, 0.0, 1.0],
+        };
+        problem.problem_meta.runtime_metadata.insert(
+            "study_universe".into(), json!({"mode":"manual","size":[6e-7,6e-7,1e-7]}),
+        );
+        let mesh = MeshIR::default();
+        let asset = FemDomainMeshAssetIR {
+            mesh_source: None,
+            mesh: Some(mesh.clone()),
+            region_markers: vec![FemDomainRegionMarkerIR {
+                geometry_name:"disk".into(),
+                marker:1,
+            }],
+            object_region_markers: vec![],
+            build_report: None,
+        };
+
+        bind_geometry_for_prepared_fields(
+            &mut problem, &scene, asset, &json!({"source":"geometry_only_mesh"}),
+        )
+        .unwrap();
+
+        let fullmag_ir::GeometryEntryIR::Cylinder { radius, .. } = &problem.geometry.entries[0]
+        else {
+            panic!("expected the exact authored cylinder");
+        };
+        assert_eq!(*radius, disk_radius);
+        assert_eq!(problem.problem_meta.runtime_metadata["study_universe"]["size"][0], airbox_x);
+        let retained = problem.geometry_assets.unwrap().fem_domain_mesh_asset.unwrap();
+        assert_eq!(retained.region_markers[0].geometry_name, solver_name);
+        assert_eq!(retained.mesh, Some(mesh));
     }
 
     #[test]

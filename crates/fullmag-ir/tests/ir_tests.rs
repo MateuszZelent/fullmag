@@ -4888,7 +4888,7 @@ fn analytic_geometry_must_have_positive_dimensions() {
         .expect_err("negative cylinder radius must fail validation");
     assert!(errors
         .iter()
-        .any(|error| error.contains("cylinder geometry 'strip' radius must be positive")));
+        .any(|error| error.contains("cylinder geometry 'strip' radius must be finite and positive")));
 }
 
 #[test]
@@ -4970,7 +4970,7 @@ fn waveguide_geometry_validates_finite_and_positive_fields() {
         .expect_err("invalid sin waveguide must fail validation");
     assert!(errors
         .iter()
-        .any(|error| error.contains("sin_waveguide geometry 'sinus' period must be positive")));
+        .any(|error| error.contains("sin_waveguide geometry 'sinus' period must be finite and positive")));
     assert!(errors
         .iter()
         .any(|error| error.contains("sin_waveguide geometry 'sinus' amplitude must be finite")));

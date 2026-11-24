@@ -425,18 +425,29 @@ export function TexturePreviewCanvas({
       data-slice-plane={effectivePlane}
       data-slot="texture-preview"
     >
-      <div className="flex flex-wrap items-center justify-between gap-1.5">
-        <SegmentedControl<SlicePlaneMode>
-          aria-label="Preview slice plane"
-          options={[
-            { value: "auto", label: `Auto (${effectivePlane.toUpperCase()})` },
-            { value: "xy", label: "XY" },
-            { value: "xz", label: "XZ" },
-            { value: "yz", label: "YZ" },
-          ]}
-          value={sliceMode}
-          onValueChange={setSliceMode}
-        />
+      <div
+        className="flex flex-wrap items-center justify-between gap-1.5"
+        data-slot="preview-slice-bar"
+      >
+        <div className="flex flex-wrap items-center gap-1.5">
+          <span
+            className="text-xs font-medium text-fm-secondary"
+            data-slot="preview-slice-label"
+          >
+            Preview slice:
+          </span>
+          <SegmentedControl<SlicePlaneMode>
+            aria-label="Preview slice plane"
+            options={[
+              { value: "auto", label: `Auto (${effectivePlane.toUpperCase()})` },
+              { value: "xy", label: "XY" },
+              { value: "xz", label: "XZ" },
+              { value: "yz", label: "YZ" },
+            ]}
+            value={sliceMode}
+            onValueChange={setSliceMode}
+          />
+        </div>
         <span className="text-xs tabular-nums text-fm-secondary">{sizeLabelNm}</span>
       </div>
 

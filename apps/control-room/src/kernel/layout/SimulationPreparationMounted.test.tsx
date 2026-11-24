@@ -14,6 +14,7 @@ import { ControlRoomApiError } from "../api/ControlRoomApi";
 import { RequestDiagnosticsController } from "../api/RequestDiagnosticsController";
 import type {
   LiveStatusResource,
+  SceneResource,
   SimulationPreparationResource,
 } from "../api/apiTypes";
 import { CommandDiagnosticsController } from "../commands/CommandDiagnosticsController";
@@ -1329,6 +1330,13 @@ function makeKernel({
   modules.register(footerManifest);
   const kernel = {
     api: {
+        model: {
+          scene: vi.fn(async () => ({
+            revision: 0,
+            objects: [],
+            current_transports: [],
+          } satisfies SceneResource)),
+        },
       sessions: {
         current: { status: loadStatus },
         // Session identity is confirmed against the session collection.

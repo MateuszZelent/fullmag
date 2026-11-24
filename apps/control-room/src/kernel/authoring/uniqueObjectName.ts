@@ -12,7 +12,19 @@
 export function primitiveDraftBaseName(draftNodeId: string | null | undefined): string {
   const identity = draftNodeId?.split(":").at(-1);
   if (identity === "thin-film") return "New thin film";
-  return identity === "cylinder" || identity === "sphere" ? `New ${identity}` : "New box";
+  if (identity === "polygon-prism" || identity === "polygon_prism") {
+    return "New polygon prism";
+  }
+  if (
+    identity === "cylinder" ||
+    identity === "sphere" ||
+    identity === "ellipsoid" ||
+    identity === "cone" ||
+    identity === "torus"
+  ) {
+    return `New ${identity}`;
+  }
+  return "New box";
 }
 
 function nameKey(value: string): string {

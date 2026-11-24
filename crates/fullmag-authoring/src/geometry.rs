@@ -224,14 +224,12 @@ pub fn geometry_capabilities(revision: u64) -> GeometryCapabilitiesResource {
                 true,
                 GeometrySupportStatus::Production,
             ),
-            // FEM meshes spheres and ellipsoids through OCC (ADR 0074); the
-            // FDM flag stays false until that lane has its own evidence.
             primitive(
                 "sphere",
                 "Sphere",
                 "mumax",
                 true,
-                false,
+                true,
                 true,
                 true,
                 GeometrySupportStatus::Production,
@@ -241,7 +239,17 @@ pub fn geometry_capabilities(revision: u64) -> GeometryCapabilitiesResource {
                 "Ellipsoid",
                 "mumax",
                 true,
-                false,
+                true,
+                true,
+                true,
+                GeometrySupportStatus::Production,
+            ),
+            primitive(
+                "ellipse",
+                "Ellipse",
+                "core",
+                true,
+                true,
                 true,
                 true,
                 GeometrySupportStatus::Production,
@@ -352,11 +360,21 @@ pub fn geometry_capabilities(revision: u64) -> GeometryCapabilitiesResource {
                 "cone",
                 "Cone",
                 "dcc",
-                false,
-                false,
-                false,
                 true,
-                GeometrySupportStatus::Preview,
+                true,
+                true,
+                true,
+                GeometrySupportStatus::Production,
+            ),
+            primitive(
+                "torus",
+                "Torus",
+                "dcc",
+                true,
+                true,
+                true,
+                true,
+                GeometrySupportStatus::Production,
             ),
             primitive(
                 "capsule",
@@ -392,21 +410,21 @@ pub fn geometry_capabilities(revision: u64) -> GeometryCapabilitiesResource {
                 "polygon_prism",
                 "Polygon Prism",
                 "dcc",
-                false,
-                false,
-                false,
                 true,
-                GeometrySupportStatus::Preview,
+                true,
+                true,
+                true,
+                GeometrySupportStatus::Production,
             ),
         ],
         csg_capabilities: vec![
             boolean(
                 "union",
-                false,
-                false,
-                false,
-                GeometrySupportStatus::Unsupported,
-                "Union is represented in SceneDocument but not yet realized by the production mesh pipeline.",
+                true,
+                true,
+                true,
+                GeometrySupportStatus::Production,
+                "Union combines two or more solid operands into a single body.",
             ),
             boolean(
                 "subtract",
@@ -414,15 +432,47 @@ pub fn geometry_capabilities(revision: u64) -> GeometryCapabilitiesResource {
                 true,
                 true,
                 GeometrySupportStatus::Production,
-                "Difference is supported for Box/Cylinder inputs, including Cylinder minus Cylinder rings.",
+                "Difference subtracts one or more tool operands from the base body.",
             ),
             boolean(
                 "intersect",
-                false,
-                false,
-                false,
-                GeometrySupportStatus::Unsupported,
-                "Intersection is represented in SceneDocument but not yet realized by the production mesh pipeline.",
+                true,
+                true,
+                true,
+                GeometrySupportStatus::Production,
+                "Intersection retains the common volume shared by all enabled operands.",
+            ),
+            boolean(
+                "xor",
+                true,
+                true,
+                true,
+                GeometrySupportStatus::Production,
+                "Symmetric difference (XOR) keeps regions belonging to an odd number of operands.",
+            ),
+            boolean(
+                "slice_plane",
+                true,
+                true,
+                true,
+                GeometrySupportStatus::Production,
+                "SlicePlane cuts a solid along an authored plane keeping positive or negative half-space.",
+            ),
+            boolean(
+                "transform",
+                true,
+                true,
+                true,
+                GeometrySupportStatus::Production,
+                "Nested affine Transform (translation, rotation_quat, scale, pivot) on any solid operand.",
+            ),
+            boolean(
+                "array_3d",
+                true,
+                true,
+                true,
+                GeometrySupportStatus::Production,
+                "Parametric 3D lattice Array3D (X/Y/Z counts, +/-/± directions, Bravais skew, step rotation/scale).",
             ),
         ],
     }
@@ -878,6 +928,9 @@ fn validate_imported_stl_geometry(
     }
 }
 
+const MAX_GEOMETRY_TREE_DEPTH: usize = 16;
+const MAX_CSG_OPERANDS: usize = 256;
+
 fn validate_geometry_node(
     geometry: &SceneGeometry,
     backend_target: &GeometryBackendTarget,
@@ -885,6 +938,29 @@ fn validate_geometry_node(
     path: &str,
     diagnostics: &mut Vec<GeometryDiagnostic>,
 ) {
+    validate_geometry_node_depth(geometry, backend_target, object_id, path, 0, diagnostics);
+}
+
+fn validate_geometry_node_depth(
+    geometry: &SceneGeometry,
+    backend_target: &GeometryBackendTarget,
+    object_id: &str,
+    path: &str,
+    depth: usize,
+    diagnostics: &mut Vec<GeometryDiagnostic>,
+) {
+    if depth > MAX_GEOMETRY_TREE_DEPTH {
+        diagnostics.push(error(
+            "GEOMETRY_TREE_DEPTH_EXCEEDED",
+            format!(
+                "Geometry tree exceeds maximum nesting depth ({MAX_GEOMETRY_TREE_DEPTH})."
+            ),
+            Some(object_id.to_string()),
+            Some(path.to_string()),
+            &["realize_geometry", "build_mesh", "run_solver"],
+        ));
+        return;
+    }
     match geometry.geometry_kind.as_str() {
         "Box" => validate_positive_vec3_param(
             &geometry.geometry_params,
@@ -904,6 +980,45 @@ fn validate_geometry_node(
             validate_positive_number_param(
                 &geometry.geometry_params,
                 "height",
+                object_id,
+                path,
+                diagnostics,
+            );
+            validate_optional_nonzero_vec3_param(
+                &geometry.geometry_params,
+                "axis",
+                object_id,
+                path,
+                diagnostics,
+            );
+        }
+        "SinWaveguide" => {
+            for key in ["length", "width", "height", "period"] {
+                validate_positive_number_param(
+                    &geometry.geometry_params,
+                    key,
+                    object_id,
+                    path,
+                    diagnostics,
+                );
+            }
+            validate_finite_number_param(
+                &geometry.geometry_params,
+                "amplitude",
+                object_id,
+                path,
+                diagnostics,
+            );
+            validate_optional_finite_number_param(
+                &geometry.geometry_params,
+                "phase",
+                object_id,
+                path,
+                diagnostics,
+            );
+            validate_optional_finite_number_param(
+                &geometry.geometry_params,
+                "z0",
                 object_id,
                 path,
                 diagnostics,
@@ -1046,11 +1161,13 @@ fn validate_geometry_node(
                 ));
             }
         }
-        "Difference" => validate_difference_node(
+        "Union" | "Difference" | "Intersection" | "Xor" => validate_boolean_node(
+            geometry.geometry_kind.as_str(),
             &geometry.geometry_params,
             backend_target,
             object_id,
             path,
+            depth,
             diagnostics,
         ),
         "Csg" => validate_csg_node(
@@ -1058,18 +1175,41 @@ fn validate_geometry_node(
             backend_target,
             object_id,
             path,
+            depth,
             diagnostics,
         ),
-        // The FEM mesher realizes spheres and ellipsoids through OCC (ADR 0074);
-        // the FDM lane keeps them preview-only until it has its own evidence.
-        "Sphere" if *backend_target == GeometryBackendTarget::Fem => validate_positive_number_param(
+        "Translate" => validate_translate_node(
+            &geometry.geometry_params,
+            backend_target,
+            object_id,
+            path,
+            depth,
+            diagnostics,
+        ),
+        "Transform" => validate_transform_node(
+            &geometry.geometry_params,
+            backend_target,
+            object_id,
+            path,
+            depth,
+            diagnostics,
+        ),
+        "SlicePlane" => validate_slice_plane_node(
+            &geometry.geometry_params,
+            backend_target,
+            object_id,
+            path,
+            depth,
+            diagnostics,
+        ),
+        "Sphere" => validate_positive_number_param(
             &geometry.geometry_params,
             "radius",
             object_id,
             path,
             diagnostics,
         ),
-        "Ellipsoid" if *backend_target == GeometryBackendTarget::Fem => {
+        "Ellipsoid" => {
             if geometry.geometry_params.get("radii").is_some() {
                 validate_positive_vec3_param(
                     &geometry.geometry_params,
@@ -1090,17 +1230,140 @@ fn validate_geometry_node(
                 }
             }
         }
-        "Ellipsoid" | "Sphere" | "Ellipse" => diagnostics.push(error(
-            "GEOMETRY_KIND_PREVIEW_ONLY",
-            format!(
-                "{} is preview-only for {} and cannot feed the production mesh pipeline yet.",
-                geometry.geometry_kind,
-                backend_target.as_str()
-            ),
-            Some(object_id.to_string()),
-            Some(path.to_string()),
-            &["realize_geometry", "build_mesh", "run_solver"],
-        )),
+        "Ellipse" => {
+            if geometry.geometry_params.get("radii").is_some() {
+                validate_positive_vec2_param(
+                    &geometry.geometry_params,
+                    "radii",
+                    object_id,
+                    path,
+                    diagnostics,
+                );
+            } else {
+                for key in ["rx", "ry"] {
+                    validate_positive_number_param(
+                        &geometry.geometry_params,
+                        key,
+                        object_id,
+                        path,
+                        diagnostics,
+                    );
+                }
+            }
+            validate_positive_number_param(
+                &geometry.geometry_params,
+                "height",
+                object_id,
+                path,
+                diagnostics,
+            );
+        }
+        "Cone" => {
+            let r_bottom = number_param(&geometry.geometry_params, "radius_bottom");
+            let r_top = number_param(&geometry.geometry_params, "radius_top");
+            if !r_bottom.is_some_and(|v| v.is_finite() && v >= 0.0) {
+                diagnostics.push(error(
+                    "GEOMETRY_PARAM_INVALID",
+                    "Cone parameter 'radius_bottom' must be finite and >= 0.".to_string(),
+                    Some(object_id.to_string()),
+                    Some(path.to_string()),
+                    &["realize_geometry", "build_mesh", "run_solver"],
+                ));
+            }
+            if !r_top.is_some_and(|v| v.is_finite() && v >= 0.0) {
+                diagnostics.push(error(
+                    "GEOMETRY_PARAM_INVALID",
+                    "Cone parameter 'radius_top' must be finite and >= 0.".to_string(),
+                    Some(object_id.to_string()),
+                    Some(path.to_string()),
+                    &["realize_geometry", "build_mesh", "run_solver"],
+                ));
+            }
+            if r_bottom.unwrap_or(0.0) <= 0.0 && r_top.unwrap_or(0.0) <= 0.0 {
+                diagnostics.push(error(
+                    "GEOMETRY_PARAM_INVALID",
+                    "Cone requires at least one positive radius (radius_bottom or radius_top)."
+                        .to_string(),
+                    Some(object_id.to_string()),
+                    Some(path.to_string()),
+                    &["realize_geometry", "build_mesh", "run_solver"],
+                ));
+            }
+            let height_key = if geometry.geometry_params.get("height").is_some() {
+                "height"
+            } else {
+                "length"
+            };
+            validate_positive_number_param(
+                &geometry.geometry_params,
+                height_key,
+                object_id,
+                path,
+                diagnostics,
+            );
+            validate_optional_nonzero_vec3_param(
+                &geometry.geometry_params,
+                "axis",
+                object_id,
+                path,
+                diagnostics,
+            );
+        }
+        "Torus" => {
+            validate_positive_number_param(
+                &geometry.geometry_params,
+                "major_radius",
+                object_id,
+                path,
+                diagnostics,
+            );
+            validate_positive_number_param(
+                &geometry.geometry_params,
+                "minor_radius",
+                object_id,
+                path,
+                diagnostics,
+            );
+            if let (Some(major), Some(minor)) = (
+                number_param(&geometry.geometry_params, "major_radius"),
+                number_param(&geometry.geometry_params, "minor_radius"),
+            ) {
+                if major.is_finite() && minor.is_finite() && minor >= major {
+                    diagnostics.push(error(
+                        "GEOMETRY_PARAM_INVALID",
+                        "Torus requires minor_radius < major_radius.".to_string(),
+                        Some(object_id.to_string()),
+                        Some(path.to_string()),
+                        &["realize_geometry", "build_mesh", "run_solver"],
+                    ));
+                }
+            }
+            validate_optional_nonzero_vec3_param(
+                &geometry.geometry_params,
+                "axis",
+                object_id,
+                path,
+                diagnostics,
+            );
+        }
+        "PolygonPrism" => {
+            validate_polygon_prism_params(
+                &geometry.geometry_params,
+                object_id,
+                path,
+                diagnostics,
+            );
+        }
+        "Array3D" => {
+            validate_array_3d_node(
+                &geometry.geometry_params,
+                backend_target,
+                object_id,
+                path,
+                depth,
+                diagnostics,
+            );
+        }
         other => diagnostics.push(error(
             "GEOMETRY_KIND_UNSUPPORTED",
             format!("Unsupported geometry kind '{other}'."),
@@ -1122,46 +1385,174 @@ fn validate_geometry_node(
     }
 }
 
-fn validate_difference_node(
-    params: &Value,
-    backend_target: &GeometryBackendTarget,
+fn validate_csg_operand_id(
+    operand_id: &str,
+    seen_ids: &mut std::collections::BTreeSet<String>,
     object_id: &str,
     path: &str,
     diagnostics: &mut Vec<GeometryDiagnostic>,
 ) {
-    let base = params.get("base").and_then(parse_geometry_value);
-    let tool = params.get("tool").and_then(parse_geometry_value);
-    match (base, tool) {
-        (Some(base), Some(tool)) => {
-            validate_geometry_node(
-                &base,
-                backend_target,
-                object_id,
-                &format!("{path}/base"),
-                diagnostics,
-            );
-            validate_geometry_node(
-                &tool,
-                backend_target,
-                object_id,
-                &format!("{path}/tool"),
-                diagnostics,
-            );
-            if !matches!(base.geometry_kind.as_str(), "Box" | "Cylinder")
-                || !matches!(tool.geometry_kind.as_str(), "Box" | "Cylinder")
-            {
-                diagnostics.push(error(
-                    "GEOMETRY_CSG_DIFFERENCE_UNSUPPORTED_INPUTS",
-                    "Difference currently supports Box/Cylinder base and tool geometries only.",
-                    Some(object_id.to_string()),
-                    Some(path.to_string()),
-                    &["realize_geometry", "build_mesh", "run_solver"],
-                ));
+    if operand_id.trim().is_empty() {
+        diagnostics.push(error(
+            "GEOMETRY_CSG_OPERAND_ID_INVALID",
+            "Canonical CSG operand IDs must not be empty.",
+            Some(object_id.to_string()),
+            Some(path.to_string()),
+            &["realize_geometry", "build_mesh", "run_solver"],
+        ));
+    } else if !seen_ids.insert(operand_id.to_string()) {
+        diagnostics.push(error(
+            "GEOMETRY_CSG_OPERAND_ID_DUPLICATE",
+            format!("Canonical CSG operand ID '{operand_id}' is duplicated."),
+            Some(object_id.to_string()),
+            Some(path.to_string()),
+            &["realize_geometry", "build_mesh", "run_solver"],
+        ));
+    }
+}
+
+fn validate_boolean_node(
+    kind: &str,
+    params: &Value,
+    backend_target: &GeometryBackendTarget,
+    object_id: &str,
+    path: &str,
+    depth: usize,
+    diagnostics: &mut Vec<GeometryDiagnostic>,
+) {
+    if let Some(raw_operands) = params.get("operands").and_then(Value::as_array) {
+        if raw_operands.is_empty() {
+            diagnostics.push(error(
+                "GEOMETRY_CSG_OPERANDS_EMPTY",
+                format!("{kind} geometry must provide at least one operand."),
+                Some(object_id.to_string()),
+                Some(path.to_string()),
+                &["realize_geometry", "build_mesh", "run_solver"],
+            ));
+            return;
+        }
+        if raw_operands.len() > MAX_CSG_OPERANDS {
+            diagnostics.push(error(
+                "GEOMETRY_CSG_OPERAND_LIMIT_EXCEEDED",
+                format!(
+                    "{kind} geometry exceeds maximum operand count ({MAX_CSG_OPERANDS})."
+                ),
+                Some(object_id.to_string()),
+                Some(path.to_string()),
+                &["realize_geometry", "build_mesh", "run_solver"],
+            ));
+            return;
+        }
+        let mut enabled_count = 0usize;
+        let mut operand_ids = std::collections::BTreeSet::new();
+        for (index, raw_operand) in raw_operands.iter().enumerate() {
+            let op_path = format!("{path}/operands[{index}]");
+            match serde_json::from_value::<crate::SceneBooleanOperand>(raw_operand.clone()) {
+                Ok(operand) => {
+                    validate_csg_operand_id(
+                        &operand.operand_id,
+                        &mut operand_ids,
+                        object_id,
+                        &op_path,
+                        diagnostics,
+                    );
+                    if operand.enabled {
+                        enabled_count += 1;
+                    }
+                    if let Some(transform) = operand.transform.as_ref() {
+                        if !transform_is_valid(transform) {
+                            diagnostics.push(error(
+                                "GEOMETRY_TRANSFORM_INVALID",
+                                format!("Operand '{}' has an invalid transform.", operand.operand_id),
+                                Some(object_id.to_string()),
+                                Some(format!("{op_path}/transform")),
+                                &["realize_geometry", "build_mesh", "run_solver"],
+                            ));
+                        }
+                    }
+                    validate_geometry_node_depth(
+                        &operand.geometry,
+                        backend_target,
+                        object_id,
+                        &format!("{op_path}/geometry"),
+                        depth + 1,
+                        diagnostics,
+                    );
+                }
+                Err(_) => {
+                    // Also allow plain SceneGeometry entries inside operands for compatibility.
+                    if let Some(geometry) = parse_geometry_value(raw_operand) {
+                        enabled_count += 1;
+                        validate_geometry_node_depth(
+                            &geometry,
+                            backend_target,
+                            object_id,
+                            &op_path,
+                            depth + 1,
+                            diagnostics,
+                        );
+                    } else {
+                        diagnostics.push(error(
+                            "GEOMETRY_CSG_OPERAND_INVALID",
+                            format!("{kind} operand at index {index} is invalid."),
+                            Some(object_id.to_string()),
+                            Some(op_path),
+                            &["realize_geometry", "build_mesh", "run_solver"],
+                        ));
+                    }
+                }
             }
+        }
+        if enabled_count == 0 {
+            diagnostics.push(error(
+                "GEOMETRY_CSG_NO_ENABLED_OPERANDS",
+                format!("{kind} geometry must have at least one enabled operand."),
+                Some(object_id.to_string()),
+                Some(path.to_string()),
+                &["realize_geometry", "build_mesh", "run_solver"],
+            ));
+        }
+        return;
+    }
+
+    // Legacy binary forms: Difference { base, tool }, Union/Intersection { a, b }, Xor { left, right }
+    let (left_key, right_key) = match kind {
+        "Difference" => ("base", "tool"),
+        "Xor" => ("left", "right"),
+        _ => ("a", "b"),
+    };
+    let left = params
+        .get(left_key)
+        .or_else(|| params.get("base"))
+        .or_else(|| params.get("left"))
+        .and_then(parse_geometry_value);
+    let right = params
+        .get(right_key)
+        .or_else(|| params.get("tool"))
+        .or_else(|| params.get("right"))
+        .and_then(parse_geometry_value);
+    match (left, right) {
+        (Some(left), Some(right)) => {
+            validate_geometry_node_depth(
+                &left,
+                backend_target,
+                object_id,
+                &format!("{path}/{left_key}"),
+                depth + 1,
+                diagnostics,
+            );
+            validate_geometry_node_depth(
+                &right,
+                backend_target,
+                object_id,
+                &format!("{path}/{right_key}"),
+                depth + 1,
+                diagnostics,
+            );
         }
         _ => diagnostics.push(error(
             "GEOMETRY_CSG_DIFFERENCE_INVALID",
-            "Difference geometry must provide base and tool geometry nodes.",
+            format!("{kind} geometry must provide operands or '{left_key}' and '{right_key}' geometry nodes."),
             Some(object_id.to_string()),
             Some(path.to_string()),
             &["realize_geometry", "build_mesh", "run_solver"],
@@ -1171,26 +1562,447 @@ fn validate_difference_node(
 
 fn validate_csg_node(
     params: &Value,
-    _backend_target: &GeometryBackendTarget,
+    backend_target: &GeometryBackendTarget,
     object_id: &str,
     path: &str,
+    depth: usize,
     diagnostics: &mut Vec<GeometryDiagnostic>,
 ) {
     let op = params.get("op").and_then(Value::as_str).unwrap_or("");
-    if op != "subtract" {
+    if !matches!(
+        op,
+        "union" | "subtract" | "difference" | "intersect" | "intersection" | "xor"
+    ) {
         diagnostics.push(error(
             "GEOMETRY_CSG_OP_UNSUPPORTED",
-            format!("CSG operation '{op}' is not production-realized yet."),
+            format!("CSG operation '{op}' is not supported."),
             Some(object_id.to_string()),
             Some(path.to_string()),
             &["realize_geometry", "build_mesh", "run_solver"],
         ));
     }
-    let children = params.get("children").and_then(Value::as_array);
-    if children.map_or(true, |children| children.len() < 2) {
+    let children = params
+        .get("operands")
+        .or_else(|| params.get("children"))
+        .and_then(Value::as_array);
+    let Some(children) = children else {
         diagnostics.push(error(
             "GEOMETRY_CSG_CHILDREN_INVALID",
             "CSG geometry requires at least two child geometry nodes.",
+            Some(object_id.to_string()),
+            Some(path.to_string()),
+            &["realize_geometry", "build_mesh", "run_solver"],
+        ));
+        return;
+    };
+    if children.len() < 2 || children.len() > MAX_CSG_OPERANDS {
+        diagnostics.push(error(
+            "GEOMETRY_CSG_CHILDREN_INVALID",
+            format!("CSG geometry requires between 2 and {MAX_CSG_OPERANDS} child geometry nodes."),
+            Some(object_id.to_string()),
+            Some(path.to_string()),
+            &["realize_geometry", "build_mesh", "run_solver"],
+        ));
+        return;
+    }
+    let mut operand_ids = std::collections::BTreeSet::new();
+    for (index, child_value) in children.iter().enumerate() {
+        let child_path = format!("{path}/children[{index}]");
+        if let Ok(operand) =
+            serde_json::from_value::<crate::SceneBooleanOperand>(child_value.clone())
+        {
+            validate_csg_operand_id(
+                &operand.operand_id,
+                &mut operand_ids,
+                object_id,
+                &child_path,
+                diagnostics,
+            );
+            validate_geometry_node_depth(
+                &operand.geometry,
+                backend_target,
+                object_id,
+                &child_path,
+                depth + 1,
+                diagnostics,
+            );
+        } else if let Some(child_geom) = parse_geometry_value(child_value) {
+            validate_geometry_node_depth(
+                &child_geom,
+                backend_target,
+                object_id,
+                &child_path,
+                depth + 1,
+                diagnostics,
+            );
+        } else {
+            diagnostics.push(error(
+                "GEOMETRY_CSG_CHILDREN_INVALID",
+                format!("CSG child at index {index} is invalid."),
+                Some(object_id.to_string()),
+                Some(child_path),
+                &["realize_geometry", "build_mesh", "run_solver"],
+            ));
+        }
+    }
+}
+
+fn validate_translate_node(
+    params: &Value,
+    backend_target: &GeometryBackendTarget,
+    object_id: &str,
+    path: &str,
+    depth: usize,
+    diagnostics: &mut Vec<GeometryDiagnostic>,
+) {
+    let offset = vec3_param(params, "offset").or_else(|| vec3_param(params, "by"));
+    if !offset.is_some_and(finite_vec3) {
+        diagnostics.push(error(
+            "GEOMETRY_PARAM_INVALID",
+            "Translate geometry requires finite 3-vector 'offset' (or 'by').".to_string(),
+            Some(object_id.to_string()),
+            Some(path.to_string()),
+            &["realize_geometry", "build_mesh", "run_solver"],
+        ));
+    }
+    let child = params
+        .get("child")
+        .or_else(|| params.get("base"))
+        .and_then(parse_geometry_value);
+    if let Some(child) = child {
+        validate_geometry_node_depth(
+            &child,
+            backend_target,
+            object_id,
+            &format!("{path}/child"),
+            depth + 1,
+            diagnostics,
+        );
+    } else {
+        diagnostics.push(error(
+            "GEOMETRY_PARAM_INVALID",
+            "Translate geometry requires a valid 'child' (or 'base') geometry node.".to_string(),
+            Some(object_id.to_string()),
+            Some(path.to_string()),
+            &["realize_geometry", "build_mesh", "run_solver"],
+        ));
+    }
+}
+
+fn validate_transform_node(
+    params: &Value,
+    backend_target: &GeometryBackendTarget,
+    object_id: &str,
+    path: &str,
+    depth: usize,
+    diagnostics: &mut Vec<GeometryDiagnostic>,
+) {
+    let parsed_patch = params
+        .get("transform")
+        .and_then(|value| serde_json::from_value::<crate::Transform3DPatch>(value.clone()).ok())
+        .or_else(|| serde_json::from_value::<crate::Transform3DPatch>(params.clone()).ok());
+    let transform = parsed_patch.and_then(|patch| {
+        let mut t = Transform3D::default();
+        t.apply_patch(patch).ok()?;
+        Some(t)
+    });
+    if !transform.as_ref().is_some_and(transform_is_valid) {
+        diagnostics.push(error(
+            "GEOMETRY_TRANSFORM_INVALID",
+            "Transform geometry requires a valid Transform3D payload.".to_string(),
+            Some(object_id.to_string()),
+            Some(path.to_string()),
+            &["realize_geometry", "build_mesh", "run_solver"],
+        ));
+    }
+    let child = params
+        .get("child")
+        .or_else(|| params.get("base"))
+        .and_then(parse_geometry_value);
+    if let Some(child) = child {
+        validate_geometry_node_depth(
+            &child,
+            backend_target,
+            object_id,
+            &format!("{path}/child"),
+            depth + 1,
+            diagnostics,
+        );
+    } else {
+        diagnostics.push(error(
+            "GEOMETRY_PARAM_INVALID",
+            "Transform geometry requires a valid 'child' geometry node.".to_string(),
+            Some(object_id.to_string()),
+            Some(path.to_string()),
+            &["realize_geometry", "build_mesh", "run_solver"],
+        ));
+    }
+}
+
+fn validate_slice_plane_node(
+    params: &Value,
+    backend_target: &GeometryBackendTarget,
+    object_id: &str,
+    path: &str,
+    depth: usize,
+    diagnostics: &mut Vec<GeometryDiagnostic>,
+) {
+    let origin =
+        vec3_param(params, "plane_origin_m").or_else(|| vec3_param(params, "plane_origin"));
+    if !origin.is_some_and(finite_vec3) {
+        diagnostics.push(error(
+            "GEOMETRY_PARAM_INVALID",
+            "SlicePlane geometry requires finite 3-vector 'plane_origin_m'.".to_string(),
+            Some(object_id.to_string()),
+            Some(path.to_string()),
+            &["realize_geometry", "build_mesh", "run_solver"],
+        ));
+    }
+    let normal = vec3_param(params, "plane_normal");
+    let normal_valid = normal.is_some_and(|n| {
+        finite_vec3(n) && (n[0] * n[0] + n[1] * n[1] + n[2] * n[2]).sqrt() > 1e-12
+    });
+    if !normal_valid {
+        diagnostics.push(error(
+            "GEOMETRY_PARAM_INVALID",
+            "SlicePlane geometry requires finite non-zero 3-vector 'plane_normal'.".to_string(),
+            Some(object_id.to_string()),
+            Some(path.to_string()),
+            &["realize_geometry", "build_mesh", "run_solver"],
+        ));
+    }
+    let keep_side = params
+        .get("keep_side")
+        .and_then(Value::as_str)
+        .unwrap_or("positive");
+    if !matches!(keep_side, "positive" | "negative") {
+        diagnostics.push(error(
+            "GEOMETRY_PARAM_INVALID",
+            "SlicePlane 'keep_side' must be 'positive' or 'negative'.".to_string(),
+            Some(object_id.to_string()),
+            Some(path.to_string()),
+            &["realize_geometry", "build_mesh", "run_solver"],
+        ));
+    }
+    if let Some(child) = params
+        .get("child")
+        .or_else(|| params.get("base"))
+        .and_then(parse_geometry_value)
+    {
+        validate_geometry_node_depth(
+            &child,
+            backend_target,
+            object_id,
+            &format!("{path}/child"),
+            depth + 1,
+            diagnostics,
+        );
+    } else {
+        diagnostics.push(error(
+            "GEOMETRY_PARAM_INVALID",
+            "SlicePlane geometry requires a valid 'child' geometry node.".to_string(),
+            Some(object_id.to_string()),
+            Some(path.to_string()),
+            &["realize_geometry", "build_mesh", "run_solver"],
+        ));
+    }
+}
+
+fn validate_array_3d_node(
+    params: &Value,
+    backend_target: &GeometryBackendTarget,
+    object_id: &str,
+    path: &str,
+    depth: usize,
+    diagnostics: &mut Vec<GeometryDiagnostic>,
+) {
+    let parsed_axes = params
+        .get("axes")
+        .and_then(|value| serde_json::from_value::<[crate::SceneArrayAxisSpec; 3]>(value.clone()).ok());
+    match parsed_axes {
+        Some(axes) => match crate::validate_and_order_array_axes(&axes) {
+            Ok((_ordered, total_instances)) => {
+                let budget = match backend_target {
+                    GeometryBackendTarget::Fem => fullmag_ir::MAX_ARRAY_INSTANCES_FEM_OCC,
+                    GeometryBackendTarget::Fdm => fullmag_ir::MAX_ARRAY_INSTANCES_FDM,
+                };
+                if total_instances > budget {
+                    diagnostics.push(error(
+                        "GEOMETRY_ARRAY3D_BUDGET_EXCEEDED",
+                        format!(
+                            "Array3D total instances ({total_instances}) exceeds {} backend limit ({budget}).",
+                            backend_target.as_str().to_uppercase()
+                        ),
+                        Some(object_id.to_string()),
+                        Some(path.to_string()),
+                        &["realize_geometry", "build_mesh", "run_solver"],
+                    ));
+                }
+            }
+            Err(message) => {
+                diagnostics.push(error(
+                    "GEOMETRY_PARAM_INVALID",
+                    message,
+                    Some(object_id.to_string()),
+                    Some(format!("{path}/axes")),
+                    &["realize_geometry", "build_mesh", "run_solver"],
+                ));
+            }
+        },
+        None => {
+            diagnostics.push(error(
+                "GEOMETRY_PARAM_INVALID",
+                "Array3D geometry requires an 'axes' array of 3 valid axis specifications (x, y, z)."
+                    .to_string(),
+                Some(object_id.to_string()),
+                Some(format!("{path}/axes")),
+                &["realize_geometry", "build_mesh", "run_solver"],
+            ));
+        }
+    }
+
+    if let Some(raw_ct) = params.get("child_transform") {
+        if !raw_ct.is_null() {
+            let valid = serde_json::from_value::<crate::Transform3DPatch>(raw_ct.clone())
+                .ok()
+                .and_then(|patch| {
+                    let mut t = Transform3D::default();
+                    t.apply_patch(patch).ok()?;
+                    Some(t)
+                })
+                .as_ref()
+                .is_some_and(transform_is_valid);
+            if !valid {
+                diagnostics.push(error(
+                    "GEOMETRY_TRANSFORM_INVALID",
+                    "Array3D 'child_transform' must be a valid Transform3D payload.".to_string(),
+                    Some(object_id.to_string()),
+                    Some(format!("{path}/child_transform")),
+                    &["realize_geometry", "build_mesh", "run_solver"],
+                ));
+            }
+        }
+    }
+
+    if let Some(child) = params
+        .get("child")
+        .or_else(|| params.get("base"))
+        .and_then(parse_geometry_value)
+    {
+        validate_geometry_node_depth(
+            &child,
+            backend_target,
+            object_id,
+            &format!("{path}/child"),
+            depth + 1,
+            diagnostics,
+        );
+    } else {
+        diagnostics.push(error(
+            "GEOMETRY_PARAM_INVALID",
+            "Array3D geometry requires a valid 'child' geometry node.".to_string(),
+            Some(object_id.to_string()),
+            Some(path.to_string()),
+            &["realize_geometry", "build_mesh", "run_solver"],
+        ));
+    }
+}
+
+fn validate_polygon_prism_params(
+    params: &Value,
+    object_id: &str,
+    path: &str,
+    diagnostics: &mut Vec<GeometryDiagnostic>,
+) {
+    validate_positive_number_param(params, "thickness", object_id, path, diagnostics);
+    let vertices = params
+        .get("vertices_xy")
+        .and_then(Value::as_array)
+        .and_then(|arr| {
+            arr.iter()
+                .map(|item| {
+                    let pair = item.as_array()?;
+                    if pair.len() != 2 {
+                        return None;
+                    }
+                    let x = pair[0].as_f64()?;
+                    let y = pair[1].as_f64()?;
+                    (x.is_finite() && y.is_finite()).then_some([x, y])
+                })
+                .collect::<Option<Vec<[f64; 2]>>>()
+        });
+    match vertices {
+        Some(verts) if verts.len() >= 3 => {
+            let mut doubled_area = 0.0;
+            for i in 0..verts.len() {
+                let a = verts[i];
+                let b = verts[(i + 1) % verts.len()];
+                doubled_area += a[0] * b[1] - b[0] * a[1];
+            }
+            if !doubled_area.is_finite() || doubled_area.abs() <= 1e-30 {
+                diagnostics.push(error(
+                    "GEOMETRY_PARAM_INVALID",
+                    "PolygonPrism 'vertices_xy' must enclose non-zero area.".to_string(),
+                    Some(object_id.to_string()),
+                    Some(path.to_string()),
+                    &["realize_geometry", "build_mesh", "run_solver"],
+                ));
+            }
+        }
+        _ => diagnostics.push(error(
+            "GEOMETRY_PARAM_INVALID",
+            "PolygonPrism requires 'vertices_xy' with at least 3 finite 2D points.".to_string(),
+            Some(object_id.to_string()),
+            Some(path.to_string()),
+            &["realize_geometry", "build_mesh", "run_solver"],
+        )),
+    }
+}
+
+fn validate_positive_vec2_param(
+    params: &Value,
+    key: &str,
+    object_id: &str,
+    path: &str,
+    diagnostics: &mut Vec<GeometryDiagnostic>,
+) {
+    let valid = params
+        .get(key)
+        .and_then(Value::as_array)
+        .filter(|arr| arr.len() == 2)
+        .and_then(|arr| Some([arr[0].as_f64()?, arr[1].as_f64()?]))
+        .is_some_and(|v| v[0].is_finite() && v[0] > 0.0 && v[1].is_finite() && v[1] > 0.0);
+    if !valid {
+        diagnostics.push(error(
+            "GEOMETRY_PARAM_INVALID",
+            format!("Geometry parameter '{key}' must be a positive 2-vector."),
+            Some(object_id.to_string()),
+            Some(path.to_string()),
+            &["realize_geometry", "build_mesh", "run_solver"],
+        ));
+    }
+}
+
+fn validate_optional_nonzero_vec3_param(
+    params: &Value,
+    key: &str,
+    object_id: &str,
+    path: &str,
+    diagnostics: &mut Vec<GeometryDiagnostic>,
+) {
+    let Some(raw) = params.get(key) else {
+        return;
+    };
+    if raw.is_null() {
+        return;
+    }
+    let valid = vec3_param(params, key).is_some_and(|v| {
+        finite_vec3(v) && (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt() > 1e-12
+    });
+    if !valid {
+        diagnostics.push(error(
+            "GEOMETRY_PARAM_INVALID",
+            format!("Geometry parameter '{key}' must be a finite non-zero 3-vector."),
             Some(object_id.to_string()),
             Some(path.to_string()),
             &["realize_geometry", "build_mesh", "run_solver"],
@@ -1200,10 +2012,20 @@ fn validate_csg_node(
 
 fn derive_object_bounds(object: &SceneObject) -> Option<([f64; 3], [f64; 3])> {
     let (local_min, local_max) = derive_geometry_bounds(&object.geometry)?;
-    let scale = object.transform.scale;
+    transform_bounds_by_transform3d(local_min, local_max, &object.transform)
+}
+
+fn transform_bounds_by_transform3d(
+    local_min: [f64; 3],
+    local_max: [f64; 3],
+    transform: &Transform3D,
+) -> Option<([f64; 3], [f64; 3])> {
+    let scale = transform.scale;
+    let pivot = transform.pivot;
     if !finite_vec3(scale)
-        || !finite_vec3(object.transform.translation)
-        || !quat_is_valid(object.transform.rotation_quat)
+        || !finite_vec3(pivot)
+        || !finite_vec3(transform.translation)
+        || !quat_is_valid(transform.rotation_quat)
     {
         return None;
     }
@@ -1212,12 +2034,16 @@ fn derive_object_bounds(object: &SceneObject) -> Option<([f64; 3], [f64; 3])> {
     for x in [local_min[0], local_max[0]] {
         for y in [local_min[1], local_max[1]] {
             for z in [local_min[2], local_max[2]] {
-                let scaled = [x * scale[0], y * scale[1], z * scale[2]];
-                let rotated = rotate_point_by_quat(scaled, object.transform.rotation_quat);
+                let scaled = [
+                    (x - pivot[0]) * scale[0],
+                    (y - pivot[1]) * scale[1],
+                    (z - pivot[2]) * scale[2],
+                ];
+                let rotated = rotate_point_by_quat(scaled, transform.rotation_quat);
                 let world = [
-                    rotated[0] + object.transform.translation[0],
-                    rotated[1] + object.transform.translation[1],
-                    rotated[2] + object.transform.translation[2],
+                    rotated[0] + pivot[0] + transform.translation[0],
+                    rotated[1] + pivot[1] + transform.translation[1],
+                    rotated[2] + pivot[2] + transform.translation[2],
                 ];
                 world_min = min_vec3(world_min, world);
                 world_max = max_vec3(world_max, world);
@@ -1852,6 +2678,10 @@ fn piecewise_path_3d_layout_bounds(params: &Value) -> Option<([f64; 3], [f64; 3]
     ))
 }
 
+pub fn derive_scene_geometry_bounds(geometry: &SceneGeometry) -> Option<([f64; 3], [f64; 3])> {
+    derive_geometry_bounds(geometry)
+}
+
 fn derive_geometry_bounds(geometry: &SceneGeometry) -> Option<([f64; 3], [f64; 3])> {
     match geometry.geometry_kind.as_str() {
         "MicrostripAntennaLayout" => microstrip_layout_bounds(&geometry.geometry_params),
@@ -1957,12 +2787,356 @@ fn derive_geometry_bounds(geometry: &SceneGeometry) -> Option<([f64; 3], [f64; 3
             }
             Some(([-rx, -ry, -rz], [rx, ry, rz]))
         }
+        "Ellipse" => {
+            let [rx, ry] = if let Some(arr) = geometry
+                .geometry_params
+                .get("radii")
+                .and_then(Value::as_array)
+                .filter(|arr| arr.len() == 2)
+            {
+                [arr[0].as_f64()?, arr[1].as_f64()?]
+            } else {
+                [
+                    number_param(&geometry.geometry_params, "rx")?,
+                    number_param(&geometry.geometry_params, "ry")?,
+                ]
+            };
+            let height = number_param(&geometry.geometry_params, "height")?;
+            if !(rx.is_finite() && rx > 0.0 && ry.is_finite() && ry > 0.0 && height.is_finite() && height > 0.0) {
+                return None;
+            }
+            Some(([-rx, -ry, -height * 0.5], [rx, ry, height * 0.5]))
+        }
+        "Cone" => {
+            let r0 = number_param(&geometry.geometry_params, "radius_bottom")?;
+            let r1 = number_param(&geometry.geometry_params, "radius_top")?;
+            let height = number_param(&geometry.geometry_params, "height")
+                .or_else(|| number_param(&geometry.geometry_params, "length"))?;
+            if !(r0.is_finite() && r0 >= 0.0 && r1.is_finite() && r1 >= 0.0 && (r0 > 0.0 || r1 > 0.0) && height.is_finite() && height > 0.0) {
+                return None;
+            }
+            let axis = vec3_param(&geometry.geometry_params, "axis").unwrap_or([0.0, 0.0, 1.0]);
+            let norm = (axis[0] * axis[0] + axis[1] * axis[1] + axis[2] * axis[2]).sqrt();
+            if !finite_vec3(axis) || !norm.is_finite() || norm <= 1e-12 {
+                return None;
+            }
+            let u = [axis[0] / norm, axis[1] / norm, axis[2] / norm];
+            let half_h = height * 0.5;
+            let mut bmin = [0.0; 3];
+            let mut bmax = [0.0; 3];
+            for i in 0..3 {
+                let radial = (1.0 - u[i] * u[i]).max(0.0).sqrt();
+                bmin[i] = (half_h * u[i] - r1 * radial).min(-half_h * u[i] - r0 * radial);
+                bmax[i] = (half_h * u[i] + r1 * radial).max(-half_h * u[i] + r0 * radial);
+            }
+            Some((bmin, bmax))
+        }
+        "Torus" => {
+            let major = number_param(&geometry.geometry_params, "major_radius")?;
+            let minor = number_param(&geometry.geometry_params, "minor_radius")?;
+            if !(major.is_finite() && major > 0.0 && minor.is_finite() && minor > 0.0 && minor < major) {
+                return None;
+            }
+            let axis = vec3_param(&geometry.geometry_params, "axis").unwrap_or([0.0, 0.0, 1.0]);
+            let norm = (axis[0] * axis[0] + axis[1] * axis[1] + axis[2] * axis[2]).sqrt();
+            if !finite_vec3(axis) || !norm.is_finite() || norm <= 1e-12 {
+                return None;
+            }
+            let u = [axis[0] / norm, axis[1] / norm, axis[2] / norm];
+            let ext = [0, 1, 2].map(|i| major * (1.0 - u[i] * u[i]).max(0.0).sqrt() + minor);
+            Some(([-ext[0], -ext[1], -ext[2]], ext))
+        }
+        "PolygonPrism" => {
+            let thickness = number_param(&geometry.geometry_params, "thickness")?;
+            if !thickness.is_finite() || thickness <= 0.0 {
+                return None;
+            }
+            let verts = geometry.geometry_params.get("vertices_xy")?.as_array()?;
+            if verts.len() < 3 {
+                return None;
+            }
+            let mut min_x = f64::INFINITY;
+            let mut max_x = f64::NEG_INFINITY;
+            let mut min_y = f64::INFINITY;
+            let mut max_y = f64::NEG_INFINITY;
+            for item in verts {
+                let pair = item.as_array()?;
+                let x = pair.first()?.as_f64()?;
+                let y = pair.get(1)?.as_f64()?;
+                if !x.is_finite() || !y.is_finite() {
+                    return None;
+                }
+                min_x = min_x.min(x);
+                max_x = max_x.max(x);
+                min_y = min_y.min(y);
+                max_y = max_y.max(y);
+            }
+            Some(([min_x, min_y, -thickness * 0.5], [max_x, max_y, thickness * 0.5]))
+        }
+        "SinWaveguide" => {
+            let length = number_param(&geometry.geometry_params, "length")?;
+            let width = number_param(&geometry.geometry_params, "width")?;
+            let height = number_param(&geometry.geometry_params, "height")?;
+            let amplitude = number_param(&geometry.geometry_params, "amplitude")?;
+            let z0 = number_param(&geometry.geometry_params, "z0").unwrap_or(0.0);
+            if !(length.is_finite() && length > 0.0 && width.is_finite() && width > 0.0 && height.is_finite() && height > 0.0 && amplitude.is_finite() && z0.is_finite()) {
+                return None;
+            }
+            let zm = amplitude.abs() + 0.5 * height;
+            Some(([-0.5 * length, -0.5 * width, z0 - zm], [0.5 * length, 0.5 * width, z0 + zm]))
+        }
+        "Translate" => {
+            let offset = vec3_param(&geometry.geometry_params, "offset")
+                .or_else(|| vec3_param(&geometry.geometry_params, "by"))?;
+            let child = geometry
+                .geometry_params
+                .get("child")
+                .or_else(|| geometry.geometry_params.get("base"))
+                .and_then(parse_geometry_value)?;
+            let (cmin, cmax) = derive_geometry_bounds(&child)?;
+            Some((
+                [cmin[0] + offset[0], cmin[1] + offset[1], cmin[2] + offset[2]],
+                [cmax[0] + offset[0], cmax[1] + offset[1], cmax[2] + offset[2]],
+            ))
+        }
+        "Transform" => {
+            let patch = geometry
+                .geometry_params
+                .get("transform")
+                .and_then(|v| serde_json::from_value::<crate::Transform3DPatch>(v.clone()).ok())
+                .or_else(|| {
+                    serde_json::from_value::<crate::Transform3DPatch>(geometry.geometry_params.clone()).ok()
+                })?;
+            let mut transform = Transform3D::default();
+            transform.apply_patch(patch).ok()?;
+            let child = geometry
+                .geometry_params
+                .get("child")
+                .or_else(|| geometry.geometry_params.get("base"))
+                .and_then(parse_geometry_value)?;
+            let (cmin, cmax) = derive_geometry_bounds(&child)?;
+            transform_bounds_by_transform3d(cmin, cmax, &transform)
+        }
+        "SlicePlane" => {
+            let child = geometry
+                .geometry_params
+                .get("child")
+                .or_else(|| geometry.geometry_params.get("base"))
+                .and_then(parse_geometry_value)?;
+            derive_geometry_bounds(&child)
+        }
+        "Array3D" => {
+            let child = geometry
+                .geometry_params
+                .get("child")
+                .or_else(|| geometry.geometry_params.get("base"))
+                .and_then(parse_geometry_value)?;
+            let (mut cmin, mut cmax) = derive_geometry_bounds(&child)?;
+            if let Some(raw_ct) = geometry
+                .geometry_params
+                .get("child_transform")
+                .filter(|v| !v.is_null())
+            {
+                let patch = serde_json::from_value::<crate::Transform3DPatch>(raw_ct.clone()).ok()?;
+                let mut t = Transform3D::default();
+                t.apply_patch(patch).ok()?;
+                (cmin, cmax) = transform_bounds_by_transform3d(cmin, cmax, &t)?;
+            }
+            let raw_axes = geometry.geometry_params.get("axes")?;
+            let axes = serde_json::from_value::<[crate::SceneArrayAxisSpec; 3]>(raw_axes.clone()).ok()?;
+            let (ordered, total) = crate::validate_and_order_array_axes(&axes).ok()?;
+            if total > fullmag_ir::MAX_ARRAY_INSTANCES_FDM {
+                return None;
+            }
+            let extent = [cmax[0] - cmin[0], cmax[1] - cmin[1], cmax[2] - cmin[2]];
+            let mut step_vectors = [[0.0; 3]; 3];
+            let mut k_ranges = [(0.0, 0.0); 3];
+            let mut has_rot_or_scale = false;
+            for a in 0..3 {
+                let ax = &ordered[a];
+                let delta = match ax.spacing_mode {
+                    crate::SceneArraySpacingMode::LatticeStep => ax.pitch_m,
+                    crate::SceneArraySpacingMode::BoundingBoxGap => {
+                        ax.relative_factor * extent[a] + ax.gap_m
+                    }
+                };
+                let mut v = ax.step_translation_extra_m;
+                v[a] += delta;
+                step_vectors[a] = v;
+                let n = ax.effective_count();
+                if n > 1 {
+                    let span = (n - 1) as f64;
+                    k_ranges[a] = match ax.direction {
+                        crate::SceneArrayDirection::Positive => (0.0, span),
+                        crate::SceneArrayDirection::Negative => (-span, 0.0),
+                        crate::SceneArrayDirection::Symmetric => (-0.5 * span, 0.5 * span),
+                    };
+                    if ax.step_rotation_euler_deg.iter().any(|r| r.abs() > 1e-12)
+                        || ax.step_scale_factor.iter().any(|s| (*s - 1.0).abs() > 1e-12)
+                    {
+                        has_rot_or_scale = true;
+                    }
+                }
+            }
+            if !has_rot_or_scale {
+                let mut tmin = [0.0; 3];
+                let mut tmax = [0.0; 3];
+                for a in 0..3 {
+                    let (klo, khi) = k_ranges[a];
+                    for j in 0..3 {
+                        let plo = klo * step_vectors[a][j];
+                        let phi = khi * step_vectors[a][j];
+                        tmin[j] += plo.min(phi);
+                        tmax[j] += plo.max(phi);
+                    }
+                }
+                return Some((
+                    [cmin[0] + tmin[0], cmin[1] + tmin[1], cmin[2] + tmin[2]],
+                    [cmax[0] + tmax[0], cmax[1] + tmax[1], cmax[2] + tmax[2]],
+                ));
+            }
+            let mut out_min = [f64::INFINITY; 3];
+            let mut out_max = [f64::NEG_INFINITY; 3];
+            let idx_x = ordered[0].canonical_indices();
+            let idx_y = ordered[1].canonical_indices();
+            let idx_z = ordered[2].canonical_indices();
+            for &kx in &idx_x {
+                for &ky in &idx_y {
+                    for &kz in &idx_z {
+                        let ks = [kx, ky, kz];
+                        let mut trans = [0.0; 3];
+                        let mut rot_deg = [0.0; 3];
+                        let mut scale = [1.0; 3];
+                        for a in 0..3 {
+                            let k = ks[a];
+                            if k == 0.0 {
+                                continue;
+                            }
+                            for j in 0..3 {
+                                trans[j] += k * step_vectors[a][j];
+                                rot_deg[j] += k * ordered[a].step_rotation_euler_deg[j];
+                                let sf = ordered[a].step_scale_factor[j];
+                                if (sf - 1.0).abs() > 1e-15 {
+                                    scale[j] *= sf.powf(k);
+                                }
+                            }
+                        }
+                        let inst_transform = Transform3D {
+                            translation: trans,
+                            rotation_quat: crate::euler_xyz_deg_to_quat(rot_deg),
+                            scale,
+                            pivot: [0.0, 0.0, 0.0],
+                        };
+                        let (imin, imax) =
+                            transform_bounds_by_transform3d(cmin, cmax, &inst_transform)?;
+                        out_min = min_vec3(out_min, imin);
+                        out_max = max_vec3(out_max, imax);
+                    }
+                }
+            }
+            Some((out_min, out_max))
+        }
         "Difference" => {
+            if let Some(operands) = geometry
+                .geometry_params
+                .get("operands")
+                .and_then(Value::as_array)
+            {
+                let first = operands.iter().find_map(|raw| {
+                    if let Ok(op) = serde_json::from_value::<crate::SceneBooleanOperand>(raw.clone()) {
+                        if !op.enabled {
+                            return None;
+                        }
+                        let (bmin, bmax) = derive_geometry_bounds(&op.geometry)?;
+                        return match op.transform.as_ref() {
+                            Some(t) => transform_bounds_by_transform3d(bmin, bmax, t),
+                            None => Some((bmin, bmax)),
+                        };
+                    }
+                    parse_geometry_value(raw).and_then(|g| derive_geometry_bounds(&g))
+                });
+                return first;
+            }
             let base = geometry
                 .geometry_params
                 .get("base")
                 .and_then(parse_geometry_value)?;
             derive_geometry_bounds(&base)
+        }
+        "Union" | "Xor" | "Intersection" | "Csg" => {
+            let op_kind = if geometry.geometry_kind == "Csg" {
+                match geometry.geometry_params.get("op").and_then(Value::as_str).unwrap_or("") {
+                    "subtract" | "difference" => "Difference",
+                    "intersect" | "intersection" => "Intersection",
+                    _ => "Union",
+                }
+            } else {
+                geometry.geometry_kind.as_str()
+            };
+            let mut child_bounds = Vec::new();
+            if let Some(operands) = geometry
+                .geometry_params
+                .get("operands")
+                .or_else(|| geometry.geometry_params.get("children"))
+                .and_then(Value::as_array)
+            {
+                for raw in operands {
+                    if let Ok(op) = serde_json::from_value::<crate::SceneBooleanOperand>(raw.clone()) {
+                        if !op.enabled {
+                            continue;
+                        }
+                        if let Some((bmin, bmax)) = derive_geometry_bounds(&op.geometry) {
+                            let transformed = match op.transform.as_ref() {
+                                Some(t) => transform_bounds_by_transform3d(bmin, bmax, t),
+                                None => Some((bmin, bmax)),
+                            };
+                            if let Some(bounds) = transformed {
+                                child_bounds.push(bounds);
+                            }
+                        }
+                    } else if let Some(g) = parse_geometry_value(raw) {
+                        if let Some(bounds) = derive_geometry_bounds(&g) {
+                            child_bounds.push(bounds);
+                        }
+                    }
+                }
+            } else {
+                for key in ["base", "a", "left", "tool", "b", "right"] {
+                    if let Some(g) = geometry.geometry_params.get(key).and_then(parse_geometry_value) {
+                        if let Some(bounds) = derive_geometry_bounds(&g) {
+                            child_bounds.push(bounds);
+                        }
+                    }
+                }
+            }
+            if child_bounds.is_empty() {
+                return geometry.bounds_min.zip(geometry.bounds_max);
+            }
+            match op_kind {
+                "Difference" => Some(child_bounds[0]),
+                "Intersection" => {
+                    let mut acc_min = child_bounds[0].0;
+                    let mut acc_max = child_bounds[0].1;
+                    for (bmin, bmax) in child_bounds.into_iter().skip(1) {
+                        acc_min = max_vec3(acc_min, bmin);
+                        acc_max = min_vec3(acc_max, bmax);
+                    }
+                    if (0..3).any(|i| acc_max[i] < acc_min[i]) {
+                        None
+                    } else {
+                        Some((acc_min, acc_max))
+                    }
+                }
+                _ => {
+                    let mut acc_min = child_bounds[0].0;
+                    let mut acc_max = child_bounds[0].1;
+                    for (bmin, bmax) in child_bounds.into_iter().skip(1) {
+                        acc_min = min_vec3(acc_min, bmin);
+                        acc_max = max_vec3(acc_max, bmax);
+                    }
+                    Some((acc_min, acc_max))
+                }
+            }
         }
         _ => geometry.bounds_min.zip(geometry.bounds_max),
     }
@@ -2315,6 +3489,11 @@ mod tests {
                     alpha: 0.01,
                     dind: None,
                     dbulk: None,
+                    ku1: None,
+                    ku2: None,
+                    kc1: None,
+                    kc2: None,
+                    kc3: None,
                 },
                 source: None,
                 references: Vec::new(),
@@ -2653,6 +3832,56 @@ mod tests {
             params["transform"]["rotation_matrix"] = rotation;
             assert!(parse_cpw_layout(&params).is_err());
         }
+    }
+
+    #[test]
+    fn canonical_boolean_operands_require_nonempty_unique_ids() {
+        let raw_box = json!({
+            "geometry_kind": "Box",
+            "geometry_params": { "size": [1.0, 1.0, 1.0] }
+        });
+        for (ids, expected_code) in [
+            (["", "op:2"], "GEOMETRY_CSG_OPERAND_ID_INVALID"),
+            (["op:1", "op:1"], "GEOMETRY_CSG_OPERAND_ID_DUPLICATE"),
+        ] {
+            let scene = scene_with_object(SceneGeometry {
+                source_asset: None,
+                geometry_kind: "Union".to_string(),
+                geometry_params: json!({
+                    "operands": [
+                        { "operand_id": ids[0], "geometry": raw_box.clone() },
+                        { "operand_id": ids[1], "geometry": raw_box.clone() }
+                    ]
+                }),
+                bounds_min: None,
+                bounds_max: None,
+            });
+            let validation = validate_geometry_scene(&scene, GeometryBackendTarget::Fem);
+            assert!(validation
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.code == expected_code));
+            assert!(geometry_blocks_mesh_build(&scene, GeometryBackendTarget::Fem).is_some());
+        }
+    }
+
+    #[test]
+    fn legacy_raw_geometry_operand_arrays_remain_supported() {
+        let scene = scene_with_object(SceneGeometry {
+            source_asset: None,
+            geometry_kind: "Union".to_string(),
+            geometry_params: json!({ "operands": [
+                { "geometry_kind": "Box", "geometry_params": { "size": [1.0, 1.0, 1.0] } },
+                { "geometry_kind": "Box", "geometry_params": { "size": [2.0, 1.0, 1.0] } }
+            ]}),
+            bounds_min: None,
+            bounds_max: None,
+        });
+        let validation = validate_geometry_scene(&scene, GeometryBackendTarget::Fem);
+        assert!(!validation.diagnostics.iter().any(|diagnostic| matches!(
+            diagnostic.code.as_str(),
+            "GEOMETRY_CSG_OPERAND_ID_INVALID" | "GEOMETRY_CSG_OPERAND_ID_DUPLICATE"
+        )));
     }
 
     #[test]

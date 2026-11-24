@@ -503,7 +503,7 @@ function LiveViewport3DModule({
       kernel.visualization.clearSavedFieldPresentation();
     }
   }, [kernel.visualization, savedPresentation, savedProjectId]);
-  const { select, clear } = useSelectionActions(moduleId);
+  const { select, toggleObjectSelection, clear } = useSelectionActions(moduleId);
   const tracker = useViewport3DResourceTracker();
   const sessionIdentityKey = sessionIdentity ? sessionResourceIdentityKey(sessionIdentity) : null;
   const previousSessionIdentityKeyRef = useRef(sessionIdentityKey);
@@ -694,6 +694,7 @@ function LiveViewport3DModule({
       fdmRegionMembershipBinary: sceneModel.fdmRegionMembershipBinary,
       semanticTargetCatalog: sceneModel.semanticTargetCatalog,
       select,
+      toggleObjectSelection,
   });
   const fdmSelectionAnnouncement = useMemo(
     () =>
@@ -1016,6 +1017,7 @@ function useViewport3DSelectionHandlers({
   fdmRegionMembershipBinary,
   semanticTargetCatalog,
   select,
+  toggleObjectSelection,
 }: {
   domainId: string | null | undefined;
   fdmDomain: { shape: readonly [number, number, number] } | null;
@@ -1024,6 +1026,7 @@ function useViewport3DSelectionHandlers({
   fdmRegionMembershipBinary: import("@/kernel/api/codecs").DecodedFdmRegionMembership | null | undefined;
   semanticTargetCatalog: SemanticRenderTargetCatalog;
   select: ReturnType<typeof useSelectionActions>["select"];
+  toggleObjectSelection: ReturnType<typeof useSelectionActions>["toggleObjectSelection"];
 }) {
   const onSelectDomain = useCallback(() => {
     select(viewportSelectionForDomain(domainId));
@@ -1072,10 +1075,18 @@ function useViewport3DSelectionHandlers({
     [select, semanticTargetCatalog],
   );
   const onSelectObject = useCallback(
-    (object: Viewport3DPrimitiveObject) => {
-      select(viewportSelectionForObject(object));
+    (
+      object: Viewport3DPrimitiveObject,
+      modifiers?: { ctrlKey?: boolean; metaKey?: boolean; shiftKey?: boolean },
+    ) => {
+      const patch = viewportSelectionForObject(object);
+      if (modifiers?.ctrlKey || modifiers?.metaKey || modifiers?.shiftKey) {
+        toggleObjectSelection(object.objectId, patch);
+        return;
+      }
+      select(patch);
     },
-    [select],
+    [select, toggleObjectSelection],
   );
   const onSelectPlanarMonitor = useCallback(
     (monitorId: string, isDraft: boolean) => {
@@ -1251,12 +1262,14 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
     useState<string | null>(null);
   const [inspectHover, setInspectHover] =
     useState<Viewport3DInspectHover | null>(null);
+  const selectedOperandId = useSelectionSelector((state) =>
+    state.ref?.type === "scene-object" ? state.ref.operandId ?? null : null,
+  );
+  // P1-FE-13: unlock transform gizmo for all scene object roles (magnet, conductor, antenna, spacer).
   const moveTargetEligible = Boolean(
     sceneProps.selectedObjectId &&
       sceneProps.primitiveModel?.objects.some(
-        (object) =>
-          object.objectId === sceneProps.selectedObjectId &&
-          object.role === "magnet",
+        (object) => object.objectId === sceneProps.selectedObjectId,
       ),
   );
   const moveInteraction = useViewport3DObjectMoveInteraction({
@@ -2196,6 +2209,8 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
             onInspectClear={clearInspectHover}
             onInspectSample={updateInspectHover}
             onMoveCommit={moveInteraction.commitMove}
+            onTransformPatchCommit={moveInteraction.commitTransformPatch}
+            selectedOperandId={selectedOperandId}
             onBeginGesture={moveInteraction.onBeginGesture}
             onMoveGestureActiveChange={moveInteraction.onGestureActiveChange}
             moveToolObjectId={moveInteraction.moveToolObjectId}

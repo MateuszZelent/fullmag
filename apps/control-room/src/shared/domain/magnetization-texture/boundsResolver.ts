@@ -1,4 +1,5 @@
 import type { SceneResource } from "@/kernel/api/apiTypes";
+import { computeSceneGeometryBoundsMeters } from "@/shared/domain/geometry/sceneGeometryBounds";
 
 import type { MagnetizationTextureTarget } from "./types";
 
@@ -486,6 +487,13 @@ function resolveGeometryRecordBounds(geomRaw: UnknownRecord | null): [Vec3, Vec3
       return leftBounds;
     }
     if (leftBounds) return leftBounds;
+  }
+
+  // Fallback to canonical recursive sceneGeometryBounds for operands[] CSG, Array3D,
+  // Translate/Transform, SlicePlane, PolygonPrism (vertices_xy), and other primitives.
+  const canonicalBounds = computeSceneGeometryBoundsMeters(geomRaw);
+  if (canonicalBounds) {
+    return [canonicalBounds.min, canonicalBounds.max];
   }
 
   // Fallback check if size is directly present even without a recognized kind string

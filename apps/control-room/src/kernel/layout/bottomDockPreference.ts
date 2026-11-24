@@ -36,14 +36,19 @@ export function subscribeBottomDockExpanded(listener: () => void): () => void {
   return () => listeners.delete(listener);
 }
 
-export function setBottomDockExpanded(next: boolean): void {
+export function setBottomDockExpanded(
+  next: boolean,
+  options?: { persist?: boolean },
+): void {
   hydrateFromStorage();
   if (expanded === next) return;
   expanded = next;
-  try {
-    window.localStorage.setItem(EXPANDED_STORAGE_KEY, String(next));
-  } catch {
-    // Keep the preference for this page even when persistence is unavailable.
+  if (options?.persist !== false) {
+    try {
+      window.localStorage.setItem(EXPANDED_STORAGE_KEY, String(next));
+    } catch {
+      // Keep the preference for this page even when persistence is unavailable.
+    }
   }
   for (const listener of listeners) listener();
 }

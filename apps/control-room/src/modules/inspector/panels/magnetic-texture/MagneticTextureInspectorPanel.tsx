@@ -4,9 +4,8 @@ import {
   Compass,
   Eye,
   FolderOpen,
-  Move3D,
+  RefreshCw,
   RotateCcw,
-  Scaling,
   SlidersHorizontal,
   Sparkles,
   Trash2,
@@ -66,6 +65,7 @@ import {
   InspectorTemplate,
   inspectorValuesEqual,
   useInspectorSpecController,
+  type InspectorActionContext,
   type InspectorFact,
   type InspectorNotice,
   type InspectorSpec,
@@ -469,6 +469,10 @@ export function MagneticTextureInspectorPanel({ selection }: InspectorPanelProps
     receipt: MagnetizationApplyReceipt;
     sessionScopeKey: string;
   } | null>(null);
+  const [lastApplyReceipt, setLastApplyReceipt] = useState<{
+    receipt: MagnetizationApplyReceipt;
+    sessionScopeKey: string;
+  } | null>(null);
   const [previewLoading, setPreviewLoading] = useState(false);
   const [previewError, setPreviewError] = useState<string | null>(null);
 
@@ -484,6 +488,7 @@ export function MagneticTextureInspectorPanel({ selection }: InspectorPanelProps
     setPreviewLoading(false);
     setPreviewError(null);
     setLastApplyPreview(null);
+    setLastApplyReceipt(null);
     setLoadFieldFeedback(null);
     setAppliedBannerMessage(null);
     setInspectionSummary(null);
@@ -711,6 +716,7 @@ export function MagneticTextureInspectorPanel({ selection }: InspectorPanelProps
           ? receipt.prepared_initial_state
           : null;
       setPreviewError(null);
+      setLastApplyReceipt({ receipt, sessionScopeKey });
       setLastApplyPreview(
         preparedSource ? { receipt, sessionScopeKey } : null,
       );
@@ -938,10 +944,8 @@ export function MagneticTextureInspectorPanel({ selection }: InspectorPanelProps
         },
         showObjectAssignmentSection: hostContext === "object",
         defaultMagnetizationRefPlaceholder,
-        canClearObjectTexture: hostContext === "object" && objectActionDisabledReason === null,
-        clearObjectTextureDisabledReason: objectActionDisabledReason,
-        clearingObjectTexture,
-        onClearObjectTexture: hostContext === "object" ? handleClearObjectTexture : undefined,
+        gizmoEnabled: bridgeSnapshot.gizmoEnabled,
+        onToggleGizmo: toggleTextureGizmo,
         canLoadFieldState: hostContext === "object" && Boolean(objectRec),
         loadFieldStateDisabledReason: !objectRec
           ? "Select a committed magnetic object in the scene."
@@ -951,16 +955,14 @@ export function MagneticTextureInspectorPanel({ selection }: InspectorPanelProps
       }),
     [
       bounds,
-      clearingObjectTexture,
+      bridgeSnapshot.gizmoEnabled,
       defaultMagnetizationRefPlaceholder,
-      handleClearObjectTexture,
       handleInspectFieldFile,
       handleLoadFieldState,
       hostContext,
       inspectingFieldFile,
       inspectionSummary,
       loadingFieldState,
-      objectActionDisabledReason,
       objectBounds,
       objectName,
       objectRec,
@@ -994,6 +996,21 @@ export function MagneticTextureInspectorPanel({ selection }: InspectorPanelProps
     const targetRegionId = target.kind === "region" ? target.regionId : null;
     return scope.object_id === target.objectId && (scope.region_id ?? null) === targetRegionId;
   }, [lastApplyPreview, sessionIdentity, target]);
+
+  const needsReevaluateM0 = useMemo(() => {
+    if (!lastApplyReceipt || !sessionIdentity) return false;
+    const { receipt, sessionScopeKey: receiptScopeKey } = lastApplyReceipt;
+    const scope = receipt.scopes[0];
+    if (
+      sessionRequestScopeKey(sessionIdentity) !== receiptScopeKey ||
+      receipt.status === "initial_state_ready" ||
+      !scope
+    ) {
+      return false;
+    }
+    const targetRegionId = target.kind === "region" ? target.regionId : null;
+    return scope.object_id === target.objectId && (scope.region_id ?? null) === targetRegionId;
+  }, [lastApplyReceipt, sessionIdentity, target]);
 
   const spec = useMemo<InspectorSpec<MagneticTextureDraft>>(() => {
     const entityId =
@@ -1095,18 +1112,6 @@ export function MagneticTextureInspectorPanel({ selection }: InspectorPanelProps
         breadcrumbs,
         canFitView: true,
         searchable: true,
-        primaryHeaderAction: {
-          label: bridgeSnapshot.gizmoEnabled ? "Hide 3D gizmo (T)" : "3D gizmo (T)",
-          icon: Move3D,
-          variant: bridgeSnapshot.gizmoEnabled ? "secondary" : "outline",
-          disabledReason:
-            target.kind === "region" && baselineDraft.inheritanceMode === "inherit"
-              ? "Switch region source to Override to manipulate its 3D texture gizmo."
-              : undefined,
-          onRun: () => {
-            toggleTextureGizmo();
-          },
-        },
         extraMenuActions: [
           ...(canShowPreparedPreview
             ? [
@@ -1119,17 +1124,24 @@ export function MagneticTextureInspectorPanel({ selection }: InspectorPanelProps
                 },
               ]
             : []),
-          {
-            id: "fit-characteristic-size",
-            label:
-              target.kind === "region"
-                ? "Fit characteristic size to region"
-                : "Fit characteristic size to object",
-            icon: Scaling,
-            onSelect: (ctx) => {
-              ctx.patchDraft(fitCharacteristicSizeToTarget(ctx.draft, bounds));
-            },
-          },
+          ...(hasCommittedTexture
+            ? [
+                {
+                  id: "reevaluate-initial-magnetization",
+                  label: "Re-evaluate m₀",
+                  icon: RefreshCw,
+                  disabledReason:
+                    target.kind === "object"
+                      ? (objectActionDisabledReason ?? undefined)
+                      : !domainModel.authoredRegion
+                        ? "Select an authored magnetic region to apply its texture."
+                        : undefined,
+                  onSelect: (ctx: InspectorActionContext<MagneticTextureDraft>) => {
+                    void handleCommitApply(ctx.draft);
+                  },
+                },
+              ]
+            : []),
           {
             id: "reset-transform",
             label: "Reset transform [0,0,0 / 1,1,1]",
@@ -1163,10 +1175,16 @@ export function MagneticTextureInspectorPanel({ selection }: InspectorPanelProps
             ? [
                 {
                   id: "clear-object-magnetization",
-                  label: "Clear",
+                  label: "Clear Texture…",
                   icon: Trash2,
                   destructive: true,
                   disabledReason: objectActionDisabledReason ?? undefined,
+                  confirm: {
+                    title: `Clear magnetic texture on ${objectName}?`,
+                    description:
+                      "This removes the assigned initial magnetization asset from this object and reverts to the solver default.",
+                    confirmLabel: "Clear Texture",
+                  },
                   onSelect: () => handleClearObjectTexture(),
                 },
               ]
@@ -1308,6 +1326,7 @@ export function MagneticTextureInspectorPanel({ selection }: InspectorPanelProps
           list.push({
             id: "prepared-initial-magnetization",
             tone: "info",
+            placement: "after-content",
             title: "Initial magnetization ready",
             text: appliedBannerMessage ?? "Prepared initial magnetization is ready to inspect in 3D.",
             quickFix: {
@@ -1316,6 +1335,25 @@ export function MagneticTextureInspectorPanel({ selection }: InspectorPanelProps
                 : "Show initial magnetization",
               disabled: previewLoading,
               onApply: () => handleShowPreparedMagnetization(),
+            },
+          });
+        } else if (needsReevaluateM0) {
+          list.push({
+            id: "reevaluate-initial-magnetization",
+            tone: "info",
+            placement: "after-content",
+            title: "Initial magnetization pending evaluation",
+            text:
+              appliedBannerMessage ??
+              "Texture is saved in the scene, but initial magnetization m₀ has not been evaluated on the current mesh yet.",
+            quickFix: {
+              label: "Re-evaluate m₀",
+              ghost: true,
+              disabled: Boolean(objectActionDisabledReason),
+              disabledReason: objectActionDisabledReason ?? undefined,
+              onApply: (ctx) => {
+                void handleCommitApply(ctx.draft);
+              },
             },
           });
         }
@@ -1403,9 +1441,8 @@ export function MagneticTextureInspectorPanel({ selection }: InspectorPanelProps
         ),
       commitBar: {
         mode: "staged",
-        allowCleanApply: true,
-        applyLabel: (_draft, dirty) =>
-          dirty ? "Apply Texture" : hasCommittedTexture ? "Reapply Texture" : "Apply Texture",
+        allowCleanApply: false,
+        applyLabel: "Apply Texture",
         cleanMessage: () =>
           domainModel.baseRevision !== null
             ? `Up to date with scene revision ${domainModel.baseRevision}`
@@ -1427,10 +1464,8 @@ export function MagneticTextureInspectorPanel({ selection }: InspectorPanelProps
   }, [
     activeLane,
     appliedBannerMessage,
-    baselineDraft.inheritanceMode,
     baselineDraft.presetKind,
     bounds,
-    bridgeSnapshot.gizmoEnabled,
     canShowPreparedPreview,
     domainModel.asset,
     domainModel.authoredRegion,
@@ -1441,6 +1476,7 @@ export function MagneticTextureInspectorPanel({ selection }: InspectorPanelProps
     hasCommittedTexture,
     hostContext,
     loadFieldFeedback,
+    needsReevaluateM0,
     objectActionDisabledReason,
     objectName,
     objectRec,
@@ -1461,6 +1497,25 @@ export function MagneticTextureInspectorPanel({ selection }: InspectorPanelProps
       isLoadSelection || baselineDraft.sourceMode === "field-file" ? "field-file" : "preset",
   });
 
+  // When browsing the Field file tab without yet dirtying draft.sourceMode, still evaluate
+  // the sampled_field capability gate notice honestly so unsupported lanes are shown upfront.
+  const renderedSpec = useMemo<InspectorSpec<MagneticTextureDraft>>(() => {
+    if (hostContext !== "object" || controller.activeModeTabId !== "field-file") {
+      return spec;
+    }
+    return {
+      ...spec,
+      notices: (draft) =>
+        spec.notices
+          ? spec.notices(
+              draft.sourceMode === "field-file"
+                ? draft
+                : { ...draft, sourceMode: "field-file" },
+            )
+          : [],
+    };
+  }, [controller.activeModeTabId, hostContext, spec]);
+
   // Honor redirected `object.magnetic-texture.load` selections even when switching from another texture sub-node
   const prevIsLoadRef = useRef(isLoadSelection);
   useEffect(() => {
@@ -1478,14 +1533,11 @@ export function MagneticTextureInspectorPanel({ selection }: InspectorPanelProps
     controller.revertAll();
   }, [clearedResetToken, controller]);
 
-  // Synchronize Slot 4 modeTab ("preset" | "field-file") with draft.sourceMode on Object
+  // Browse Slot 4 modeTab ("preset" | "field-file") without dirtying draft.sourceMode;
+  // sourceMode switches only when a preset tile is clicked or a field file field is edited.
   const handleModeTabChange = useCallback(
     (tabId: string) => {
       controller.setActiveModeTabId(tabId);
-      const nextSourceMode = tabId === "field-file" ? "field-file" : "preset";
-      if (controller.draft.sourceMode !== nextSourceMode) {
-        controller.setField("sourceMode", nextSourceMode);
-      }
     },
     [controller],
   );
@@ -1595,7 +1647,7 @@ export function MagneticTextureInspectorPanel({ selection }: InspectorPanelProps
       forceShowErrors={controller.forceShowErrors}
       invalidFields={controller.invalidFields}
       selection={selection}
-      spec={spec}
+      spec={renderedSpec}
       touchedFields={controller.touchedFields}
       onActiveModeTabChange={handleModeTabChange}
       onApply={controller.requestApply}

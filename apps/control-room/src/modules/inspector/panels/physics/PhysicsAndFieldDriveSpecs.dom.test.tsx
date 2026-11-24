@@ -704,12 +704,12 @@ describe("Physics, Transport, Spin & FieldDrive Specs (Wave 4 Parity)", () => {
     mocks.openDocs.mockClear();
   });
 
-  it("wires exactly 31 distinct components and disjoint selectionKinds in MODEL_PHYSICS_ROUTES", () => {
-    expect(MODEL_PHYSICS_ROUTES).toHaveLength(31);
+  it("wires 32 distinct route IDs and components in MODEL_PHYSICS_ROUTES", () => {
+    expect(MODEL_PHYSICS_ROUTES).toHaveLength(32);
     const ids = new Set(MODEL_PHYSICS_ROUTES.map((r) => r.id));
     const components = new Set(MODEL_PHYSICS_ROUTES.map((r) => r.component));
-    expect(ids.size).toBe(31);
-    expect(components.size).toBe(31);
+    expect(ids.size).toBe(32);
+    expect(components.size).toBe(32);
   });
 
   it("preserves authored params on ObjectPhysics toggle, supports Present removal, blocks Magnetoelastic HTTP 400, and passes typed creation refs", async () => {

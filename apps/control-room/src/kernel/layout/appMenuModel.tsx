@@ -14,6 +14,7 @@ import {
   LayoutDashboard,
   Layers3,
   ListChecks,
+  Maximize2,
   Pause,
   Play,
   Redo2,
@@ -112,6 +113,13 @@ const MAIN_MENU_DEFINITIONS: AppMenuNode[] = [
     children: [
       { id: "workspace.view-3d", label: "3D Workspace", icon: <Box size={14} />, shortcut: "1" },
       { id: "workspace.view-2d", label: "2D Slice Workspace", icon: <LayoutDashboard size={14} />, shortcut: "2" },
+      {
+        id: "workspace.fullscreen-toggle",
+        label: "Full Screen Mode",
+        icon: <Maximize2 size={14} />,
+        shortcut: "Alt+Shift+F",
+        checkable: true,
+      },
       {
         id: "panels",
         label: "Panels",

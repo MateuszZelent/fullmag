@@ -1,11 +1,17 @@
-import React from "react";
+import React, { act } from "react";
+import { createRoot } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { FieldCatalogResource, QuantityCatalogResource } from "@/kernel/api/apiTypes";
+import {
+  findElement,
+  installSimulationPreparationTestDom,
+} from "@/kernel/layout/simulationPreparationTestDom.test-support";
 
 const testState = vi.hoisted(() => ({
   discretization: "fdm",
+  fdmMultilayerLayout: null as Record<string, unknown> | null,
   fieldCatalog: null as FieldCatalogResource | null,
   quantityCatalog: null as QuantityCatalogResource | null,
   fieldCatalogRequested: false,
@@ -13,36 +19,48 @@ const testState = vi.hoisted(() => ({
   planarActivate: null as (() => void) | null,
   queuePatch: vi.fn(),
   resourceCalls: [] as Array<{ enabled: boolean; name: string }>,
+  selectionSet: vi.fn(),
 }));
 
 function resourceCall(name: string, enabled: boolean): void {
   testState.resourceCalls.push({ enabled, name });
 }
 
+const EMPTY_SYNC_SNAPSHOT = {
+  inflightTargetIds: [],
+  pendingTargetIds: [],
+  version: 0,
+};
+const CONNECTED_SNAPSHOT = { disrupted: false, status: "connected" };
+const EMPTY_DEBUG_SNAPSHOTS: unknown[] = [];
+
 vi.mock("@/kernel/KernelContext", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/kernel/KernelContext")>()),
   useKernel: () => ({
     api: {},
+    analysisFieldOverlay: {
+      getRenderableSnapshot: () => null,
+      subscribe: () => () => undefined,
+    },
     resources: {
       getRevision: () => null,
       subscribe: () => () => undefined,
     },
     visualizationSync: {
       queuePatch: testState.queuePatch,
-      getSnapshot: () => ({
-        inflightTargetIds: [],
-        pendingTargetIds: [],
-        version: 0,
-      }),
+      getSnapshot: () => EMPTY_SYNC_SNAPSHOT,
       subscribe: () => () => undefined,
     },
     realtimeConnection: {
-      getSnapshot: () => ({ disrupted: false, status: "connected" }),
+      getSnapshot: () => CONNECTED_SNAPSHOT,
       subscribe: () => () => undefined,
     },
     visualizationDebug: {
-      getSnapshots: () => [],
+      getSnapshots: () => EMPTY_DEBUG_SNAPSHOTS,
       subscribe: () => () => undefined,
+    },
+    selection: {
+      set: testState.selectionSet,
     },
   }),
 }));
@@ -139,10 +157,10 @@ vi.mock("@/kernel/visualization/useVisualizationStateResource", () => ({
 vi.mock("@/kernel/resources/geometryLifecycleResources", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/kernel/resources/geometryLifecycleResources")>()),
   useFdmMultilayerLayoutResource: () => ({
-    data: null,
+    data: testState.fdmMultilayerLayout,
     error: null,
-    revision: null,
-    status: "idle",
+    revision: testState.fdmMultilayerLayout ? 1 : null,
+    status: testState.fdmMultilayerLayout ? "ready" : "idle",
   }),
   useFdmMultilayerLayerActiveMasksResource: () => ({
     data: null,
@@ -447,10 +465,12 @@ function expectSharedVisualizationInspectorContract(
 }
 
 afterEach(() => {
+  testState.fdmMultilayerLayout = null;
   testState.fieldCatalog = null;
   testState.quantityCatalog = null;
   testState.fieldCatalogRequested = false;
   testState.fieldCatalogStatus = "idle";
+  testState.selectionSet.mockReset();
 });
 
 describe("ObjectVisualizationPanel lane routing", () => {
@@ -756,5 +776,85 @@ describe("ObjectVisualizationPanel lane routing", () => {
         enabled: false,
       });
     }
+  });
+
+  it("renders airbox_carrier_missing notice with 1-click Configure Airbox Extent CTA in FDM Multilayer and hides it when carrier is available", async () => {
+    testState.discretization = "fdm";
+    testState.fdmMultilayerLayout = {
+      available: true,
+      backend: "fdm_multilayer",
+      domain_generation_id: "gen-ml-1",
+      execution_revision: 1,
+      layout_revision: 1,
+      observation_revision: 1,
+      schema_version: "1.0",
+      layers: [],
+      airbox: {
+        carrier_available: false,
+        h_demag_available: false,
+        h_eff_available: false,
+        unavailable_reason: "airbox_carrier_missing",
+      },
+    };
+
+    const dom = installSimulationPreparationTestDom();
+    const container = dom.document.createElement("div");
+    dom.document.body.appendChild(container);
+    const root = createRoot(container as unknown as Element);
+
+    try {
+      await act(async () => {
+        root.render(<ObjectVisualizationPanel selection={airboxSelection} />);
+      });
+
+      const notice = findElement(
+        container,
+        (el) => el.getAttribute("data-notice-id") === "airbox-carrier-missing",
+        "airbox-carrier-missing notice",
+      );
+      expect(notice.textContent).toContain(
+        "FDM Multilayer only computes magnetic layers by default. To display Wireframe and H_demag vectors in the air gap, switch Airbox Extent to Manual Box in Universe > Airbox, then Build Grid and run Compute.",
+      );
+
+      const ctaBtn = findElement(
+        notice,
+        (el) => el.getAttribute("data-testid") === "configure-airbox-extent-btn",
+        "Configure Airbox Extent button",
+      );
+      expect(ctaBtn.textContent.trim()).toBe("Configure Airbox Extent →");
+
+      await act(async () => {
+        ctaBtn.click();
+      });
+
+      expect(testState.selectionSet).toHaveBeenCalledTimes(1);
+      expect(testState.selectionSet).toHaveBeenCalledWith(
+        expect.objectContaining({
+          kind: "airbox.root",
+          label: "Airbox",
+          nodeId: "model:airbox",
+          objectId: null,
+        }),
+        "inspector",
+      );
+    } finally {
+      await act(async () => root.unmount());
+      dom.restore();
+    }
+
+    // When carrier_available is true, notice must not render
+    testState.fdmMultilayerLayout = {
+      ...testState.fdmMultilayerLayout,
+      airbox: {
+        carrier_available: true,
+        h_demag_available: true,
+        h_eff_available: false,
+        unavailable_reason: null,
+      },
+    };
+    const readyHtml = renderToStaticMarkup(
+      <ObjectVisualizationPanel selection={airboxSelection} />,
+    );
+    expect(readyHtml).not.toContain('data-notice-id="airbox-carrier-missing"');
   });
 });

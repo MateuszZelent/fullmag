@@ -1,4 +1,5 @@
 import type { JsonObject, SceneResource } from "@/kernel/api/apiTypes";
+import { parseArray3DGeometry } from "@/kernel/authoring/array3dModel";
 import type { PrimitiveDraft } from "@/kernel/authoring/geometryLifecycleCommands";
 import { resolveDraftObjectName } from "@/kernel/authoring/uniqueObjectName";
 
@@ -13,13 +14,19 @@ import {
 import type { InspectorTone } from "../../../template";
 
 import {
+  applyArray3DConfigToGeometry,
+  applyInlineNodePatchesToGeometry,
+} from "./geometryNodeTreeOps";
+import {
   axisVectorFromSymmetryAxis,
+  buildCompositeGeometrySummary,
   createPolygonVertexRow,
   normalizePrimitiveKind,
   normalizeZero,
   parseImportedMeshUnitScale,
   parseSymmetryAxis,
   resolveDefaultDraftBaseName,
+  vec3ApproxEqual,
   type ObjectGeometrySpecDraft,
   type PolygonVertexRow,
 } from "./geometryShared";
@@ -27,6 +34,19 @@ import {
 /* ── Serialization & Parsing ── */
 
 export function serializeGeometryPayload(draft: ObjectGeometrySpecDraft): JsonObject {
+  if (draft.compositeSummary && draft.preservedRawGeometry && draft.csgOperation === "none") {
+    let next = applyInlineNodePatchesToGeometry(
+      draft.preservedRawGeometry,
+      draft.inlineNodePatches,
+    );
+    if (draft.array3dConfig === null && draft.compositeSummary.op === "array") {
+      next = applyArray3DConfigToGeometry(next, null) as JsonObject;
+    } else if (draft.array3dConfig && draft.array3dConfig.realization === "modifier_in_object") {
+      next = applyArray3DConfigToGeometry(next, draft.array3dConfig) as JsonObject;
+    }
+    return next;
+  }
+
   const rawGeomParams = draft.preservedRawGeometry?.geometry_params;
   const baseParams: Record<string, unknown> =
     rawGeomParams && typeof rawGeomParams === "object" && !Array.isArray(rawGeomParams)
@@ -86,18 +106,20 @@ export function serializeGeometryPayload(draft: ObjectGeometrySpecDraft): JsonOb
         },
       };
       break;
-    case "Cone":
+    case "Cone": {
+      const { bottom_radius: _legacyBottom, top_radius: _legacyTop, ...coneBaseParams } = baseParams;
       primitiveDescriptor = {
         geometry_kind: "Cone",
         geometry_params: {
-          ...baseParams,
-          bottom_radius: draft.bottomRadius,
-          top_radius: draft.topRadius,
+          ...coneBaseParams,
+          radius_bottom: draft.bottomRadius,
+          radius_top: draft.topRadius,
           height: draft.height,
-          axis: draft.symmetryAxis,
+          axis: axisVectorFromSymmetryAxis(draft.symmetryAxis),
         },
       };
       break;
+    }
     case "Torus":
       primitiveDescriptor = {
         geometry_kind: "Torus",
@@ -105,7 +127,7 @@ export function serializeGeometryPayload(draft: ObjectGeometrySpecDraft): JsonOb
           ...baseParams,
           major_radius: draft.majorRadius,
           minor_radius: draft.minorRadius,
-          axis: draft.symmetryAxis,
+          axis: axisVectorFromSymmetryAxis(draft.symmetryAxis),
         },
       };
       break;
@@ -134,17 +156,23 @@ export function serializeGeometryPayload(draft: ObjectGeometrySpecDraft): JsonOb
       };
       break;
     }
-    case "PolygonExtrusion":
+    case "PolygonExtrusion": {
+      const {
+        vertices: _legacyVerts,
+        height: _legacyHeight,
+        axis: _legacyAxis,
+        ...prismBaseParams
+      } = baseParams;
       primitiveDescriptor = {
-        geometry_kind: "PolygonExtrusion",
+        geometry_kind: "PolygonPrism",
         geometry_params: {
-          ...baseParams,
-          height: draft.height,
-          axis: draft.symmetryAxis,
-          vertices: draft.polygonVertices.map((v) => [v.x_m, v.y_m]),
+          ...prismBaseParams,
+          vertices_xy: draft.polygonVertices.map((v) => [v.x_m, v.y_m]),
+          thickness: draft.height,
         },
       };
       break;
+    }
     case "ImportedMesh":
       primitiveDescriptor = {
         geometry_kind: "ImportedMesh",
@@ -174,13 +202,46 @@ export function serializeGeometryPayload(draft: ObjectGeometrySpecDraft): JsonOb
       csg_tree: draft.preservedComplexCsg,
     };
   }
-  return {
+  const baseResult: JsonObject = {
     ...(draft.preservedRawGeometry ?? {}),
     ...primitiveDescriptor,
   };
+  if (draft.array3dConfig && draft.array3dConfig.realization === "modifier_in_object") {
+    return applyArray3DConfigToGeometry(baseResult, draft.array3dConfig) as JsonObject;
+  }
+  return baseResult;
 }
 
-export function serializeTransformPayload(draft: ObjectGeometrySpecDraft): JsonObject {
+/**
+ * Merge a partial Transform3D patch onto an existing committed transform without
+ * zeroing omitted components (`translation`, `rotation_quat`, `scale`, `pivot`,
+ * `euler_xyz_deg`, or backend extension keys).
+ */
+export function mergeTransformPatch(
+  existingTransform: Record<string, unknown> | null | undefined,
+  patch: Record<string, unknown>,
+): JsonObject {
+  const base =
+    existingTransform && typeof existingTransform === "object" && !Array.isArray(existingTransform)
+      ? existingTransform
+      : {};
+  const merged: Record<string, unknown> = { ...base };
+  for (const [key, value] of Object.entries(patch)) {
+    if (value !== undefined) {
+      merged[key] = value;
+    }
+  }
+  return merged as JsonObject;
+}
+
+export function serializeTransformPayload(
+  draft: ObjectGeometrySpecDraft,
+  existingTransform?: Record<string, unknown> | null,
+  baselineDraft?: Pick<
+    ObjectGeometrySpecDraft,
+    "translation" | "eulerDeg" | "scale" | "pivotMode" | "pivotCustom"
+  > | null,
+): JsonObject {
   const quat = eulerDegToQuat(draft.eulerDeg);
   const [tx, ty, tz] = draft.translation;
   const pivot: [number, number, number] =
@@ -193,13 +254,44 @@ export function serializeTransformPayload(draft: ObjectGeometrySpecDraft): JsonO
       : draft.pivotMode === "origin"
         ? [normalizeZero(-tx), normalizeZero(-ty), normalizeZero(-tz)]
         : [0, 0, 0];
-  return {
+
+  const serialized: JsonObject = {
     translation: [normalizeZero(tx), normalizeZero(ty), normalizeZero(tz)],
     rotation_quat: quat,
     scale: [draft.scale[0], draft.scale[1], draft.scale[2]],
     pivot,
     ...(draft.pivotMode !== "centroid" ? { pivot_mode: draft.pivotMode } : {}),
   };
+
+  if (!existingTransform) {
+    return serialized;
+  }
+
+  const patch: Record<string, unknown> = {};
+  if (!baselineDraft || !vec3ApproxEqual(draft.translation, baselineDraft.translation)) {
+    patch.translation = serialized.translation;
+  }
+  if (!baselineDraft || !vec3ApproxEqual(draft.eulerDeg, baselineDraft.eulerDeg, 1e-9)) {
+    patch.rotation_quat = serialized.rotation_quat;
+  }
+  if (!baselineDraft || !vec3ApproxEqual(draft.scale, baselineDraft.scale)) {
+    patch.scale = serialized.scale;
+  }
+  const pivotChanged =
+    !baselineDraft ||
+    draft.pivotMode !== baselineDraft.pivotMode ||
+    (draft.pivotMode === "custom" &&
+      !vec3ApproxEqual(draft.pivotCustom, baselineDraft.pivotCustom)) ||
+    (draft.pivotMode === "origin" &&
+      !vec3ApproxEqual(draft.translation, baselineDraft.translation));
+  if (pivotChanged) {
+    patch.pivot = serialized.pivot;
+    if (draft.pivotMode !== "centroid") {
+      patch.pivot_mode = draft.pivotMode;
+    }
+  }
+
+  return mergeTransformPatch(existingTransform, patch);
 }
 
 export function resolvePreviewOverlayDraft(
@@ -265,10 +357,20 @@ export function resolvePreviewOverlayDraft(
         : "Box";
 
   let dims: [number, number, number] | null = null;
+  let cylinderDraft: PrimitiveDraft["cylinder"] | undefined;
   if (draft.primitiveKind === "Cylinder") {
     const r = positiveValue(draft.radius, lastValid?.radius, "radius", "Radius");
     const h = positiveValue(draft.height, lastValid?.height, "height", "Height");
-    dims = r !== null && h !== null ? [2 * r, h, 2 * r] : null;
+    const axis = axisVectorFromSymmetryAxis(draft.symmetryAxis);
+    if (r !== null && h !== null) {
+      const absAxis = axis.map(Math.abs);
+      dims = [
+        2 * (absAxis[0]! * (h * 0.5) + r * Math.sqrt(Math.max(0, 1 - absAxis[0]! * absAxis[0]!))),
+        2 * (absAxis[1]! * (h * 0.5) + r * Math.sqrt(Math.max(0, 1 - absAxis[1]! * absAxis[1]!))),
+        2 * (absAxis[2]! * (h * 0.5) + r * Math.sqrt(Math.max(0, 1 - absAxis[2]! * absAxis[2]!))),
+      ];
+      cylinderDraft = { axis, height: h, radius: r };
+    }
   } else if (draft.primitiveKind === "Sphere") {
     const r = positiveValue(draft.radius, lastValid?.radius, "radius", "Radius");
     dims = r !== null ? [2 * r, 2 * r, 2 * r] : null;
@@ -374,6 +476,7 @@ export function resolvePreviewOverlayDraft(
   const tz = finiteValue(draft.translation[2], fbTrans?.[2], "translation.2", "Position Z");
 
   return {
+    ...(cylinderDraft ? { cylinder: cylinderDraft } : {}),
     kind,
     dimensions: dims,
     translation: tx !== null && ty !== null && tz !== null ? [tx, ty, tz] : null,
@@ -443,6 +546,50 @@ export function buildBaselineFromScene(
     createPolygonVertexRow(-50e-9, 30e-9, "vtx-3"),
   ];
 
+  const defaultBase: Omit<
+    ObjectGeometrySpecDraft,
+    "mode" | "objectId" | "draftName" | "materialRef" | "primitiveKind" | "meshStatusPill"
+  > = {
+    regionName: "",
+    compositeSummary: null,
+    symmetryAxis: "z",
+    sizeX: 100e-9,
+    sizeY: 100e-9,
+    sizeZ: 10e-9,
+    radius: 50e-9,
+    height: 10e-9,
+    innerRadius: 20e-9,
+    outerRadius: 50e-9,
+    bottomRadius: 50e-9,
+    topRadius: 25e-9,
+    majorRadius: 80e-9,
+    minorRadius: 20e-9,
+    archProfile: "parabolic_arch",
+    length: 500e-9,
+    width: 100e-9,
+    archHeight: 30e-9,
+    z0: 0,
+    archRadius: 150e-9,
+    archAngleRad: Math.PI / 3,
+    polygonVertices: defaultPolygon,
+    meshAssetPath: "",
+    meshUnitScale: 1e-9,
+    translation: [0, 0, 0],
+    eulerDeg: [0, 0, 0],
+    pivotMode: "centroid",
+    pivotCustom: [0, 0, 0],
+    uniformScale: true,
+    scale: [1, 1, 1],
+    csgOperation: "none",
+    csgToolObjectId: "",
+    csgKeepTool: false,
+    array3dConfig: null,
+    inlineNodePatches: {},
+    preservedComplexCsg: null,
+    preservedRawGeometry: null,
+    hasRealizedOrDirtyMesh: false,
+  };
+
   if (forceBuilderMode || selection.kind === "builder.primitive") {
     const slug = selection.nodeId?.split(":").at(-1) ?? "box";
     const primitiveKind = normalizePrimitiveKind(slug);
@@ -453,46 +600,12 @@ export function buildBaselineFromScene(
       scene,
     );
     return {
+      ...defaultBase,
       mode: "draft-new",
       objectId: "draft",
       draftName,
-      materialRef: null,
-      regionName: "",
+      materialRef: scene?.materials?.[0]?.id ?? null,
       primitiveKind,
-      symmetryAxis: "z",
-      sizeX: 100e-9,
-      sizeY: 100e-9,
-      sizeZ: 10e-9,
-      radius: 50e-9,
-      height: 10e-9,
-      innerRadius: 20e-9,
-      outerRadius: 50e-9,
-      bottomRadius: 50e-9,
-      topRadius: 25e-9,
-      majorRadius: 80e-9,
-      minorRadius: 20e-9,
-      archProfile: "parabolic_arch",
-      length: 500e-9,
-      width: 100e-9,
-      archHeight: 30e-9,
-      z0: 0,
-      archRadius: 150e-9,
-      archAngleRad: Math.PI / 3,
-      polygonVertices: defaultPolygon,
-      meshAssetPath: "",
-      meshUnitScale: 1e-9,
-      translation: [0, 0, 0],
-      eulerDeg: [0, 0, 0],
-      pivotMode: "centroid",
-      pivotCustom: [0, 0, 0],
-      uniformScale: true,
-      scale: [1, 1, 1],
-      csgOperation: "none",
-      csgToolObjectId: "",
-      csgKeepTool: false,
-      preservedComplexCsg: null,
-      preservedRawGeometry: null,
-      hasRealizedOrDirtyMesh: false,
       meshStatusPill: { tone: "info", label: "New draft" },
     };
   }
@@ -504,46 +617,12 @@ export function buildBaselineFromScene(
   const sceneObj = scene?.objects?.find((o) => o.id === objectId);
   if (!sceneObj) {
     return {
+      ...defaultBase,
       mode: "missing",
       objectId: objectId || "none",
       draftName: selection.label ?? "Geometry",
       materialRef: null,
-      regionName: "",
       primitiveKind: "Box",
-      symmetryAxis: "z",
-      sizeX: 100e-9,
-      sizeY: 100e-9,
-      sizeZ: 10e-9,
-      radius: 50e-9,
-      height: 10e-9,
-      innerRadius: 20e-9,
-      outerRadius: 50e-9,
-      bottomRadius: 50e-9,
-      topRadius: 25e-9,
-      majorRadius: 80e-9,
-      minorRadius: 20e-9,
-      archProfile: "parabolic_arch",
-      length: 500e-9,
-      width: 100e-9,
-      archHeight: 30e-9,
-      z0: 0,
-      archRadius: 150e-9,
-      archAngleRad: Math.PI / 3,
-      polygonVertices: defaultPolygon,
-      meshAssetPath: "",
-      meshUnitScale: 1e-9,
-      translation: [0, 0, 0],
-      eulerDeg: [0, 0, 0],
-      pivotMode: "centroid",
-      pivotCustom: [0, 0, 0],
-      uniformScale: true,
-      scale: [1, 1, 1],
-      csgOperation: "none",
-      csgToolObjectId: "",
-      csgKeepTool: false,
-      preservedComplexCsg: null,
-      preservedRawGeometry: null,
-      hasRealizedOrDirtyMesh: false,
       meshStatusPill: { tone: "warn", label: "Not found" },
     };
   }
@@ -608,7 +687,11 @@ export function buildBaselineFromScene(
     }
   }
 
-  const rawVerts = Array.isArray(params.vertices) ? params.vertices : null;
+  const rawVerts = Array.isArray(params.vertices_xy)
+    ? params.vertices_xy
+    : Array.isArray(params.vertices)
+      ? params.vertices
+      : null;
   const parsedVerts: readonly PolygonVertexRow[] =
     rawVerts && rawVerts.length >= 3
       ? rawVerts.map((pair, idx) => {
@@ -621,6 +704,7 @@ export function buildBaselineFromScene(
         })
       : defaultPolygon;
 
+  const parsedRootArray = parseArray3DGeometry(geom);
   const csgOpRec = (geom?.csg_operation ?? null) as Record<string, unknown> | null;
   const csgTreeRec = (geom?.csg_tree ?? null) as JsonObject | null;
   const tags = Array.isArray(sceneObj.tags) ? sceneObj.tags : [];
@@ -638,6 +722,7 @@ export function buildBaselineFromScene(
         : null,
     regionName: typeof sceneObj.region_name === "string" ? sceneObj.region_name : "",
     primitiveKind,
+    compositeSummary: buildCompositeGeometrySummary(geom),
     symmetryAxis: parseSymmetryAxis(params.axis),
     sizeX:
       typeof rawSize?.[0] === "number"
@@ -658,11 +743,26 @@ export function buildBaselineFromScene(
           ? rawRadii[2] * 2
           : 10e-9,
     radius: typeof params.radius === "number" ? params.radius : 50e-9,
-    height: typeof params.height === "number" ? params.height : 10e-9,
+    height:
+      typeof params.height === "number"
+        ? params.height
+        : typeof params.thickness === "number"
+          ? params.thickness
+          : 10e-9,
     innerRadius: typeof params.inner_radius === "number" ? params.inner_radius : 20e-9,
     outerRadius: typeof params.outer_radius === "number" ? params.outer_radius : 50e-9,
-    bottomRadius: typeof params.bottom_radius === "number" ? params.bottom_radius : 50e-9,
-    topRadius: typeof params.top_radius === "number" ? params.top_radius : 25e-9,
+    bottomRadius:
+      typeof params.radius_bottom === "number"
+        ? params.radius_bottom
+        : typeof params.bottom_radius === "number"
+          ? params.bottom_radius
+          : 50e-9,
+    topRadius:
+      typeof params.radius_top === "number"
+        ? params.radius_top
+        : typeof params.top_radius === "number"
+          ? params.top_radius
+          : 25e-9,
     majorRadius: typeof params.major_radius === "number" ? params.major_radius : 80e-9,
     minorRadius: typeof params.minor_radius === "number" ? params.minor_radius : 20e-9,
     archProfile:
@@ -694,6 +794,14 @@ export function buildBaselineFromScene(
         : "none",
     csgToolObjectId: typeof csgOpRec?.tool_object_id === "string" ? csgOpRec.tool_object_id : "",
     csgKeepTool: Boolean(csgOpRec?.keep_tool),
+    array3dConfig: parsedRootArray
+      ? {
+          axes: parsedRootArray.axes,
+          mergeOverlapping: parsedRootArray.mergeOverlapping,
+          realization: "modifier_in_object",
+        }
+      : null,
+    inlineNodePatches: {},
     preservedComplexCsg: csgTreeRec,
     preservedRawGeometry: geom,
     hasRealizedOrDirtyMesh,
@@ -728,6 +836,13 @@ export function computeDraftSummaryMetrics(draft: ObjectGeometrySpecDraft): {
   spanText: string | null;
   volumeText: string | null;
 } {
+  if (draft.compositeSummary) {
+    const size = draft.compositeSummary.boundsMeters?.size;
+    return {
+      spanText: size ? formatSpanAuto([size[0], size[1], size[2]]) : null,
+      volumeText: null,
+    };
+  }
   switch (draft.primitiveKind) {
     case "Box":
       return {

@@ -478,6 +478,7 @@ export function selectionRefFromNode(node: ExplorerNode): SelectionRef | null {
     node.objectId &&
     (node.kind === "object.root" ||
       node.kind === "object.geometry" ||
+      node.kind === "object.geometry.node" ||
       node.kind === "object.antenna" ||
       node.kind === "object.antenna.geometry" ||
       node.kind === "object.antenna.regional" ||
@@ -528,6 +529,8 @@ export function selectionRefFromNode(node: ExplorerNode): SelectionRef | null {
         ? { antennaResourceKind: node.antennaResourceKind }
         : {}),
       ...(extensionId ? { extensionId } : {}),
+      ...(node.geometryNodeId ? { geometryNodeId: node.geometryNodeId } : {}),
+      ...(node.operandId ? { operandId: node.operandId } : {}),
       ...(node.regionId ? { regionId: node.regionId } : {}),
       type: "scene-object",
       visualizationTargetId: visualizationTargetIdForSceneObject(

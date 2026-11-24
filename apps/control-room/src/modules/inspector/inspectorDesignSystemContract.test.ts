@@ -318,4 +318,46 @@ describe("Inspector design-system reference contract", () => {
     expect(inspectorCss).toContain('.fm-inspector-section[data-state="open"]');
     expect(studyCss).not.toContain(".fm-inspector-section");
   });
+
+  it("enforces the One Golden Persistence Law (max-1 primary button, CommitBar-only) across Geometry inspectors", () => {
+    const geometryDir = "src/modules/inspector/inspectors/objects/geometry";
+    const productionFiles = readdirSync(join(appRoot, geometryDir)).filter(
+      (fileName) =>
+        /\.(?:ts|tsx)$/.test(fileName) &&
+        !fileName.includes(".test.") &&
+        !fileName.includes(".spec."),
+    );
+
+    expect(productionFiles.length).toBeGreaterThan(0);
+    for (const fileName of productionFiles) {
+      const source = read(`${geometryDir}/${fileName}`);
+      expect(
+        source,
+        `${fileName} must not render non-CommitBar variant="primary" buttons`,
+      ).not.toMatch(/variant\s*=\s*["']primary["']|\?\s*["']primary["']/);
+    }
+
+    const arraySection = read(`${geometryDir}/Array3DLatticeTableSection.tsx`);
+    expect(arraySection).not.toContain("Apply Array 3D");
+    expect(arraySection).not.toContain("applyArray3DTransaction");
+
+    const objectSpec = read(`${geometryDir}/ObjectGeometrySpec.tsx`);
+    expect(objectSpec).toContain('label: "Geometry"');
+    expect(objectSpec).toContain('label: "Placement"');
+    expect(objectSpec).not.toContain('label: "Boolean CSG"');
+    expect(objectSpec).not.toContain("geometry-revision-conflict-actions");
+    expect(objectSpec).not.toContain("geometry-object-danger-actions");
+    expect(objectSpec).toContain("deleteAction:");
+
+    const transformSections = read(`${geometryDir}/GeometryTransformSections.tsx`);
+    expect(transformSections).not.toContain('id: "geometry-csg"');
+
+    const nodeSpec = read(`${geometryDir}/GeometryNodeInspectorSpec.tsx`);
+    expect(nodeSpec).toContain("Modifier local transform");
+    expect(nodeSpec).toContain("commitGeometryStackTransaction");
+
+    const booleanSection = read(`${geometryDir}/BooleanNodeSection.tsx`);
+    expect(booleanSection).toContain("DropdownMenu");
+    expect(booleanSection).toContain("commitGeometryStackTransaction");
+  });
 });

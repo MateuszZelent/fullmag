@@ -3635,6 +3635,18 @@ impl HostResourceLedger {
         snapshot: &ComputeNodeSnapshot,
         expected_generation: Option<&str>,
     ) -> Result<ComputeNodeSnapshotPublicationDisposition> {
+        self.publish_compute_node_snapshot_observed(owner, snapshot, expected_generation, || {})
+    }
+
+    /// Notify the sampler when the writer is acquired so it can distinguish
+    /// waiting and retries from work performed inside the transaction.
+    pub fn publish_compute_node_snapshot_observed(
+        &self,
+        owner: &HostInventoryOwner,
+        snapshot: &ComputeNodeSnapshot,
+        expected_generation: Option<&str>,
+        writer_acquired: impl FnOnce(),
+    ) -> Result<ComputeNodeSnapshotPublicationDisposition> {
         snapshot.validate()?;
         if snapshot.schema_version != crate::compute_node_snapshot::COMPUTE_NODE_SNAPSHOT_SCHEMA_V2
             || snapshot.node_id != self.node_id()
@@ -3655,6 +3667,7 @@ impl HostResourceLedger {
             "compute-node snapshot",
         )?;
         let _host_writer = self.writer.acquire()?;
+        writer_acquired();
         let document = self.read_document_locked()?;
         if let Some(expected_generation) = expected_generation {
             validate_runtime_cas_digest(expected_generation, "runtime_generation_sha256")?;

@@ -1,9 +1,9 @@
-import { type FooterTelemetryStatus, type FooterScalarAttemptReference, resolveFooterSolverStatus, resolveFooterAntennaStage, resolveFooterMeanTimestep, resolveFooterScalarResourceSample, resolveFooterActiveStageMethod, resolveFooterRuntimeRelaxationAlgorithm, scalarSampleNumber, isFooterLlgRuntimeStageMethod, scalarSampleMagnetization, type FooterAntennaStage, validStageTimestamp, type FooterRelaxationAlgorithm } from "./FooterTelemetry.model";
+import { type FooterTelemetryStatus, type FooterScalarAttemptReference, resolveFooterSolverStatus, resolveFooterAntennaStage, resolveFooterEigensolveStage, resolveFooterMeanTimestep, resolveFooterScalarResourceSample, resolveFooterActiveStageMethod, resolveFooterRuntimeRelaxationAlgorithm, scalarSampleNumber, isFooterLlgRuntimeStageMethod, scalarSampleMagnetization, type FooterAntennaStage, type FooterEigensolveStage, validStageTimestamp, type FooterRelaxationAlgorithm } from "./FooterTelemetry.model";
 import type { FrequencyDomainSweepProgressResource, ObjectMetricsResource, RunPerformanceResource, ScalarWindowResource, SolverStatusResource, StageExecutionResource } from "@/kernel/api/apiTypes";
 import type { ResourceResult } from "@/kernel/resources/resourceTypes";
 import { formatRuntimeStateLabel, formatRuntimeUserSolvePhaseLabel, isRuntimeStateActive, isRuntimeStateWaitingForCompute, resolveEffectiveRuntimeState, type RuntimeUserSolvePhase } from "@/kernel/runtime/runtimeStateDisplay";
 import { footerPerformanceMatchesScalarSeries, footerPerformanceStageMatches, resolveFooterPerformanceClock, resolveFooterPerformanceRate, resolveFooterPerformanceStep, type FooterPerformanceStageReference } from "./footerPerformanceProgress";
-import { Clock3, Gauge, Hash, Magnet, Radio, Zap } from "lucide-react";
+import { Clock3, Gauge, Hash, Magnet, Radio, Sigma, Zap } from "lucide-react";
 import { formatTorqueT } from "@/shared/domain/physics/torqueUnits";
 import type { ReactNode } from "react";
 import type { KernelEventMap } from "@/kernel/events/eventTypes";
@@ -68,6 +68,7 @@ export function buildFooterTelemetryModel(
     nowMs?: number | null;
     stageExecutionUnpublished?: boolean;
     stageHandoff?: boolean;
+    telemetryView?: "overview" | "antenna" | "eigensolve";
     userSolvePhase?: RuntimeUserSolvePhase | null;
   },
 ) {
@@ -85,7 +86,24 @@ export function buildFooterTelemetryModel(
   };
 
   const antennaStage = resolveFooterAntennaStage(status, stageExecution);
-  if (antennaStage) return buildAntennaSolveTelemetry(antennaStage, runtimePhase?.nowMs ?? null);
+  if (antennaStage && runtimePhase?.telemetryView !== "eigensolve") {
+    return buildAntennaSolveTelemetry(antennaStage, runtimePhase?.nowMs ?? null);
+  }
+
+  const eigensolveStage = resolveFooterEigensolveStage(status, stageExecution);
+  if (runtimePhase?.telemetryView === "eigensolve" && eigensolveStage) {
+    const frequencyDomainProgress = buildFrequencyDomainProgress({
+      responseProgress,
+      responseSweep,
+      solverStageKind: solverStatus?.stage_kind ?? eigensolveStage.kind,
+      stageExecution,
+    });
+    return buildEigensolveTelemetry(
+      eigensolveStage,
+      frequencyDomainProgress,
+      runtimePhase?.nowMs ?? null,
+    );
+  }
 
   const stageHandoff = runtimePhase?.stageHandoff === true;
   const completedRun = !stageHandoff && (
@@ -663,6 +681,120 @@ function buildAntennaSolveTelemetry(stage: FooterAntennaStage, nowMs: number | n
     statusDetail: reason ? String(reason) : "Antenna field solve lifecycle",
     statusState: state,
     statusTitle: `System Status: Antenna solve — ${label}`,
+  };
+}
+
+function buildEigensolveTelemetry(
+  stage: FooterEigensolveStage,
+  frequencyDomainProgress: FooterFrequencyDomainProgress | null,
+  nowMs: number | null,
+) {
+  const { record } = stage;
+  const state = record.status;
+  const label = state.charAt(0).toUpperCase() + state.slice(1);
+  const reason = record.state_transition_reason ?? record.reason ?? null;
+  const start = record.started_at_unix_ms;
+  const end = state === "running" ? nowMs : record.completed_at_unix_ms;
+  const elapsed =
+    validStageTimestamp(start) && validStageTimestamp(end) && end >= start
+      ? formatDuration((end - start) / 1_000)
+      : "Not reported";
+  const stageTitle = isEigenmodesStageKind(stage.kind)
+    ? "Eigenmodes"
+    : "Frequency response";
+  const progressValue =
+    frequencyDomainProgress?.percentLabel ??
+    (typeof record.progress_percent === "number" &&
+    Number.isFinite(record.progress_percent)
+      ? `${Math.round(record.progress_percent)}%`
+      : label);
+  const solverValue =
+    frequencyDomainProgress?.solverLabel ??
+    frequencyDomainProgress?.solveLabel ??
+    record.progress_label ??
+    "Modal eigensolver";
+  const residualValue =
+    frequencyDomainProgress?.residualLabel ??
+    frequencyDomainProgress?.pointLabel ??
+    frequencyDomainProgress?.frequencyLabel ??
+    "Not reported";
+  const publication =
+    state === "failed"
+      ? "Not completed"
+      : state === "cancelled"
+        ? "Cancelled"
+        : state === "completed"
+          ? "Modes published"
+          : state === "pending"
+            ? "Awaiting execution"
+            : "Solving modes";
+  const metric = (
+    id: string,
+    title: string,
+    value: string,
+    detail: string,
+  ): FooterTelemetryMetric => ({
+    detail,
+    icon: <Sigma size={14} aria-hidden="true" />,
+    id,
+    label: title,
+    subdetail: "Authoritative eigensolve stage execution",
+    value,
+  });
+  return {
+    antennaProgress: null,
+    awaitingCompute: false,
+    frequencyDomainProgress,
+    stageProgressNotice: null,
+    metrics: [
+      metric(
+        "eigensolve-state",
+        "Solve state",
+        label,
+        reason ? String(reason) : `${stageTitle} solver lifecycle`,
+      ),
+      metric(
+        "eigensolve-stage",
+        "Module stage",
+        stageTitle,
+        frequencyDomainProgress?.detail ?? record.progress_detail ?? stageTitle,
+      ),
+      metric(
+        "eigensolve-progress",
+        "Progress",
+        progressValue,
+        frequencyDomainProgress?.detail ?? "Modal/frequency sweep completion",
+      ),
+      metric(
+        "eigensolve-solver",
+        "Solver",
+        solverValue,
+        "Active linear/modal solver backend",
+      ),
+      metric(
+        "eigensolve-residual",
+        "Residual / point",
+        residualValue,
+        "Latest reported solver residual or frequency point",
+      ),
+      metric(
+        "eigensolve-elapsed",
+        "Stage elapsed",
+        elapsed,
+        "Wall-clock duration from the published eigensolve stage timestamps",
+      ),
+      metric(
+        "eigensolve-results",
+        "Publication",
+        publication,
+        "Published modal spectrum and eigenmode spatial profiles",
+      ),
+    ],
+    onlineDetail: "Session state",
+    onlineTitle: state === "running" ? "Online / Active" : `Online / ${stageTitle}`,
+    statusDetail: reason ? String(reason) : `${stageTitle} solver lifecycle`,
+    statusState: state,
+    statusTitle: `System Status: ${stageTitle} — ${label}`,
   };
 }
 

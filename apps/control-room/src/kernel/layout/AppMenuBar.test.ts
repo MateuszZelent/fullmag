@@ -29,6 +29,7 @@ describe("AppMenuBar CSS contract", () => {
     expect(headerCss).toContain(".fm-header__session-indicator");
     expect(headerCss).toContain(".fm-header__session-dot");
     expect(headerCss).toContain(".fm-header__project-status");
+    expect(headerCss).toContain(".fm-header__fullscreen-toggle");
     expect(headerCss).toContain("-webkit-app-region: drag");
   });
 
@@ -153,6 +154,19 @@ describe("app menu command model", () => {
 
     expect(communicationItem).toMatchObject({
       label: "Communication",
+    });
+  });
+
+  it("exposes Full Screen Mode as a checkable View menu command", () => {
+    const viewMenu = MAIN_MENUS.find((menu) => menu.id === "view");
+    const fullscreenItem = viewMenu?.children?.find(
+      (item) => item.id === "workspace.fullscreen-toggle",
+    );
+
+    expect(fullscreenItem).toMatchObject({
+      checkable: true,
+      label: "Full Screen Mode",
+      shortcut: "Alt+Shift+F",
     });
   });
 });

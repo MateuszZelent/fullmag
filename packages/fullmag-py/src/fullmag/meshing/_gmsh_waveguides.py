@@ -11,6 +11,7 @@ from fullmag.model.geometry import (
     ArchWaveguide,
     CPWAntennaLayout,
     MicrostripAntennaLayout,
+    SinWaveguide,
 )
 
 
@@ -48,6 +49,66 @@ def add_arch_waveguide_to_occ(
         t = index / (n_sections - 1)
         x = -half_l + t * length
         z_center = z0 + arch_height * math.sin(math.pi * t)
+        z_min = z_center - half_h
+        z_max = z_center + half_h
+        points = [
+            gmsh.model.occ.addPoint(x, -half_w, z_min),
+            gmsh.model.occ.addPoint(x, half_w, z_min),
+            gmsh.model.occ.addPoint(x, half_w, z_max),
+            gmsh.model.occ.addPoint(x, -half_w, z_max),
+        ]
+        lines = [
+            gmsh.model.occ.addLine(points[0], points[1]),
+            gmsh.model.occ.addLine(points[1], points[2]),
+            gmsh.model.occ.addLine(points[2], points[3]),
+            gmsh.model.occ.addLine(points[3], points[0]),
+        ]
+        wires.append(gmsh.model.occ.addWire(lines))
+
+    return list(gmsh.model.occ.addThruSections(wires, makeSolid=True, makeRuled=True))
+
+
+def add_sin_waveguide_to_occ(
+    gmsh: Any,
+    geometry: SinWaveguide,
+    *,
+    scale: float = 1.0,
+    sections: int | None = None,
+) -> list[tuple[int, int]]:
+    """Create a SinWaveguide OCC solid from rectangular vertical sections."""
+    length = geometry.length * scale
+    width = geometry.width * scale
+    height = geometry.height * scale
+    period = geometry.period * scale
+    amplitude = geometry.amplitude * scale
+    phase = geometry.phase
+    z0 = geometry.z0 * scale
+    half_l = length * 0.5
+    half_w = width * 0.5
+    half_h = height * 0.5
+
+    if math.isclose(amplitude, 0.0, abs_tol=max(abs(height), abs(length), 1.0) * 1e-15):
+        tag = gmsh.model.occ.addBox(
+            -half_l,
+            -half_w,
+            z0 - half_h,
+            length,
+            width,
+            height,
+        )
+        return [(3, tag)]
+
+    if sections is None:
+        periods = max(1.0, abs(length / period))
+        n_sections = min(257, max(33, int(math.ceil(periods * 24.0)) + 1))
+    else:
+        n_sections = max(3, int(sections))
+
+    wires: list[int] = []
+    for index in range(n_sections):
+        t = index / (n_sections - 1)
+        x = -half_l + t * length
+        z_center = z0 + amplitude * math.sin((2.0 * math.pi / period) * x + phase)
         z_min = z_center - half_h
         z_max = z_center + half_h
         points = [

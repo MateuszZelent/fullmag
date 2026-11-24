@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+import math
 from typing import Any
 
 from ._mesh_targets import _geometry_name_aliases
@@ -83,13 +84,20 @@ def resolve_entity_selectors(
     *,
     dimension: int,
     component_surface_tags: dict[str, list[int]] | None = None,
+    coord_scale: float = 1.0,
 ) -> tuple[list[int], list[dict[str, object]]]:
     """Resolve semantic entity selectors to Gmsh entity tags.
 
-    The public selector payload stores physical intent. This adapter resolves
-    that intent only after Gmsh has realized the geometry and stable entity tags
-    exist.
+    The public selector payload stores physical intent in SI meters. When the
+    active Gmsh OCC model is scaled by ``coord_scale`` (for example,
+    ``SCALE = 1e6`` for micrometer CAD conditioning), query coordinates are
+    multiplied by ``coord_scale`` before calling OCC and returned diagnostic
+    distances and closest points are divided back into SI meters.
     """
+    scale = float(coord_scale)
+    if not math.isfinite(scale) or scale <= 0.0:
+        raise ValueError(f"coord_scale must be finite and positive, got {coord_scale!r}")
+
     if selectors is None:
         return [], []
 
@@ -120,9 +128,9 @@ def resolve_entity_selectors(
         )
         if candidates:
             out_dim_tags, distances, coord = gmsh.model.occ.getClosestEntities(
-                point[0],
-                point[1],
-                point[2],
+                point[0] * scale,
+                point[1] * scale,
+                point[2] * scale,
                 candidates,
                 n=count,
             )
@@ -137,8 +145,8 @@ def resolve_entity_selectors(
                 "dimension": dimension,
                 "candidate_count": len(candidates),
                 "resolved_tags": tags,
-                "distances": [float(distance) for distance in distances],
-                "closest_points": [float(value) for value in coord],
+                "distances": [float(distance) / scale for distance in distances],
+                "closest_points": [float(value) / scale for value in coord],
             }
         )
 

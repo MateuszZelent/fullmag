@@ -215,17 +215,30 @@ Inne błędy uzgadniania pozostają fatalne; nie są zamieniane w pusty ledger
 ani zgodę na nowe obliczenia. Ten wyjątek nie obejmuje błędów zapisów
 checkpointu lub zakończenia aktywnego workera.
 
-W fazie pracy cykliczny sampler zachowuje istniejący lease inventory także
-przy błędzie próbkowania. Wyłącznie typowany konflikt `StoreWriterBusy` może
-pominąć najwyżej pięć kolejnych cykli; szósty kończy się dotychczasową ścieżką
-Unknown/drain. Pierwsza próbka wymagana do startu pozostaje fail-closed.
-Odmowa admission przez ledger lub typowany konflikt przy jej obserwacji
-może być tolerowany przez najwyżej 60 sekund czasu monotonicznego. Nie
-przedłuża to ważności snapshotu: ledger nadal odmawia nowych rezerwacji na
-podstawie starej lub niezgodnej próbki. Błędy schematu, danych i generacji
-zwracane jako błędy pozostają fatalne. Wznowienie poprawnej obserwacji zeruje
-budżet odroczenia. Drain i błędy kanału sterowania nadal wymagają dołączenia
-trwającego samplera przed zakończeniem pętli.
+W fazie pracy cykliczny sampler utrzymuje lease inventory. Przeterminowana
+próbka lub próbka z błędem pomiaru przy zgodnej tożsamości hosta blokuje nowe
+rezerwacje w ledgerze. Nadzorca nadal sprawdza pule, publikuje heartbeat
+i obsługuje drain. Działające workery zachowują nadzór. Po trzech kolejnych
+zakończonych odświeżeniach bez świeżej próbki usługa zapisuje alarm i dalej
+ponawia próbę. Licznik uwzględnia wynik publikacji oraz typowane przejściowe
+błędy blokady lub I/O. Odczyty tej samej próbki przez heartbeat i cykle,
+w których próbkę publikuje inny owner, nie zwiększają licznika. Na hoście
+z budżetem GPU świeża próbka zawierająca tylko ostatni znany inwentarz GPU
+nadal liczy się jako nieudane odświeżenie, ponieważ ledger wciąż odmawia
+rezerwacji GPU. Przy przypięciu CPU odświeżenie wymaga też aktualnej topologii
+i zbioru CPU dostępnych dla procesu. Świeża próbka z bieżącym inwentarzem
+wymaganym przez profil zeruje licznik.
+
+Pierwsza próbka pozostaje warunkiem startu. Istniejący budżet 60 s dotyczy
+niepotwierdzonej tożsamości, np. niezgodności aktywnego ownera. Błędy schematu,
+danych, generacji oraz zapisy o niepotwierdzonym wyniku wymagają nadal ścieżki
+Unknown/drain. Drain i błędy kanału sterowania wymagają dołączenia trwającego
+samplera przed zakończeniem pętli.
+
+Pierwsze, wolne (co najmniej 1 s) i nieudane odświeżenia publikują
+`compute_node_sample_timing`. Zdarzenie podaje w milisekundach czas pobrania
+danych ledgera, pomiaru hosta, oczekiwania na rozpoczęcie zapisu z ponowieniami
+oraz pracy w trakcie transakcji ledgera.
 
 Błąd jednego schedulera drenuje drugi,
 lecz owner kończy jako failed/unknown, nigdy jako poprawny drained.
@@ -424,6 +437,14 @@ porównuje zegarów między różnymi `boot_id`.
 Dowód bieżącej ścieżki Docker dotyczy Linux `CLOCK_BOOTTIME`. Native Windows
 boot identity i tick-source pozostają osobną kwalifikacją; ten kontrakt nie
 ogłasza ich równoważności bez takiego dowodu.
+
+Jeżeli zweryfikowana próbka z bieżącego bootu przekroczy limit wieku, ledger
+odracza przyjmowanie nowych zadań do następnej świeżej próbki. Nadzorca nadal
+sprawdza oba schedulery i publikuje heartbeat, więc aktywny worker może dokończyć
+etap i przekazać wynik. Log nadzorcy rejestruje wejście w oczekiwanie na próbkę
+i powrót świeżej obserwacji. Brak próbki, niezgodne powiązanie właściciela
+inwentarza, inny boot i inne przyczyny niedostępności nadal podlegają ograniczonemu
+czasowi oczekiwania. Twarde błędy tożsamości i odczytu pozostają błędami.
 
 ## Kontrolowane odzyskanie po utracie exit receiptu workera
 

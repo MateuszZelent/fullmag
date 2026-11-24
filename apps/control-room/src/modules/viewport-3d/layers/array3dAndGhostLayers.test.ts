@@ -1,0 +1,604 @@
+import { readFileSync } from "node:fs";
+
+import { BoxGeometry, ExtrudeGeometry, LineDashedMaterial, Vector3 } from "three";
+import { beforeEach, describe, expect, it } from "vitest";
+
+import { applyArray3DPreset, defaultArrayAxisSpec } from "@/kernel/authoring/array3dModel";
+import { geometryGhostVisibilityStore } from "@/kernel/visualization/geometryGhostVisibilityStore";
+
+import {
+  buildMergeSafeGizmoTransformPatch,
+  createMoveGestureController,
+  resolveGizmoAnchorPosition,
+  resolveGizmoAxisVector,
+  resolveGizmoShortcutUpdate,
+} from "../MoveObjectGizmo.model";
+import {
+  buildAuthoredMagnetizationVectorGridPoints,
+  buildSubdividedSurfacePreviewData,
+} from "../TextureTransformGizmo";
+import {
+  buildViewport3DPrimitiveRenderModel,
+  type Viewport3DPrimitiveObject,
+} from "../viewport3dPrimitiveModel";
+import {
+  buildArray3DInstanceMatrices,
+  extractArray3DPreviewDescriptors,
+} from "./Array3DInstancedPreviewLayer";
+import {
+  createGhostCutterDashedMaterial,
+  createGhostCutterEdgesGeometry,
+  resolveGhostCutterDescriptors,
+} from "./GhostCutterOverlayLayer";
+import {
+  createPrimitiveObjectGeometry,
+  resolvePrimitiveGroupTransform,
+} from "./PrimitiveObjectLayerModel";
+
+function mockPrimitiveObject(
+  overrides: Partial<Viewport3DPrimitiveObject>,
+): Viewport3DPrimitiveObject {
+  return {
+    bounds: { center: [0, 0, 0], size: [100e-9, 100e-9, 10e-9] },
+    csgPreview: null,
+    fallbackLabel: "Parametric",
+    geometryKey: "obj:1",
+    kind: "box",
+    label: "Film",
+    magnetizationTexturePreview: null,
+    meshState: "primitive-only",
+    objectId: "film_1",
+    role: "magnet",
+    sceneRevision: 1,
+    translation: [0, 0, 0],
+    ...overrides,
+  };
+}
+
+describe("Viewport 3D Etap D: Array3D InstancedMesh, GhostCutterOverlay, and Transform Gizmo", () => {
+  beforeEach(() => {
+    geometryGhostVisibilityStore.clear();
+  });
+
+  it("extracts Array3D descriptors for both direct objects and CSG cutters and builds exact instance matrices", () => {
+    const hexAxes = applyArray3DPreset("hexagonal_xy", 100e-9);
+    const antidotFilm = mockPrimitiveObject({
+      objectId: "antidot",
+      rawGeometry: {
+        geometry_kind: "Difference",
+        geometry_params: {
+          operands: [
+            {
+              enabled: true,
+              geometry: { geometry_kind: "Box", geometry_params: { size: [500e-9, 500e-9, 10e-9] } },
+              label: "Film",
+              operand_id: "base",
+            },
+            {
+              enabled: true,
+              geometry: {
+                geometry_kind: "Array3D",
+                geometry_params: {
+                  axes: hexAxes,
+                  child: {
+                    geometry_kind: "Cylinder",
+                    geometry_params: { height: 12e-9, radius: 15e-9 },
+                  },
+                  merge_overlapping: false,
+                },
+              },
+              label: "Antidot Lattice",
+              operand_id: "holes",
+            },
+          ],
+        },
+      },
+      transform: { translation: [10e-9, 0, 0] },
+    });
+
+    const descriptors = extractArray3DPreviewDescriptors([antidotFilm]);
+    expect(descriptors).toHaveLength(1);
+    expect(descriptors[0]).toMatchObject({
+      childKind: "Cylinder",
+      isCutter: true,
+      objectId: "antidot",
+      operandId: "holes",
+    });
+
+    const matrices = buildArray3DInstanceMatrices(descriptors[0]!);
+    expect(matrices).toHaveLength(16); // 4x4x1
+    // Verify root translation [10nm, 0, 0] is composed into every instance matrix.
+    const pos = new Vector3().setFromMatrixPosition(matrices[0]!);
+    expect(Number.isFinite(pos.x)).toBe(true);
+    expect(Number.isFinite(pos.y)).toBe(true);
+  });
+
+  it("resolves ghost cutter descriptors when toggled in local store or selected, without touching SceneDocument", () => {
+    const compositeObj = mockPrimitiveObject({
+      objectId: "film_csg",
+      rawGeometry: {
+        geometry_kind: "Difference",
+        geometry_params: {
+          operands: [
+            {
+              enabled: true,
+              geometry: { geometry_kind: "Box", geometry_params: { size: [100e-9, 100e-9, 10e-9] } },
+              label: "Base",
+              operand_id: "op_base",
+            },
+            {
+              enabled: true,
+              geometry: { geometry_kind: "Cylinder", geometry_params: { height: 12e-9, radius: 15e-9 } },
+              label: "Hole",
+              operand_id: "op_hole",
+              transform: { translation: [5e-9, -5e-9, 0] },
+            },
+          ],
+        },
+      },
+      transform: { translation: [10e-9, 20e-9, 0] },
+    });
+
+    // Neither toggled nor selected -> empty
+    expect(
+      resolveGhostCutterDescriptors(
+        [compositeObj],
+        null,
+        null,
+        geometryGhostVisibilityStore.getSnapshot(),
+      ),
+    ).toHaveLength(0);
+
+    // Selected operand -> visible
+    const selectedGhosts = resolveGhostCutterDescriptors(
+      [compositeObj],
+      "film_csg",
+      "op_hole",
+      geometryGhostVisibilityStore.getSnapshot(),
+    );
+    expect(selectedGhosts).toHaveLength(1);
+    expect(selectedGhosts[0]!.position[0]).toBeCloseTo(15e-9, 15);
+    expect(selectedGhosts[0]!.position[1]).toBeCloseTo(15e-9, 15);
+    expect(selectedGhosts[0]!.position[2]).toBeCloseTo(0, 15);
+    expect(selectedGhosts[0]?.role).toBe("subtract");
+
+    // Local ghost toggle -> visible even when deselected
+    geometryGhostVisibilityStore.setGhostVisible("film_csg", "op_hole", true);
+    const toggledGhosts = resolveGhostCutterDescriptors(
+      [compositeObj],
+      null,
+      null,
+      geometryGhostVisibilityStore.getSnapshot(),
+    );
+    expect(toggledGhosts).toHaveLength(1);
+  });
+
+  it("anchors gizmo at pivot, switches G/R/S/L modes, and produces merge-safe Transform3D patches", () => {
+    const anchor = resolveGizmoAnchorPosition({
+      bounds: { center: [10e-9, 0, 0] },
+      transform: { pivot: [5e-9, -2e-9, 0] },
+    });
+    expect(anchor[0]).toBeCloseTo(15e-9, 18);
+    expect(anchor[1]).toBeCloseTo(-2e-9, 18);
+    expect(anchor[2]).toBeCloseTo(0, 18);
+
+    expect(resolveGizmoShortcutUpdate("r", "move", "world")).toEqual({
+      mode: "rotate",
+      space: "world",
+    });
+    expect(resolveGizmoShortcutUpdate("s", "rotate", "world")).toEqual({
+      mode: "scale",
+      space: "world",
+    });
+    expect(resolveGizmoShortcutUpdate("l", "scale", "world")).toEqual({
+      mode: "scale",
+      space: "local",
+    });
+    expect(resolveGizmoShortcutUpdate("g", "scale", "local")).toEqual({
+      mode: "move",
+      space: "local",
+    });
+
+    // 90 deg rotation around Z rotates local +X onto world +Y.
+    const q90z: [number, number, number, number] = [0, 0, Math.SQRT1_2, Math.SQRT1_2];
+    const localX = resolveGizmoAxisVector("x", "local", q90z);
+    expect(localX.x).toBeCloseTo(0, 6);
+    expect(localX.y).toBeCloseTo(1, 6);
+
+    const rotPatch = buildMergeSafeGizmoTransformPatch({
+      axis: "z",
+      currentTransform: {
+        pivot: [1e-9, 0, 0],
+        rotationQuat: [0, 0, 0, 1],
+        scale: [2, 2, 1],
+        translation: [10e-9, 0, 0],
+      },
+      delta: Math.PI / 2,
+      mode: "rotate",
+      space: "world",
+    });
+    expect(rotPatch.rotation_quat).toBeDefined();
+    expect(rotPatch.translation).toBeUndefined();
+    expect(rotPatch.scale).toBeUndefined();
+
+    const scalePatch = buildMergeSafeGizmoTransformPatch({
+      axis: "x",
+      currentTransform: {
+        rotationQuat: q90z,
+        scale: [2, 1, 1],
+        translation: [10e-9, 0, 0],
+      },
+      delta: 0.5,
+      mode: "scale",
+      space: "local",
+    });
+    expect(scalePatch).toEqual({ scale: [3, 1, 1] });
+  });
+
+  it("composes rotated parent transform with operand & child transforms in GhostCutter and Array3D", () => {
+    // 90 deg rotation around Z maps local +X [10nm, 0, 0] -> world +Y [0, 10nm, 0]
+    const q90z: [number, number, number, number] = [0, 0, Math.SQRT1_2, Math.SQRT1_2];
+    const rotatedObj = mockPrimitiveObject({
+      objectId: "rot_csg",
+      rawGeometry: {
+        geometry_kind: "Difference",
+        geometry_params: {
+          operands: [
+            {
+              enabled: true,
+              geometry: { geometry_kind: "Box", geometry_params: { size: [100e-9, 100e-9, 10e-9] } },
+              label: "Base",
+              operand_id: "op_base",
+            },
+            {
+              enabled: true,
+              geometry: {
+                geometry_kind: "Array3D",
+                geometry_params: {
+                  axes: applyArray3DPreset("stripe_1d", 20e-9),
+                  child: { geometry_kind: "Cylinder", geometry_params: { height: 12e-9, radius: 5e-9 } },
+                  child_transform: { translation: [0, 0, 2e-9] },
+                  merge_overlapping: false,
+                },
+              },
+              label: "Rotated Holes",
+              operand_id: "op_holes",
+              transform: { translation: [10e-9, 0, 0] },
+            },
+          ],
+        },
+      },
+      transform: { rotationQuat: q90z, translation: [0, 0, 0] },
+    });
+
+    const ghosts = resolveGhostCutterDescriptors(
+      [rotatedObj],
+      "rot_csg",
+      "op_holes",
+      geometryGhostVisibilityStore.getSnapshot(),
+    );
+    expect(ghosts).toHaveLength(1);
+    expect(ghosts[0]!.position[0]).toBeCloseTo(0, 12);
+    expect(ghosts[0]!.position[1]).toBeCloseTo(10e-9, 12);
+
+    const arrayDescs = extractArray3DPreviewDescriptors([rotatedObj]);
+    expect(arrayDescs).toHaveLength(1);
+    const matrices = buildArray3DInstanceMatrices(arrayDescs[0]!);
+    // Symmetric stripe_1d has 6 instances centered around 0; average world pos should be (0, 10nm, 2nm)
+    const avg = matrices.reduce(
+      (acc, mat) => acc.add(new Vector3().setFromMatrixPosition(mat)),
+      new Vector3(),
+    ).divideScalar(matrices.length);
+    expect(avg.x).toBeCloseTo(0, 12);
+    expect(avg.y).toBeCloseTo(10e-9, 12);
+    expect(avg.z).toBeCloseTo(2e-9, 12);
+  });
+
+  it("projects local-space gizmo drag onto rotated local axis and preserves dragged axis on commit", async () => {
+    const q90z: [number, number, number, number] = [0, 0, Math.SQRT1_2, Math.SQRT1_2];
+    let committedAxisPayload: { axis: string; delta: number; translation: [number, number, number] } | null = null;
+    const controller = createMoveGestureController({
+      baseRevision: 5,
+      objectId: "rot_obj",
+      onAxisCommit: (payload) => {
+        committedAxisPayload = {
+          axis: payload.axis,
+          delta: payload.delta,
+          translation: payload.translation,
+        };
+      },
+      onCommit: () => true,
+      onDraftChange: () => undefined,
+      origin: [0, 0, 0],
+      rotationQuat: q90z,
+      space: "local",
+    });
+
+    // Dragging local X handle (which points along world +Y after 90 deg Z rotation) by +25nm in world Y
+    controller.begin("x", 1, [0, 0, 0], () => undefined, () => undefined);
+    controller.move(1, [0, 25e-9, 0]);
+    await controller.end(1);
+
+    expect(committedAxisPayload).not.toBeNull();
+    expect(committedAxisPayload!.axis).toBe("x");
+    expect(committedAxisPayload!.delta).toBeCloseTo(25e-9, 12);
+    expect(committedAxisPayload!.translation[0]).toBeCloseTo(0, 12);
+    expect(committedAxisPayload!.translation[1]).toBeCloseTo(25e-9, 12);
+  });
+
+  it("creates valid THREE.LineDashedMaterial and precomputed lineDistance attributes with zero PascalCase R3F tags", () => {
+    const ghostSource = readFileSync(
+      new URL("./GhostCutterOverlayLayer.tsx", import.meta.url),
+      "utf8",
+    );
+    expect(ghostSource).not.toMatch(/<[A-Z][a-zA-Z0-9]*Material\b/);
+    expect(ghostSource).not.toContain("<lineDashedMaterial");
+
+    const box = new BoxGeometry(100e-9, 100e-9, 20e-9);
+    const edges = createGhostCutterEdgesGeometry(box);
+    const lineDistances = edges.getAttribute("lineDistance");
+    expect(lineDistances).toBeDefined();
+    expect(lineDistances.count).toBeGreaterThan(0);
+
+    const mat = createGhostCutterDashedMaterial("#ff6b6b", 12e-9);
+    expect(mat).toBeInstanceOf(LineDashedMaterial);
+    expect(mat.dashSize).toBeCloseTo(12e-9, 15);
+    expect(mat.gapSize).toBeCloseTo(12e-9 * 0.65, 15);
+
+    edges.dispose();
+    box.dispose();
+    mat.dispose();
+  });
+
+  it("frames Union, multi-operand Difference, and Array3D at exact nm bounds instead of 1m fallback and builds valid composite geometry", () => {
+    const scene = {
+      objects: [
+        {
+          geometry: {
+            geometry_kind: "Union",
+            geometry_params: {
+              operands: [
+                {
+                  enabled: true,
+                  geometry: { geometry_kind: "Box", geometry_params: { size: [100e-9, 100e-9, 10e-9] } },
+                  operand_id: "op:1",
+                },
+                {
+                  enabled: true,
+                  geometry: { geometry_kind: "Box", geometry_params: { size: [100e-9, 100e-9, 10e-9] } },
+                  operand_id: "op:2",
+                  transform: { translation: [150e-9, 0, 0] },
+                },
+              ],
+            },
+          },
+          id: "union_1",
+          name: "UnionBox",
+          transform: { translation: [20e-9, 0, 0] },
+        },
+        {
+          geometry: {
+            geometry_kind: "Array3D",
+            geometry_params: {
+              axes: [
+                defaultArrayAxisSpec("x", { count: 2, enabled: true, pitch_m: 600e-9 }),
+                defaultArrayAxisSpec("y", { count: 2, enabled: true, pitch_m: 600e-9 }),
+                defaultArrayAxisSpec("z", { count: 1, enabled: false, pitch_m: 100e-9 }),
+              ],
+              child: {
+                geometry_kind: "Difference",
+                geometry_params: {
+                  operands: [
+                    {
+                      enabled: true,
+                      geometry: { geometry_kind: "Box", geometry_params: { size: [500e-9, 500e-9, 20e-9] } },
+                      operand_id: "base",
+                    },
+                    {
+                      enabled: true,
+                      geometry: { geometry_kind: "Cylinder", geometry_params: { height: 24e-9, radius: 50e-9 } },
+                      operand_id: "hole",
+                    },
+                  ],
+                },
+              },
+              merge_overlapping: false,
+            },
+          },
+          id: "array_film",
+          name: "ArrayedFilm",
+          transform: { translation: [10e-9, 0, 0] },
+        },
+      ],
+      revision: 3,
+    };
+
+    const model = buildViewport3DPrimitiveRenderModel(scene as never, null);
+    expect(model.objects).toHaveLength(2);
+
+    const unionObj = model.objects.find((o) => o.objectId === "union_1")!;
+    expect(unionObj.kind).toBe("composite");
+    expect(unionObj.bounds.size[0]).toBeCloseTo(250e-9, 15);
+    expect(unionObj.bounds.size[1]).toBeCloseTo(100e-9, 15);
+    expect(unionObj.bounds.size[2]).toBeCloseTo(10e-9, 15);
+    // Group transform for composite uses object translation, NOT bounds.center
+    expect(resolvePrimitiveGroupTransform(unionObj).position).toEqual([20e-9, 0, 0]);
+    const unionGeo = createPrimitiveObjectGeometry(unionObj);
+    expect(unionGeo.getAttribute("position").count).toBeGreaterThan(36);
+    unionGeo.dispose();
+
+    const arrayObj = model.objects.find((o) => o.objectId === "array_film")!;
+    expect(arrayObj.kind).toBe("array3d");
+    expect(arrayObj.bounds.size[0]).toBeCloseTo(1100e-9, 14);
+    expect(arrayObj.bounds.size[1]).toBeCloseTo(1100e-9, 14);
+    expect(arrayObj.bounds.size[2]).toBeCloseTo(20e-9, 14);
+
+    const arrayDescs = extractArray3DPreviewDescriptors(model.objects);
+    expect(arrayDescs).toHaveLength(1);
+    expect(arrayDescs[0]?.childSize).toEqual([500e-9, 500e-9, 20e-9]);
+    const matrices = buildArray3DInstanceMatrices(arrayDescs[0]!);
+    expect(matrices).toHaveLength(4);
+    const firstPos = new Vector3().setFromMatrixPosition(matrices[0]!);
+    expect(firstPos.x).toBeCloseTo(10e-9, 15);
+  });
+
+  it("renders real 3D through-holes via ExtrudeGeometry for Box minus rotated Box + 2 Cylinders and Cylinder minus Cylinder", () => {
+    const q45z: [number, number, number, number] = [0, 0, Math.sin(Math.PI / 8), Math.cos(Math.PI / 8)];
+    const multiHoleScene = {
+      objects: [
+        {
+          geometry: {
+            geometry_kind: "Difference",
+            geometry_params: {
+              operands: [
+                {
+                  enabled: true,
+                  geometry: { geometry_kind: "Box", geometry_params: { size: [500e-9, 500e-9, 20e-9] } },
+                  label: "Film",
+                  operand_id: "op:1",
+                },
+                {
+                  enabled: true,
+                  geometry: { geometry_kind: "Box", geometry_params: { size: [60e-9, 40e-9, 24e-9] } },
+                  label: "Center Slot",
+                  operand_id: "op:2",
+                  transform: { rotation_quat: q45z, translation: [0, 0, 0] },
+                },
+                {
+                  enabled: true,
+                  geometry: { geometry_kind: "Cylinder", geometry_params: { height: 24e-9, radius: 30e-9 } },
+                  label: "Left Hole",
+                  operand_id: "op:3",
+                  transform: { translation: [-150e-9, 0, 0] },
+                },
+                {
+                  enabled: true,
+                  geometry: { geometry_kind: "Cylinder", geometry_params: { height: 24e-9, radius: 30e-9 } },
+                  label: "Right Hole",
+                  operand_id: "op:4",
+                  transform: { translation: [150e-9, 0, 0] },
+                },
+              ],
+            },
+          },
+          id: "multi_hole_box",
+          name: "MultiHoleBox",
+        },
+        {
+          geometry: {
+            geometry_kind: "Difference",
+            geometry_params: {
+              operands: [
+                {
+                  enabled: true,
+                  geometry: { geometry_kind: "Cylinder", geometry_params: { axis: [0, 0, 1], height: 20e-9, radius: 120e-9 } },
+                  label: "Disk",
+                  operand_id: "op:1",
+                },
+                {
+                  enabled: true,
+                  geometry: { geometry_kind: "Cylinder", geometry_params: { axis: [0, 0, 1], height: 24e-9, radius: 40e-9 } },
+                  label: "Inner Hole",
+                  operand_id: "op:2",
+                },
+              ],
+            },
+          },
+          id: "ring_disk",
+          name: "RingDisk",
+        },
+      ],
+      revision: 4,
+    };
+
+    const model = buildViewport3DPrimitiveRenderModel(multiHoleScene as never, null);
+    const multiHoleObj = model.objects.find((o) => o.objectId === "multi_hole_box")!;
+    const multiGeo = createPrimitiveObjectGeometry(multiHoleObj);
+    expect(multiGeo).toBeInstanceOf(ExtrudeGeometry);
+    expect(multiGeo.userData.analyticalHoleCount).toBe(3);
+    expect(multiGeo.getAttribute("position").count).toBeGreaterThan(200);
+    multiGeo.dispose();
+
+    const ringObj = model.objects.find((o) => o.objectId === "ring_disk")!;
+    const ringGeo = createPrimitiveObjectGeometry(ringObj);
+    expect(ringGeo).toBeInstanceOf(ExtrudeGeometry);
+    expect(ringGeo.userData.analyticalHoleCount).toBe(1);
+    ringGeo.dispose();
+  });
+
+  it("renders real 3D antidot lattice holes via ExtrudeGeometry for Box minus Array3D(Cylinder 3x3)", () => {
+    const antidotScene = {
+      objects: [
+        {
+          geometry: {
+            geometry_kind: "Difference",
+            geometry_params: {
+              operands: [
+                {
+                  enabled: true,
+                  geometry: { geometry_kind: "Box", geometry_params: { size: [500e-9, 500e-9, 20e-9] } },
+                  label: "Base Film",
+                  operand_id: "op:1",
+                },
+                {
+                  enabled: true,
+                  geometry: {
+                    geometry_kind: "Array3D",
+                    geometry_params: {
+                      axes: [
+                        defaultArrayAxisSpec("x", { count: 3, direction: "symmetric", enabled: true, pitch_m: 120e-9 }),
+                        defaultArrayAxisSpec("y", { count: 3, direction: "symmetric", enabled: true, pitch_m: 120e-9 }),
+                        defaultArrayAxisSpec("z", { count: 1, enabled: false, pitch_m: 100e-9 }),
+                      ],
+                      child: {
+                        geometry_kind: "Cylinder",
+                        geometry_params: { axis: [0, 0, 1], height: 24e-9, radius: 25e-9 },
+                      },
+                      merge_overlapping: false,
+                    },
+                  },
+                  label: "Antidot 3x3",
+                  operand_id: "op:2",
+                },
+              ],
+            },
+          },
+          id: "antidot_film",
+          name: "AntidotFilm",
+        },
+      ],
+      revision: 5,
+    };
+
+    const model = buildViewport3DPrimitiveRenderModel(antidotScene as never, null);
+    const antidotObj = model.objects[0]!;
+    expect(antidotObj.kind).toBe("composite");
+    expect(antidotObj.bounds.size).toEqual([500e-9, 500e-9, 20e-9]);
+    const geo = createPrimitiveObjectGeometry(antidotObj);
+    expect(geo).toBeInstanceOf(ExtrudeGeometry);
+    expect(geo.userData.analyticalHoleCount).toBe(9);
+    expect(geo.getAttribute("position").count).toBeGreaterThan(500);
+    geo.dispose();
+
+    // Magnetic Texture surface preview must also use perforated ExtrudeGeometry (not BoxGeometry)
+    const texSurface = buildSubdividedSurfacePreviewData(antidotObj, 24);
+    expect(texSurface.sourceGeometryType).toBe("ExtrudeGeometry");
+    expect(texSurface.analyticalHoleCount).toBe(9);
+    expect(texSurface.positionsWorld.length / 3).toBeGreaterThan(500);
+    // Vector arrows must skip all 9 hole interiors (radius 25nm at {-120, 0, +120}nm)
+    const arrows = buildAuthoredMagnetizationVectorGridPoints(antidotObj, {
+      budget: 256,
+      geometryScope: "surface",
+    });
+    expect(arrows.count).toBeGreaterThan(50);
+    for (let i = 0; i < arrows.count; i += 1) {
+      const x = arrows.positionsWorld[i * 3]!;
+      const y = arrows.positionsWorld[i * 3 + 1]!;
+      for (const hx of [-120e-9, 0, 120e-9]) {
+        for (const hy of [-120e-9, 0, 120e-9]) {
+          expect(Math.hypot(x - hx, y - hy)).toBeGreaterThan(25e-9 - 1e-12);
+        }
+      }
+    }
+  });
+});
