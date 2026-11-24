@@ -141,7 +141,9 @@ mod tests {
     fn segmented_numeric_callbacks_preserve_later_timings_and_rejections_once() {
         let output = tempfile::tempdir().unwrap();
         let mut session = PerformanceSession {
-            recorder: Some(RunPerformanceRecorder::start(output.path(), serde_json::json!({}), "fdm_cpu")),
+            recorder: Some(RunPerformanceRecorder::start_with_step_csv(
+                output.path(), serde_json::json!({}), "fdm_cpu", true,
+            )),
             owned_output: None,
             numeric_steps: Default::default(),
         };
@@ -169,6 +171,8 @@ mod tests {
         assert_eq!(summary["coverage"]["last_step_index"], 6);
         assert_eq!(summary["step_reported_counters"]["sum_step_reported_rejected_attempts"], 12);
         assert_eq!(summary["terminal_stats_snapshot"]["timings_ns"]["relaxation_line_search_wall_time_ns"], 300);
+        assert_eq!(summary["artifacts"]["steps_csv_enabled"], true);
+        assert_eq!(summary["artifacts"]["steps_csv"], "performance/steps.csv");
         let csv = std::fs::read_to_string(output.path().join("performance/steps.csv")).unwrap();
         let rows = csv.lines().skip(1).collect::<Vec<_>>();
         assert_eq!(rows.len(), 6);
