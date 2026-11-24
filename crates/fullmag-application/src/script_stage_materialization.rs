@@ -282,7 +282,7 @@ mod canonical_relaxation_time_tests {
             ("interactive_session_requested".into(), serde_json::json!(false)),
             ("wait_for_solve".into(), serde_json::json!(true)),
         ]);
-        let stage = materialize_pipeline_primitive(&mut problem, &inventory, "run", &flags, Some(1e-12))
+        let stage = materialize_pipeline_primitive(&mut problem, &inventory, "run", None, &flags, Some(1e-12))
             .unwrap().unwrap();
         assert_eq!(stage.ir.problem_meta.runtime_metadata["interactive_session_requested"], false);
         assert_eq!(stage.ir.problem_meta.runtime_metadata["wait_for_solve"], true);
@@ -291,10 +291,10 @@ mod canonical_relaxation_time_tests {
             ("wait_for_solve".into(), serde_json::json!(false)),
             ("current_density".into(), serde_json::json!(2.0)),
         ]);
-        assert!(materialize_pipeline_primitive(&mut problem, &inventory, "set_current", &action, None).unwrap().is_none());
+        assert!(materialize_pipeline_primitive(&mut problem, &inventory, "set_current", None, &action, None).unwrap().is_none());
         assert_eq!(problem.problem_meta.runtime_metadata["interactive_session_requested"], true);
         assert_eq!(problem.problem_meta.runtime_metadata["wait_for_solve"], false);
-        let inherited = materialize_pipeline_primitive(&mut problem, &inventory, "run", &BTreeMap::new(), Some(2e-12))
+        let inherited = materialize_pipeline_primitive(&mut problem, &inventory, "run", None, &BTreeMap::new(), Some(2e-12))
             .unwrap().unwrap();
         assert_eq!(inherited.ir.problem_meta.runtime_metadata["interactive_session_requested"], true);
         assert_eq!(inherited.ir.problem_meta.runtime_metadata["wait_for_solve"], false);
@@ -322,7 +322,7 @@ mod canonical_relaxation_time_tests {
                 ]);
                 payload.insert(extra_key.into(), extra_value);
                 assert!(materialize_pipeline_primitive(&mut problem, &ScriptAntennaAuthoringInventory::default(),
-                    kind, &payload, Some(1e-12)).is_err(), "{kind}");
+                    kind, None, &payload, Some(1e-12)).is_err(), "{kind}");
                 assert_eq!(problem.problem_meta.runtime_metadata, before, "{kind}");
             }
         }

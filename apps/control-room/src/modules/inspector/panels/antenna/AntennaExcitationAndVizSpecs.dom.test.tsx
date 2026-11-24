@@ -506,13 +506,13 @@ function buildBaseScene(): Record<string, unknown> {
       {
         branches: [
           {
-            id: "signal_branch",
+            id: "signal",
             inlet_terminal_ref: "sig_in",
             outlet_terminal_ref: "sig_out",
             signed_weight: 1,
           },
           {
-            id: "return_branch",
+            id: "return",
             inlet_terminal_ref: "ret_in",
             outlet_terminal_ref: "ret_out",
             signed_weight: -1,
@@ -615,6 +615,12 @@ function buildBaseScene(): Record<string, unknown> {
           },
           id: "ant-1:current:rt0",
           kind: "closed_geometry_potential_jump",
+          material_parts: [
+            { part_id: "signal" },
+            { part_id: "return" },
+            { part_id: "inlet" },
+            { part_id: "outlet" },
+          ],
           mesh_object_id: "ant-1",
           method: "mixed_hybrid_rt0",
           object_id: "ant-1",
@@ -1401,7 +1407,7 @@ describe("Wave 5 AntennaExcitationAndVizSpecs 100% Feature-Parity Suite", () => 
       (el) =>
         el.tagName === "BUTTON" && Boolean(el.textContent?.trim() === "Points"),
     )[0];
-    expect(pointsPassBtn).toBeDefined();
+    expect(pointsPassBtn?.disabled).toBe(false);
     await act(async () => {
       pointsPassBtn!.click();
     });

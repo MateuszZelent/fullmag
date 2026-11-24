@@ -1543,7 +1543,7 @@ mod tests {
         let fullmag = root.path().join("fullmag"); std::fs::create_dir(&fullmag).unwrap();
         let mut phases = Vec::new();
         let result = crate::script_source_capture::capture_authored_script(&script, &fullmag,
-            &crate::script_source_capture::CaptureOptions::default(), |args, _| {
+            &crate::script_source_capture::CaptureOptions::default(), |args, _, _| {
                 let phase = &args[args.iter().position(|arg| arg == "--phase").unwrap() + 1]; phases.push(phase.clone());
                 if phase == "export" { anyhow::bail!("python_helper_timeout: source preparation deadline"); }
                 let inventory = json!({"capture": {"schema_version":"fullmag.script-source-capture.v1", "entry_relative_path":"source/source.py",

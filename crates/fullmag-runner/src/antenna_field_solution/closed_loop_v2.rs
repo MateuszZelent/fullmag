@@ -1,6 +1,6 @@
 //! Signed closed-loop field publication. Raw inspection is not scientific qualification.
 use super::closed_loop_field_evidence::ClosedLoopFieldEvidence;
-#[cfg(any(feature = "fem-gpu", test))]
+#[cfg(any(feature = "fem-native", test))]
 use super::closed_loop_field_evidence::ClosedLoopFieldSnapshot;
 use super::{AntennaFieldSolutionSignatures, AntennaSampleCarrier};
 use crate::types::{AuxiliaryArtifact, RunError};
@@ -72,7 +72,7 @@ pub(crate) struct ClosedLoopAcceptedSourceInputV2 {
     /// Exact serialized already-hashed authored input body from the admitted planner.
     pub authored_input_json: Vec<u8>,
 }
-#[cfg(any(feature = "fem-gpu", test))]
+#[cfg(any(feature = "fem-native", test))]
 #[derive(Debug, Clone)]
 pub(crate) struct ClosedLoopFieldSolutionInputV2 {
     pub asset_id: String,
@@ -270,7 +270,7 @@ fn path_identifier(s: &str) -> Result<(), RunError> {
     }
     Ok(())
 }
-#[cfg(any(feature = "fem-gpu", test))]
+#[cfg(any(feature = "fem-native", test))]
 fn floats(values: impl IntoIterator<Item = f64>, scale: f64) -> Result<Vec<u8>, RunError> {
     let values = values.into_iter();
     let (minimum, _) = values.size_hint();
@@ -404,7 +404,7 @@ fn source_valid(s: &ClosedLoopAcceptedSourceInputV2) -> Result<(), RunError> {
     }
     Ok(())
 }
-#[cfg(any(feature = "fem-gpu", test))]
+#[cfg(any(feature = "fem-native", test))]
 fn insert_payload(
     m: &mut ManifestV2,
     artifacts: &mut Vec<AuxiliaryArtifact>,
@@ -436,7 +436,7 @@ fn copy_bytes(bytes: &[u8]) -> Result<Vec<u8>, RunError> {
     out.extend_from_slice(bytes);
     Ok(out)
 }
-#[cfg(any(feature = "fem-gpu", test))]
+#[cfg(any(feature = "fem-native", test))]
 fn records(s: &ClosedLoopAcceptedSourceInputV2) -> Result<(Vec<u8>, Vec<u8>, Vec<u8>), RunError> {
     let mut cells = Vec::new();
     let mut faces = Vec::new();
@@ -491,7 +491,7 @@ fn records(s: &ClosedLoopAcceptedSourceInputV2) -> Result<(Vec<u8>, Vec<u8>, Vec
     }
     Ok((cells, faces, weak))
 }
-#[cfg(any(feature = "fem-gpu", test))]
+#[cfg(any(feature = "fem-native", test))]
 pub(crate) fn build(
     input: &ClosedLoopFieldSolutionInputV2,
 ) -> Result<Vec<AuxiliaryArtifact>, RunError> {

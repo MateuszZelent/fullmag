@@ -1,15 +1,15 @@
 //! Closed choice of field evidence; direct bytes retain their existing encoding.
 use super::closed_loop_v2::{invalid, ClosedLoopSourceMetadataV2};
-#[cfg(any(feature = "fem-gpu", test))]
+#[cfg(any(feature = "fem-native", test))]
 use super::direct_quadrature::DirectOerstedSnapshot;
 use super::direct_quadrature_v2::DirectQuadratureEvidenceV2;
 use super::surface_rt0_evidence_v1::SurfaceRt0EvidenceV1;
-#[cfg(any(feature = "fem-gpu", test))]
+#[cfg(any(feature = "fem-native", test))]
 use super::surface_rt0_evidence_v1::SurfaceRt0Snapshot;
 use crate::types::RunError;
 use serde_json::Value;
 
-#[cfg(any(feature = "fem-gpu", test))]
+#[cfg(any(feature = "fem-native", test))]
 #[derive(Debug, Clone)]
 pub(crate) enum ClosedLoopFieldSnapshot {
     Direct(DirectOerstedSnapshot),
@@ -21,7 +21,7 @@ pub(crate) enum ClosedLoopFieldEvidence {
     Surface(SurfaceRt0EvidenceV1),
 }
 impl ClosedLoopFieldEvidence {
-    #[cfg(any(feature = "fem-gpu", test))]
+    #[cfg(any(feature = "fem-native", test))]
     pub(crate) fn new(snapshot: ClosedLoopFieldSnapshot, source: &ClosedLoopSourceMetadataV2) -> Result<Self, RunError> {
         Ok(match snapshot {
             ClosedLoopFieldSnapshot::Direct(snapshot) => Self::Direct(DirectQuadratureEvidenceV2 {
@@ -35,7 +35,7 @@ impl ClosedLoopFieldEvidence {
                 source.current_balance_certificate_digest.clone())?),
         })
     }
-    #[cfg(any(feature = "fem-gpu", test))]
+    #[cfg(any(feature = "fem-native", test))]
     pub(crate) fn schema(&self) -> &'static str {
         match self { Self::Direct(_) => super::direct_quadrature_v2::SCHEMA,
             Self::Surface(_) => super::surface_rt0_evidence_v1::SCHEMA }
@@ -50,7 +50,7 @@ impl ClosedLoopFieldEvidence {
             _ => Err(invalid("unknown field evidence family")),
         }
     }
-    #[cfg(any(feature = "fem-gpu", test))]
+    #[cfg(any(feature = "fem-native", test))]
     pub(crate) fn raw_h(&self) -> Vec<[f64; 3]> {
         match self { Self::Direct(e) => e.snapshot.targets.iter().map(|t|t.h_xyz_apm).collect(),
             Self::Surface(e) => e.snapshot.targets.iter().map(|t|t.h_xyz_apm).collect() }
