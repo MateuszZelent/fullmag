@@ -59,6 +59,7 @@ DropdownMenuSubTrigger.displayName =
 function DropdownMenuSubContent({
   className,
   collisionPadding = MENU_COLLISION_PADDING,
+  onFocusOutside,
   ref,
   ...props
 }: ComponentPropsWithRef<typeof DropdownMenuPrimitive.SubContent>) {
@@ -69,6 +70,23 @@ function DropdownMenuSubContent({
         collisionPadding={collisionPadding}
         data-slot="dropdown-menu-sub-content"
         className={cn("fm-dropdown-content", className)}
+        onFocusOutside={(event) => {
+          onFocusOutside?.(event);
+          if (event.defaultPrevented) return;
+          // Radix MenuContentImpl defaults pointerDirRef to "right" and focuses
+          // the parent [role="menu"] container on SubTrigger pointerleave when
+          // a right-edge submenu flips to side="left" before any leftward move.
+          // Ignore focus landing on the parent menu container itself while
+          // still letting sibling menuitems close the submenu normally.
+          const target = event.target as Element | null;
+          const slot = target?.getAttribute?.("data-slot");
+          if (
+            slot === "dropdown-menu-content" ||
+            slot === "dropdown-menu-sub-content"
+          ) {
+            event.preventDefault();
+          }
+        }}
         {...props}
       />
     </DropdownMenuPrimitive.Portal>

@@ -47,6 +47,7 @@ ContextMenuSubTrigger.displayName = ContextMenuPrimitive.SubTrigger.displayName;
 function ContextMenuSubContent({
   className,
   collisionPadding = MENU_COLLISION_PADDING,
+  onFocusOutside,
   ref,
   ...props
 }: ComponentPropsWithRef<typeof ContextMenuPrimitive.SubContent>) {
@@ -57,6 +58,18 @@ function ContextMenuSubContent({
         collisionPadding={collisionPadding}
         data-slot="context-menu-sub-content"
         className={cn("fm-context-menu-content", className)}
+        onFocusOutside={(event) => {
+          onFocusOutside?.(event);
+          if (event.defaultPrevented) return;
+          const target = event.target as Element | null;
+          const slot = target?.getAttribute?.("data-slot");
+          if (
+            slot === "context-menu-content" ||
+            slot === "context-menu-sub-content"
+          ) {
+            event.preventDefault();
+          }
+        }}
         {...props}
       />
     </ContextMenuPrimitive.Portal>

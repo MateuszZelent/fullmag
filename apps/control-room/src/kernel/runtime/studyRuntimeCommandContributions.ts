@@ -2024,10 +2024,84 @@ function flatStageEditingReason(scene: unknown): string | null {
     ?? "This scene uses a canonical pipeline. Flat-stage insertion/removal is unavailable; no dormant stages will be written.";
 }
 
+function defaultRelaxStageForScene(
+  scene: unknown,
+  context: CommandContext,
+): JsonObject {
+  const sceneStudy =
+    scene && typeof scene === "object"
+      ? (
+          scene as {
+            study?: {
+              requested_backend?: unknown;
+              requested_device?: unknown;
+              requested_precision?: unknown;
+            };
+          }
+        ).study
+      : undefined;
+  const activeLane = resourceData<LiveStatusResource>(
+    context,
+    SESSION_STATUS_RESOURCE_KEY,
+  )?.capabilities.active_lane;
+  const backend = String(
+    typeof sceneStudy?.requested_backend === "string" &&
+      sceneStudy.requested_backend.trim()
+      ? sceneStudy.requested_backend
+      : (activeLane?.resolved?.backend ?? activeLane?.requested?.backend ?? ""),
+  )
+    .trim()
+    .toLowerCase();
+  const device = String(
+    typeof sceneStudy?.requested_device === "string" &&
+      sceneStudy.requested_device.trim()
+      ? sceneStudy.requested_device
+      : (activeLane?.resolved?.device ?? activeLane?.requested?.device ?? ""),
+  )
+    .trim()
+    .toLowerCase();
+  const precision =
+    String(
+      typeof sceneStudy?.requested_precision === "string" &&
+        sceneStudy.requested_precision.trim()
+        ? sceneStudy.requested_precision
+        : (activeLane?.resolved?.precision ??
+            activeLane?.requested?.precision ??
+            "double"),
+    )
+      .trim()
+      .toLowerCase() || "double";
+  const hasExecutionConstraint = Boolean(
+    backend || device || precision !== "double",
+  );
+  const canUseAdaptive =
+    !hasExecutionConstraint ||
+    (precision === "double" && (backend === "fem" || device === "cpu"));
+  if (canUseAdaptive) {
+    return {
+      ...DEFAULT_RELAX_STAGE,
+      adaptive_timestep: {
+        atol: 1e-5,
+        dt_initial: 5e-14,
+        dt_max: 1e-11,
+        dt_min: 1e-16,
+        rtol: 0,
+        tolerance_mode: "max_error",
+      },
+      integrator: "rk23",
+    };
+  }
+  return {
+    ...DEFAULT_RELAX_STAGE,
+    fixed_timestep: "5e-14",
+    integrator: "rk23",
+  };
+}
+
 function addStageCommand(
   id: string,
   title: string,
-  stage: JsonObject,
+  stage: JsonObject | ((scene: unknown, context: CommandContext) => JsonObject),
   successMessage: string,
   capabilityDisabledReason?: (context: CommandContext) => string | null,
 ): CommandContribution {
@@ -2069,7 +2143,8 @@ function addStageCommand(
           const currentStages = studyStages(scene);
           const editingReason = flatStageEditingReason(scene);
           if (editingReason) return { message: editingReason, status: "failed" };
-          const addedStage = stageWithDefaultId(stage, currentStages.length);
+          const resolvedStage = typeof stage === "function" ? stage(scene, context) : stage;
+          const addedStage = stageWithDefaultId(resolvedStage, currentStages.length);
           const nextStages = [...currentStages, addedStage];
           const response = await context.api!.model.commitTransaction(
             {
@@ -2539,7 +2614,7 @@ export const STUDY_RUNTIME_COMMANDS: CommandContribution[] = [
   addStageCommand(
     "study.add-relax-stage",
     "Add Relax Stage",
-    DEFAULT_RELAX_STAGE,
+    defaultRelaxStageForScene,
     "Relax stage added.",
     stageOperationDisabledReason("study.relaxation"),
   ),
