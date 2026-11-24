@@ -352,6 +352,13 @@ mod tests {
     #[test]
     fn native_tentative_reservation_blocks_relocation() {
         let (_directory, ledger) = fixture();
+        let node_policy_revision = ledger
+            .read_observation_snapshot()
+            .unwrap()
+            .node_policy_status()
+            .unwrap()
+            .unwrap()
+            .revision;
         let request = HostReservationRequest {
             identity: HostReservationIdentity {
                 store_id: format!("sha256:{}", "b".repeat(64)),
@@ -379,7 +386,7 @@ mod tests {
             exclusive_gpu_uuids: BTreeSet::new(),
             gpu_vram_bytes_by_uuid: BTreeMap::new(),
             cpu_ids: BTreeSet::new(),
-            expected_node_policy_revision: 0,
+            expected_node_policy_revision: node_policy_revision,
             scheduling_priority: 0,
             parallelism: ComputeParallelismIR::default(),
         };
