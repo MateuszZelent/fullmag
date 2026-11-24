@@ -128,6 +128,14 @@ class NetworkFailureValidatorsTests(unittest.TestCase):
             with self.subTest(extra=extra), self.assertRaises(BuildControlError):
                 reconcile.validate_pool_failure(output + "\n" + extra, NETWORK, PROJECT)
 
+    def test_compact_compose_pool_error_is_admissible(self):
+        terminal = f"failed to create network {NETWORK}: Error response from daemon: {POOL_ERROR}"
+        output = f"Network {NETWORK} Creating\n Network {NETWORK} {terminal} \n{terminal}"
+        self.assertEqual(reconcile.validate_pool_failure(output, NETWORK, PROJECT), terminal)
+        for bad in (output.replace(NETWORK, "foreign", 1), output + "\nContainer foreign Started"):
+            with self.subTest(output=bad), self.assertRaises(BuildControlError):
+                reconcile.validate_pool_failure(bad, NETWORK, PROJECT)
+
     def test_compose_success_or_other_error_lines_are_rejected(self):
         for text in (
             COMPOSE_ERROR.replace("backend-1 Creating", "backend-1 Created"),
