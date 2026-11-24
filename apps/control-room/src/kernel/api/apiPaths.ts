@@ -35,6 +35,7 @@ export const SESSIONS_PATH = openApiV2Path(
   "/v2/sessions",
 );
 
+export const SESSION_PREVIEWS_PATH = openApiV2Path("/v2/sessions/previews");
 export const SESSION_PREVIEW_FROM_SCRIPT_PATH = openApiV2Path("/v2/sessions/previews/from-script");
 export const SESSION_PREVIEW_PATH = openApiV2Path("/v2/sessions/previews/{session_id}");
 
