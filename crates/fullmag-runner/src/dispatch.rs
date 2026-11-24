@@ -5373,6 +5373,7 @@ mod tests {
     fn gpu_device_info_for_log_test() -> native_fem::DeviceInfo {
         native_fem::DeviceInfo {
             name: "NVIDIA test GPU".to_string(),
+            is_gpu_enabled: true,
             compute_capability: "8.9".to_string(),
             driver_version: 13010,
             runtime_version: 12060,

@@ -9362,6 +9362,7 @@ mod tests {
                 uniaxial_anisotropy: None,
                 cubic_anisotropy: None,
                 interfacial_dmi: None,
+                rotated_interfacial_dmi: None,
                 bulk_dmi: None,
                 zhang_li_stt: if has_zhang_li_stt(plan) {
                     Some(fullmag_engine::ZhangLiSttConfig {
