@@ -16,7 +16,7 @@ import {
   Scissors,
   Trash2,
 } from "lucide-react";
-import { useCallback, useMemo, useState, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from "react";
 
 import type { JsonObject, SceneResource } from "@/kernel/api/apiTypes";
 import {
@@ -211,9 +211,12 @@ export function BooleanNodeSection({
     if (initialExpandedOperandId) {
       setExpandedOperandId(initialExpandedOperandId);
       setAutoFocusOperandId(initialExpandedOperandId);
-      onExpandedOperandConsumed?.();
     }
   }
+
+  useEffect(() => {
+    if (initialExpandedOperandId) onExpandedOperandConsumed?.();
+  }, [initialExpandedOperandId, onExpandedOperandConsumed]);
 
   const unit = controlledUnit ?? fallbackUnit;
   const handleUnitChange = onUnitChange ?? setFallbackUnit;
