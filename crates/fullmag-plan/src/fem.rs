@@ -2972,7 +2972,13 @@ fn remap_segment_object_ids(
                 return Ok(segment.clone());
             }
             let seg_id = segment.object_id.as_str();
-            let mut mapped_object_id = geometry_to_object_id.get(seg_id).copied();
+            // Authored shared-domain segments carry a stable object ID and a
+            // separate geometry ID. Only the latter names the planner input.
+            let mut mapped_object_id = segment
+                .geometry_id
+                .as_deref()
+                .and_then(|geometry_id| geometry_to_object_id.get(geometry_id).copied())
+                .or_else(|| geometry_to_object_id.get(seg_id).copied());
             if mapped_object_id.is_none() && seg_id.ends_with("_geom") {
                 mapped_object_id = geometry_to_object_id
                     .get(&seg_id[..seg_id.len() - 5])
@@ -3015,6 +3021,33 @@ fn remap_segment_object_ids(
             })
         })
         .collect()
+}
+
+#[test]
+fn fem_segment_remap_accepts_authored_geometry_with_a_distinct_object_id() {
+    let magnetic = fullmag_ir::FemObjectSegmentIR {
+        object_id: "pt-co-ir-disk-abc".into(),
+        geometry_id: Some("Pt-Co-Ir disk_geom".into()),
+        node_start: 1,
+        node_count: 4,
+        element_start: 2,
+        element_count: 1,
+        boundary_face_start: 3,
+        boundary_face_count: 2,
+    };
+    let air = fullmag_ir::FemObjectSegmentIR {
+        object_id: AIR_OBJECT_SEGMENT_ID.into(),
+        geometry_id: None,
+        ..magnetic.clone()
+    };
+    let objects = BTreeMap::from([("Pt-Co-Ir disk_geom", "Pt-Co-Ir disk")]);
+
+    let expected = fullmag_ir::FemObjectSegmentIR {
+        object_id: "Pt-Co-Ir disk".into(),
+        ..magnetic.clone()
+    };
+    let mapped = remap_segment_object_ids(&[magnetic, air.clone()], &objects).unwrap();
+    assert_eq!(mapped, vec![expected, air]);
 }
 
 fn segment_matches_magnet_entry(

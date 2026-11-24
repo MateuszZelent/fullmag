@@ -7103,6 +7103,111 @@ async fn field_vector_returns_304_when_etag_matches() {
 }
 
 #[tokio::test]
+async fn prepared_fem_demag_is_readable_in_airbox_without_a_solver_run() {
+    use crate::live_authored_initial_state::AuthoredInitialStatePublication;
+    use crate::schemas::common::AuthoredInitialStateOrigin;
+
+    const VECTOR: &str =
+        "/v2/sessions/current/data/fields/H_demag/samples/vector?scope_kind=airbox&scope_id=airbox";
+
+    let state = test_app_state_with_live_session().await;
+    let app = build_v2_router().with_state(state.clone());
+    {
+        let mut guard = state.current_live_state.write().await;
+        let snapshot = guard.as_mut().unwrap();
+        snapshot.capabilities = None;
+        snapshot.session.status = "awaiting_command".into();
+        snapshot.session.requested_backend = "fem".into();
+        snapshot.session.resolved_backend = None;
+        snapshot.session.resolved_engine_id = None;
+        snapshot.session.resolved_runtime_family = None;
+        snapshot.run = None;
+        snapshot.fem_mesh = Some(sample_scoped_fem_mesh_payload().into());
+        snapshot.mesh_revision = 11;
+        snapshot.metadata = Some(serde_json::json!({
+            "artifact_layout": { "backend": "fem", "node_count": 8 }
+        }).into());
+        let mut scene = fullmag_authoring::SceneDocument::default();
+        scene.revision = 7;
+        scene.study.requested_backend = "fem".into();
+        snapshot.scene_document = Some(scene);
+
+        let magnetization = [0.0, 0.0, 1.0].repeat(8);
+        let layout = serde_json::json!({
+            "backend": "fem", "spatial_kind": "fem_nodes", "location": "node", "node_count": 8
+        });
+        let publication = AuthoredInitialStatePublication::new(
+            snapshot,
+            AuthoredInitialStateOrigin {
+                preparation_id: "prepared-demag-test".to_owned(),
+                plan_fingerprint: "a".repeat(64),
+                scene_revision: 7,
+                initial_state_revision: 1,
+                values_sha256: fullmag_runner::live_preview_values_sha256(&magnetization),
+            },
+            0.0,
+        );
+        let frame = publication.frame.clone();
+        let mut initial = crate::types::LatestFields::default();
+        initial.insert("m".into(), serde_json::json!({
+            "values": magnetization, "n_comp": 3, "layout": layout,
+            "source_step": 0, "source_time_seconds": 0.0, "observation_frame": frame
+        }));
+        crate::session::apply_current_live_authored_initial_state(snapshot, publication, initial)
+            .unwrap();
+        let mut fields = crate::types::LatestFields::default();
+        fields.insert("H_demag".into(), serde_json::json!({
+            "values": [1.25, -2.5, 5.0].repeat(8), "n_comp": 3, "layout": layout,
+            "source_step": 0, "source_time_seconds": 0.0, "spatial_kind": "fem_nodes",
+            "provenance": { "source": crate::prepared_observation_adoption::PROVENANCE_SOURCE }
+        }));
+        let session_id = snapshot.session.session_id.clone();
+        crate::session::apply_current_live_field_frame_to_candidate(
+            snapshot,
+            CurrentLiveFieldFrameRequest {
+                session_id,
+                latest_fields: Some(fields),
+                replace_latest_fields: false,
+                field_generation: None,
+                preview_fields: None,
+                clear_preview_cache: false,
+            },
+            Some(&frame),
+        ).unwrap();
+        assert_eq!(snapshot.field_publication_bundles["H_demag"].observation_frame, frame);
+    }
+
+    let get = |uri: &'static str| {
+        app.clone().oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap())
+    };
+    let fields = body_json(get("/v2/sessions/current/data/fields").await.unwrap()).await;
+    let demag = fields["quantities"].as_array().unwrap().iter()
+        .find(|entry| entry["quantity_id"] == "H_demag").unwrap();
+    assert_eq!(demag["available"], true);
+    let quantities = body_json(get("/v2/sessions/current/data/quantities").await.unwrap()).await;
+    let demag = quantities["quantities"].as_array().unwrap().iter()
+        .find(|entry| entry["id"] == "H_demag").unwrap();
+    assert_eq!(demag["requestable"], true);
+    assert_eq!(demag["renderable"], true);
+    assert_eq!(demag["materializable"], false);
+
+    let response = get(VECTOR).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(response.headers()["x-fullmag-scope-kind"], "airbox");
+    let bytes = body_bytes(response).await;
+    assert_eq!(&bytes[..4], b"FMVP");
+    assert_eq!(decode_fmvp_node_indices(&bytes), vec![4, 5, 6, 7]);
+    assert_eq!(decode_fmvp_payload_f64(&bytes), [1.25, -2.5, 5.0].repeat(4));
+
+    let mut guard = state.current_live_state.write().await;
+    let snapshot = guard.as_mut().unwrap();
+    assert!(snapshot.run.is_none() && snapshot.capabilities.is_none());
+    snapshot.scene_document.as_mut().unwrap().revision += 1;
+    drop(guard);
+    assert_ne!(get(VECTOR).await.unwrap().status(), StatusCode::OK);
+}
+
+#[tokio::test]
 async fn authored_step_zero_replaces_old_magnetization_and_fences_binary_reads() {
     use crate::live_authored_initial_state::AuthoredInitialStatePublication;
     use crate::schemas::common::AuthoredInitialStateOrigin;
