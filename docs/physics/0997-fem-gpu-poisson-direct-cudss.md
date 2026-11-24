@@ -309,6 +309,29 @@ memory.
    factorization took 325 s and a step 3.1 s. That measurement predates the memory preflight, which now rejects such
    a factor after the analysis (item 7); it does not resolve the case to CG/AMG.
 
+**Results of the PR #550 review checks** (2026-11-24, RTX 5050 8 GB, WSL2, inside the DEV backend container):
+
+6. Receipt and provenance. Contract tests pass: `fem_gpu_execution_receipt_contract` (the Krylov and direct
+   relaxation receipts commit as `0x70f` and `0x150f`; a direct solve under a Krylov plan, both bits together, and
+   `DIRECT_SOLVE` without `DEMAG_SOLVE` fail closed), `fem_gpu_strict_execution_contract` (the planner requires the
+   bit of the realization the workspace reports, both plans pass strict validation, the ABI query returns the same
+   value and `UNAVAILABLE` for hybrid CPU Poisson), and the `fullmag-runner` tests for the receipt parser, the header
+   mirror, the provenance field and the demag runtime metadata. The two strict film relaxations are **NOT VERIFIED**:
+   the managed package could not be rebuilt, because `just docker-dev` refuses a backend whose health is not
+   `healthy`, and the API of this group stays diagnostic-only after the previous rebuild.
+7. Memory preflight. `fem_cudss_poisson_budget_contract` passes: a 200-row SPD matrix factors within the budget
+   (estimated peak 437 884 bytes) and solves to $1.2\times10^{-11}$, and a 1-byte cap rejects it after the analysis,
+   before the factorization. The tetrahedral film (4 082 076 rows, two steps, with the override) was run as a
+   diagnostic with the package `fullmag-bin` of `83376a9b6` and the native library built from this change in the
+   same container, not with a managed package. It stopped after an analysis of 90.1 s, 408 s after the start of the
+   process including meshing, with:
+   `cuDSS Poisson demag factorization needs an estimated device peak of 59.32 GiB (63693684940 bytes), above the
+   device budget of 0.00 GiB (0 bytes) (free device memory after analysis 0.00 GiB (0 bytes) minus a margin of
+   0.50 GiB (536870912 bytes)); rows=4082076, estimated factor nonzeros=7426605875. The factorization was not
+   started.` The estimated factor nonzeros match the $7.43\times10^{9}$ measured before. After the analysis
+   `cudaMemGetInfo` reported no free device memory; device memory use peaked 6 043 MiB above the baseline
+   (`nvidia-smi`, 5 s samples) and the process tree peaked at 22.8 GB of host memory.
+
 (limitations)=
 ## Limitations
 
@@ -319,6 +342,9 @@ memory.
   CG/AMG. Very large meshes still need the default path.
 - The memory budget trusts the cuDSS peak estimate; the margin is a fixed rule, not a measured bound for every device
   and driver.
+- The analysis phase itself is not budgeted, because cuDSS gives no estimate before it. On the 4 082 076-row film no
+  device memory was free after the analysis, so an analysis that oversubscribes the device can still be paged by
+  WDDM before the preflight rejects the factor.
 - The periodic reduced operator and FEM/BEM are excluded; the hybrid CPU-Poisson mode ignores the override.
 
 (scientific-bibliography)=
