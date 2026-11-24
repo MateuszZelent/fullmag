@@ -557,6 +557,43 @@ __device__ double apply_level_row(
     return value;
 }
 
+// Conservative flux-difference form of A*v on the fine FV grid: eliminates
+// catastrophic 6*g*v[i] - sum(g*v[nb]) FP64 cancellation on smooth/Neumann fields.
+__device__ double apply_level_row_conservative(
+    uint64_t i, const double *v, const CoarseLevel &fine, const uint8_t *active) {
+    if (active[i] == 0) return 0.0;
+    const uint64_t nx = fine.nx;
+    const uint64_t ny = fine.ny;
+    const uint64_t nz = fine.nz;
+    const uint64_t plane = nx * ny;
+    const uint64_t x = i % nx;
+    const uint64_t yz = i / nx;
+    const uint64_t y = yz % ny;
+    const uint64_t z = yz / ny;
+    const double gx_p = x + 1 < nx ? fine.gx[i] : 0.0;
+    const double gy_p = y + 1 < ny ? fine.gy[i] : 0.0;
+    const double gz_p = z + 1 < nz ? fine.gz[i] : 0.0;
+    const double gx_m = x > 0 ? fine.gx[i - 1] : 0.0;
+    const double gy_m = y > 0 ? fine.gy[i - nx] : 0.0;
+    const double gz_m = z > 0 ? fine.gz[i - plane] : 0.0;
+    // Sum internal conductances in the exact order used by assemble_charge_fv_kernel
+    // so d_bc is bit-for-bit 0.0 on all non-Dirichlet cells.
+    double internal_sum = gx_p + gy_p + gz_p;
+    if (x > 0) internal_sum += gx_m;
+    if (y > 0) internal_sum += gy_m;
+    if (z > 0) internal_sum += gz_m;
+    const double d_bc = fine.diag[i] - internal_sum;
+    const double vi = v[i];
+    double value = d_bc * vi;
+    if (x > 0) value += gx_m * (vi - v[i - 1]);
+    if (x + 1 < nx) value += gx_p * (vi - v[i + 1]);
+    if (y > 0) value += gy_m * (vi - v[i - nx]);
+    if (y + 1 < ny) value += gy_p * (vi - v[i + nx]);
+    if (z > 0) value += gz_m * (vi - v[i - plane]);
+    if (z + 1 < nz) value += gz_p * (vi - v[i + plane]);
+    return value;
+}
+
 __device__ double deterministic_block_reduce_sum(double value, double *shared) {
     shared[threadIdx.x] = value;
     __syncthreads();
@@ -1008,12 +1045,41 @@ __global__ void label_reference_components_coop_kernel(
     }
     grid.sync();
 
-    // 4. Detect anchored components (voltage boundary faces).
+    // 4. Detect anchored components (voltage boundary faces) and select a centered
+    // deterministic pin cell per component (closest to domain center).
     const uint32_t comp_count = *device_component_count;
     for (uint64_t c = grid.thread_rank(); c < comp_count; c += grid.size()) {
         component_anchored[c] = 0;
         comp_rhs_sum_scratch[c] = 0.0;
         comp_rhs_l1_scratch[c] = 0.0;
+        aux_u64[c] = UINT64_MAX;
+    }
+    grid.sync();
+
+    const uint64_t cx_mid = nx / 2;
+    const uint64_t cy_mid = ny / 2;
+    const uint64_t cz_mid = nz / 2;
+    for (uint64_t i = grid.thread_rank(); i < cells; i += grid.size()) {
+        const uint64_t c = labels[i];
+        if (c == UINT64_MAX) continue;
+        const uint64_t x = i % nx;
+        const uint64_t yz = i / nx;
+        const uint64_t y = yz % ny;
+        const uint64_t z = yz / ny;
+        const uint64_t dx = x >= cx_mid ? x - cx_mid : cx_mid - x;
+        const uint64_t dy = y >= cy_mid ? y - cy_mid : cy_mid - y;
+        const uint64_t dz = z >= cz_mid ? z - cz_mid : cz_mid - z;
+        const uint64_t dist = dx + dy + dz;
+        const uint64_t key = (dist << 32) | (i & UINT64_C(0xFFFFFFFF));
+        atomicMin(reinterpret_cast<unsigned long long *>(aux_u64 + c),
+                  static_cast<unsigned long long>(key));
+    }
+    grid.sync();
+    for (uint64_t c = grid.thread_rank(); c < comp_count; c += grid.size()) {
+        const uint64_t best = aux_u64[c];
+        if (best != UINT64_MAX) {
+            component_pin_cell[c] = static_cast<uint32_t>(best & UINT64_C(0xFFFFFFFF));
+        }
         aux_u64[c] = 0;
     }
     grid.sync();
@@ -1679,6 +1745,9 @@ __global__ void build_pinned_mask_kernel(
 
 // Assembles the symmetric lower-triangle CSR of the 7-point FV operator directly
 // on GPU in closed form (zero prefix-sum, zero host transfers).
+// For each unanchored free component, adds a rank-1 diagonal pin (+diag[p] e_p e_p^T)
+// at the centered pin cell p so A_hat is strictly SPD with unmodified off-diagonals
+// and solves A_hat x = b with x[p] = 0 automatically whenever 1^T b = 0.
 __global__ void assemble_cudss_lower_csr_kernel(
     uint64_t nx, uint64_t ny, uint64_t nz, uint64_t total_nnz,
     const uint8_t *active, const uint8_t *pinned_mask,
@@ -1706,37 +1775,40 @@ __global__ void assemble_cudss_lower_csr_kernel(
         if (z > 0) {
             const uint64_t nb = i - plane;
             d_columns[pos] = static_cast<int32_t>(nb);
-            d_values[pos] = (self_active && !self_pinned && pinned_mask[nb] == 0 && gz[nb] > 0.0)
-                ? -gz[nb] : 0.0;
+            d_values[pos] = (self_active && gz[nb] > 0.0) ? -gz[nb] : 0.0;
             ++pos;
         }
         if (y > 0) {
             const uint64_t nb = i - nx;
             d_columns[pos] = static_cast<int32_t>(nb);
-            d_values[pos] = (self_active && !self_pinned && pinned_mask[nb] == 0 && gy[nb] > 0.0)
-                ? -gy[nb] : 0.0;
+            d_values[pos] = (self_active && gy[nb] > 0.0) ? -gy[nb] : 0.0;
             ++pos;
         }
         if (x > 0) {
             const uint64_t nb = i - 1;
             d_columns[pos] = static_cast<int32_t>(nb);
-            d_values[pos] = (self_active && !self_pinned && pinned_mask[nb] == 0 && gx[nb] > 0.0)
-                ? -gx[nb] : 0.0;
+            d_values[pos] = (self_active && gx[nb] > 0.0) ? -gx[nb] : 0.0;
             ++pos;
         }
         d_columns[pos] = static_cast<int32_t>(i);
-        d_values[pos] = (!self_active || self_pinned) ? 1.0 : diag[i];
+        if (!self_active) {
+            d_values[pos] = 1.0;
+        } else if (self_pinned) {
+            d_values[pos] = diag[i] > 0.0 ? 2.0 * diag[i] : 1.0;
+        } else {
+            d_values[pos] = diag[i];
+        }
     }
 }
 
-// Prepares RHS for cuDSS direct solve (projects free-component means if zero_mean,
-// then zeroes pinned rows & inactive cells).
+// Prepares RHS for cuDSS direct solve (zeroes inactive cells and projects
+// free-component means when ZERO_MEAN_PER_FREE_COMPONENT is active).
 __global__ void prepare_cudss_rhs_coop_kernel(
-    uint64_t cells, const uint8_t *active, const uint8_t *pinned_mask,
-    const double *rhs, uint32_t gauge_policy,
-    const uint64_t *component_labels, const uint32_t *free_component_ids,
-    const uint64_t *free_component_sizes, const uint32_t *free_component_count_device,
-    double *rhs_eff, double *rhs_pinned, double *partials, DevicePcgState *state) {
+    uint64_t cells, const uint8_t *active, const double *rhs,
+    uint32_t gauge_policy, const uint64_t *component_labels,
+    const uint32_t *free_component_ids, const uint64_t *free_component_sizes,
+    const uint32_t *free_component_count_device, double *rhs_eff,
+    double *partials, DevicePcgState *state) {
     extern __shared__ double shared[];
     cg::grid_group grid = cg::this_grid();
     const bool zero_mean = gauge_policy ==
@@ -1750,29 +1822,40 @@ __global__ void prepare_cudss_rhs_coop_kernel(
             rhs_eff, component_labels, free_component_ids, free_component_sizes,
             free_count, cells, partials, &state->scalar0, shared, grid);
     }
-    for (uint64_t i = grid.thread_rank(); i < cells; i += grid.size()) {
-        rhs_pinned[i] = (active[i] != 0 && pinned_mask[i] == 0) ? rhs_eff[i] : 0.0;
-    }
-    grid.sync();
 }
 
-// Post-processes cuDSS direct solution: subtracts free-component means, zeroes inactive
-// cells, and computes exact deterministic FP64 algebraic residual & solve metrics.
-__global__ void finalize_cudss_solution_coop_kernel(
+// Iterative-refinement step on GPU: optionally adds a cuDSS correction vector
+// to `potential`, enforces inactive-zero / zero-mean gauge, and computes the
+// conservative flux-difference residual `r = rhs_eff - A * potential`.
+__global__ void cudss_ir_residual_coop_kernel(
     CoarseLevel fine, const uint8_t *active, const double *rhs_eff,
-    double tolerance, uint32_t gauge_policy,
-    const uint64_t *component_labels, const uint32_t *free_component_ids,
-    const uint64_t *free_component_sizes, const uint32_t *free_component_count_device,
-    double *potential, double *r, double *partials, DevicePcgState *state,
-    const DeviceHierarchyInfo *hierarchy, DeviceSolveMetrics *metrics) {
+    uint32_t gauge_policy, const uint64_t *component_labels,
+    const uint32_t *free_component_ids, const uint64_t *free_component_sizes,
+    const uint32_t *free_component_count_device, double *correction,
+    double *potential, double *r, double *partials, DevicePcgState *state) {
     extern __shared__ double shared[];
     cg::grid_group grid = cg::this_grid();
     const uint64_t cells = fine.cells;
     const bool zero_mean = gauge_policy ==
         FULLMAG_FDM_GPU_TRANSPORT_GAUGE_POLICY_ZERO_MEAN_PER_FREE_COMPONENT;
     const uint32_t free_count = *free_component_count_device;
-    for (uint64_t i = grid.thread_rank(); i < cells; i += grid.size()) {
-        if (active[i] == 0) potential[i] = 0.0;
+    if (correction != nullptr) {
+        for (uint64_t i = grid.thread_rank(); i < cells; i += grid.size()) {
+            if (active[i] == 0) correction[i] = 0.0;
+        }
+        grid.sync();
+        if (zero_mean && free_count > 0u) {
+            project_free_component_means_coop(
+                correction, component_labels, free_component_ids, free_component_sizes,
+                free_count, cells, partials, &state->scalar0, shared, grid);
+        }
+        for (uint64_t i = grid.thread_rank(); i < cells; i += grid.size()) {
+            potential[i] = active[i] != 0 ? (potential[i] + correction[i]) : 0.0;
+        }
+    } else {
+        for (uint64_t i = grid.thread_rank(); i < cells; i += grid.size()) {
+            if (active[i] == 0) potential[i] = 0.0;
+        }
     }
     grid.sync();
     if (zero_mean && free_count > 0u) {
@@ -1781,7 +1864,63 @@ __global__ void finalize_cudss_solution_coop_kernel(
             free_count, cells, partials, &state->scalar0, shared, grid);
     }
     for (uint64_t i = grid.thread_rank(); i < cells; i += grid.size()) {
-        r[i] = rhs_eff[i] - apply_level_row(i, potential, fine);
+        r[i] = active[i] != 0
+            ? (rhs_eff[i] - apply_level_row_conservative(i, potential, fine, active))
+            : 0.0;
+    }
+    grid.sync();
+    if (zero_mean && free_count > 0u) {
+        project_free_component_means_coop(
+            r, component_labels, free_component_ids, free_component_sizes,
+            free_count, cells, partials, &state->scalar0, shared, grid);
+    }
+}
+
+// Post-processes cuDSS direct solution: applies final IR correction, subtracts
+// free-component means, zeroes inactive cells, and computes exact deterministic
+// FP64 conservative algebraic residual & solve metrics.
+__global__ void finalize_cudss_solution_coop_kernel(
+    CoarseLevel fine, const uint8_t *active, const double *rhs_eff,
+    double tolerance, uint32_t gauge_policy,
+    const uint64_t *component_labels, const uint32_t *free_component_ids,
+    const uint64_t *free_component_sizes, const uint32_t *free_component_count_device,
+    double *correction, double *potential, double *r, double *partials,
+    DevicePcgState *state, const DeviceHierarchyInfo *hierarchy,
+    DeviceSolveMetrics *metrics) {
+    extern __shared__ double shared[];
+    cg::grid_group grid = cg::this_grid();
+    const uint64_t cells = fine.cells;
+    const bool zero_mean = gauge_policy ==
+        FULLMAG_FDM_GPU_TRANSPORT_GAUGE_POLICY_ZERO_MEAN_PER_FREE_COMPONENT;
+    const uint32_t free_count = *free_component_count_device;
+    if (correction != nullptr) {
+        for (uint64_t i = grid.thread_rank(); i < cells; i += grid.size()) {
+            if (active[i] == 0) correction[i] = 0.0;
+        }
+        grid.sync();
+        if (zero_mean && free_count > 0u) {
+            project_free_component_means_coop(
+                correction, component_labels, free_component_ids, free_component_sizes,
+                free_count, cells, partials, &state->scalar0, shared, grid);
+        }
+        for (uint64_t i = grid.thread_rank(); i < cells; i += grid.size()) {
+            potential[i] = active[i] != 0 ? (potential[i] + correction[i]) : 0.0;
+        }
+    } else {
+        for (uint64_t i = grid.thread_rank(); i < cells; i += grid.size()) {
+            if (active[i] == 0) potential[i] = 0.0;
+        }
+    }
+    grid.sync();
+    if (zero_mean && free_count > 0u) {
+        project_free_component_means_coop(
+            potential, component_labels, free_component_ids, free_component_sizes,
+            free_count, cells, partials, &state->scalar0, shared, grid);
+    }
+    for (uint64_t i = grid.thread_rank(); i < cells; i += grid.size()) {
+        r[i] = active[i] != 0
+            ? (rhs_eff[i] - apply_level_row_conservative(i, potential, fine, active))
+            : 0.0;
     }
     grid.sync();
     if (zero_mean && free_count > 0u) {
@@ -2795,10 +2934,13 @@ uint32_t solve_device(const SolveInput &input, SolveOutput *output) noexcept {
         const uint32_t prep_blocks = resolve_coop_blocks(
             reinterpret_cast<const void *>(prepare_cudss_rhs_coop_kernel),
             cells, prop.multiProcessorCount, true);
+        const uint32_t ir_blocks = resolve_coop_blocks(
+            reinterpret_cast<const void *>(cudss_ir_residual_coop_kernel),
+            cells, prop.multiProcessorCount, true);
         const uint32_t fin_blocks = resolve_coop_blocks(
             reinterpret_cast<const void *>(finalize_cudss_solution_coop_kernel),
             cells, prop.multiProcessorCount, true);
-        if (prep_blocks == 0u || fin_blocks == 0u) {
+        if (prep_blocks == 0u || ir_blocks == 0u || fin_blocks == 0u) {
             cleanup(); release(candidate);
             if (!cache_hit) release(cache);
             return FULLMAG_FDM_GPU_TRANSPORT_ERROR_CUDA_RUNTIME_ERROR;
@@ -2806,36 +2948,68 @@ uint32_t solve_device(const SolveInput &input, SolveOutput *output) noexcept {
         uint64_t cells_arg = cells;
         uint32_t gauge_arg = input.gauge_policy;
         void *prep_args[] = {
-            &cells_arg, &cache.active, &cache.pinned_mask, &cache.rhs, &gauge_arg,
+            &cells_arg, &cache.active, &cache.rhs, &gauge_arg,
             &cache.component_labels, &cache.free_component_ids,
             &cache.free_component_sizes, &cache.device_free_component_count,
-            &fine_tmp, &p, &partials, &pcg_state};
+            &fine_tmp, &partials, &pcg_state};
         solver_launch = cudaLaunchCooperativeKernel(
             reinterpret_cast<void *>(prepare_cudss_rhs_coop_kernel),
             prep_blocks, kThreads, prep_args, kThreads * sizeof(double), input.stream);
         if (solver_launch == cudaSuccess) {
+            auto *direct_solver = static_cast<CudssDirectSolver *>(cache.cudss_solver);
             std::string solve_error;
             const uint32_t solve_status = solve_charge_cudss_direct(
-                static_cast<CudssDirectSolver *>(cache.cudss_solver),
-                input.stream, p, candidate.potential, solve_error);
+                direct_solver, input.stream, fine_tmp, candidate.potential, solve_error);
             if (solve_status != FULLMAG_FDM_GPU_TRANSPORT_ERROR_OK) {
                 std::fprintf(stderr, "charge cuDSS solve failed: %s\n", solve_error.c_str());
                 cleanup(); release(candidate);
                 if (!cache_hit) release(cache);
                 return solve_status;
             }
+            // Device-resident iterative refinement (1 step anchored, 2 steps zero-mean)
+            // using the already-factored cuDSS handle and conservative flux-difference
+            // residuals (zero extra host transfers or host synchronizations).
             CoarseLevel fine_lvl = cache.levels[0];
-            double tol_arg = input.relative_tolerance;
-            const auto *hinfo = reinterpret_cast<const DeviceHierarchyInfo *>(cache.hierarchy_info);
-            void *fin_args[] = {
-                &fine_lvl, &cache.active, &fine_tmp, &tol_arg, &gauge_arg,
-                &cache.component_labels, &cache.free_component_ids,
-                &cache.free_component_sizes, &cache.device_free_component_count,
-                &candidate.potential, &r, &partials, &pcg_state,
-                &hinfo, &device_metrics};
-            solver_launch = cudaLaunchCooperativeKernel(
-                reinterpret_cast<void *>(finalize_cudss_solution_coop_kernel),
-                fin_blocks, kThreads, fin_args, kThreads * sizeof(double), input.stream);
+            const uint32_t ir_steps =
+                input.gauge_policy ==
+                        FULLMAG_FDM_GPU_TRANSPORT_GAUGE_POLICY_ZERO_MEAN_PER_FREE_COMPONENT
+                    ? 2u
+                    : 1u;
+            for (uint32_t step = 0; step < ir_steps && solver_launch == cudaSuccess; ++step) {
+                double *corr_ptr = step == 0u ? nullptr : z;
+                void *ir_args[] = {
+                    &fine_lvl, &cache.active, &fine_tmp, &gauge_arg,
+                    &cache.component_labels, &cache.free_component_ids,
+                    &cache.free_component_sizes, &cache.device_free_component_count,
+                    &corr_ptr, &candidate.potential, &r, &partials, &pcg_state};
+                solver_launch = cudaLaunchCooperativeKernel(
+                    reinterpret_cast<void *>(cudss_ir_residual_coop_kernel),
+                    ir_blocks, kThreads, ir_args, kThreads * sizeof(double), input.stream);
+                if (solver_launch != cudaSuccess) break;
+                const uint32_t ir_status = solve_charge_cudss_direct(
+                    direct_solver, input.stream, r, z, solve_error);
+                if (ir_status != FULLMAG_FDM_GPU_TRANSPORT_ERROR_OK) {
+                    std::fprintf(stderr, "charge cuDSS IR solve failed: %s\n", solve_error.c_str());
+                    cleanup(); release(candidate);
+                    if (!cache_hit) release(cache);
+                    return ir_status;
+                }
+            }
+            if (solver_launch == cudaSuccess) {
+                double tol_arg = input.relative_tolerance;
+                const auto *hinfo =
+                    reinterpret_cast<const DeviceHierarchyInfo *>(cache.hierarchy_info);
+                double *final_corr = z;
+                void *fin_args[] = {
+                    &fine_lvl, &cache.active, &fine_tmp, &tol_arg, &gauge_arg,
+                    &cache.component_labels, &cache.free_component_ids,
+                    &cache.free_component_sizes, &cache.device_free_component_count,
+                    &final_corr, &candidate.potential, &r, &partials, &pcg_state,
+                    &hinfo, &device_metrics};
+                solver_launch = cudaLaunchCooperativeKernel(
+                    reinterpret_cast<void *>(finalize_cudss_solution_coop_kernel),
+                    fin_blocks, kThreads, fin_args, kThreads * sizeof(double), input.stream);
+            }
         }
     } else {
         // Multi-block cooperative-groups PCG + multi-level geometric AMG W-cycle.
