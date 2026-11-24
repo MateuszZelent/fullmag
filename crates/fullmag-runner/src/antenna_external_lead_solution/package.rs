@@ -85,6 +85,11 @@ pub fn load_antenna_inspection_package_for_execution_plan(
         })?;
     let revision = match source {
         fullmag_ir::ConservativeCurrentSourceIR::ExternalLeadCurrent { revision, .. } => revision,
+        fullmag_ir::ConservativeCurrentSourceIR::RetainedPreparationAsset(_) => {
+            return Err(RunError {
+                message: "retained preparation assets require their own H-only operation; external-lead execution is forbidden".into(),
+            });
+        }
         fullmag_ir::ConservativeCurrentSourceIR::ClosedGeometryPotentialJump(_) => {
             return Err(RunError {
                 message: "inspection package requires an external-lead current source; closed geometry uses its own solution owner".into(),

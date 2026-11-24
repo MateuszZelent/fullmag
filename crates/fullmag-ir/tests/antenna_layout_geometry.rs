@@ -40,6 +40,7 @@ fn cpw_geometry(name: &str) -> GeometryEntryIR {
         .collect::<BTreeMap<_, _>>();
     GeometryEntryIR::CpwAntenna {
         name: name.to_string(),
+        r#loop: None,
         length_m: 10.0e-6,
         thickness_m: 100.0e-9,
         conductivity_s_per_m: 58.0e6,
@@ -90,4 +91,37 @@ fn problem_validation_rejects_non_monotonic_antenna_stations() {
     assert!(errors
         .iter()
         .any(|error| error.contains("positions must be strictly increasing")));
+}
+
+
+#[test]
+fn closed_gsg_round_trip_preserves_explicit_end_connections() {
+    let mut value = serde_json::to_value(cpw_geometry("strip")).unwrap();
+    value["loop"] = serde_json::json!({
+        "enabled": true,
+        "inlet_connection_length_m": 2e-6, "inlet_crossbar_length_m": 0.3e-6,
+        "inlet_connection_part_id": "feed", "inlet_connection_conductivity_s_per_m": 3.5e7,
+        "outlet_connection_length_m": 3e-6, "outlet_crossbar_length_m": 0.4e-6,
+        "outlet_connection_part_id": "closure", "outlet_connection_conductivity_s_per_m": 2e7,
+    });
+    let decoded: GeometryEntryIR = serde_json::from_value(value.clone()).unwrap();
+    assert_eq!(serde_json::to_value(decoded).unwrap(), value);
+    let mut problem = ProblemIR::bootstrap_example();
+    problem.geometry.entries[0] = serde_json::from_value(value.clone()).unwrap();
+    problem.validate().expect("valid closed GSG geometry");
+    let round_tripped: ProblemIR =
+        serde_json::from_value(serde_json::to_value(&problem).unwrap()).unwrap();
+    round_tripped.validate().expect("valid round-tripped GSG problem");
+    assert_eq!(round_tripped.geometry, problem.geometry);
+    for invalid in [
+        ("inlet_crossbar_length_m", serde_json::json!(2e-6)),
+        ("inlet_connection_part_id", serde_json::json!("signal")),
+    ] {
+        let mut bad = value.clone();
+        bad["loop"][invalid.0] = invalid.1;
+        let mut problem = ProblemIR::bootstrap_example();
+        problem.geometry.entries[0] = serde_json::from_value(bad).unwrap();
+        let errors = problem.validate().expect_err("invalid GSG closure must fail");
+        assert!(errors.iter().any(|error| error.contains("CPW")));
+    }
 }

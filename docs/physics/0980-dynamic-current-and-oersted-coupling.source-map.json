@@ -31,13 +31,30 @@
   "equations": [
     {
       "id": "instantaneous-biot-savart-h",
-      "symbols": ["J_c", "H_oe", "r", "V_e", "r_reg"],
-      "sources": ["physics-biot-savart", "fem-midpoint-reference"]
+      "symbols": [
+        "J_c",
+        "H_oe",
+        "r",
+        "V_e",
+        "r_reg"
+      ],
+      "sources": [
+        "physics-biot-savart",
+        "fem-midpoint-reference"
+      ]
     },
     {
       "id": "reciprocal-transport-torque-rhs",
-      "symbols": ["J_c", "mu_s", "m_stage", "tau_tr"],
-      "sources": ["fem-stage-transport-callback-runner", "fem-stage-transport-contract"]
+      "symbols": [
+        "J_c",
+        "mu_s",
+        "m_stage",
+        "tau_tr"
+      ],
+      "sources": [
+        "fem-stage-transport-callback-runner",
+        "fem-stage-transport-contract"
+      ]
     },
     {
       "id": "fdm-oersted-face-to-cell-current",
@@ -50,7 +67,10 @@
         "e_a",
         "xyz_axes"
       ],
-      "sources": ["fdm-oersted-open-v1-doc-contract-test", "fdm-oersted-native-cpu-contract-test"]
+      "sources": [
+        "fdm-oersted-open-v1-doc-contract-test",
+        "fdm-oersted-native-cpu-contract-test"
+      ]
     },
     {
       "id": "fdm-oersted-cell-integrated-kernel",
@@ -73,12 +93,25 @@
         "j",
         "J_c_cell"
       ],
-      "sources": ["fdm-oersted-open-v1-doc-contract-test", "fdm-oersted-native-cell-kernel", "fdm-oersted-direct-surface-oracle"]
+      "sources": [
+        "fdm-oersted-open-v1-doc-contract-test",
+        "fdm-oersted-native-cell-kernel",
+        "fdm-oersted-direct-surface-oracle"
+      ]
     },
     {
       "id": "fdm-oersted-fft-convolution",
-      "symbols": ["H_oe_hat", "k_hat", "J_c_hat", "xyz_axes"],
-      "sources": ["fdm-oersted-open-v1-doc-contract-test", "fdm-oersted-native-cpu-owner", "fdm-oersted-native-cpu-contract-test"]
+      "symbols": [
+        "H_oe_hat",
+        "k_hat",
+        "J_c_hat",
+        "xyz_axes"
+      ],
+      "sources": [
+        "fdm-oersted-open-v1-doc-contract-test",
+        "fdm-oersted-native-cpu-owner",
+        "fdm-oersted-native-cpu-contract-test"
+      ]
     },
     {
       "id": "fdm-oersted-post-reconstruction-differential-operators",
@@ -95,7 +128,11 @@
         "J_c_cell",
         "H_oe"
       ],
-      "sources": ["fdm-oersted-open-v1-doc-contract-test", "fdm-oersted-native-cpu-owner", "fdm-oersted-native-cpu-contract-test"]
+      "sources": [
+        "fdm-oersted-open-v1-doc-contract-test",
+        "fdm-oersted-native-cpu-owner",
+        "fdm-oersted-native-cpu-contract-test"
+      ]
     },
     {
       "id": "fdm-oersted-post-reconstruction-residuals",
@@ -122,7 +159,11 @@
         "max_operator",
         "min_operator"
       ],
-      "sources": ["fdm-oersted-open-v1-doc-contract-test", "fdm-oersted-native-cpu-owner", "fdm-oersted-native-cpu-contract-test"]
+      "sources": [
+        "fdm-oersted-open-v1-doc-contract-test",
+        "fdm-oersted-native-cpu-owner",
+        "fdm-oersted-native-cpu-contract-test"
+      ]
     },
     {
       "id": "fdm-oersted-post-reconstruction-refinement",
@@ -138,7 +179,10 @@
         "max_operator",
         "log2_operator"
       ],
-      "sources": ["fdm-oersted-open-v1-doc-contract-test", "fdm-oersted-native-cpu-contract-test"]
+      "sources": [
+        "fdm-oersted-open-v1-doc-contract-test",
+        "fdm-oersted-native-cpu-contract-test"
+      ]
     },
     {
       "id": "fdm-oersted-direct-oracle-mixed-bound",
@@ -155,7 +199,11 @@
         "max_operator",
         "absolute_value"
       ],
-      "sources": ["fdm-oersted-open-v1-doc-contract-test", "fdm-oersted-direct-surface-oracle", "fdm-oersted-native-cpu-contract-test"]
+      "sources": [
+        "fdm-oersted-open-v1-doc-contract-test",
+        "fdm-oersted-direct-surface-oracle",
+        "fdm-oersted-native-cpu-contract-test"
+      ]
     },
     {
       "id": "fdm-oersted-direct-oracle-surface-reduction",
@@ -170,7 +218,11 @@
         "euclidean_norm",
         "dS_prime"
       ],
-      "sources": ["fdm-oersted-open-v1-doc-contract-test", "fdm-oersted-direct-surface-oracle", "fdm-oersted-native-cpu-contract-test"]
+      "sources": [
+        "fdm-oersted-open-v1-doc-contract-test",
+        "fdm-oersted-direct-surface-oracle",
+        "fdm-oersted-native-cpu-contract-test"
+      ]
     },
     {
       "id": "fdm-oersted-direct-oracle-spot-check",
@@ -186,7 +238,11 @@
         "h_max",
         "absolute_value"
       ],
-      "sources": ["fdm-oersted-open-v1-doc-contract-test", "fdm-oersted-adaptive-surface-oracle", "fdm-oersted-native-cpu-contract-test"]
+      "sources": [
+        "fdm-oersted-open-v1-doc-contract-test",
+        "fdm-oersted-adaptive-surface-oracle",
+        "fdm-oersted-native-cpu-contract-test"
+      ]
     },
     {
       "id": "fdm-oersted-direct-oracle-exact-zero",
@@ -202,93 +258,674 @@
         "K",
         "positive_zero_tensor"
       ],
-      "sources": ["fdm-oersted-open-v1-doc-contract-test", "fdm-oersted-native-cell-kernel", "fdm-oersted-native-cpu-owner", "fdm-oersted-native-cpu-contract-test"]
+      "sources": [
+        "fdm-oersted-open-v1-doc-contract-test",
+        "fdm-oersted-native-cell-kernel",
+        "fdm-oersted-native-cpu-owner",
+        "fdm-oersted-native-cpu-contract-test"
+      ]
+    },
+    {
+      "id": "rank-bareiss-identity-step",
+      "symbols": [
+        "rank_j",
+        "rank_a",
+        "rank_b",
+        "rank_p",
+        "rank_d",
+        "rank_f",
+        "rank_r",
+        "rank_s"
+      ],
+      "sources": [
+        "rank-bareiss-reducer",
+        "rank-bareiss-regressions"
+      ]
+    },
+    {
+      "id": "rank-balanced-incidence-signs",
+      "symbols": [
+        "inc_z",
+        "inc_b",
+        "inc_ij",
+        "inc_k"
+      ],
+      "sources": [
+        "rank-balanced-incidence",
+        "rank-unbalanced-cycle-test"
+      ]
+    },
+    {
+      "id": "rank-balanced-incidence-exact-rank",
+      "symbols": [
+        "inc_B",
+        "inc_Z",
+        "inc_z",
+        "inc_n",
+        "inc_c",
+        "inc_Q",
+        "inc_diag",
+        "inc_rank"
+      ],
+      "sources": [
+        "rank-balanced-incidence",
+        "rank-balanced-chain-test"
+      ]
     }
   ],
   "symbols": [
-    {"id": "J_c", "latex": "J_c", "meaning": "conventional current density", "si_unit": "A/m^2"},
-    {"id": "mu_s", "latex": "mu_s", "meaning": "spin accumulation potential", "si_unit": "V"},
-    {"id": "H_oe", "latex": "H_{\\mathrm{oe}}", "meaning": "Oersted field", "si_unit": "\\mathrm{A\\,m^{-1}}"},
-    {"id": "r", "latex": "r", "meaning": "target-source displacement", "si_unit": "\\mathrm{m}"},
-    {"id": "o", "latex": "o", "meaning": "physical union-grid origin", "si_unit": "\\mathrm{m}"},
-    {"id": "V_e", "latex": "V_e", "meaning": "active tetrahedron volume", "si_unit": "m^3"},
-    {"id": "r_reg", "latex": "r_reg", "meaning": "equivalent-sphere self regularization radius of the bounded midpoint slice", "si_unit": "m"},
-    {"id": "mu_0", "latex": "mu_0", "meaning": "vacuum permeability used only when converting H to B or evaluating Zeeman energy", "si_unit": "H/m"},
-    {"id": "m_stage", "latex": "m_stage", "meaning": "normalized magnetization at an RK stage", "si_unit": "1"},
-    {"id": "tau_tr", "latex": "tau_tr", "meaning": "direct reciprocal transport contribution to `dm/dt`", "si_unit": "s^-1"},
-    {"id": "J_c_cell", "latex": "J_c^{\\mathrm{cell}}", "meaning": "reconstructed cell-centred conventional current density", "si_unit": "\\mathrm{A\\,m^{-2}}"},
-    {"id": "J_c_face", "latex": "J_c^{\\mathrm{face}}", "meaning": "signed, globally oriented finite-volume face-current density", "si_unit": "\\mathrm{A\\,m^{-2}}"},
-    {"id": "chi_c", "latex": "\\chi_c", "meaning": "conductor-source cell mask", "si_unit": "1"},
-    {"id": "chi_m", "latex": "\\chi_m", "meaning": "magnetic-target cell mask", "si_unit": "1"},
-    {"id": "i", "latex": "i", "meaning": "target or active-cell multi-index, according to context", "si_unit": "1"},
-    {"id": "j", "latex": "j", "meaning": "source-cell multi-index", "si_unit": "1"},
-    {"id": "a", "latex": "a", "meaning": "Cartesian axis selector", "si_unit": "1"},
-    {"id": "e_a", "latex": "e_a", "meaning": "unit lattice-index vector along axis $a$", "si_unit": "1"},
-    {"id": "xyz_axes", "latex": "\\{x,y,z\\}", "meaning": "ordered Cartesian component set", "si_unit": "1"},
-    {"id": "k_a", "latex": "k_a", "meaning": "scalar component of the source-cell-integrated kernel", "si_unit": "\\mathrm{m}"},
-    {"id": "x_i", "latex": "x_i", "meaning": "target-cell centre on the union grid", "si_unit": "\\mathrm{m}"},
-    {"id": "x_j", "latex": "x_j", "meaning": "source-cell centre on the union grid", "si_unit": "\\mathrm{m}"},
-    {"id": "x_prime", "latex": "x'", "meaning": "source integration point", "si_unit": "\\mathrm{m}"},
-    {"id": "C_j", "latex": "C_j", "meaning": "rectangular source cell centred at $x_j$", "si_unit": "\\mathrm{m^3}"},
-    {"id": "pi", "latex": "\\pi", "meaning": "circle constant", "si_unit": "1"},
-    {"id": "euclidean_norm", "latex": "\\lVert\\cdot\\rVert_2", "meaning": "Euclidean norm; its value inherits the operand's SI unit", "si_unit": "1"},
-    {"id": "dV_prime", "latex": "dV'", "meaning": "source-volume integration measure", "si_unit": "\\mathrm{m^3}"},
-    {"id": "source_sum", "latex": "\\sum_j", "meaning": "discrete sum over all source cells indexed by $j$", "si_unit": "1"},
-    {"id": "K", "latex": "K", "meaning": "antisymmetric source-cell-integrated Oersted tensor", "si_unit": "\\mathrm{m}"},
-    {"id": "positive_zero_tensor", "latex": "+0_{3\\times3}", "meaning": "exact IEEE-754 positive-zero self tensor", "si_unit": "\\mathrm{m}"},
-    {"id": "H_oe_hat", "latex": "\\widehat{H}_{\\mathrm{oe},a}", "meaning": "unnormalised spectral Oersted-field component $a$", "si_unit": "\\mathrm{A\\,m^{-1}}"},
-    {"id": "k_hat", "latex": "\\widehat{k}_a", "meaning": "unnormalised forward R2C transform of kernel component $a$", "si_unit": "\\mathrm{m}"},
-    {"id": "J_c_hat", "latex": "\\widehat{J}_{c,a}", "meaning": "unnormalised forward R2C transform of current component $a$", "si_unit": "\\mathrm{A\\,m^{-2}}"},
-    {"id": "N_a", "latex": "N_a", "meaning": "physical union-grid size along axis $a$", "si_unit": "1"},
-    {"id": "P_a", "latex": "P_a", "meaning": "padded convolution-grid size along axis $a$", "si_unit": "1"},
-    {"id": "q_a", "latex": "q_a", "meaning": "padded grid index along axis $a$", "si_unit": "1"},
-    {"id": "d_a", "latex": "d_a", "meaning": "signed lattice displacement along axis $a$", "si_unit": "1"},
-    {"id": "diagnostic_field", "latex": "f", "meaning": "scalar or Cartesian component sampled at cell centres for an independent diagnostic", "si_unit": "A/m^2 or A/m"},
-    {"id": "delta0_a", "latex": "\\delta_a^0", "meaning": "radius-one centred-difference operator along axis $a$", "si_unit": "\\mathrm{m^{-1}}"},
-    {"id": "h_a", "latex": "h_a", "meaning": "FDM cell size along axis $a\\in\\{x,y,z\\}$", "si_unit": "\\mathrm{m}"},
-    {"id": "D_h", "latex": "D_h", "meaning": "independent cell-centred divergence operator", "si_unit": "\\mathrm{m^{-1}}"},
-    {"id": "C_h", "latex": "C_h", "meaning": "independent cell-centred curl operator", "si_unit": "\\mathrm{m^{-1}}"},
-    {"id": "I_2", "latex": "\\mathcal I_2", "meaning": "diagnostic cell-index set after removal of the open-boundary band", "si_unit": "1"},
-    {"id": "b_open", "latex": "b_{\\mathrm{open}}", "meaning": "excluded open-boundary-band width in cells", "si_unit": "1"},
-    {"id": "V_h", "latex": "V_h", "meaning": "Cartesian cell volume $h_xh_yh_z$", "si_unit": "\\mathrm{m^3}"},
-    {"id": "diagnostic_sum", "latex": "\\sum_{i\\in\\mathcal I_2}", "meaning": "discrete sum over the diagnostic cell-index set", "si_unit": "1"},
-    {"id": "rms_norm", "latex": "\\lVert\\cdot\\rVert_{2,h,\\mathcal I_2}", "meaning": "volume-weighted RMS norm on the diagnostic set", "si_unit": "1"},
-    {"id": "S_J", "latex": "S_J", "meaning": "reconstructed-current RMS diagnostic scale", "si_unit": "\\mathrm{A\\,m^{-2}}"},
-    {"id": "S_A", "latex": "S_A", "meaning": "Ampere residual diagnostic scale", "si_unit": "\\mathrm{A\\,m^{-2}}"},
-    {"id": "h_min", "latex": "h_{\\min}", "meaning": "smallest FDM cell dimension", "si_unit": "\\mathrm{m}"},
-    {"id": "h_max", "latex": "h_{\\max}", "meaning": "largest FDM cell dimension", "si_unit": "\\mathrm{m}"},
-    {"id": "rho_divJ", "latex": "\\rho_{\\mathrm{div}J}", "meaning": "normalized post-reconstruction current-divergence residual", "si_unit": "1"},
-    {"id": "rho_divH", "latex": "\\rho_{\\mathrm{div}H}", "meaning": "normalized Oersted-field divergence residual", "si_unit": "1"},
-    {"id": "rho_A", "latex": "\\rho_{\\mathrm A}", "meaning": "normalized discrete Ampere residual", "si_unit": "1"},
-    {"id": "rho_generic", "latex": "\\rho", "meaning": "one of the three normalized diagnostic residuals in a refinement rule", "si_unit": "1"},
-    {"id": "p", "latex": "p", "meaning": "observed spatial convergence order", "si_unit": "1"},
-    {"id": "p_min", "latex": "p_{\\min}", "meaning": "minimum accepted spatial convergence order", "si_unit": "1"},
-    {"id": "h_refinement", "latex": "h", "meaning": "common refinement-spacing scale", "si_unit": "\\mathrm{m}"},
-    {"id": "epsilon_fp64", "latex": "\\epsilon_{\\mathrm{FP64}}", "meaning": "IEEE-754 binary64 machine epsilon", "si_unit": "1"},
-    {"id": "k_prod", "latex": "k_a^{\\mathrm{prod}}", "meaning": "production scalar kernel component", "si_unit": "\\mathrm{m}"},
-    {"id": "k_hat_prod", "latex": "\\widehat{k}_a^{\\mathrm{prod}}", "meaning": "production spectral scalar-kernel component", "si_unit": "\\mathrm{m}"},
-    {"id": "k_ref", "latex": "k_a^{\\mathrm{ref}}", "meaning": "independently integrated reference scalar kernel component", "si_unit": "\\mathrm{m}"},
-    {"id": "B_a", "latex": "B_a", "meaning": "mixed absolute-plus-relative kernel acceptance budget", "si_unit": "\\mathrm{m}"},
-    {"id": "a_K", "latex": "a_K", "meaning": "dimensionless absolute-scale kernel tolerance", "si_unit": "1"},
-    {"id": "r_K", "latex": "r_K", "meaning": "dimensionless relative kernel tolerance", "si_unit": "1"},
-    {"id": "F_a_plus", "latex": "F_a^+", "meaning": "positive source-cell face normal to axis a", "si_unit": "\\mathrm{m^2}"},
-    {"id": "F_a_minus", "latex": "F_a^-", "meaning": "negative source-cell face normal to axis a", "si_unit": "\\mathrm{m^2}"},
-    {"id": "dS_prime", "latex": "dS'", "meaning": "source-face integration measure", "si_unit": "\\mathrm{m^2}"},
-    {"id": "A_spot", "latex": "A_a^{(L)}", "meaning": "independent adaptive surface-quadrature spot value at level L", "si_unit": "\\mathrm{m}"},
-    {"id": "A_previous", "latex": "A_a^{(L-1)}", "meaning": "previous adaptive surface-quadrature spot value", "si_unit": "\\mathrm{m}"},
-    {"id": "E_spot", "latex": "E_a^{\\mathrm{spot}}", "meaning": "successive-level adaptive spot-check difference", "si_unit": "\\mathrm{m}"},
-    {"id": "B_spot", "latex": "B_a^{\\mathrm{spot}}", "meaning": "independent adaptive spot-check budget", "si_unit": "\\mathrm{m}"},
-    {"id": "a_S", "latex": "a_S", "meaning": "dimensionless absolute-scale spot-check tolerance", "si_unit": "1"},
-    {"id": "r_S", "latex": "r_S", "meaning": "dimensionless relative spot-check tolerance", "si_unit": "1"},
-    {"id": "q", "latex": "q", "meaning": "padded R2C spectral-bin multi-index", "si_unit": "1"},
-    {"id": "Z_real", "latex": "\\mathcal Z_{\\mathrm{real}}", "meaning": "real-space exact-zero index pairs selected by self geometry or parity", "si_unit": "1"},
-    {"id": "Z_spec", "latex": "\\mathcal Z_{\\mathrm{spec}}", "meaning": "spectral exact-zero index pairs selected by DC or full self-conjugacy", "si_unit": "1"},
-    {"id": "positive_zero_scalar", "latex": "+0", "meaning": "IEEE-754 binary64 positive-zero scalar kernel value", "si_unit": "\\mathrm{m}"},
-    {"id": "S_H_i", "latex": "S_{H,i}", "meaning": "absolute field-error scale at target cell $i$", "si_unit": "\\mathrm{A\\,m^{-1}}"},
-    {"id": "max_operator", "latex": "\\max", "meaning": "maximum-value operator", "si_unit": "1"},
-    {"id": "min_operator", "latex": "\\min", "meaning": "minimum-value operator", "si_unit": "1"},
-    {"id": "log2_operator", "latex": "\\log_2", "meaning": "base-two logarithm operator", "si_unit": "1"},
-    {"id": "absolute_value", "latex": "|\\cdot|", "meaning": "scalar absolute-value operator", "si_unit": "1"}
+    {
+      "id": "J_c",
+      "latex": "J_c",
+      "meaning": "conventional current density",
+      "si_unit": "A/m^2"
+    },
+    {
+      "id": "mu_s",
+      "latex": "mu_s",
+      "meaning": "spin accumulation potential",
+      "si_unit": "V"
+    },
+    {
+      "id": "H_oe",
+      "latex": "H_{\\mathrm{oe}}",
+      "meaning": "Oersted field",
+      "si_unit": "\\mathrm{A\\,m^{-1}}"
+    },
+    {
+      "id": "r",
+      "latex": "r",
+      "meaning": "target-source displacement",
+      "si_unit": "\\mathrm{m}"
+    },
+    {
+      "id": "o",
+      "latex": "o",
+      "meaning": "physical union-grid origin",
+      "si_unit": "\\mathrm{m}"
+    },
+    {
+      "id": "V_e",
+      "latex": "V_e",
+      "meaning": "active tetrahedron volume",
+      "si_unit": "m^3"
+    },
+    {
+      "id": "r_reg",
+      "latex": "r_reg",
+      "meaning": "equivalent-sphere self regularization radius of the bounded midpoint slice",
+      "si_unit": "m"
+    },
+    {
+      "id": "mu_0",
+      "latex": "mu_0",
+      "meaning": "vacuum permeability used only when converting H to B or evaluating Zeeman energy",
+      "si_unit": "H/m"
+    },
+    {
+      "id": "m_stage",
+      "latex": "m_stage",
+      "meaning": "normalized magnetization at an RK stage",
+      "si_unit": "1"
+    },
+    {
+      "id": "tau_tr",
+      "latex": "tau_tr",
+      "meaning": "direct reciprocal transport contribution to `dm/dt`",
+      "si_unit": "s^-1"
+    },
+    {
+      "id": "J_c_cell",
+      "latex": "J_c^{\\mathrm{cell}}",
+      "meaning": "reconstructed cell-centred conventional current density",
+      "si_unit": "\\mathrm{A\\,m^{-2}}"
+    },
+    {
+      "id": "J_c_face",
+      "latex": "J_c^{\\mathrm{face}}",
+      "meaning": "signed, globally oriented finite-volume face-current density",
+      "si_unit": "\\mathrm{A\\,m^{-2}}"
+    },
+    {
+      "id": "chi_c",
+      "latex": "\\chi_c",
+      "meaning": "conductor-source cell mask",
+      "si_unit": "1"
+    },
+    {
+      "id": "chi_m",
+      "latex": "\\chi_m",
+      "meaning": "magnetic-target cell mask",
+      "si_unit": "1"
+    },
+    {
+      "id": "i",
+      "latex": "i",
+      "meaning": "target or active-cell multi-index, according to context",
+      "si_unit": "1"
+    },
+    {
+      "id": "j",
+      "latex": "j",
+      "meaning": "source-cell multi-index",
+      "si_unit": "1"
+    },
+    {
+      "id": "a",
+      "latex": "a",
+      "meaning": "Cartesian axis selector",
+      "si_unit": "1"
+    },
+    {
+      "id": "e_a",
+      "latex": "e_a",
+      "meaning": "unit lattice-index vector along axis $a$",
+      "si_unit": "1"
+    },
+    {
+      "id": "xyz_axes",
+      "latex": "\\{x,y,z\\}",
+      "meaning": "ordered Cartesian component set",
+      "si_unit": "1"
+    },
+    {
+      "id": "k_a",
+      "latex": "k_a",
+      "meaning": "scalar component of the source-cell-integrated kernel",
+      "si_unit": "\\mathrm{m}"
+    },
+    {
+      "id": "x_i",
+      "latex": "x_i",
+      "meaning": "target-cell centre on the union grid",
+      "si_unit": "\\mathrm{m}"
+    },
+    {
+      "id": "x_j",
+      "latex": "x_j",
+      "meaning": "source-cell centre on the union grid",
+      "si_unit": "\\mathrm{m}"
+    },
+    {
+      "id": "x_prime",
+      "latex": "x'",
+      "meaning": "source integration point",
+      "si_unit": "\\mathrm{m}"
+    },
+    {
+      "id": "C_j",
+      "latex": "C_j",
+      "meaning": "rectangular source cell centred at $x_j$",
+      "si_unit": "\\mathrm{m^3}"
+    },
+    {
+      "id": "pi",
+      "latex": "\\pi",
+      "meaning": "circle constant",
+      "si_unit": "1"
+    },
+    {
+      "id": "euclidean_norm",
+      "latex": "\\lVert\\cdot\\rVert_2",
+      "meaning": "Euclidean norm; its value inherits the operand's SI unit",
+      "si_unit": "1"
+    },
+    {
+      "id": "dV_prime",
+      "latex": "dV'",
+      "meaning": "source-volume integration measure",
+      "si_unit": "\\mathrm{m^3}"
+    },
+    {
+      "id": "source_sum",
+      "latex": "\\sum_j",
+      "meaning": "discrete sum over all source cells indexed by $j$",
+      "si_unit": "1"
+    },
+    {
+      "id": "K",
+      "latex": "K",
+      "meaning": "antisymmetric source-cell-integrated Oersted tensor",
+      "si_unit": "\\mathrm{m}"
+    },
+    {
+      "id": "positive_zero_tensor",
+      "latex": "+0_{3\\times3}",
+      "meaning": "exact IEEE-754 positive-zero self tensor",
+      "si_unit": "\\mathrm{m}"
+    },
+    {
+      "id": "H_oe_hat",
+      "latex": "\\widehat{H}_{\\mathrm{oe},a}",
+      "meaning": "unnormalised spectral Oersted-field component $a$",
+      "si_unit": "\\mathrm{A\\,m^{-1}}"
+    },
+    {
+      "id": "k_hat",
+      "latex": "\\widehat{k}_a",
+      "meaning": "unnormalised forward R2C transform of kernel component $a$",
+      "si_unit": "\\mathrm{m}"
+    },
+    {
+      "id": "J_c_hat",
+      "latex": "\\widehat{J}_{c,a}",
+      "meaning": "unnormalised forward R2C transform of current component $a$",
+      "si_unit": "\\mathrm{A\\,m^{-2}}"
+    },
+    {
+      "id": "N_a",
+      "latex": "N_a",
+      "meaning": "physical union-grid size along axis $a$",
+      "si_unit": "1"
+    },
+    {
+      "id": "P_a",
+      "latex": "P_a",
+      "meaning": "padded convolution-grid size along axis $a$",
+      "si_unit": "1"
+    },
+    {
+      "id": "q_a",
+      "latex": "q_a",
+      "meaning": "padded grid index along axis $a$",
+      "si_unit": "1"
+    },
+    {
+      "id": "d_a",
+      "latex": "d_a",
+      "meaning": "signed lattice displacement along axis $a$",
+      "si_unit": "1"
+    },
+    {
+      "id": "diagnostic_field",
+      "latex": "f",
+      "meaning": "scalar or Cartesian component sampled at cell centres for an independent diagnostic",
+      "si_unit": "A/m^2 or A/m"
+    },
+    {
+      "id": "delta0_a",
+      "latex": "\\delta_a^0",
+      "meaning": "radius-one centred-difference operator along axis $a$",
+      "si_unit": "\\mathrm{m^{-1}}"
+    },
+    {
+      "id": "h_a",
+      "latex": "h_a",
+      "meaning": "FDM cell size along axis $a\\in\\{x,y,z\\}$",
+      "si_unit": "\\mathrm{m}"
+    },
+    {
+      "id": "D_h",
+      "latex": "D_h",
+      "meaning": "independent cell-centred divergence operator",
+      "si_unit": "\\mathrm{m^{-1}}"
+    },
+    {
+      "id": "C_h",
+      "latex": "C_h",
+      "meaning": "independent cell-centred curl operator",
+      "si_unit": "\\mathrm{m^{-1}}"
+    },
+    {
+      "id": "I_2",
+      "latex": "\\mathcal I_2",
+      "meaning": "diagnostic cell-index set after removal of the open-boundary band",
+      "si_unit": "1"
+    },
+    {
+      "id": "b_open",
+      "latex": "b_{\\mathrm{open}}",
+      "meaning": "excluded open-boundary-band width in cells",
+      "si_unit": "1"
+    },
+    {
+      "id": "V_h",
+      "latex": "V_h",
+      "meaning": "Cartesian cell volume $h_xh_yh_z$",
+      "si_unit": "\\mathrm{m^3}"
+    },
+    {
+      "id": "diagnostic_sum",
+      "latex": "\\sum_{i\\in\\mathcal I_2}",
+      "meaning": "discrete sum over the diagnostic cell-index set",
+      "si_unit": "1"
+    },
+    {
+      "id": "rms_norm",
+      "latex": "\\lVert\\cdot\\rVert_{2,h,\\mathcal I_2}",
+      "meaning": "volume-weighted RMS norm on the diagnostic set",
+      "si_unit": "1"
+    },
+    {
+      "id": "S_J",
+      "latex": "S_J",
+      "meaning": "reconstructed-current RMS diagnostic scale",
+      "si_unit": "\\mathrm{A\\,m^{-2}}"
+    },
+    {
+      "id": "S_A",
+      "latex": "S_A",
+      "meaning": "Ampere residual diagnostic scale",
+      "si_unit": "\\mathrm{A\\,m^{-2}}"
+    },
+    {
+      "id": "h_min",
+      "latex": "h_{\\min}",
+      "meaning": "smallest FDM cell dimension",
+      "si_unit": "\\mathrm{m}"
+    },
+    {
+      "id": "h_max",
+      "latex": "h_{\\max}",
+      "meaning": "largest FDM cell dimension",
+      "si_unit": "\\mathrm{m}"
+    },
+    {
+      "id": "rho_divJ",
+      "latex": "\\rho_{\\mathrm{div}J}",
+      "meaning": "normalized post-reconstruction current-divergence residual",
+      "si_unit": "1"
+    },
+    {
+      "id": "rho_divH",
+      "latex": "\\rho_{\\mathrm{div}H}",
+      "meaning": "normalized Oersted-field divergence residual",
+      "si_unit": "1"
+    },
+    {
+      "id": "rho_A",
+      "latex": "\\rho_{\\mathrm A}",
+      "meaning": "normalized discrete Ampere residual",
+      "si_unit": "1"
+    },
+    {
+      "id": "rho_generic",
+      "latex": "\\rho",
+      "meaning": "one of the three normalized diagnostic residuals in a refinement rule",
+      "si_unit": "1"
+    },
+    {
+      "id": "p",
+      "latex": "p",
+      "meaning": "observed spatial convergence order",
+      "si_unit": "1"
+    },
+    {
+      "id": "p_min",
+      "latex": "p_{\\min}",
+      "meaning": "minimum accepted spatial convergence order",
+      "si_unit": "1"
+    },
+    {
+      "id": "h_refinement",
+      "latex": "h",
+      "meaning": "common refinement-spacing scale",
+      "si_unit": "\\mathrm{m}"
+    },
+    {
+      "id": "epsilon_fp64",
+      "latex": "\\epsilon_{\\mathrm{FP64}}",
+      "meaning": "IEEE-754 binary64 machine epsilon",
+      "si_unit": "1"
+    },
+    {
+      "id": "k_prod",
+      "latex": "k_a^{\\mathrm{prod}}",
+      "meaning": "production scalar kernel component",
+      "si_unit": "\\mathrm{m}"
+    },
+    {
+      "id": "k_hat_prod",
+      "latex": "\\widehat{k}_a^{\\mathrm{prod}}",
+      "meaning": "production spectral scalar-kernel component",
+      "si_unit": "\\mathrm{m}"
+    },
+    {
+      "id": "k_ref",
+      "latex": "k_a^{\\mathrm{ref}}",
+      "meaning": "independently integrated reference scalar kernel component",
+      "si_unit": "\\mathrm{m}"
+    },
+    {
+      "id": "B_a",
+      "latex": "B_a",
+      "meaning": "mixed absolute-plus-relative kernel acceptance budget",
+      "si_unit": "\\mathrm{m}"
+    },
+    {
+      "id": "a_K",
+      "latex": "a_K",
+      "meaning": "dimensionless absolute-scale kernel tolerance",
+      "si_unit": "1"
+    },
+    {
+      "id": "r_K",
+      "latex": "r_K",
+      "meaning": "dimensionless relative kernel tolerance",
+      "si_unit": "1"
+    },
+    {
+      "id": "F_a_plus",
+      "latex": "F_a^+",
+      "meaning": "positive source-cell face normal to axis a",
+      "si_unit": "\\mathrm{m^2}"
+    },
+    {
+      "id": "F_a_minus",
+      "latex": "F_a^-",
+      "meaning": "negative source-cell face normal to axis a",
+      "si_unit": "\\mathrm{m^2}"
+    },
+    {
+      "id": "dS_prime",
+      "latex": "dS'",
+      "meaning": "source-face integration measure",
+      "si_unit": "\\mathrm{m^2}"
+    },
+    {
+      "id": "A_spot",
+      "latex": "A_a^{(L)}",
+      "meaning": "independent adaptive surface-quadrature spot value at level L",
+      "si_unit": "\\mathrm{m}"
+    },
+    {
+      "id": "A_previous",
+      "latex": "A_a^{(L-1)}",
+      "meaning": "previous adaptive surface-quadrature spot value",
+      "si_unit": "\\mathrm{m}"
+    },
+    {
+      "id": "E_spot",
+      "latex": "E_a^{\\mathrm{spot}}",
+      "meaning": "successive-level adaptive spot-check difference",
+      "si_unit": "\\mathrm{m}"
+    },
+    {
+      "id": "B_spot",
+      "latex": "B_a^{\\mathrm{spot}}",
+      "meaning": "independent adaptive spot-check budget",
+      "si_unit": "\\mathrm{m}"
+    },
+    {
+      "id": "a_S",
+      "latex": "a_S",
+      "meaning": "dimensionless absolute-scale spot-check tolerance",
+      "si_unit": "1"
+    },
+    {
+      "id": "r_S",
+      "latex": "r_S",
+      "meaning": "dimensionless relative spot-check tolerance",
+      "si_unit": "1"
+    },
+    {
+      "id": "q",
+      "latex": "q",
+      "meaning": "padded R2C spectral-bin multi-index",
+      "si_unit": "1"
+    },
+    {
+      "id": "Z_real",
+      "latex": "\\mathcal Z_{\\mathrm{real}}",
+      "meaning": "real-space exact-zero index pairs selected by self geometry or parity",
+      "si_unit": "1"
+    },
+    {
+      "id": "Z_spec",
+      "latex": "\\mathcal Z_{\\mathrm{spec}}",
+      "meaning": "spectral exact-zero index pairs selected by DC or full self-conjugacy",
+      "si_unit": "1"
+    },
+    {
+      "id": "positive_zero_scalar",
+      "latex": "+0",
+      "meaning": "IEEE-754 binary64 positive-zero scalar kernel value",
+      "si_unit": "\\mathrm{m}"
+    },
+    {
+      "id": "S_H_i",
+      "latex": "S_{H,i}",
+      "meaning": "absolute field-error scale at target cell $i$",
+      "si_unit": "\\mathrm{A\\,m^{-1}}"
+    },
+    {
+      "id": "max_operator",
+      "latex": "\\max",
+      "meaning": "maximum-value operator",
+      "si_unit": "1"
+    },
+    {
+      "id": "min_operator",
+      "latex": "\\min",
+      "meaning": "minimum-value operator",
+      "si_unit": "1"
+    },
+    {
+      "id": "log2_operator",
+      "latex": "\\log_2",
+      "meaning": "base-two logarithm operator",
+      "si_unit": "1"
+    },
+    {
+      "id": "absolute_value",
+      "latex": "|\\cdot|",
+      "meaning": "scalar absolute-value operator",
+      "si_unit": "1"
+    },
+    {
+      "id": "rank_j",
+      "latex": "j",
+      "meaning": "indeks kolumny więzu",
+      "si_unit": "1"
+    },
+    {
+      "id": "rank_a",
+      "latex": "a_j, a'_j",
+      "meaning": "współczynnik bieżącego wiersza przed i po aktualizacji",
+      "si_unit": "1"
+    },
+    {
+      "id": "rank_b",
+      "latex": "b_j",
+      "meaning": "współczynnik wiersza bazy",
+      "si_unit": "1"
+    },
+    {
+      "id": "rank_p",
+      "latex": "p",
+      "meaning": "niezerowy pivot wiersza bazy",
+      "si_unit": "1"
+    },
+    {
+      "id": "rank_d",
+      "latex": "d",
+      "meaning": "poprzedni niezerowy pivot (początkowo jeden)",
+      "si_unit": "1"
+    },
+    {
+      "id": "rank_f",
+      "latex": "f",
+      "meaning": "współczynnik eliminacji z bieżącego wiersza",
+      "si_unit": "1"
+    },
+    {
+      "id": "rank_r",
+      "latex": "r, r'",
+      "meaning": "dokładna prawa strona przed i po aktualizacji",
+      "si_unit": "\\mathrm{A}"
+    },
+    {
+      "id": "rank_s",
+      "latex": "s",
+      "meaning": "dokładna prawa strona wiersza bazy",
+      "si_unit": "\\mathrm{A}"
+    },
+    {
+      "id": "inc_B",
+      "latex": "B",
+      "meaning": "macierz współczynników zwalidowanych więzów",
+      "si_unit": "1"
+    },
+    {
+      "id": "inc_b",
+      "latex": "b_{ik}, b_{jk}",
+      "meaning": "dwa niezerowe współczynniki kolumny",
+      "si_unit": "1"
+    },
+    {
+      "id": "inc_ij",
+      "latex": "i, j",
+      "meaning": "różne indeksy wierszy tej kolumny",
+      "si_unit": "1"
+    },
+    {
+      "id": "inc_k",
+      "latex": "k",
+      "meaning": "indeks kolumny macierzy więzów",
+      "si_unit": "1"
+    },
+    {
+      "id": "inc_z",
+      "latex": "z_i, z_j",
+      "meaning": "znaki świadectwa równoważącego wiersze",
+      "si_unit": "1"
+    },
+    {
+      "id": "inc_Z",
+      "latex": "Z",
+      "meaning": "odwracalna diagonalna macierz znaków wierszy",
+      "si_unit": "1"
+    },
+    {
+      "id": "inc_n",
+      "latex": "n",
+      "meaning": "liczba wierszy, łącznie z wierszami izolowanymi",
+      "si_unit": "1"
+    },
+    {
+      "id": "inc_c",
+      "latex": "c",
+      "meaning": "liczba spójnych składowych grafu wierszy",
+      "si_unit": "1"
+    },
+    {
+      "id": "inc_Q",
+      "latex": "\\mathbb Q",
+      "meaning": "ciało liczb wymiernych użyte w definicji dokładnej rangi",
+      "si_unit": "1"
+    },
+    {
+      "id": "inc_diag",
+      "latex": "\\operatorname{diag}",
+      "meaning": "utworzenie macierzy diagonalnej z podanych znaków",
+      "si_unit": "1"
+    },
+    {
+      "id": "inc_rank",
+      "latex": "\\operatorname{rank}_{\\mathbb Q}",
+      "meaning": "dokładny rząd macierzy nad liczbami wymiernymi",
+      "si_unit": "1"
+    }
   ],
   "sources": [
     {
@@ -842,6 +1479,36 @@
       "path": "backends/fem/tests/oersted_vector_potential_contract.cpp",
       "symbol": "main",
       "responsibility": "Managed CPU mixed H(curl)-H1 vector-potential contract with gauge and weak-Ampere diagnostics."
+    },
+    {
+      "id": "rank-bareiss-reducer",
+      "path": "backends/fem/cpu/mfem/transport/conservative_constraint_rank.cpp",
+      "symbol": "reduce_bareiss_row",
+      "responsibility": "Dokładna redukcja i pominięcie kroku tożsamościowego FEM CPU."
+    },
+    {
+      "id": "rank-bareiss-regressions",
+      "path": "backends/fem/tests/conservative_constraint_rank_contract.cpp",
+      "symbol": "main",
+      "responsibility": "Regresje rangi, RHS i budżetu; wykonanie w tym etapie niepotwierdzone."
+    },
+    {
+      "id": "rank-balanced-incidence",
+      "path": "backends/fem/cpu/mfem/transport/conservative_constraint_rank.cpp",
+      "symbol": "try_zero_rhs_signed_incidence",
+      "responsibility": "Kandydat dokładnej ścieżki zbilansowanej incydencji; bez wykonania runtime."
+    },
+    {
+      "id": "rank-balanced-chain-test",
+      "path": "backends/fem/tests/conservative_constraint_rank_contract.cpp",
+      "symbol": "void balanced_incidence_chain_fits_bounded_work",
+      "responsibility": "Nieskompilowany kandydat regresji ograniczonej pracy i certyfikatu."
+    },
+    {
+      "id": "rank-unbalanced-cycle-test",
+      "path": "backends/fem/tests/conservative_constraint_rank_contract.cpp",
+      "symbol": "void unbalanced_signed_cycle_retains_exact_general_rank",
+      "responsibility": "Nieskompilowany kandydat regresji przejścia do Bareissa."
     }
   ],
   "public_api": {

@@ -130,8 +130,10 @@ import { planViewport3DColorbars, resolveViewport3DColorbarRangeStates, type Vie
 export { resolveViewport3DColorbarRangeStates } from "./model/viewport3DColorbarPlan";
 
 import {
+  observeViewport3DIdle,
   useViewport3DResourceCounts,
   useViewport3DResourceTracker,
+  type Viewport3DIdleObservation,
 } from "./viewport3dDiagnostics";
 import { useViewport3DWorkerRuntime } from "./viewport3dWorkerRuntime";
 import { createViewport3DEventManager } from "./viewport3dEventManager";
@@ -456,6 +458,9 @@ interface Viewport3DFrameProps
   ) => void;
   onClearSelection: () => void;
   onReturnToCurrentView: () => void;
+  onFitSavedField: ((aspect: number) => boolean) | null;
+  onFitSavedScene: (aspect: number) => boolean;
+  onRetrySavedAntennaContext: (() => void) | null;
   onFdmUniverseOverlayVisibilityChange: (visible: boolean) => void;
   onFrozenSpinsOverlayVisibilityChange: (visible: boolean) => void;
   onRegionOverlaySourceChange: (source: RegionDiagnosticOverlaySource) => void;
@@ -945,6 +950,11 @@ function LiveViewport3DModule({
       regionDiagnosticOverlayState={regionDiagnosticOverlayState}
       regionOverlayMode={regionDiagnosticOverlayMode(regionDiagnosticOverlayState)}
       rotationMode={commandState.widgets.rotationMode}
+      onFitSavedField={sceneModel.savedSamplingBounds
+        ? (aspect) => savedViewportCamera.fitCamera(aspect, sceneModel.savedSamplingBounds)
+        : null}
+      onFitSavedScene={savedViewportCamera.fitCamera}
+      onRetrySavedAntennaContext={sceneModel.retrySavedAntennaSourceContext}
       savedViewportActive={sceneModel.savedViewportActive}
       scaleLabelsVisible={commandState.widgets.scaleLabelsVisible}
       scaleUnitMode={commandState.widgets.scaleUnitMode}
@@ -1153,6 +1163,9 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
   onCameraPatch,
   onClearSelection,
   onReturnToCurrentView,
+  onFitSavedField,
+  onFitSavedScene,
+  onRetrySavedAntennaContext,
   onFdmUniverseOverlayVisibilityChange,
   onFrozenSpinsOverlayVisibilityChange,
   onRegionOverlaySourceChange,
@@ -1189,6 +1202,29 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
     visibleSavedScaleStore.getSnapshot,
   );
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const [renderDetailsOpen, setRenderDetailsOpen] = useState(false);
+  const [idleInspection, setIdleInspection] = useState<Viewport3DIdleObservation | null>(null);
+  useEffect(() => {
+    if (!renderDetailsOpen) return;
+    return observeViewport3DIdle(sceneProps.tracker, sceneProps.requestDiagnostics, setIdleInspection);
+  }, [renderDetailsOpen, sceneProps.tracker, sceneProps.requestDiagnostics]);
+  const [webglInspection, setWebglInspection] = useState<{
+    contextLost: boolean; width: number; height: number;
+  } | null>(null);
+  const inspectWebglOnOpen = useCallback((open: boolean) => {
+    setRenderDetailsOpen(open);
+    setIdleInspection(null);
+    if (!open) return;
+    const canvas = canvasRef.current;
+    const gl = canvas?.isConnected
+      ? canvas.getContext("webgl2") ?? canvas.getContext("webgl")
+      : null;
+    setWebglInspection(gl ? {
+      contextLost: gl.isContextLost(),
+      width: gl.drawingBufferWidth,
+      height: gl.drawingBufferHeight,
+    } : null);
+  }, []);
   const antennaFieldOverlay = useAntennaFieldOverlay(!savedViewportActive);
   const artifactTarget = sceneProps.primitiveModel?.objects.find(object => object.objectId === sceneProps.selectedObjectId);
   const artifactSettings = artifactPresentationTarget?.kind === "airbox" ? sceneProps.airboxSettings :
@@ -2057,16 +2093,29 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
             </span>
           </fieldset>
         ) : null}
-        {!savedViewportActive ? (
-          <Popover>
-            <PopoverTrigger asChild>
-              <Button className="fm-viewport-3d__render-details-trigger" size="sm" type="button" variant="secondary">Render details</Button>
-            </PopoverTrigger>
-            <PopoverContent align="start" aria-label="Render diagnostics" className="fm-viewport-3d__render-details">
-              {diagnostics}
-            </PopoverContent>
-          </Popover>
-        ) : null}
+        <Popover onOpenChange={inspectWebglOnOpen}>
+          <PopoverTrigger asChild>
+            <Button className="fm-viewport-3d__render-details-trigger" size="sm" type="button" variant="secondary">Render details</Button>
+          </PopoverTrigger>
+          <PopoverContent align="start" aria-label="Render diagnostics" className="fm-viewport-3d__render-details">
+            <p aria-label="WebGL inspection snapshot">
+              WebGL snapshot on opening: {webglInspection
+                ? `context ${webglInspection.contextLost ? "lost" : "active"} · drawing buffer ${webglInspection.width} × ${webglInspection.height} px`
+                : "context unavailable"}
+            </p>
+            <p aria-label="Viewport frame observation">
+              {idleInspection
+                ? `Rendered frames: ${idleInspection.frames} in ${(idleInspection.elapsedMs / 1000).toFixed(2)} s. Interaction and loading are included.`
+                : "Observing rendered frames for 2 s after settling. Leave the scene untouched to check idle rendering."}
+            </p>
+            {idleInspection?.lastFrameWindow ? (
+              <p aria-label="Last recorded frame window">
+                Last recorded frame window (may precede this observation): {idleInspection.lastFrameWindow}
+              </p>
+            ) : null}
+            {diagnostics}
+          </PopoverContent>
+        </Popover>
           </div>}
         />
         <div className="fm-viewport-3d__status" aria-label="3D view status">
@@ -2117,6 +2166,40 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
             >
               Current view
             </Button>
+            <Button
+              disabled={!onFitSavedField}
+              onClick={() => {
+                const canvas = canvasRef.current;
+                onFitSavedField?.(canvas && canvas.clientHeight > 0
+                  ? canvas.clientWidth / canvas.clientHeight : 1);
+              }}
+              size="sm" type="button" variant="secondary"
+              title="Frame the saved field sampling domain"
+            >
+              Fit field
+            </Button>
+            <Button
+              disabled={!onFitSavedField}
+              onClick={() => {
+                const canvas = canvasRef.current;
+                onFitSavedScene(canvas && canvas.clientHeight > 0
+                  ? canvas.clientWidth / canvas.clientHeight : 1);
+              }}
+              size="sm" type="button" variant="secondary"
+              title="Frame the saved field and archived source geometry"
+            >
+              Fit scene
+            </Button>
+            {onRetrySavedAntennaContext ? (
+              <Button
+                onClick={onRetrySavedAntennaContext}
+                size="sm"
+                type="button"
+                variant="secondary"
+              >
+                Retry antenna geometry
+              </Button>
+            ) : null}
           </fieldset>
         ) : null}
         {/* Informational pills share one shrinkable lane so they truncate with

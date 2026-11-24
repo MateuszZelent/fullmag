@@ -11,6 +11,8 @@ use crate::schemas::saved_field_geometry::{
     SavedFieldGeometryDatasetResource, SavedFieldGeometryPayloadResource,
     SavedFieldGeometryPinnedSourceResource, SavedFieldGeometryRepresentationEvidenceResource,
     SavedFieldGeometryResource, MAX_SAVED_FIELD_GEOMETRY_DECODE_BYTES,
+    SavedAntennaGeometrySourceContextResource, SavedAntennaGeometrySourcePurposeResource,
+    SavedAntennaGeometryParentResource, SavedFieldGeometryQuery,
     MAX_SAVED_FIELD_SUPPORT_BINARY_BYTES, SAVED_FIELD_GEOMETRY_RESOURCE_SCHEMA,
     SAVED_FIELD_SUPPORT_BINARY_SCHEMA,
 };
@@ -43,10 +45,11 @@ const MAX_BINARY_RESPONSE_BYTES: usize = MAX_SAVED_FIELD_GEOMETRY_DECODE_BYTES a
 // A transport view of either immutable magnetic support or owned nonmagnetic samples.
 // This adapter does not grant magnetic semantics to inspection carriers.
 #[derive(Debug, Clone)]
-struct SavedFieldGeometry {
+pub(super) struct SavedFieldGeometry {
     schema_version: String,
     coordinate_unit: String,
-    mesh: fullmag_ir::MeshIR,
+    pub(super) mesh: fullmag_ir::MeshIR,
+    pub(super) owned_role: Option<fullmag_session::solution_field_geometry::OwnedSampleGeometryRole>,
     support: SavedFieldSupport,
 }
 #[derive(Debug, Clone)]
@@ -58,7 +61,7 @@ struct SavedFieldSupport {
 impl From<SavedFemP1FieldGeometry> for SavedFieldGeometry {
     fn from(value: SavedFemP1FieldGeometry) -> Self {
         Self {schema_version:value.schema_version, coordinate_unit:value.coordinate_unit,
-            mesh:value.mesh, support:SavedFieldSupport {producer_id:value.field_semantics.producer_id,
+            mesh:value.mesh, owned_role:None, support:SavedFieldSupport {producer_id:value.field_semantics.producer_id,
                 producer_version:value.field_semantics.producer_version,
                 active_node_mask:value.field_semantics.active_node_mask}}
     }
@@ -69,20 +72,20 @@ impl From<SavedOwnedSampleFieldGeometry> for SavedFieldGeometry {
         // coverage, not a magnetic material mask or extrapolation outside the carrier.
         let active_node_mask = vec![true; value.mesh.nodes.len()];
         Self {schema_version:value.schema_version, coordinate_unit:value.coordinate_unit,
-            mesh:value.mesh, support:SavedFieldSupport {producer_id:value.producer_id,
+            mesh:value.mesh, owned_role:Some(value.role), support:SavedFieldSupport {producer_id:value.producer_id,
                 producer_version:value.producer_version, active_node_mask}}
     }
 }
 
 #[derive(Debug, Clone)]
-struct ResolvedSavedGeometry {
-    geometry_artifact: SolutionArtifactRef,
-    geometry_manifest: SolutionFieldGeometryManifest,
-    geometry: SavedFieldGeometry,
-    tensor_artifact: SolutionArtifactRef,
-    tensor: TensorDescriptor,
-    dataset_artifact: SolutionArtifactRef,
-    dataset: MaterializedDatasetManifest,
+pub(super) struct ResolvedSavedGeometry {
+    pub(super) geometry_artifact: SolutionArtifactRef,
+    pub(super) geometry_manifest: SolutionFieldGeometryManifest,
+    pub(super) geometry: SavedFieldGeometry,
+    pub(super) tensor_artifact: SolutionArtifactRef,
+    pub(super) tensor: TensorDescriptor,
+    pub(super) dataset_artifact: SolutionArtifactRef,
+    pub(super) dataset: MaterializedDatasetManifest,
 }
 
 #[derive(Debug)]
@@ -96,7 +99,7 @@ struct BinaryPayload {
 #[utoipa::path(
     get,
     path = "/v2/persistence/projects/{project_id}/runs/{run_id}/solution-sets/{solution_set_id}/revisions/{revision}/members/{member_id}/artifacts/{artifact_id}/saved-field-geometry",
-    params(("project_id" = String, Path), ("run_id" = String, Path), ("solution_set_id" = String, Path), ("revision" = String, Path, description = "Canonical positive decimal u64"), ("member_id" = String, Path), ("artifact_id" = String, Path, description = "Selected materialized dataset artifact ID")),
+    params(("project_id" = String, Path), ("run_id" = String, Path), ("solution_set_id" = String, Path), ("revision" = String, Path, description = "Canonical positive decimal u64"), ("member_id" = String, Path), ("artifact_id" = String, Path, description = "Selected materialized dataset artifact ID"), SavedFieldGeometryQuery),
     responses((status = 200, body = SavedFieldGeometryResource, description = "Exact immutable saved FEM geometry metadata; no active-runtime fallback"), (status = 400, description = "Invalid identity or revision"), (status = 404, description = "Pinned geometry or dataset manifest is missing"), (status = 409, description = "Pinned owner, dataset, geometry, or tensor identity mismatch"), (status = 500, description = "Corrupt or oversized persisted geometry")),
     tag = "persistence"
 )]
@@ -110,6 +113,7 @@ pub async fn get_saved_field_geometry(
         String,
         String,
     )>,
+    Query(query): Query<SavedFieldGeometryQuery>,
 ) -> Result<axum::Json<SavedFieldGeometryResource>, ApiError> {
     super::validate_lookup_id(&member_id, "member")?;
     super::validate_lookup_id(&artifact_id, "dataset artifact")?;
@@ -123,12 +127,32 @@ pub async fn get_saved_field_geometry(
         revision,
         move |store, solution| {
             let resolved = resolve_saved_geometry(store, &solution, &member_id, &artifact_id)?;
-            saved_geometry_resource(
+            let mut resource = saved_geometry_resource(
                 response_project_id,
                 response_run_id,
                 solution.revision,
                 &resolved,
-            )
+            )?;
+            // Keep provenance I/O out of topology/support and planar hot paths.
+            if query.include_antenna_source_context.unwrap_or(false) && resource.producer_id == "fullmag.retained-current-field" {
+                if let Some(context) = fullmag_runtime_control::read_saved_retained_current_geometry_parent(
+                    store, &resource.project_id, &resolved.geometry_manifest.source,
+                ).map_err(|error| ApiError::conflict(error.to_string()))? {
+                    let parent = context.parent_owner;
+                    resource.antenna_source_context = Some(SavedAntennaGeometrySourceContextResource {
+                        purpose: SavedAntennaGeometrySourcePurposeResource::HistoricalGeometryOnly,
+                        source_package: artifact_resource(&context.source_package),
+                        parent: SavedAntennaGeometryParentResource {
+                            project_id: parent.project_id, run_id: parent.run_id,
+                            study_step_id: parent.study_step_id, task_id: parent.task_id,
+                            attempt_id: parent.attempt_id, ownership_epoch: parent.ownership_epoch,
+                            artifact_id: parent.artifact_id, package_object_ref: parent.package.object_ref,
+                            package_byte_length: parent.package.byte_count.to_string(),
+                        },
+                    });
+                }
+            }
+            Ok(resource)
         },
     )
     .await
@@ -273,7 +297,7 @@ pub async fn get_saved_field_geometry_support(
     Ok(response)
 }
 
-fn resolve_saved_geometry(
+pub(super) fn resolve_saved_geometry(
     store: &SessionStore,
     solution: &SolutionSet,
     member_id: &str,
@@ -365,7 +389,7 @@ fn resolve_saved_geometry(
     })
 }
 
-fn saved_geometry_resource(
+pub(super) fn saved_geometry_resource(
     project_id: String,
     run_id: String,
     containing_solution_revision: u64,
@@ -461,6 +485,7 @@ fn saved_geometry_resource(
         topology_binary_sha256: topology_binary.map(|(_, hash)| hash),
         support_binary_byte_length: support_binary_byte_length.to_string(),
         support_binary_sha256: support_binary_hash,
+        antenna_source_context: None,
     })
 }
 
@@ -552,7 +577,7 @@ fn validate_binary_request(
     Ok(())
 }
 
-fn verify_expected_identity(
+pub(super) fn verify_expected_identity(
     resolved: &ResolvedSavedGeometry,
     query: &SavedFieldGeometryBinaryQuery,
 ) -> Result<(), ApiError> {

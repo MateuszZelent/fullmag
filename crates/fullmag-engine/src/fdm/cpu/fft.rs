@@ -1327,6 +1327,14 @@ fn compute_periodic_newell_kernels(
     periodic: [bool; 3],
     images: [u32; 3],
 ) -> newell::NewellKernels {
+    if nz == 1 && !periodic[2] && periodic[0] != periodic[1] {
+        let periodic_x = periodic[0];
+        let image_count = if periodic_x { images[0] } else { images[1] };
+        return fullmag_fdm_demag::newell::compute_single_layer_mixed_newell_kernels(
+            nx, ny, [dx, dy, dz], periodic_x, image_count,
+        );
+    }
+
     let px = if periodic[0] { nx } else { 2 * nx };
     let py = if periodic[1] { ny } else { 2 * ny };
     let pz = if periodic[2] { nz } else { 2 * nz };
@@ -1423,6 +1431,46 @@ mod periodic_newell_kernel_cache_tests {
     };
 
     type Parameters = ([usize; 3], [f64; 3], [bool; 3], [u32; 3]);
+
+    #[test]
+    fn one_layer_periodic_images_preserve_demag_tensor_at_long_lags() {
+        // Cubic-cell self tensor is 1/3 along each axis. At 500 cell pitches
+        // the independent dipole evaluation of an image has negligible
+        // finite-cell error at the tolerance below.
+        let h = 20e-9;
+        let images = 32;
+        let image_tail: f64 = (1..=images)
+            .map(|image| 1.0 / (500.0 * f64::from(image)).powi(3))
+            .sum();
+        let expected_xx = 1.0 / 3.0 - image_tail / std::f64::consts::PI;
+        let expected_zz = 1.0 / 3.0 + image_tail / (2.0 * std::f64::consts::PI);
+        let x = compute_periodic_newell_kernels(
+            500, 2, 1, h, h, h, [true, false, false], [images, 0, 0],
+        );
+        let y = compute_periodic_newell_kernels(
+            2, 500, 1, h, h, h, [false, true, false], [0, images, 0],
+        );
+
+        assert_eq!([x.px, x.py, x.pz], [500, 4, 2]);
+        assert_eq!([y.px, y.py, y.pz], [4, 500, 2]);
+        for (actual, expected) in [
+            (x.n_xx[0], expected_xx),
+            (x.n_zz[0], expected_zz),
+            (y.n_yy[0], expected_xx),
+            (y.n_zz[0], expected_zz),
+        ] {
+            assert!(
+                (actual - expected).abs() < 1e-13,
+                "periodic self coefficient: got {actual:.16e}, expected {expected:.16e}"
+            );
+        }
+
+        assert_eq!(x.n_xx[1], x.n_xx[499]);
+        assert_eq!(x.n_xy[501], -x.n_xy[999]);
+        assert_eq!(x.n_xy[750], 0.0);
+        assert_eq!(y.n_yy[4], y.n_yy[1996]);
+        assert_eq!(y.n_xy[5], -y.n_xy[1997]);
+    }
 
     fn cached(parameters: Parameters) -> crate::newell::NewellKernels {
         let ([nx, ny, nz], [dx, dy, dz], periodic, images) = parameters;

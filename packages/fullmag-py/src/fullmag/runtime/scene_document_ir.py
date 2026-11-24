@@ -20,8 +20,11 @@ from fullmag.model.selection import SelectionDefinition
 from fullmag.runtime.fem_demag_accuracy import validate_fem_demag_accuracy_contract
 from fullmag.runtime.loader import LoadedProblem, load_problem_from_script
 from fullmag.runtime.run_config_export import RunConfigExportOptions, export_run_config
-from fullmag.runtime.scene_document import validate_fem_domain_mesh_reference
-from fullmag.runtime.script_builder import render_scene_document_as_script
+from fullmag.runtime.execution_intent import validate_execution_intent_fields
+from fullmag.runtime.scene_document import build_builder_from_scene_document, validate_fem_domain_mesh_reference
+from fullmag.runtime.script_builder import (
+    _enabled_scene_stages, _scene_antenna_stage_sequence, render_scene_document_as_script,
+)
 
 _SCENE_DOCUMENT_FIELDS = frozenset(
     {
@@ -64,6 +67,8 @@ _STUDY_FIELDS = frozenset(
         "requested_precision",
         "requested_mode",
         "requested_cpu_threads",
+        "interactive_session_requested",
+        "wait_for_solve",
         "parallel_execution",
         "pbc",
         "execution_profile",
@@ -132,6 +137,7 @@ def _capture_scene_document(
     source_root: str | Path | None,
     include_authored_stages: bool,
     include_legacy_relax_stages: bool,
+    source_preparation_assets=None,
 ) -> Iterator[_SceneDocumentCapture]:
     """Render and capture one scene while its private source file is alive."""
 
@@ -139,6 +145,16 @@ def _capture_scene_document(
         raise TypeError("SceneDocument must be a JSON object")
     scene = copy.deepcopy(dict(scene_document))
     _reject_unlowered_scene_fields(scene)
+    if source_preparation_assets:
+        from fullmag.runtime.script_builder import _source_preparation_from_capture
+        roots = {_source_preparation_from_capture({"asset_id": key, "content_sha256": record["sha256"]}, source_preparation_assets)[1]
+                 for key, record in source_preparation_assets.items()}
+        if len(roots) != 1:
+            raise ValueError("source preparation scene capture requires one immutable input closure")
+        captured_root = next(iter(roots))
+        if source_root is not None and Path(source_root).resolve() != captured_root.resolve():
+            raise ValueError("source preparation scene capture root differs from immutable input closure")
+        source_root = captured_root
     stable_source_root = (
         Path(source_root).resolve() if source_root is not None else Path.cwd().resolve()
     )
@@ -204,8 +220,10 @@ def _capture_scene_document(
     if study_pipeline is not None and not isinstance(study_pipeline, Mapping):
         raise ValueError("SceneDocument.study.study_pipeline must be an object")
 
-    def attach_scene_semantics(problem):
+    def attach_scene_semantics(problem, execution_intent=None):
         runtime_metadata = dict(problem.runtime_metadata)
+        execution_intent = execution_intent or {}
+        runtime_metadata.update(execution_intent)
         if accuracy_contract is None:
             runtime_metadata.pop("fem_demag_accuracy_contract", None)
         else:
@@ -218,7 +236,9 @@ def _capture_scene_document(
             pipeline = copy.deepcopy(dict(study_pipeline))
             runtime_metadata["study_pipeline"] = pipeline
             if (
-                runtime_metadata.get("interactive_session_requested") is True
+                "wait_for_solve" not in study
+                and "wait_for_solve" not in execution_intent
+                and runtime_metadata.get("interactive_session_requested") is True
                 and _has_enabled_study_pipeline_node(pipeline.get("nodes"))
             ):
                 runtime_metadata["wait_for_solve"] = True
@@ -234,21 +254,41 @@ def _capture_scene_document(
         include_authored_stages=include_authored_stages,
         include_legacy_relax_stages=include_legacy_relax_stages,
         _source_root=stable_source_root,
+        source_preparation_assets=source_preparation_assets,
     )
     with tempfile.TemporaryDirectory(prefix="fullmag-scene-problem-ir-") as temporary:
         script_path = Path(temporary) / "scene_document.py"
         script_path.write_text(script_source, encoding="utf-8")
-        loaded = load_problem_from_script(script_path, lightweight_assets=True)
+        if source_preparation_assets:
+            script_path = captured_root / "scene_document.py"
+            loaded = load_problem_from_script(script_path, lightweight_assets=True, source_bytes=script_source.encode("utf-8"))
+        else:
+            loaded = load_problem_from_script(script_path, lightweight_assets=True)
+        builder = build_builder_from_scene_document(scene)
+        if include_authored_stages:
+            authored_stages = _enabled_scene_stages(_scene_antenna_stage_sequence(builder))
+        elif include_legacy_relax_stages:
+            authored_stages = [stage for stage in builder.get("stages") or []
+                               if isinstance(stage, Mapping) and str(stage.get("kind") or "relax") == "relax"]
+        else:
+            authored_stages = []
+        if len(authored_stages) != len(loaded.stages):
+            raise ValueError("SceneDocument execution intent requires exact ordered stage snapshots")
+        active_execution_intent = validate_execution_intent_fields(study, context="SceneDocument.study")
+        stage_intents = {}
+        for stage, authored in zip(loaded.stages, authored_stages):
+            active_execution_intent.update(validate_execution_intent_fields(authored, context="SceneDocument stage"))
+            stage_intents[id(stage.problem)] = dict(active_execution_intent)
         loaded = replace(
             loaded,
-            problem=attach_scene_semantics(loaded.problem),
+            problem=attach_scene_semantics(loaded.problem, stage_intents.get(id(loaded.problem))),
             workspace_problem=(
                 attach_scene_semantics(loaded.workspace_problem)
                 if loaded.workspace_problem is not None
                 else None
             ),
             stages=tuple(
-                replace(stage, problem=attach_scene_semantics(stage.problem))
+                replace(stage, problem=attach_scene_semantics(stage.problem, stage_intents[id(stage.problem)]))
                 for stage in loaded.stages
             ),
         )
@@ -324,6 +364,7 @@ def scene_document_to_problem_ir(
     requested_precision: str,
     requested_mode: str,
     source_root: str | Path | None = None,
+    source_preparation_assets=None,
 ) -> dict[str, object]:
     """Return the canonical, geometry-light ProblemIR for a SceneDocument.
 
@@ -341,6 +382,7 @@ def scene_document_to_problem_ir(
         source_root=source_root,
         include_authored_stages=False,
         include_legacy_relax_stages=True,
+        source_preparation_assets=source_preparation_assets,
     ) as capture:
         problem_ir = _scene_capture_to_ir(capture, include_geometry_assets=False)
         if capture.loaded.stages:
@@ -384,6 +426,7 @@ def scene_document_to_execution_config(
     source_root: str | Path | None = None,
     materialize_geometry_assets: bool = False,
     _accepted_preparation: dict[str, object] | None = None,
+    source_preparation_assets=None,
 ) -> dict[str, object]:
     """Capture stages without solving; geometry realization is execution-only opt-in.
 
@@ -414,6 +457,7 @@ def scene_document_to_execution_config(
         source_root=source_root,
         include_authored_stages=not scene_pipeline_owns_stage_expansion,
         include_legacy_relax_stages=not scene_pipeline_owns_stage_expansion,
+        source_preparation_assets=source_preparation_assets,
     ) as capture:
         study_pipeline = _scene_capture_study_pipeline(capture)
         run_capture = capture

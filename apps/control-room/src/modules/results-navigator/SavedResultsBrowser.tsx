@@ -3,6 +3,7 @@
 import { useState } from "react";
 
 import type { ModuleProps } from "@/kernel/types";
+import { useSavedRunSelection } from "@/kernel/saved-results/useSavedRun";
 import { useProjectDocumentSnapshot } from "@/kernel/persistence/ProjectDocumentStatus";
 import {
   useProjectRunResource,
@@ -39,6 +40,9 @@ export function SavedResultsBrowser({
   moduleId,
 }: SavedResultsBrowserProps) {
   const project = useProjectDocumentSnapshot();
+  const savedRun = useSavedRunSelection();
+  if (savedRun) return <SavedRunResults key={`${savedRun.projectId}:${savedRun.runId}`}
+    kernel={kernel} moduleId={moduleId} projectId={savedRun.projectId} runId={savedRun.runId} />;
 
   if (project.state !== "ready") {
     return (

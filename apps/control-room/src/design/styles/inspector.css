@@ -596,6 +596,14 @@ button.fm-inspector__breadcrumb:hover {
   background: var(--fm-field-bg);
 }
 
+@container (max-width: 24rem) {
+  .fm-inspector__mode-tabs:has(> :nth-child(4):last-child) {
+    grid-auto-flow: row;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    height: auto;
+  }
+}
+
 .fm-inspector__mode-tab {
   display: inline-flex;
   align-items: center;
@@ -2395,6 +2403,7 @@ button.fm-inspector__commit-status--error {
   display: grid;
   grid-template-columns: repeat(var(--fm-inspector-tab-count, 4), minmax(0, 1fr));
   width: 100%;
+  height: auto;
   min-height: var(--fm-control-height-regular);
   padding: var(--fm-space-1);
   border: 1px solid var(--fm-border-subtle);
@@ -2408,6 +2417,12 @@ button.fm-inspector__commit-status--error {
 
 .fm-inspector__tab-list:has(> :nth-child(2):last-child) {
   --fm-inspector-tab-count: 2;
+}
+
+@container (max-width: 24rem) {
+  .fm-inspector__tab-list:has(> :nth-child(3)) {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
 }
 
 .fm-inspector__tab-list .fm-tabs-trigger {
@@ -2788,6 +2803,12 @@ button.fm-inspector__commit-status--error {
 .fm-inspector [data-slot="inspector-property-label"] {
   overflow-wrap: break-word;
   word-break: normal;
+}
+
+/* A multiline description must contribute to the shared header height. */
+.fm-inspector :is([data-slot="inspector-group-header"], [data-slot="inspector-group-trigger"]):has([data-slot="inspector-group-heading"] > p) {
+  height: auto;
+  min-height: var(--fm-control-height-sm);
 }
 
 .fm-inspector [data-slot="inspector-group-heading"] h3 {

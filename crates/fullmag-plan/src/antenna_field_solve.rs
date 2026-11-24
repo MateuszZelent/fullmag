@@ -133,7 +133,7 @@ fn require_tetrahedral_field_sampling_mesh(
     Ok(())
 }
 
-fn resolve_field_sampling(
+pub(crate) fn resolve_field_sampling(
     problem: &ProblemIR,
     target: &FieldTargetIR,
 ) -> Result<AntennaFieldSamplingPlanIR, PlanError> {
@@ -274,6 +274,12 @@ pub(crate) fn plan_standalone_antenna(
         // Selection is part of the canonical, content-owned input. Do not
         // substitute authored activation metadata when it is malformed.
         problem.validate().map_err(|reasons| PlanError { reasons })?;
+        if problem.antenna_field_solve_stages.iter().any(|stage|
+            stage.id == selection.stage_id && stage.retained_current_source.is_some()) {
+            return crate::plan_antenna_field_only_carrier(
+                problem, &selection.stage_id, &selection.port_mode_id,
+            );
+        }
         if matches!(plan_antenna_field_solve_execution(
             problem, &selection.stage_id, &selection.port_mode_id,
         )?, AntennaFieldSolveExecutionPlan::ClosedLoopInspection { .. }) {
@@ -330,6 +336,14 @@ pub fn plan_antenna_field_solve_execution(
                 "antenna field-solve stage '{stage_id}' does not exist"
             ))
         })?;
+    if stage.retained_source_preparation.is_some() || problem.current_modules.iter().any(|module| matches!(module,
+        CurrentModuleIR::CurrentTransport { definition: Some(definition), .. } if matches!(
+            &definition.conservative_current_source, Some(fullmag_ir::ConservativeCurrentSourceIR::RetainedPreparationAsset(_))))) {
+        return Err(fail("retained preparation assets cannot execute fresh transport or external-lead materialization"));
+    }
+    if stage.retained_current_source.is_some() {
+        return Err(fail("retained-current H-only requires its typed accepted operation; fresh charge transport is forbidden"));
+    }
     if !stage.port_mode_ids.iter().any(|id| id == port_mode_id) {
         return Err(fail(format!(
             "antenna field-solve stage '{stage_id}' does not include port mode '{port_mode_id}'"

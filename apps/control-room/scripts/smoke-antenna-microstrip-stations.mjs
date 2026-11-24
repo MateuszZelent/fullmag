@@ -523,10 +523,10 @@ try {
     assert.deepEqual((await read()).unexpected, []);
     checks.push({ name: `${layout} Conductor explicitly reports ${charge === "none" ? "missing current module" : "missing charge materials"} without conductivity fallback`, passed: true });
   }
-  if (layout === "microstrip") {
+  {
     const circuitUrl = new URL(layoutUrl); circuitUrl.searchParams.set("inspector", "geometry");
     await page.goto(circuitUrl.href, { waitUntil: "domcontentloaded", timeout }); await ready();
-    await page.evaluate(() => { window.__circuitCreation = window.__antennaStationsFixture.createAntenna("microstrip"); });
+    await page.evaluate(value => { window.__circuitCreation = window.__antennaStationsFixture.createAntenna(value); }, layout);
     await page.waitForFunction(() => window.__antennaStationsFixture.read().pendingWrites === 1, undefined, { timeout });
     await page.evaluate(() => window.__antennaStationsFixture.releaseWrite());
     await page.evaluate(() => window.__circuitCreation); await ready();
@@ -538,17 +538,38 @@ try {
     const save = () => circuitPanel.getByRole("button", { name: "Save conductor authoring", exact: true }).evaluate(button => button.click());
     await circuitPanel.getByRole("checkbox", { name: "Full 3D conducting circuit", exact: true }).check();
     for (const end of ["inlet", "outlet"]) {
-      for (const [suffix, value] of [["length", "2e-7"], ["width", "1e-7"], ["center v", "0"], ["part ID", ` ${end}-bridge `], ["conductivity", "3e7"]]) {
-        await field(`${end} bridge ${suffix}`).fill(value);
-      }
+      const fields = layout === "cpw"
+        ? [[`${end} connection length`, "2e-7"], [`${end} crossbar length`, "5e-8"], [`${end} connection part ID`, ` ${end}-bridge `], [`${end} connection conductivity`, "3e7"]]
+        : [[`${end} bridge length`, "2e-7"], [`${end} bridge width`, "1e-7"], [`${end} bridge center v`, "0"], [`${end} bridge part ID`, ` ${end}-bridge `], [`${end} bridge conductivity`, "3e7"]];
+      for (const [name, value] of fields) await field(name).fill(value);
     }
+    if (layout === "cpw") await field("Inlet source-cut local x offset").fill("-1e-7");
     await field("Inlet source-cut potential jump").fill("0");
     const beforeCircuit = await read(); await save();
     await circuitPanel.getByRole("alert").filter({ hasText: "must be non-zero" }).waitFor({ timeout });
     assert.equal((await read()).calls.filter(call => call.method === "POST").length, beforeCircuit.calls.filter(call => call.method === "POST").length);
     checks.push({ name: "Full circuit rejects zero source voltage before dispatching any transaction", passed: true });
     await field("Inlet source-cut potential jump").fill("0.25");
-    await field("Inlet source-cut potential jump").evaluate(input => { window.__circuitRetainedInput = input; window.__circuitRetainedRoot = input.closest('[data-inspector-owner]'); });
+    await field("Inlet source-cut potential jump").evaluate(input => {
+      const root = input.closest('[data-inspector-owner]'), scroll = document.querySelector('[data-testid="antenna-stations-scroll"]');
+      input.focus({ preventScroll: true });
+      window.__circuitRetainedInput = input; window.__circuitRetainedRoot = root;
+      const controls = [...root.querySelectorAll('input:not([type="checkbox"]),select'), ...[...root.querySelectorAll("button")].filter(button => button.textContent === "Add station" || button.textContent?.startsWith("Remove station"))];
+      const proof = { scrollTop: scroll.scrollTop, rootChanges: 0, identityChanges: 0, disabledChanges: 0, opacityChanges: 0, opacityAnimations: 0, maxScrollDelta: 0 };
+      const baseline = controls.map(element => ({ element, disabled: element.disabled, opacity: getComputedStyle(element).opacity }));
+      const sample = () => {
+        if (document.querySelector('[data-inspector-owner="object.antenna.geometry"]') !== root) proof.rootChanges++;
+        for (const value of baseline) {
+          if (!value.element.isConnected) proof.identityChanges++;
+          if (value.element.disabled !== value.disabled) proof.disabledChanges++;
+          if (getComputedStyle(value.element).opacity !== value.opacity) proof.opacityChanges++;
+        }
+        proof.maxScrollDelta = Math.max(proof.maxScrollDelta, Math.abs(scroll.scrollTop - proof.scrollTop));
+        proof.opacityAnimations += root.getAnimations({ subtree: true }).filter(animation => (animation.playState === "running" || animation.pending) && animation.effect?.getKeyframes().some(frame => "opacity" in frame)).length;
+      };
+      const observer = new MutationObserver(sample); observer.observe(root, { childList: true, subtree: true, attributes: true });
+      window.__circuitPendingStability = { proof, sample, observer }; sample();
+    });
     await save();
     await page.waitForFunction(() => window.__antennaStationsFixture.read().pendingWrites === 1, undefined, { timeout });
     const submitted = (await read()).calls.filter(call => call.method === "POST").at(-1).body;
@@ -561,7 +582,9 @@ try {
     assert.deepEqual(patchedOwner.geometry.geometry_params.stations, owner.geometry.geometry_params.stations);
     assert.equal(patchedOwner.geometry.geometry_params.loop.enabled, true);
     assert.equal(current.gauge, "zero_mean"); assert.deepEqual(current.boundaries, []);
-    assert.equal(current.materials.length, 4); assert.equal(cut.drive.potential_jump_V, 0.25);
+    assert.equal(current.materials.length, layout === "cpw" ? 5 : 4);
+    assert.equal(port.branches.length, layout === "cpw" ? 3 : 2);
+    assert.equal(cut.plane.axis, layout === "cpw" ? "x" : "z"); assert.equal(cut.drive.potential_jump_V, 0.25);
     assert.equal(cut.region.region_id, "inlet-bridge"); assert.equal(port.schema_version, "antenna_port_mode.v3");
     assert.equal(port.normalization.source_cut_ref, cut.source_cut_id);
     assert.deepEqual(patch.objects.find(object => object.id !== ownerId), originalScene.objects[0]);
@@ -573,6 +596,15 @@ try {
     assert.equal(await page.evaluate(() => window.__circuitRetainedInput.isConnected && window.__circuitRetainedRoot === document.querySelector('[data-inspector-owner="object.antenna.geometry"]')), true);
     assert.equal(await circuitPanel.getByRole("checkbox", { name: "Full 3D conducting circuit", exact: true }).isDisabled(), true);
     assert.ok(!(await circuitPanel.innerText()).includes("Conductor geometry changed on the server"));
+    const stability = await page.evaluate(() => {
+      const { proof, sample, observer } = window.__circuitPendingStability; sample(); observer.disconnect();
+      return { ...proof, focus: document.activeElement === window.__circuitRetainedInput };
+    });
+    for (const key of ["rootChanges", "identityChanges", "disabledChanges", "opacityChanges", "opacityAnimations", "maxScrollDelta"]) assert.equal(stability[key], 0, `${layout} circuit changed ${key} through pending/ACK`);
+    assert.equal(stability.focus, true);
+    const circuitAck = await read();
+    assert.ok(circuitAck.calls.length - beforeCircuit.calls.length <= 6); assert.ok(circuitAck.renderCommits - beforeCircuit.renderCommits <= 30);
+    checks.push({ name: `${layout}: circuit pending/ACK preserves root, controls, focus, scroll and opacity with bounded requests/renders`, passed: true, evidence: stability });
     await screenshot("20-circuit-ack-newer-voltage");
     checks.push({ name: "Canonical creator to Geometry authors bridges, materials, voltage cut and port normalization atomically; ACK retains newer voltage and panel identity", passed: true });
     await save(); await page.waitForFunction(() => window.__antennaStationsFixture.read().pendingWrites === 1, undefined, { timeout });
@@ -592,7 +624,7 @@ try {
         inputs: groups.flatMap(group => [...group.querySelectorAll("input")]).length,
         clippedLabels: groups.flatMap(group => [...group.querySelectorAll("label")]).filter(label => label.scrollWidth > label.clientWidth + 1).length };
     });
-    assert.deepEqual(narrow, { groups: 3, overflow: 0, inputs: 11, clippedLabels: 0 });
+    assert.deepEqual(narrow, { groups: 3, overflow: 0, inputs: layout === "cpw" ? 10 : 12, clippedLabels: 0 });
     await circuitPanel.getByRole("group", { name: "Voltage source", exact: true }).scrollIntoViewIfNeeded();
     await screenshot("23-circuit-narrow-groups");
     checks.push({ name: "320 px circuit Inspector separates voltage source, inlet and outlet with accessible groups and no horizontal overflow", passed: true });
@@ -609,6 +641,65 @@ try {
     await circuitPanel.getByRole("alert").filter({ hasText: "Circuit ACK omitted or changed the submitted source-cut port" }).scrollIntoViewIfNeeded();
     await screenshot("22-circuit-rejected-partial-ack");
     checks.push({ name: "Partial circuit ACK without port normalization is refused before success/cache publication and preserves newer voltage and panel", passed: true });
+  }
+  {
+    const guardedUrl = new URL(layoutUrl);
+    for (const key of ["inspector", "placement", "history"]) guardedUrl.searchParams.set(key, key === "inspector" ? "geometry" : "1");
+    await page.goto(guardedUrl.href, { waitUntil: "domcontentloaded", timeout }); await ready();
+    const panel = page.locator('[data-inspector-owner="object.antenna.geometry"]');
+    const length = panel.getByRole("textbox", { name: "Conductor length", exact: true });
+    await length.fill("0");
+    await page.waitForFunction(() => window.__antennaStationsFixture.read().editSession?.dirty === true, undefined, { timeout });
+    assert.equal((await read()).editSession.valid, false);
+    assert.equal(await panel.getByRole("button", { name: "Save conductor authoring", exact: true }).isDisabled(), true);
+    await length.fill("2e-6");
+    await panel.getByRole("combobox", { name: "Placement target", exact: true }).selectOption("placement-target");
+    await page.waitForFunction(() => window.__antennaStationsFixture.read().editSession?.reason?.includes("each edited form"), undefined, { timeout });
+    const posts = (await read()).calls.filter(call => call.method === "POST").length;
+    await page.evaluate(() => window.__antennaStationsFixture.clearSelection());
+    const dialog = page.getByRole("dialog", { name: "Unapplied Inspector changes" });
+    await dialog.waitFor({ timeout });
+    assert.equal(await dialog.getByRole("button", { name: "Apply and continue", exact: true }).isDisabled(), true);
+    assert.equal((await read()).calls.filter(call => call.method === "POST").length, posts);
+    await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
+    assert.equal(await length.inputValue(), "2e-6");
+    assert.equal(await panel.getByRole("combobox", { name: "Placement target", exact: true }).inputValue(), "placement-target");
+    await panel.getByRole("button", { name: "Revert placement", exact: true }).click();
+    await page.waitForFunction(() => window.__antennaStationsFixture.read().editSession?.valid === true, undefined, { timeout });
+    await page.evaluate(() => window.__antennaStationsFixture.clearSelection());
+    await dialog.waitFor({ timeout });
+    await dialog.getByRole("button", { name: "Apply and continue", exact: true }).click();
+    await page.waitForFunction(() => window.__antennaStationsFixture.read().pendingWrites === 1, undefined, { timeout });
+    await length.fill("3e-6");
+    await page.evaluate(() => window.__antennaStationsFixture.releaseWrite());
+    await page.waitForFunction(() => window.__antennaStationsFixture.read().editSession?.applying === false
+      && window.__antennaStationsFixture.read().historyRecords === 1, undefined, { timeout });
+    await dialog.getByRole("alert").filter({ hasText: "still has unapplied changes" }).waitFor({ timeout });
+    assert.equal(await length.inputValue(), "3e-6");
+    assert.equal((await read()).scene.objects[0].geometry.geometry_params.length_m, 2e-6);
+    assert.equal((await read()).editSession.dirty, true);
+    assert.equal((await page.evaluate(() => window.__antennaStationsFixture.readSelection())).objectId, "fixture-microstrip-conductor");
+    await screenshot(`26-${layout}-guard-retains-newer-draft`);
+    await dialog.getByRole("button", { name: "Discard", exact: true }).click();
+    await dialog.waitFor({ state: "hidden", timeout });
+    assert.equal((await page.evaluate(() => window.__antennaStationsFixture.readSelection())).kind, null);
+    assert.equal((await read()).historyRecords, 1);
+    assert.equal((await read()).calls.filter(call => call.method === "POST").length, posts + 1);
+    checks.push({ name: `${layout}: geometry and placement have one aggregate guard; invalid/multiple drafts block Apply, Cancel preserves both, ACK records one history entry and newer edits block navigation`, passed: true });
+
+    await page.goto(guardedUrl.href, { waitUntil: "domcontentloaded", timeout }); await ready();
+    await length.fill("2e-6");
+    await panel.getByRole("button", { name: "Save conductor authoring", exact: true }).click();
+    await page.waitForFunction(() => window.__antennaStationsFixture.read().pendingWrites === 1, undefined, { timeout });
+    await page.evaluate(() => { window.__antennaStationsFixture.clearHistory(); window.__antennaStationsFixture.releaseWrite(); });
+    await page.waitForFunction(() => window.__antennaStationsFixture.read().editSession?.applying === false, undefined, { timeout });
+    assert.equal((await read()).historyRecords, 0);
+    assert.equal((await read()).editSession.dirty, true);
+    assert.equal(await length.inputValue(), "2e-6");
+    assert.ok(!(await panel.innerText()).includes("Conductor authoring committed."));
+    assert.equal(await page.getByTestId("antenna-stations-editor").getAttribute("data-scene-revision"), "1");
+    assert.deepEqual((await read()).unexpected, []);
+    checks.push({ name: `${layout}: history-generation change rejects a late ACK before cache publication, history or draft reset`, passed: true });
   }
   if (layout === "microstrip") {
     const studyUrl = new URL(layoutUrl); studyUrl.searchParams.set("inspector", "geometry"); studyUrl.searchParams.set("study", "1");

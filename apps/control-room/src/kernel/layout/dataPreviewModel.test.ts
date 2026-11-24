@@ -67,6 +67,34 @@ describe("dataPreviewModel", () => {
     ]);
   });
 
+  it.each<[number, number, number[]]>([
+    [4, 2, [1, 2]],
+    [5, 2, [1, 2]],
+    [4, 3, [0, 1, 2]],
+    [5, 3, [1, 2, 3]],
+  ])("preserves center ordering for %i points and %i samples", (points, samples, expected) => {
+    const values = Array.from({ length: points }, (_, index) => index + 1);
+    const rows = buildDataPreviewRows(fieldVector(values, 1), samples);
+
+    expect(rows.map((row) => row.sourceIndex)).toEqual(expected);
+    expect(rows.map((row) => row.values)).toEqual(expected.map((index) => [String(index + 1)]));
+  });
+
+  it("expands through zeros and retains all nine tensor components", () => {
+    const values = new Array<number>(45).fill(0);
+    for (let component = 0; component < 9; component += 1) values[component] = component + 1;
+    values[44] = -9;
+    const tensor = fieldVector(values, 9);
+    const rows = buildDataPreviewRows(tensor, 2);
+
+    expect(rows).toEqual([
+      { index: 0, sourceIndex: 0, values: ["1", "2", "3", "4", "5", "6", "7", "8", "9"] },
+      { index: 1, sourceIndex: 4, values: ["0", "0", "0", "0", "0", "0", "0", "0", "-9"] },
+    ]);
+    expect(buildDataPreviewSignature(tensor, 2)).toMatch(/^2x9:/);
+    expect(buildDataPreviewRows(fieldVector(new Array<number>(45).fill(0), 9), 2)).toEqual([]);
+  });
+
   it("builds a short signature from the visible sample values", () => {
     expect(
       buildDataPreviewSignature(

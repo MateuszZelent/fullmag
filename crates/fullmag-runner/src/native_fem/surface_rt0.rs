@@ -34,26 +34,7 @@ impl SurfaceSnapshotBuffer {
         Ok(Self { header, h, evidence, policy: policy.clone(), policy_version })
     }
     pub fn options(&self) -> ffi::fullmag_fem_surface_rt0_options_v1 {
-        let l = &self.policy.limits; let t = &self.policy.tolerances;
-        ffi::fullmag_fem_surface_rt0_options_v1 {
-            work_limits: ffi::fullmag_fem_surface_rt0_work_limits_v1 {
-                total: l.total, per_target: l.per_target,
-                maximum_raw_integer_bits: l.maximum_raw_integer_bits,
-                maximum_reduced_fraction_bits: l.maximum_reduced_fraction_bits,
-                maximum_lifetime_peak_rss_bytes: l.maximum_lifetime_peak_rss_bytes,
-                guard_interval_events: l.guard_interval_events,
-                maximum_total_seconds: l.maximum_total_seconds, maximum_target_seconds: l.maximum_target_seconds,
-            },
-            tolerances: ffi::fullmag_fem_surface_rt0_tolerances_v1 {
-                absolute_field_apm:t.absolute_field_apm, relative_field:t.relative_field,
-                cancellation_floor_apm:t.cancellation_floor_apm, scalar_relative_80:t.scalar_relative_80,
-                scalar_relative_120:t.scalar_relative_120, angle_relative_80:t.angle_relative_80,
-                angle_relative_120:t.angle_relative_120, binary_scalar_epsilon_factor:t.binary_scalar_epsilon_factor,
-                binary_roundoff_epsilon_factor:t.binary_roundoff_epsilon_factor,
-                binary_cancellation_limit:t.binary_cancellation_limit,
-                highprecision_cancellation_limit:t.highprecision_cancellation_limit,
-            }, policy_version:self.policy_version.as_ptr(),
-        }
+        policy_options(&self.policy, &self.policy_version)
     }
     pub fn finish(self, points: &[[f64;3]], source: &PreparedClosedLoopAcceptedSnapshot,
         view_digest: &str) -> Result<(NativeFemOerstedField, SurfaceRt0Snapshot), RunError> {
@@ -67,41 +48,77 @@ impl SurfaceSnapshotBuffer {
             || h.evidence_json_len == 0 || h.evidence_json_len > self.evidence.len() as u64 {
             return Err(bad("native output header or buffer"));
         }
-        let snapshot = SurfaceRt0Snapshot::from_native_json(&self.evidence[..h.evidence_json_len as usize])?;
-        let expected_policy = serde_json::to_value(&self.policy).map_err(|_| bad("policy encoding"))?;
-        if snapshot.operator_version != OPERATOR_VERSION
-            || snapshot.policy_binding() != expected_policy
-            || snapshot.source_view_identity_digest != view_digest
-            || snapshot.accepted_source_state_digest != source.accepted_source_state_digest
-            || snapshot.targets_xyz_m.len() != points.len()
-            || !snapshot.targets_xyz_m.iter().flatten().zip(points.iter().flatten()).all(|(a,b)|a.to_bits()==b.to_bits())
-            || !snapshot.targets.iter().flat_map(|t|t.h_xyz_apm).zip(&self.h).all(|(a,b)|a.to_bits()==b.to_bits()) {
-            return Err(bad("policy, accepted source, ordered targets or raw H binding"));
-        }
-        let source_count = source.source.cells.len() as u64;
-        let expected_pairs = source_count.checked_mul(points.len() as u64).ok_or_else(|| bad("pair count overflow"))?;
-        if source_count == 0 || snapshot.work_report.total[0] != expected_pairs
-            || snapshot.targets.iter().any(|target| target.work[0] != source_count) {
-            return Err(bad("accepted source pair counts"));
-        }
-        let diagnostics = serde_json::json!({
-            "schema_version": snapshot.schema_version,
-            "operator_version": snapshot.operator_version,
-            "status": "inspection_only",
-            "source_target_pairs": expected_pairs,
-            "target_count": points.len(),
-            "elapsed_seconds": snapshot.work_report.elapsed_seconds,
-            "last_sampled_lifetime_peak_rss_bytes": snapshot.work_report.last_sampled_lifetime_peak_rss_bytes,
-            "inspection_only": true,
-            "error_certificate_available": false,
-        });
-        let field = NativeFemOerstedField {
-            field:self.h, operator_version:snapshot.operator_version.clone(),
-            source_view_identity_digest:snapshot.source_view_identity_digest.clone(),
-            source_target_pairs:Some(snapshot.work_report.total[0]), refined_pairs:None,
-            unconverged_pair_count:None, maximum_pair_error_apm:None,
-            diagnostics, quadrature_snapshot:None,
-        };
-        Ok((field,snapshot))
+        finish_surface_output(self.h, &self.evidence[..h.evidence_json_len as usize], points,
+            source.source.cells.len() as u64, &self.policy, view_digest,
+            &source.accepted_source_state_digest)
     }
+}
+
+
+pub(super) fn policy_options(policy: &AntennaSurfaceFieldPolicyIR,
+    policy_version: &std::ffi::CStr) -> ffi::fullmag_fem_surface_rt0_options_v1 {
+    let l = &policy.limits; let t = &policy.tolerances;
+    ffi::fullmag_fem_surface_rt0_options_v1 {
+        work_limits: ffi::fullmag_fem_surface_rt0_work_limits_v1 {
+            total: l.total, per_target: l.per_target,
+            maximum_raw_integer_bits: l.maximum_raw_integer_bits,
+            maximum_reduced_fraction_bits: l.maximum_reduced_fraction_bits,
+            maximum_lifetime_peak_rss_bytes: l.maximum_lifetime_peak_rss_bytes,
+            guard_interval_events: l.guard_interval_events,
+            maximum_total_seconds: l.maximum_total_seconds, maximum_target_seconds: l.maximum_target_seconds,
+        },
+        tolerances: ffi::fullmag_fem_surface_rt0_tolerances_v1 {
+            absolute_field_apm:t.absolute_field_apm, relative_field:t.relative_field,
+            cancellation_floor_apm:t.cancellation_floor_apm, scalar_relative_80:t.scalar_relative_80,
+            scalar_relative_120:t.scalar_relative_120, angle_relative_80:t.angle_relative_80,
+            angle_relative_120:t.angle_relative_120, binary_scalar_epsilon_factor:t.binary_scalar_epsilon_factor,
+            binary_roundoff_epsilon_factor:t.binary_roundoff_epsilon_factor,
+            binary_cancellation_limit:t.binary_cancellation_limit,
+            highprecision_cancellation_limit:t.highprecision_cancellation_limit,
+        }, policy_version:policy_version.as_ptr(),
+    }
+}
+
+pub(super) fn finish_surface_output(raw_h: Vec<f64>, evidence: &[u8],
+    points: &[[f64; 3]], source_count: u64, policy: &AntennaSurfaceFieldPolicyIR,
+    view_digest: &str, accepted_source_digest: &str,
+) -> Result<(NativeFemOerstedField, SurfaceRt0Snapshot), RunError> {
+    if points.len().checked_mul(3) != Some(raw_h.len()) {
+        return Err(bad("H length differs from ordered target count"));
+    }
+    let snapshot = SurfaceRt0Snapshot::from_native_json(evidence)?;
+    let expected_policy = serde_json::to_value(policy).map_err(|_| bad("policy encoding"))?;
+    if snapshot.operator_version != OPERATOR_VERSION
+        || snapshot.policy_binding() != expected_policy
+        || snapshot.source_view_identity_digest != view_digest
+        || snapshot.accepted_source_state_digest != accepted_source_digest
+        || snapshot.targets_xyz_m.len() != points.len()
+        || !snapshot.targets_xyz_m.iter().flatten().zip(points.iter().flatten()).all(|(a,b)|a.to_bits()==b.to_bits())
+        || !snapshot.targets.iter().flat_map(|t|t.h_xyz_apm).zip(&raw_h).all(|(a,b)|a.to_bits()==b.to_bits()) {
+        return Err(bad("policy, accepted source, ordered targets or raw H binding"));
+    }
+    let expected_pairs = source_count.checked_mul(points.len() as u64).ok_or_else(|| bad("pair count overflow"))?;
+    if source_count == 0 || snapshot.work_report.total[0] != expected_pairs
+        || snapshot.targets.iter().any(|target| target.work[0] != source_count) {
+        return Err(bad("accepted source pair counts"));
+    }
+    let diagnostics = serde_json::json!({
+        "schema_version": snapshot.schema_version,
+        "operator_version": snapshot.operator_version,
+        "status": "inspection_only",
+        "source_target_pairs": expected_pairs,
+        "target_count": points.len(),
+        "elapsed_seconds": snapshot.work_report.elapsed_seconds,
+        "last_sampled_lifetime_peak_rss_bytes": snapshot.work_report.last_sampled_lifetime_peak_rss_bytes,
+        "inspection_only": true,
+        "error_certificate_available": false,
+    });
+    let field = NativeFemOerstedField {
+        field:raw_h, operator_version:snapshot.operator_version.clone(),
+        source_view_identity_digest:snapshot.source_view_identity_digest.clone(),
+        source_target_pairs:Some(snapshot.work_report.total[0]), refined_pairs:None,
+        unconverged_pair_count:None, maximum_pair_error_apm:None,
+        diagnostics, quadrature_snapshot:None,
+    };
+    Ok((field,snapshot))
 }

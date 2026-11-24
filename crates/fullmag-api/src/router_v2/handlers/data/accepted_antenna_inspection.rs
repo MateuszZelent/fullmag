@@ -48,6 +48,11 @@ pub(crate) enum AcceptedAntennaInspectionData {
         port_mode_id: String,
         output_id: String,
     },
+    RetainedCurrent {
+        loaded: fullmag_antenna_artifacts::retained_current::RetainedCurrentFieldBundleAny,
+        port_mode_id: String,
+        output_id: String,
+    },
 }
 
 fn invalid(message: impl Into<String>) -> ApiError {
@@ -165,6 +170,23 @@ fn with_accepted_antenna_publications<T>(
             .find(|step| step.step_id == lowered.step_id)
             .ok_or_else(|| invalid("antenna execution plan has no accepted Study step"))?;
         let (native_stage_id, codec_id, codec_version) = match &step.kind {
+            StudyStepKind::RetainedCurrentFieldInspection { stage_id, port_mode_id, output_id } => {
+                let inspection = match &plan.backend_plan {
+                    BackendPlanIR::AntennaRetainedCurrentFieldInspection(plan) => &plan.stage,
+                    BackendPlanIR::AntennaRetainedDirectFieldInspection(plan) => &plan.stage,
+        BackendPlanIR::AntennaRetainedPreparationFieldInspection(plan) => &plan.stage,
+                    _ => return Err(invalid("retained-current typed step has another execution plan")),
+                };
+                if inspection.id != *stage_id || inspection.port_mode_ids != [port_mode_id.clone()]
+                    || inspection.outputs.len() != 1 || inspection.outputs[0].id != *output_id {
+                    return Err(invalid("retained-current plan and typed step selectors differ"));
+                }
+                (stage_id.as_str(),
+                    fullmag_antenna_artifacts::retained_current::RETAINED_CURRENT_FIELD_CODEC_ID,
+                    if matches!(&plan.backend_plan, BackendPlanIR::AntennaRetainedDirectFieldInspection(_)) {
+                        fullmag_antenna_artifacts::retained_current::RETAINED_CURRENT_FIELD_CODEC_VERSION_V2
+                    } else { fullmag_antenna_artifacts::retained_current::RETAINED_CURRENT_FIELD_CODEC_VERSION })
+            },
             StudyStepKind::ClosedLoopInspection { stage_id, .. } => (
                 stage_id.as_str(),
                 fullmag_application::ANTENNA_INSPECTION_BUNDLE_CODEC_ID,
@@ -365,6 +387,23 @@ pub(crate) fn load_accepted_antenna_inspection(
                     "requested antenna publication is no longer current",
                 ));
             }
+            if output.codec_id == fullmag_antenna_artifacts::retained_current::RETAINED_CURRENT_FIELD_CODEC_ID {
+                let (evidence, loaded) = fullmag_runtime_control::load_saved_retained_current_field_inspection(
+                    store, project_id, run_id, &identity.task_id, &identity.attempt_id,
+                    identity.ownership_epoch, &identity.package_object_ref,
+                ).map_err(closed_inspection_error)?;
+                if evidence["artifact_id"].as_str() != Some(identity.artifact_id.as_str()) {
+                    return Err(invalid("retained-current artifact changed during accepted read"));
+                }
+                let StudyStepKind::RetainedCurrentFieldInspection { port_mode_id, output_id, .. } = &step.kind else {
+                    return Err(invalid("retained-current codec has no accepted typed operation"));
+                };
+                return Ok(LoadedAcceptedAntennaInspection {
+                    identity, loaded: AcceptedAntennaInspectionData::RetainedCurrent {
+                        loaded, port_mode_id: port_mode_id.clone(), output_id: output_id.clone(),
+                    },
+                });
+            }
             if output.codec_id == fullmag_application::ANTENNA_INSPECTION_BUNDLE_CODEC_ID {
                 let (evidence, loaded) = fullmag_runtime_control::load_saved_inspection(
                     store, project_id, run_id, &identity.task_id, &identity.attempt_id,
@@ -433,6 +472,8 @@ fn validate_output_codec(
         || output.data_kind != "artifact"
         || output.codec_id != codec_id
         || output.codec_version != codec_version
+        || (codec_id == fullmag_antenna_artifacts::retained_current::RETAINED_CURRENT_FIELD_CODEC_ID
+            && output.case_id != "default")
     {
         return Err(invalid(
             "accepted antenna output has an unsupported port/data-kind/codec tuple",
@@ -485,6 +526,8 @@ mod tests {
                 fullmag_application::STUDY_ANTENNA_INSPECTION_CODEC_VERSION),
             (fullmag_application::ANTENNA_INSPECTION_BUNDLE_CODEC_ID,
                 fullmag_application::ANTENNA_INSPECTION_BUNDLE_CODEC_VERSION),
+            (fullmag_antenna_artifacts::retained_current::RETAINED_CURRENT_FIELD_CODEC_ID,
+                fullmag_antenna_artifacts::retained_current::RETAINED_CURRENT_FIELD_CODEC_VERSION),
         ];
         for (codec_id, codec_version) in families {
             let output = fullmag_session::FmsStudyOutputManifestEntry {
@@ -499,6 +542,20 @@ mod tests {
             }
             assert!(validate_output_codec(&output, codec_id, "unknown-version").is_err());
         }
+    }
+
+    #[test]
+    fn retained_current_codec_requires_its_own_default_case() {
+        let codec = fullmag_antenna_artifacts::retained_current::RETAINED_CURRENT_FIELD_CODEC_ID;
+        let version = fullmag_antenna_artifacts::retained_current::RETAINED_CURRENT_FIELD_CODEC_VERSION;
+        let mut output = fullmag_session::FmsStudyOutputManifestEntry {
+            port_id: "inspection".into(), case_id: "default".into(), data_kind: "artifact".into(),
+            codec_id: codec.into(), codec_version: version.into(), artifact_id: "artifact".into(),
+            object_ref: "a".repeat(64), content_sha256: "a".repeat(64),
+        };
+        validate_output_codec(&output, codec, version).unwrap();
+        output.case_id = "foreign".into();
+        assert!(validate_output_codec(&output, codec, version).is_err());
     }
 
     #[test]

@@ -137,6 +137,21 @@ pub fn verify_antenna_closed_loop_inspection_bytes(
     content_digest: &str,
     max_bytes: usize,
 ) -> Result<(), RunError> {
+    validate_inspection_envelope(manifest_bytes, artifacts, stage_id, output_id,
+        port_mode_id, content_digest, max_bytes)?;
+    closed_loop_v2::verify(manifest_bytes, artifacts, true)
+}
+
+/// Shared framing, budget and immutable operation identity, before physical verification.
+pub(crate) fn validate_inspection_envelope(
+    manifest_bytes: &[u8],
+    artifacts: &[AuxiliaryArtifact],
+    stage_id: &str,
+    output_id: &str,
+    port_mode_id: &str,
+    content_digest: &str,
+    max_bytes: usize,
+) -> Result<Value, RunError> {
     if manifest_bytes.is_empty() || manifest_bytes.len() > super::ANTENNA_FIELD_MANIFEST_MAX_BYTES {
         return Err(closed_loop_v2::invalid("inspection manifest bound"));
     }
@@ -159,7 +174,7 @@ pub fn verify_antenna_closed_loop_inspection_bytes(
         || manifest["port_mode_id"] != port_mode_id || manifest["content_digest"] != content_digest {
         return Err(closed_loop_v2::invalid("inspection stage/output/port/digest mismatch"));
     }
-    closed_loop_v2::verify(manifest_bytes, artifacts, true)
+    Ok(manifest)
 }
 
 #[cfg(test)]

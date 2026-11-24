@@ -37,6 +37,98 @@ def fixture():
     return request,probe
 
 
+class GroupLedgerTests(unittest.TestCase):
+    def ledger_fixture(self,namespace='',legacy=False):
+        import docker_group_ledger as ledger
+        project='fullmag-worktree-test';image='sha256:'+'b'*64
+        volume=ledger._control_volume(project)
+        control=SimpleNamespace(project=project,volume=volume,namespace=namespace,
+                                subpath=lambda path:namespace+'/'+path if namespace else path)
+        subpath='' if legacy else control.subpath('private/ledger')
+        profile=ledger.profile('a'*64,project,
+            'fullmag-dev-group-ledger-v1-test' if legacy else volume,image,ledger_subpath=subpath)
+        document={'name':project,'services':{'backend':profile['backend']},
+                  'volumes':{ledger.COMPOSE_VOLUME:profile['compose_volume']}}
+        options={'NoCopy':True}
+        if subpath:options['Subpath']=subpath
+        actual={'Id':'c'*64,'Image':image,'Config':{'User':'65532:65532',
+            'Labels':{'com.docker.compose.project':project,'com.docker.compose.service':'backend'},
+            'Env':[key+'='+value for key,value in profile['environment'].items()]},
+            'HostConfig':{'Mounts':[{'Type':'volume','Source':profile['volume_name'],
+                'Target':'/host-ledger','VolumeOptions':options}]},
+            'Mounts':[{'Destination':'/host-ledger','Type':'volume','Name':profile['volume_name'],
+                       'Driver':'local','RW':True}]}
+        return control,document,actual,image
+
+    def test_current_namespaced_and_legacy_ledger_use_shared_attestation(self):
+        for namespace,legacy in [('',False),('namespaces/'+'d'*32,False),('',True)]:
+            with self.subTest(namespace=namespace,legacy=legacy):
+                control,document,actual,image=self.ledger_fixture(namespace,legacy)
+                with mock.patch.object(target,'docker_capture',return_value=SimpleNamespace(returncode=0,stdout=b'')) as call:
+                    result=target.validate_group_ledger(control,document,actual,image)
+                self.assertEqual(result['backend_verification'],'PASS')
+                self.assertEqual(call.call_args.args[:3],('exec',actual['Id'],'/bin/sh'))
+                if not legacy:self.assertEqual(result['ledger_subpath'],control.subpath('private/ledger'))
+
+    def test_wrong_group_subpath_options_access_and_namespace_fail_closed(self):
+        for case in ('group','volume','subpath','missing-options','nocopy','readonly','mount-readonly','namespace','profile'):
+            with self.subTest(case=case):
+                control,document,actual,image=self.ledger_fixture()
+                mount=actual['HostConfig']['Mounts'][0]
+                if case=='group':actual['Config']['Labels']['com.docker.compose.project']='foreign'
+                elif case=='volume':actual['Mounts'][0]['Name']='foreign'
+                elif case=='subpath':mount['VolumeOptions']['Subpath']='private/backend'
+                elif case=='missing-options':mount.pop('VolumeOptions')
+                elif case=='nocopy':mount['VolumeOptions']['NoCopy']=False
+                elif case=='readonly':mount['ReadOnly']=True
+                elif case=='mount-readonly':actual['Mounts'][0]['RW']=False
+                elif case=='namespace':
+                    control.namespace='namespaces/'+'e'*32
+                    control.subpath=lambda path:control.namespace+'/'+path
+                else:document['services']['backend']['volumes'][0]['volume']['nocopy']=False
+                with mock.patch.object(target,'docker_capture') as call:
+                    with self.assertRaises((BuildControlError,target.GroupLedgerError,target.GroupStorageError)):
+                        target.validate_group_ledger(control,document,actual,image)
+                call.assert_not_called()
+
+
+class OperatorRequestSourceTests(unittest.TestCase):
+    def test_control_request_uses_logical_key_and_bounded_read(self):
+        request,_=fixture();raw=canonical(request)+b'\n'
+        control=mock.Mock(path=target.BuildControl.path)
+        control.read_bytes.return_value=raw
+        args=SimpleNamespace(request=None,control_request_relative_path='verification/request.json',
+                             request_sha256=target.sha(raw))
+        self.assertEqual(target.read_operator_request(args,control),(raw,request))
+        control.read_bytes.assert_called_once_with('verification/request.json',maximum=256*1024)
+        args.request_sha256='0'*64
+        with self.assertRaises(BuildControlError):target.read_operator_request(args,control)
+        args.request_sha256=target.sha(b'x'*(256*1024+1))
+        control.read_bytes.return_value=b'x'*(256*1024+1)
+        with self.assertRaises(BuildControlError):target.read_operator_request(args,control)
+
+    def test_sources_are_exclusive_and_unsafe_keys_never_read(self):
+        for host,key in [(None,None),(Path('/request'),'verification/request.json'),
+                         (None,'/control/request.json'),(None,'../request'),
+                         (None,'a/../../request'),(None,'namespaces/'+'a'*32+'/request.json'),
+                         (None,'a\\request')]:
+            with self.subTest(host=host,key=key):
+                control=mock.Mock(path=target.BuildControl.path)
+                args=SimpleNamespace(request=host,control_request_relative_path=key,request_sha256='a'*64)
+                with self.assertRaises(BuildControlError):target.read_operator_request(args,control)
+                control.read_bytes.assert_not_called()
+
+    def test_host_request_remains_supported_and_shape_is_checked(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path=Path(folder)/'request.json';request,_=fixture();raw=canonical(request);path.write_bytes(raw)
+            args=SimpleNamespace(request=path,request_sha256=target.sha(raw))
+            control=mock.Mock()
+            self.assertEqual(target.read_operator_request(args,control),(raw,request))
+            control.read_bytes.assert_not_called()
+            request['extra']=True;raw=canonical(request);path.write_bytes(raw);args.request_sha256=target.sha(raw)
+            with self.assertRaises(BuildControlError):target.read_operator_request(args,control)
+
+
 class RequestTests(unittest.TestCase):
     def test_exact_request_is_accepted_without_mutation(self):
         request,probe=fixture();before=deepcopy(probe)
@@ -111,11 +203,52 @@ class ShellRouteTests(unittest.TestCase):
             self.assertEqual(result.returncode,0,result.stderr)
             self.assertEqual(json.loads(log.read_text())[-4:],
                              ['--reconcile-loader-failure','e'*32,'--failed-receipt-sha256','f'*64])
+            control_command=command.replace("--request '/tmp/request.json'", "--control-request-relative-path 'verification/request.json'")
+            result=subprocess.run(['bash',str(root/'scripts/just_storage_shell.sh'),control_command],env=env,capture_output=True,text=True)
+            self.assertEqual(result.returncode,0,result.stderr)
+            argv=json.loads(log.read_text())
+            self.assertEqual(argv[argv.index('--control-request-relative-path')+1],'verification/request.json')
+            for invalid in (control_command+" --request '/tmp/request.json'",control_command+' --unknown yes'):
+                result=subprocess.run(['bash',str(root/'scripts/just_storage_shell.sh'),invalid],env=env,capture_output=True,text=True)
+                self.assertEqual(result.returncode,2)
             log.unlink()
             result=subprocess.run(['bash',str(root/'scripts/just_storage_shell.sh'),command+'; true'],
                                   env=env,capture_output=True,text=True)
             self.assertEqual(result.returncode,2)
             self.assertFalse(log.exists())
+
+
+    def test_failed_supervisor_stop_accepts_only_the_authorized_preservation_profile(self):
+        root=Path(__file__).resolve().parent.parent
+        with tempfile.TemporaryDirectory() as folder:
+            folder=Path(folder);fake=folder/'python';log=folder/'argv.json'
+            fake.write_text('#!'+sys.executable+'\nimport json,pathlib,sys\n'
+                            'if "-c" in sys.argv:sys.exit(0)\n'
+                            'pathlib.Path('+repr(str(log))+').write_text(json.dumps(sys.argv[1:]))\n')
+            fake.chmod(0o755)
+            env=dict(os.environ,FULLMAG_STORAGE_PYTHON=str(fake))
+            command=(str(fake)+' "'+str(root/'scripts/docker_volume_stop_failed.py')+'" '
+                     "--source-root '/tmp/source; never-evaluate' --container-id '"+'a'*64+"' "
+                     "--image-id 'sha256:"+'b'*64+"' --process-receipt-sha256 '"+'c'*64+"'")
+            for suffix in ('', ' --preservation-profile retained-scientific-preservation.v2'):
+                result=subprocess.run(['bash',str(root/'scripts/just_storage_shell.sh'),command+suffix],
+                                      env=env,capture_output=True,text=True)
+                self.assertEqual(result.returncode,0,result.stderr)
+                argv=json.loads(log.read_text())
+                self.assertEqual(argv[0],str(root/'scripts/docker_volume_stop_failed.py'))
+                self.assertEqual(argv[argv.index('--source-root')+1],'/tmp/source; never-evaluate')
+                if suffix:self.assertEqual(argv[-2:],['--preservation-profile','retained-scientific-preservation.v2'])
+                else:self.assertNotIn('--preservation-profile',argv)
+                log.unlink()
+            for suffix in (' --preservation-profile unknown',
+                           ' --preservation-profile retained-scientific-preservationXv2',
+                           ' --preservation-profile retained-scientific-preservation.v2 --preservation-profile retained-scientific-preservation.v2',
+                           ' --preservation-profile retained-scientific-preservation.v2; true',
+                           ' --unknown yes'):
+                result=subprocess.run(['bash',str(root/'scripts/just_storage_shell.sh'),command+suffix],
+                                      env=env,capture_output=True,text=True)
+                self.assertEqual(result.returncode,2,result.stderr)
+                self.assertFalse(log.exists())
 
 
 class BinaryPinTests(unittest.TestCase):
@@ -194,6 +327,7 @@ class NamespacedApplyTests(unittest.TestCase):
                  mock.patch('docker_compose_identity.compose_project_identity',return_value={'source_root':str(folder)}),\
                  mock.patch('docker_compose_identity.validate_source_labels'),\
                  mock.patch('fullmag_storage.resolve_layout',return_value={}),\
+                 mock.patch('fullmag_storage.git',return_value='1'*40),\
                  mock.patch('docker_volume_dev._validate_retained_service'),\
                  mock.patch('docker_group_ledger.retained_profile',return_value={'volume_name':'control','ledger_subpath':'private/ledger'}),\
                  mock.patch('docker_group_ledger.validate_container') as ledger_attestation,\
@@ -201,10 +335,11 @@ class NamespacedApplyTests(unittest.TestCase):
                  mock.patch.object(target,'BuildControl',return_value=Control()),\
                  mock.patch.object(target,'docker_capture',side_effect=capture),\
                  mock.patch.object(target,'write_immutable'),\
+                 mock.patch.object(target,'validate_group_ledger') as group_ledger_attestation,\
                  mock.patch.object(target,'guest',side_effect=[before,before,result,after]) as call:
                 outcome=target.cancel(args)
             self.assertEqual(outcome['state'],'cancelled-no-spawn')
-            self.assertEqual(ledger_attestation.call_count, 3)
+            self.assertEqual(group_ledger_attestation.call_count, 3)
             inputs=call.call_args_list[2].args[2]
             self.assertEqual(inputs['request_path'],'/opt/fullmag/control/cancel-failed-no-spawn/attempts/'+'f'*32+'/request.json')
             self.assertNotIn('namespaces/',inputs['result_path'])

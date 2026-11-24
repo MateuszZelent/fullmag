@@ -18,6 +18,8 @@ use super::{
     RuntimeServiceContainerRecoveryRequest, RUNTIME_SERVICE_CONTAINER_RECOVERY_REQUEST_SCHEMA_V2,
     RUNTIME_SERVICE_CONTAINER_RECOVERY_REQUEST_SCHEMA_V3,
     RUNTIME_SERVICE_CONTAINER_RECOVERY_REQUEST_SCHEMA_V4,
+    RUNTIME_SERVICE_CONTAINER_RECOVERY_REQUEST_SCHEMA_V6,
+    RUNTIME_SERVICE_CONTAINER_RECOVERY_REQUEST_SCHEMA_V7,
 };
 
 pub const DOCKER_NAMESPACE_ABSENCE_ATTESTATION_SCHEMA: &str =
@@ -108,6 +110,12 @@ impl DockerNamespaceAbsenceAttestation {
                 request.retained_terminal_runs.is_some()
                     && request.retained_held_manual_runs.is_some()
                     && request.retained_cancelled_runs.is_none()
+            }
+            RUNTIME_SERVICE_CONTAINER_RECOVERY_REQUEST_SCHEMA_V6 | RUNTIME_SERVICE_CONTAINER_RECOVERY_REQUEST_SCHEMA_V7 => {
+                request.retained_terminal_runs.is_some() && request.retained_held_manual_runs.is_some()
+                    && request.retained_attempt_histories.is_some() && request.retained_pending_inboxes.is_some()
+                    && request.retained_cancelled_runs.is_none()
+                    && (request.schema_version != RUNTIME_SERVICE_CONTAINER_RECOVERY_REQUEST_SCHEMA_V7 || request.retained_absent_inboxes.is_some())
             }
             _ => false,
         };

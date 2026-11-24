@@ -114,7 +114,7 @@ pub(crate) fn authored_stage_output_ports(kind: &StudyStepKind) -> Vec<StudyOutp
     match kind {
         StudyStepKind::Primitive {
             stage_kind: StudyPrimitiveStageKind::AntennaFieldSolve,
-        } => vec![StudyOutputPort {
+        } | StudyStepKind::RetainedCurrentFieldInspection { .. } => vec![StudyOutputPort {
             port_id: ANTENNA_INSPECTION_OUTPUT_PORT_ID.into(),
             data_kind: StudyPortDataKind::Artifact,
         }],
@@ -154,6 +154,11 @@ pub enum StudyStepKind {
         port_mode_id: String,
         output_id: String,
     },
+    RetainedCurrentFieldInspection {
+        stage_id: String,
+        port_mode_id: String,
+        output_id: String,
+    },
 
     Primitive {
         stage_kind: StudyPrimitiveStageKind,
@@ -183,7 +188,7 @@ impl<'de> Deserialize<'de> for StudyStepKind {
             .ok_or_else(|| D::Error::custom("study step kind requires a string kind"))?;
 
         match kind {
-            "closed_loop_inspection" => serde_json::from_value::<KnownStudyStepKind>(raw.clone()).map(Into::into).map_err(D::Error::custom),
+            "closed_loop_inspection" | "retained_current_field_inspection" => serde_json::from_value::<KnownStudyStepKind>(raw.clone()).map(Into::into).map_err(D::Error::custom),
             "primitive" | "macro" | "group" | "unsupported" => {
                 match serde_json::from_value::<KnownStudyStepKind>(raw.clone()) {
                     Ok(known) => Ok(known.into()),
@@ -209,6 +214,11 @@ enum KnownStudyStepKind {
         port_mode_id: String,
         output_id: String,
     },
+    RetainedCurrentFieldInspection {
+        stage_id: String,
+        port_mode_id: String,
+        output_id: String,
+    },
 
     Primitive {
         stage_kind: StudyPrimitiveStageKind,
@@ -230,6 +240,7 @@ impl From<KnownStudyStepKind> for StudyStepKind {
     fn from(value: KnownStudyStepKind) -> Self {
         match value {
             KnownStudyStepKind::ClosedLoopInspection { stage_id, port_mode_id, output_id } => Self::ClosedLoopInspection { stage_id, port_mode_id, output_id },
+            KnownStudyStepKind::RetainedCurrentFieldInspection { stage_id, port_mode_id, output_id } => Self::RetainedCurrentFieldInspection { stage_id, port_mode_id, output_id },
             KnownStudyStepKind::Primitive { stage_kind } => Self::Primitive { stage_kind },
             KnownStudyStepKind::Macro { macro_kind } => Self::Macro { macro_kind },
             KnownStudyStepKind::Group { child_step_ids } => Self::Group { child_step_ids },
@@ -248,6 +259,7 @@ impl StudyStepKind {
     pub fn kind_name(&self) -> &str {
         match self {
             Self::ClosedLoopInspection { .. } => "closed_loop_inspection",
+            Self::RetainedCurrentFieldInspection { .. } => "retained_current_field_inspection",
             Self::Primitive { .. } => "primitive",
             Self::Macro { .. } => "macro",
             Self::Group { .. } => "group",
@@ -349,8 +361,8 @@ impl Serialize for StudyPlan {
         let v3 = matches!(self.schema_version.as_str(), STUDY_PLAN_SCHEMA_VERSION | STUDY_PLAN_SCHEMA_VERSION_V4);
         let mut steps = Vec::with_capacity(self.steps.len());
         for step in &self.steps {
-            if self.schema_version != STUDY_PLAN_SCHEMA_VERSION_V4 && matches!(step.kind, StudyStepKind::ClosedLoopInspection { .. }) {
-                return Err(serde::ser::Error::custom("closed_loop_inspection requires study_plan.v4"));
+            if self.schema_version != STUDY_PLAN_SCHEMA_VERSION_V4 && matches!(step.kind, StudyStepKind::ClosedLoopInspection { .. } | StudyStepKind::RetainedCurrentFieldInspection { .. }) {
+                return Err(serde::ser::Error::custom("antenna inspection operations require study_plan.v4"));
             }
             if !v3 && !step.completion_dependencies.is_empty() {
                 return Err(serde::ser::Error::custom(
@@ -396,8 +408,8 @@ impl<'de> Deserialize<'de> for StudyPlan {
         }
         let mut steps = Vec::with_capacity(wire.steps.len());
         for value in wire.steps {
-            if wire.schema_version != STUDY_PLAN_SCHEMA_VERSION_V4 && value.pointer("/kind/kind").and_then(Value::as_str) == Some("closed_loop_inspection") {
-                return Err(D::Error::custom("closed_loop_inspection requires study_plan.v4"));
+            if wire.schema_version != STUDY_PLAN_SCHEMA_VERSION_V4 && matches!(value.pointer("/kind/kind").and_then(Value::as_str), Some("closed_loop_inspection" | "retained_current_field_inspection")) {
+                return Err(D::Error::custom("antenna inspection operations require study_plan.v4"));
             }
             if !v3 && value.get("initial_state_overlay").is_some() {
                 return Err(D::Error::custom("initial-state overlays require study_plan.v3 or later"));
@@ -478,14 +490,19 @@ impl StudyPlan {
             if let Some(overlay) = &step.initial_state_overlay {
                 validate_initial_state_overlay(&self.schema_version, step, overlay)?;
             }
-            if let StudyStepKind::ClosedLoopInspection { stage_id, port_mode_id, output_id } = &step.kind {
+            if let StudyStepKind::ClosedLoopInspection { stage_id, port_mode_id, output_id }
+                | StudyStepKind::RetainedCurrentFieldInspection { stage_id, port_mode_id, output_id } = &step.kind {
                 if self.schema_version != STUDY_PLAN_SCHEMA_VERSION_V4 {
-                    return Err(StudyContractError::Invalid("closed_loop_inspection requires study_plan.v4".into()));
+                    return Err(StudyContractError::Invalid("antenna inspection operations require study_plan.v4".into()));
                 }
                 for (value, name) in [(stage_id, "stage_id"), (port_mode_id, "port_mode_id"), (output_id, "output_id")] { validate_reference(value, name)?; }
                 if step.until_seconds.is_some() || !step.inputs.is_empty() || step.outputs != [StudyOutputPort { port_id: "inspection".into(), data_kind: StudyPortDataKind::Artifact }] || step.acceptance != StudyAcceptancePolicy::Any {
-                    return Err(StudyContractError::Invalid("closed-loop inspection requires no horizon/state input, one inspection Artifact output, and Any assessment".into()));
+                    return Err(StudyContractError::Invalid("antenna inspection requires no horizon/state input, one inspection Artifact output, and Any assessment".into()));
                 }
+            }
+            if matches!(step.kind, StudyStepKind::RetainedCurrentFieldInspection { .. })
+                && step.acquisition != StudyAcquisitionPolicy::Exclusive {
+                return Err(StudyContractError::Invalid("retained-current inspection requires Exclusive acquisition".into()));
             }
             if !matches!(self.schema_version.as_str(), STUDY_PLAN_SCHEMA_VERSION | STUDY_PLAN_SCHEMA_VERSION_V4)
                 && !step.completion_dependencies.is_empty()
@@ -1580,6 +1597,74 @@ mod tests {
         assert!(serde_json::from_value::<StudyPlan>(value.clone()).is_err());
         value["steps"][0]["enabled"]=json!(false);
         assert!(serde_json::from_value::<StudyPlan>(value).is_err());
+    }
+
+    fn retained_current_wire_fixture() -> StudyPlan {
+        let mut plan = closed_loop_wire_fixture();
+        plan.steps[0].kind = StudyStepKind::RetainedCurrentFieldInspection {
+            stage_id: "stage".into(), port_mode_id: "port".into(), output_id: "result".into(),
+        };
+        plan.steps[0].acquisition = StudyAcquisitionPolicy::Exclusive;
+        plan
+    }
+
+    #[test]
+    fn retained_current_v4_roundtrip_is_strict_and_preserves_unknown_kinds() {
+        let plan = retained_current_wire_fixture();
+        plan.validate_for_execution().unwrap();
+        let wire = serde_json::to_value(&plan).unwrap();
+        assert_eq!(wire["steps"][0]["kind"]["kind"], "retained_current_field_inspection");
+        assert_eq!(serde_json::from_value::<StudyPlan>(wire.clone()).unwrap(), plan);
+        for field in ["stage_id", "port_mode_id", "output_id"] {
+            let mut invalid = wire.clone();
+            invalid["steps"][0]["kind"].as_object_mut().unwrap().remove(field);
+            assert!(serde_json::from_value::<StudyPlan>(invalid).is_err(), "{field}");
+        }
+        let mut invalid = wire.clone();
+        invalid["steps"][0]["kind"]["source_mesh"] = json!({});
+        assert!(serde_json::from_value::<StudyPlan>(invalid).is_err());
+        let mut future = wire;
+        future["steps"][0]["kind"]["kind"] = json!("future_retained_field");
+        let future: StudyPlan = serde_json::from_value(future).unwrap();
+        assert!(matches!(&future.steps[0].kind, StudyStepKind::Unsupported { unsupported_kind, .. } if unsupported_kind == "future_retained_field"));
+        assert!(future.validate_for_execution().is_err());
+    }
+
+    #[test]
+    fn retained_current_operation_cannot_enter_legacy_study_versions() {
+        let plan = retained_current_wire_fixture();
+        let wire = serde_json::to_value(&plan).unwrap();
+        for version in [STUDY_PLAN_SCHEMA_VERSION_V1, STUDY_PLAN_SCHEMA_VERSION_V2, STUDY_PLAN_SCHEMA_VERSION] {
+            let mut invalid = plan.clone(); invalid.schema_version = version.into();
+            assert!(invalid.validate_for_execution().is_err());
+            assert!(serde_json::to_value(invalid).is_err());
+            let mut invalid = wire.clone(); invalid["schema_version"] = json!(version);
+            if version != STUDY_PLAN_SCHEMA_VERSION {
+                invalid["steps"][0].as_object_mut().unwrap().remove("completion_dependencies");
+            }
+            assert!(serde_json::from_value::<StudyPlan>(invalid).is_err());
+        }
+    }
+
+    #[test]
+    fn retained_current_operation_has_only_static_artifact_semantics() {
+        for case in ["horizon", "input", "output", "output_count", "acceptance", "acquisition", "selector"] {
+            let mut plan = retained_current_wire_fixture();
+            let step = &mut plan.steps[0];
+            match case {
+                "horizon" => step.until_seconds = Some(1.0),
+                "input" => step.inputs.push(StudyInputPort { port_id: "initial_state".into(),
+                    data_kind: StudyPortDataKind::InitialState, required: true,
+                    source: StudyInputSource::AuthoredInitialState { reference: "state".into() } }),
+                "output" => step.outputs[0].data_kind = StudyPortDataKind::State,
+                "output_count" => step.outputs.clear(),
+                "acceptance" => step.acceptance = StudyAcceptancePolicy::Converged,
+                "acquisition" => step.acquisition = StudyAcquisitionPolicy::Shared,
+                "selector" => { let StudyStepKind::RetainedCurrentFieldInspection { output_id, .. } = &mut step.kind else {panic!()}; *output_id = "".into(); },
+                _ => unreachable!(),
+            }
+            assert!(plan.validate_for_execution().is_err(), "{case}");
+        }
     }
 
 }

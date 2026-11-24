@@ -165,10 +165,28 @@ export interface ViewportTargetRenderingPreferences {
   vectorSurfaceOffsetScale?: number;
 }
 
+export interface SavedFieldSectionPreferences {
+  plane: "xy" | "xz" | "yz";
+  positionText: string | null;
+  component: string;
+  vectors: boolean;
+  verticalExaggeration: 1 | 10 | 100;
+  interaction: { panU: number; panV: number; zoom: number };
+}
+
+export const DEFAULT_SAVED_FIELD_SECTION: SavedFieldSectionPreferences = {
+  plane: "yz", positionText: null, component: "magnitude", vectors: true,
+  verticalExaggeration: 1, interaction: { panU: 0, panV: 0, zoom: 1 },
+};
+
 export interface SavedFieldPresentation {
   selection: PinnedMaterializedDatasetSelectionRef;
   settings: VisualizationTargetSettings;
+  /** Local context visibility; never changes the saved field or source physics. */
+  sourceGeometryVisible?: boolean;
   colorRanges?: Partial<Record<"magnitude" | "x" | "y" | "z", AntennaColorRange>>;
+  /** Small UI preferences survive tab unmounts only for this exact saved dataset. */
+  section?: SavedFieldSectionPreferences;
 }
 
 export interface ObjectVisualizationSnapshot {
@@ -687,6 +705,14 @@ export class ObjectVisualizationController {
     this.bump();
   }
 
+  setSavedFieldSourceGeometryVisible(selection: PinnedMaterializedDatasetSelectionRef, visible: boolean): void {
+    const current = this.savedFieldPresentation;
+    if (!current || !selectionRefEquals(current.selection, selection) ||
+        (current.sourceGeometryVisible ?? true) === visible) return;
+    this.savedFieldPresentation = { ...current, sourceGeometryVisible: visible };
+    this.bump();
+  }
+
   setSavedFieldColorRange(
     selection: PinnedMaterializedDatasetSelectionRef,
     component: keyof NonNullable<SavedFieldPresentation["colorRanges"]>,
@@ -701,6 +727,18 @@ export class ObjectVisualizationController {
     if (range) colorRanges[component] = { ...range };
     else delete colorRanges[component];
     this.savedFieldPresentation = { ...current, colorRanges };
+    this.bump();
+  }
+
+  patchSavedFieldSection(
+    selection: PinnedMaterializedDatasetSelectionRef,
+    patch: Partial<SavedFieldSectionPreferences>,
+  ): void {
+    const current = this.savedFieldPresentation;
+    if (!current || !selectionRefEquals(current.selection, selection)) return;
+    const section = { ...DEFAULT_SAVED_FIELD_SECTION, ...current.section, ...patch };
+    if (JSON.stringify(section) === JSON.stringify(current.section ?? DEFAULT_SAVED_FIELD_SECTION)) return;
+    this.savedFieldPresentation = { ...current, section };
     this.bump();
   }
 

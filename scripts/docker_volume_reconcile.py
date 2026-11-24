@@ -272,14 +272,21 @@ def validate_failed_build(control, root, request, original, actual, state):
             "finished_at": proof["finished_at"]}
 
 
-def claim_script(control, root, request, current_receipt_sha, *, phase="iteration", publish_verified=True):
+def claim_script(control, root, request, current_receipt_sha, *, phase="iteration", publish_verified=True, result_sha256=None):
     attempt = request["attempt"]
     path = control.path(root)
-    marker = "__RESULT_SHA__"
+    preflight = request.get("schema") == "fullmag.docker-resume-preflight-failure.v1"
+    require((preflight and isinstance(result_sha256, str) and SHA.fullmatch(result_sha256))
+            or (not preflight and result_sha256 is None), "Exact prepared result hash required for preflight confirmation")
+    marker = result_sha256 if preflight else "__RESULT_SHA__"
     commit = commit_script(control, root, request, root + "/reconciliation/" + marker,
                            marker, current_receipt_sha, phase=phase, publish_verified=publish_verified)
     # All interpolated paths are control.path-validated. The only dynamic value is a strict hex digest.
-    commit = commit.replace("'", '"').replace(marker, "${result_sha}")
+    commit = commit.replace("'", '"')
+    if not preflight:
+        commit = commit.replace(marker, "${result_sha}")
+    else:
+        commit = 'test "$result_sha" = "' + result_sha256 + '"; ' + commit
     # One daemon helper owns the observer flock from READY through the final terminal publication.
     # EOF before BEGIN is safe: no _finish operation has started. After BEGIN every unknown outcome retains the lock.
     return ("umask 027; "
@@ -313,12 +320,25 @@ def commit_script(control, root, request, journal_relative, result_sha, current_
                  and request.get("schema") == TOOLCHAIN_CANCELED_SCHEMA)
     resume_failure = phase == "resume" and not publish_verified and request.get("schema") in (
         FRONTEND_FROZEN_SCHEMA, LAYOUT_REFUSAL_SCHEMA, MOUNT_REFUSAL_SCHEMA)
-    require(activation or toolchain or resume_failure or (phase, publish_verified) in (("iteration", True), ("iteration", False), ("boris-reference", False)), "Closed reconciliation phase required")
+    schema = request.get("schema")
+    recovery_failure_schema = "fullmag.retained-recovery-failed-build-reconciliation.v1"
+    resume_preflight_schema = "fullmag.docker-resume-preflight-failure.v1"
+    gsg_prestart_schema = "fullmag.gsg-prestart-input-failure.v1"
+    recovery_failure = (phase == "recovery-build" and publish_verified is False
+                        and schema == recovery_failure_schema)
+    resume_preflight = phase == "resume" and publish_verified is False and schema == resume_preflight_schema
+    gsg_prestart = phase == "gsg-mesh-preparation" and publish_verified is False and schema == gsg_prestart_schema
+    require(activation or toolchain or resume_failure or recovery_failure or resume_preflight or gsg_prestart
+            or (phase, publish_verified) in (("iteration", True), ("iteration", False), ("boris-reference", False)),
+            "Closed reconciliation phase required")
     iteration_failures = (FAILED_BUILD_SCHEMA, PRESTART_SCHEMA, TERMINAL_PRESTART_SCHEMA,
                           CGROUP_FAILURE_SCHEMA, INTERRUPTED_IDLE_RESTART_SCHEMA)
-    require(phase != "iteration" or publish_verified or request.get("schema") in iteration_failures,
+    require(phase != "iteration" or publish_verified or schema in iteration_failures,
             "Failure-only publication requires its explicit schema")
-    require(not publish_verified or request.get("schema") not in (*iteration_failures, FRONTEND_FROZEN_SCHEMA, LAYOUT_REFUSAL_SCHEMA, MOUNT_REFUSAL_SCHEMA),
+    require(not publish_verified or schema not in (
+        *iteration_failures, FRONTEND_FROZEN_SCHEMA, LAYOUT_REFUSAL_SCHEMA, MOUNT_REFUSAL_SCHEMA,
+        recovery_failure_schema, resume_preflight_schema, gsg_prestart_schema,
+    ),
             "A failed iteration cannot publish a verified success")
     phase = control.path(phase)
     targets = f"'{path}/receipt.json' '{phase}/current.json' " + (f"'{phase}/verified.json' " if publish_verified else "") + f"'{path}/terminal.json'"
@@ -371,6 +391,20 @@ def commit_script(control, root, request, journal_relative, result_sha, current_
                 if allow_result:
                     marker_commit += f" || test \"$s\" = '{result_sha}'"
                 marker_commit += "; "
+    if recovery_failure:
+        for relative, expected in (("recovery-build/current.json", request["phase_current_sha256"]),
+                                   ("recovery-build/verified.json", request["verified_sha256"])):
+            require(expected is None or SHA.fullmatch(expected), "Invalid recovery phase pin")
+            target = control.path(relative)
+            marker_commit += f"test ! -L '{target}'; "
+            if expected is None:
+                marker_commit += f"test ! -e '{target}'; "
+            else:
+                marker_commit += (f"test -f '{target}'; test $(stat -c %h '{target}') = 1; "
+                                  f"test \"$(sha256sum '{target}' | cut -d' ' -f1)\" = '{expected}'; ")
+    if resume_preflight:
+        from docker_volume_resume_preflight_recovery import commit_checks
+        marker_commit = commit_checks(control, request, result_sha)
     # Each write is atomic; a prepared journal admits only the original or exact prepared receipt.
     return ("umask 027; "
         f"test ! -L '{path}/reconcile-commit.lock'; "
@@ -406,9 +440,26 @@ def reconcile(args):
     request_raw = read_raw(control, args.request)
     require(SHA.fullmatch(args.request_sha256) and digest(request_raw) == args.request_sha256, "Request CAS differs")
     request = json.loads(request_raw)
+    if isinstance(request, dict) and request.get("schema") == "fullmag.docker-saved-authoring-completion-reconciliation.v1":
+        from docker_saved_authoring_completion_reconcile import reconcile_saved_completion
+        result = reconcile_saved_completion(args, control, selected, request, request_raw)
+        print(json.dumps(result, indent=2))
+        return result
+    require(not getattr(args, "preview_sha256", None),
+            "Preview digest is scoped to saved-authoring completion only")
     if isinstance(request, dict) and request.get("schema") == ACTIVATION_PREFLIGHT_SCHEMA:
         from docker_activation_preflight_runtime import reconcile_preflight
         return reconcile_preflight(args, control, selected, request, request_raw)
+    if isinstance(request, dict) and request.get("schema") == "fullmag.retained-recovery-failed-build-reconciliation.v1":
+        from docker_volume_recovery_failure_reconcile import reconcile as reconcile_recovery_failure
+        result = reconcile_recovery_failure(args, control, selected, request, request_raw)
+        print(json.dumps(result, indent=2))
+        return
+    if isinstance(request, dict) and request.get("schema") == "fullmag.retained-recovery-missing-owner-failure.v1":
+        from docker_volume_missing_owner_failure import reconcile as reconcile_missing_owner
+        result = reconcile_missing_owner(args, control, selected, request, request_raw)
+        print(json.dumps(result, indent=2))
+        return
     frontend_frozen = isinstance(request, dict) and request.get("schema") == FRONTEND_FROZEN_SCHEMA
     layout_refusal = isinstance(request, dict) and request.get("schema") == LAYOUT_REFUSAL_SCHEMA
     mount_refusal = isinstance(request, dict) and request.get("schema") == MOUNT_REFUSAL_SCHEMA
@@ -699,6 +750,7 @@ def main():
     parser.add_argument("--request-sha256", required=True)
     parser.add_argument("--port", required=True, type=int)
     parser.add_argument("--preview", action="store_true", help="Read-only validation of a typed failure reconciliation")
+    parser.add_argument("--preview-sha256", help="Exact saved-authoring completion preview digest")
     reconcile(parser.parse_args())
 
 

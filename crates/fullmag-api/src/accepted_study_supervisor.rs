@@ -18,6 +18,11 @@ use crate::accepted_profile_admission as profile_admission;
 use crate::accepted_worker_execution_receipt;
 
 use crate::{compute_operator_env, owned_worker_process};
+
+#[cfg(target_os = "linux")]
+#[path = "accepted_worker_exit_observation.rs"]
+mod accepted_worker_exit_observation;
+
 use owned_worker_process::OwnedWorkerProcess;
 
 /// How long the read-only Stop poll, or a heartbeat failing on transient store
@@ -80,6 +85,7 @@ struct SupervisorSlotOwner {
 }
 
 struct SupervisorSlot {
+    store_root: PathBuf,
     path: PathBuf,
     owner_path: PathBuf,
     released: bool,
@@ -135,7 +141,7 @@ impl SupervisorSlot {
         fs::create_dir(&path).context("acquire accepted-worker resource supervisor slot")?;
         let owner_path = path.join(SLOT_OWNER_FILE);
         let owner = SupervisorSlotOwner {
-            schema_version: "fullmag.accepted_worker_supervisor_slot.v3".into(),
+            schema_version: if cfg!(target_os = "linux") { "fullmag.accepted_worker_supervisor_slot.v4" } else { "fullmag.accepted_worker_supervisor_slot.v3" }.into(),
             process_id: std::process::id(),
             process_start_token: process_start_token(std::process::id())?
                 .context("current supervisor process is not observable")?,
@@ -155,6 +161,11 @@ impl SupervisorSlot {
             file.write_all(&bytes)
                 .context("write supervisor slot owner")?;
             file.sync_all().context("sync supervisor slot owner")?;
+            #[cfg(target_os = "linux")]
+            {
+                fs::File::open(&path)?.sync_all()?;
+                fs::File::open(&slots_root)?.sync_all()?;
+            }
             Ok(())
         })();
         if let Err(error) = result {
@@ -163,6 +174,7 @@ impl SupervisorSlot {
             return Err(error);
         }
         Ok(Self {
+            store_root: store.root().to_path_buf(),
             path,
             owner_path,
             released: false,
@@ -170,6 +182,13 @@ impl SupervisorSlot {
     }
 
     fn release(mut self) -> Result<()> {
+        #[cfg(target_os = "linux")]
+        if fs::symlink_metadata(self.path.join(accepted_worker_exit_observation::OBSERVATION_FILE)).is_ok() {
+            let store = SessionStore::open_existing(&self.store_root)?;
+            accepted_worker_exit_observation::archive_published(&store, &self.path)?;
+            self.released = true;
+            return Ok(());
+        }
         fs::remove_file(&self.owner_path).context("remove supervisor slot owner")?;
         fs::remove_dir(&self.path).context("release accepted-worker supervisor slot")?;
         self.released = true;
@@ -260,6 +279,47 @@ pub(crate) fn validate_reaped_supervisor_slot(
     request_id: &str,
     pin: &ReapedSupervisorSlotPin,
 ) -> Result<(PathBuf, PathBuf)> {
+    validate_supervisor_slot_identity(store, claim, request_id, pin, false)
+}
+
+/// Validate the old slot in the replacement namespace. This is identity-only:
+/// callers must also hold the ledger's typed teardown/Engine evidence fence.
+pub(crate) fn validate_namespace_supervisor_slot(
+    store: &SessionStore,
+    claim: &fullmag_application::TaskClaim,
+    request_id: &str,
+    pin: &ReapedSupervisorSlotPin,
+    teardown: &fullmag_session::host_resource_ledger::SucceededWorkerNamespaceTeardownRequest,
+    attestation: &fullmag_session::host_resource_ledger::SucceededWorkerNamespaceTeardownAttestation,
+) -> Result<(PathBuf, PathBuf)> {
+    use fullmag_session::host_resource_ledger::{HostReservationOwner, SucceededWorkerNamespaceTeardownIntent};
+    let intent = SucceededWorkerNamespaceTeardownIntent::from_request(teardown.clone())?;
+    attestation.validate_for_request(teardown, &intent.sha256()?)?;
+    if teardown.request_id != request_id
+        || teardown.identity.run_id != claim.run_id.as_str()
+        || teardown.identity.task_id != claim.task_id.as_str()
+        || teardown.identity.resource_id != claim.lease.resource_id
+        || teardown.identity.lease_token != claim.lease.lease_token.as_str()
+        || teardown.identity.owner != (HostReservationOwner::Solver {
+            attempt_id: claim.attempt_id.as_str().into(), ownership_epoch: claim.ownership_epoch.value(),
+        })
+    { bail!("namespace slot archive differs from its exact teardown identity"); }
+    #[cfg(target_os = "linux")]
+    if fs::read_link("/proc/self/ns/pid")?.to_string_lossy() != attestation.new_pid_namespace {
+        bail!("namespace slot validation is outside the attested replacement PID namespace");
+    }
+    #[cfg(not(target_os = "linux"))]
+    bail!("namespace slot validation currently requires Linux");
+    validate_supervisor_slot_identity(store, claim, request_id, pin, true)
+}
+
+fn validate_supervisor_slot_identity(
+    store: &SessionStore,
+    claim: &fullmag_application::TaskClaim,
+    request_id: &str,
+    pin: &ReapedSupervisorSlotPin,
+    owner_namespace_removed: bool,
+) -> Result<(PathBuf, PathBuf)> {
     let id = uuid::Uuid::parse_str(request_id)?;
     if id.is_nil() || id.to_string() != request_id {
         bail!("invalid slot recovery request id");
@@ -313,7 +373,8 @@ pub(crate) fn validate_reaped_supervisor_slot(
         || owner.process_start_token != pin.process_start_token
         || owner.max_concurrency.is_none_or(|limit| limit == 0)
         || pin.process_start_token.is_empty()
-        || process_start_token(owner.process_id)?.as_deref() == Some(&owner.process_start_token)
+        || (!owner_namespace_removed
+            && process_start_token(owner.process_id)?.as_deref() == Some(&owner.process_start_token))
     {
         bail!("reaped supervisor slot differs from its failed-owner/start-token proof");
     }
@@ -418,7 +479,7 @@ pub(crate) fn archive_reaped_supervisor_slot(
         || receipts[0].status_success || receipts[0].timed_out || receipts[0].stop_requested {
         bail!("slot archive process-exit proof differs from the released attempt");
     }
-    archive_validated_supervisor_slot(store, claim, request_id, pin)
+    archive_validated_reaped_slot(store, claim, request_id, pin)
 }
 
 pub(crate) fn archive_interrupted_supervisor_slot(
@@ -467,14 +528,95 @@ pub(crate) fn archive_interrupted_supervisor_slot(
     {
         bail!("interrupted slot archive lease differs");
     }
-    archive_validated_supervisor_slot(store, claim, request_id, pin)
+    archive_validated_reaped_slot(store, claim, request_id, pin)
+}
+
+pub(crate) fn archive_succeeded_supervisor_slot(
+    store: &SessionStore,
+    claim: &fullmag_application::TaskClaim,
+    request_id: &str,
+    pin: &ReapedSupervisorSlotPin,
+    released: &fullmag_session::host_resource_ledger::HostResourceReservation,
+    candidate: Option<&fullmag_session::SucceededRecoveryCandidateStorage>,
+) -> Result<()> {
+    use fullmag_session::host_resource_ledger::{HostReservationOwner, HostResourceReservationState};
+    let _writer = store.write_transaction()?;
+    let store_id = match candidate {
+        Some(candidate) => candidate.store_id(store.root())?,
+        None => fullmag_session::host_resource_ledger::HostResourceLedger::store_id(store.root())?,
+    };
+    let lease = store.read_resource_lease(claim.run_id.as_str(), &claim.lease.resource_id, claim.lease.lease_token.as_str())?
+        .context("succeeded slot lease missing")?;
+    if released.state != HostResourceReservationState::Released || released.release_proof_sha256.is_none()
+        || released.identity.store_id != store_id
+        || released.identity.run_id != claim.run_id.as_str() || released.identity.task_id != claim.task_id.as_str()
+        || released.identity.resource_id != claim.lease.resource_id
+        || released.identity.lease_token != claim.lease.lease_token.as_str()
+        || released.identity.owner != (HostReservationOwner::Solver { attempt_id: claim.attempt_id.as_str().into(), ownership_epoch: claim.ownership_epoch.value() })
+        || lease.state != fullmag_session::FmsResourceLeaseState::Released
+        || lease.attempt_id != claim.attempt_id.as_str() || lease.ownership_epoch != claim.ownership_epoch.value()
+        || lease.heartbeat_sequence != claim.lease.heartbeat_sequence {
+        bail!("succeeded slot archive requires exact proof-backed release");
+    }
+    let recovered = fullmag_runtime_control::recover_coordinator(store, claim)?;
+    if recovered.coordinator.phase() != fullmag_application::CoordinatorPhase::Terminal
+        || recovered.coordinator.task().lifecycle != fullmag_application::TaskLifecycle::Succeeded
+        || store.read_run_intent(claim.run_id.as_str())?.and_then(|intent| intent.study_object_ref).is_none() {
+        bail!("succeeded slot archive requires an accepted terminal success");
+    }
+    fullmag_runtime_control::validate_study_task_completion(store, claim)?;
+    archive_validated_reaped_slot(store, claim, request_id, pin)
+}
+
+/// Separate authority for an unknown worker exit after exact Docker namespace
+/// teardown. The legacy succeeded-worker archive keeps its v1 exit requirement.
+pub(crate) fn archive_succeeded_namespace_supervisor_slot(
+    store: &SessionStore,
+    claim: &fullmag_application::TaskClaim,
+    request_id: &str,
+    pin: &ReapedSupervisorSlotPin,
+    released: &fullmag_session::host_resource_ledger::HostResourceReservation,
+    candidate: Option<&fullmag_session::SucceededRecoveryCandidateStorage>,
+    ledger: &fullmag_session::host_resource_ledger::HostResourceLedger,
+    teardown: &fullmag_session::host_resource_ledger::SucceededWorkerNamespaceTeardownRequest,
+    attestation: &fullmag_session::host_resource_ledger::SucceededWorkerNamespaceTeardownAttestation,
+) -> Result<()> {
+    ledger.with_succeeded_namespace_teardown_release_fence(store, teardown, attestation, candidate, |verified| {
+        if verified != released {
+            bail!("namespace slot archive supplied reservation differs from authoritative release");
+        }
+        let lease = store.read_resource_lease(claim.run_id.as_str(), &claim.lease.resource_id, claim.lease.lease_token.as_str())?
+            .context("namespace slot archive lease missing")?;
+        if lease.state != fullmag_session::FmsResourceLeaseState::Released
+            || lease.attempt_id != claim.attempt_id.as_str()
+            || lease.ownership_epoch != claim.ownership_epoch.value()
+            || lease.heartbeat_sequence != claim.lease.heartbeat_sequence {
+            bail!("namespace slot archive requires the exact released attempt lease");
+        }
+        let recovered = fullmag_runtime_control::recover_coordinator(store, claim)?;
+        if recovered.coordinator.phase() != CoordinatorPhase::Terminal
+            || recovered.coordinator.task().lifecycle != TaskLifecycle::Succeeded
+            || store.read_run_intent(claim.run_id.as_str())?.and_then(|intent| intent.study_object_ref).is_none() {
+            bail!("namespace slot archive requires an accepted terminal success");
+        }
+        fullmag_runtime_control::validate_study_task_completion(store, claim)?;
+        validate_namespace_supervisor_slot(store, claim, request_id, pin, teardown, attestation)?;
+        archive_validated_supervisor_slot(store, claim, request_id, pin, true)
+    })
+}
+
+fn archive_validated_reaped_slot(
+    store: &SessionStore, claim: &fullmag_application::TaskClaim,
+    request_id: &str, pin: &ReapedSupervisorSlotPin,
+) -> Result<()> {
+    archive_validated_supervisor_slot(store, claim, request_id, pin, false)
 }
 
 fn archive_validated_supervisor_slot(
     store: &SessionStore, claim: &fullmag_application::TaskClaim,
-    request_id: &str, pin: &ReapedSupervisorSlotPin,
+    request_id: &str, pin: &ReapedSupervisorSlotPin, owner_namespace_removed: bool,
 ) -> Result<()> {
-    let (active, archived) = validate_reaped_supervisor_slot(store, claim, request_id, pin)?;
+    let (active, archived) = validate_supervisor_slot_identity(store, claim, request_id, pin, owner_namespace_removed)?;
     if active.try_exists()? {
         let parent_relative = format!("reaped-worker-recovery/{request_id}");
         let parent =
@@ -522,7 +664,7 @@ fn archive_validated_supervisor_slot(
         std::fs::File::open(parent.context("slot archive parent missing")?)?.sync_all()?;
     }
     sync_archive_ancestors(store, &archived)?;
-    validate_reaped_supervisor_slot(store, claim, request_id, pin)?;
+    validate_supervisor_slot_identity(store, claim, request_id, pin, owner_namespace_removed)?;
     Ok(())
 }
 
@@ -555,7 +697,7 @@ fn reclaim_stale_retry_slot(
     .context("parse occupied supervisor slot owner")?;
     if !matches!(
         owner.schema_version.as_str(),
-        "fullmag.accepted_worker_supervisor_slot.v2" | "fullmag.accepted_worker_supervisor_slot.v3"
+        "fullmag.accepted_worker_supervisor_slot.v2" | "fullmag.accepted_worker_supervisor_slot.v3" | "fullmag.accepted_worker_supervisor_slot.v4"
     ) || owner.run_id != run_id
         || owner.task_id != task_id
         || resource_id.is_some_and(|resource_id| owner.resource_id.as_deref() != Some(resource_id))
@@ -564,6 +706,12 @@ fn reclaim_stale_retry_slot(
     }
     if process_start_token(owner.process_id)?.as_deref() == Some(&owner.process_start_token) {
         bail!("accepted-worker concurrency limit is occupied by a live supervisor process");
+    }
+    #[cfg(target_os = "linux")]
+    if owner.schema_version == accepted_worker_exit_observation::SLOT_SCHEMA {
+        // Raw -> canonical -> archive is completed before acquiring this
+        // global writer. Never nest a receipt read transaction under it.
+        bail!("v4 supervisor slot still requires its fenced raw-evidence consumer before acquisition");
     }
     fs::remove_file(&owner_path).context("remove confirmed stale supervisor slot owner")?;
     fs::remove_dir(slot_path).context("remove confirmed stale supervisor slot")?;
@@ -592,13 +740,13 @@ fn inspect_active_supervisor_slots(slots_root: &Path) -> Result<(usize, Option<u
         .context("parse active supervisor slot owner")?;
         let owner_limit = match owner.schema_version.as_str() {
             "fullmag.accepted_worker_supervisor_slot.v2" => 1,
-            "fullmag.accepted_worker_supervisor_slot.v3" => owner
+            "fullmag.accepted_worker_supervisor_slot.v3" | "fullmag.accepted_worker_supervisor_slot.v4" => owner
                 .max_concurrency
                 .filter(|limit| *limit > 0)
                 .context("v3 supervisor slot owner requires positive max_concurrency")?,
             other => bail!("unsupported supervisor slot owner schema `{other}`"),
         };
-        if owner.schema_version == "fullmag.accepted_worker_supervisor_slot.v3" {
+        if matches!(owner.schema_version.as_str(), "fullmag.accepted_worker_supervisor_slot.v3" | "fullmag.accepted_worker_supervisor_slot.v4") {
             let resource_id = owner
                 .resource_id
                 .as_deref()
@@ -684,6 +832,10 @@ fn process_start_token(_process_id: u32) -> Result<Option<String>> {
 impl Drop for SupervisorSlot {
     fn drop(&mut self) {
         if !self.released {
+            #[cfg(target_os = "linux")]
+            if fs::symlink_metadata(self.path.join(accepted_worker_exit_observation::OBSERVATION_FILE)).is_ok() {
+                return; // Keep the only durable reaped-child proof for its fenced consumer.
+            }
             let _ = fs::remove_file(&self.owner_path);
             let _ = fs::remove_dir(&self.path);
         }
@@ -763,21 +915,8 @@ pub(crate) fn run_supervised_accepted_worker_with_host(
             "accepted-worker supervisor heartbeat interval must be positive and shorter than the worker timeout"
         );
     }
-    let recoverable_retry = retry_decision_for_terminal_task(store, run_id, task_id)
-        .context("inspect durable retry before supervisor slot acquisition")?
-        .is_some();
-    let recoverable_process_exit =
-        worker_process_exit_receipt_for_current_task(store, run_id, task_id)
-            .context("inspect durable process exit before supervisor slot acquisition")?
-            .is_some();
-    let host_recovery_exit = if host.is_some() {
-        worker_process_exit_receipt_for_current_task(store, run_id, task_id)?
-    } else {
-        None
-    };
-    if host.is_some() && recoverable_retry && host_recovery_exit.is_none() {
-        bail!("host retry recovery requires the exact durable worker process exit proof");
-    }
+    #[cfg(target_os = "linux")]
+    accepted_worker_exit_observation::archive_canonical_task_slots(store, run_id, task_id)?;
     let catalog = store
         .read_run_catalog(run_id)
         .context("read run catalog before supervisor slot acquisition")?
@@ -790,6 +929,27 @@ pub(crate) fn run_supervised_accepted_worker_with_host(
         .resource_id
         .clone()
         .context("supervisor task has no assigned resource before slot acquisition")?;
+    #[cfg(target_os = "linux")]
+    promote_owned_wait_observation(store, run_id, task_id, &resource_id)?;
+    let recoverable_retry = retry_decision_for_terminal_task(store, run_id, task_id)
+        .context("inspect durable retry before supervisor slot acquisition")?
+        .is_some();
+    let recoverable_process_exit =
+        worker_process_exit_receipt_for_current_task(store, run_id, task_id)
+            .context("inspect durable process exit before supervisor slot acquisition")?
+            .is_some();
+    #[cfg(target_os = "linux")]
+    if let Some(receipt) = worker_process_exit_receipt_for_current_task(store, run_id, task_id)? {
+        accepted_worker_exit_observation::confirm_archived(store, &receipt)?;
+    }
+    let host_recovery_exit = if host.is_some() {
+        worker_process_exit_receipt_for_current_task(store, run_id, task_id)?
+    } else {
+        None
+    };
+    if host.is_some() && recoverable_retry && host_recovery_exit.is_none() {
+        bail!("host retry recovery requires the exact durable worker process exit proof");
+    }
     let slot = retry_store_writer_busy(|| {
         SupervisorSlot::acquire(
             store,
@@ -996,6 +1156,10 @@ pub(crate) fn run_supervised_accepted_worker_with_host(
     };
     #[cfg(not(target_os = "linux"))]
     let linux_cgroup = None;
+    #[cfg(target_os = "linux")]
+    let observation_publisher = accepted_worker_exit_observation::ObservationPublisher::new(
+        &slot.path, &claim, &lease,
+    )?;
     let mut active_lease = lease;
     let mut pending_heartbeat = None;
     let fem_step_profile = profile_admission::fem_child_enabled(store, run_id, task_id)?;
@@ -1006,7 +1170,7 @@ pub(crate) fn run_supervised_accepted_worker_with_host(
         Ok(token) => token,
         Err(error) => return Err(defer_pre_spawn_worker_launch_error(slot, error)),
     };
-    let outcome = match spawn_worker(
+    let outcome = match spawn_worker_with_observation(
         worker_executable,
         store.root(),
         run_id,
@@ -1022,6 +1186,8 @@ pub(crate) fn run_supervised_accepted_worker_with_host(
         heartbeat_interval,
         || renew_resource_lease(store, &mut active_lease, &mut pending_heartbeat),
         || task_stop_requested(store, run_id, task_id),
+        #[cfg(target_os = "linux")]
+        Some(&observation_publisher),
     ) {
         Ok(outcome) => outcome,
         Err(error) => {
@@ -1737,7 +1903,7 @@ fn classify_final_heartbeat_reconciliation(
     Ok(FinalHeartbeatReconciliation::Unacknowledged { sequence: expected })
 }
 
-fn spawn_worker<H, C>(
+fn spawn_worker_with_observation<H, C>(
     worker_executable: &Path,
     store_root: &Path,
     run_id: &str,
@@ -1753,6 +1919,7 @@ fn spawn_worker<H, C>(
     heartbeat_interval: Duration,
     heartbeat: H,
     stop_requested: C,
+    #[cfg(target_os = "linux")] observation: Option<&accepted_worker_exit_observation::ObservationPublisher>,
 ) -> Result<ObservedWorkerProcess>
 where
     H: FnMut() -> Result<bool>,
@@ -1810,15 +1977,54 @@ where
         }
         command.creation_flags(flags);
     }
-    let child = OwnedWorkerProcess::spawn(&mut command, cpu_ids, cpu_rate_limit, linux_cgroup)
-        .with_context(|| format!("spawn accepted worker `{}`", worker_executable.display()))?;
-    observe_child(
+    #[cfg(target_os = "linux")]
+    let failed_reap = |status: ExitStatus, identity: &owned_worker_process::LinuxPreReapIdentity, cleanup: bool, reason: &str| {
+        if let Some(observation) = observation {
+            observation.bind_child(identity);
+            if cleanup { observation.confirm_cleanup(); }
+            else { observation.publish_reaped(status, identity.process_id, Some(&identity.start_token), false, false, Some(reason)); }
+        }
+    };
+    let child = OwnedWorkerProcess::spawn_with_reap_observer(&mut command, cpu_ids, cpu_rate_limit, linux_cgroup,
+        #[cfg(target_os = "linux")] Some(&failed_reap),
+    ).with_context(|| format!("spawn accepted worker `{}`", worker_executable.display()))?;
+    observe_child_with_observation(
         child,
         Some(worker_timeout),
         Some(heartbeat_interval),
         heartbeat,
         stop_requested,
+        #[cfg(target_os = "linux")]
+        observation,
     )
+}
+
+#[cfg(test)]
+fn spawn_worker<H, C>(
+    worker_executable: &Path,
+    store_root: &Path,
+    run_id: &str,
+    task_id: &str,
+    gpu_uuid: Option<&str>,
+    cpu_ids: &BTreeSet<u32>,
+    cpu_thread_environment: &[(&'static str, String)],
+    host_launch_token: Option<&str>,
+    fem_step_profile: bool,
+    cpu_rate_limit: Option<u32>,
+    linux_cgroup: Option<owned_worker_process::LinuxWorkerCgroup>,
+    worker_timeout: Duration,
+    heartbeat_interval: Duration,
+    heartbeat: H,
+    stop_requested: C,
+) -> Result<ObservedWorkerProcess>
+where
+    H: FnMut() -> Result<bool>,
+    C: FnMut() -> Result<bool>,
+{
+    spawn_worker_with_observation(worker_executable, store_root, run_id, task_id,
+        gpu_uuid, cpu_ids, cpu_thread_environment, host_launch_token, fem_step_profile, cpu_rate_limit,
+        linux_cgroup, worker_timeout, heartbeat_interval, heartbeat, stop_requested,
+        #[cfg(target_os = "linux")] None)
 }
 
 fn worker_environment(
@@ -2021,18 +2227,57 @@ fn worker_gpu_uuid(lease: &fullmag_session::FmsResourceLease) -> Result<Option<S
     Ok(Some(uuid.to_owned()))
 }
 
-fn observe_child<H, C>(
+fn wait_observed_child(
+    child: &mut OwnedWorkerProcess, timed_out: bool, stop_requested: bool, reason: Option<&str>,
+    #[cfg(target_os = "linux")] observation: Option<&accepted_worker_exit_observation::ObservationPublisher>,
+) -> std::io::Result<ExitStatus> {
+    #[cfg(target_os = "linux")]
+    let identity = child.pre_reap_identity().clone();
+    child.wait_with_reap_observer(|status| {
+        #[cfg(target_os = "linux")]
+        if let Some(observation) = observation {
+            observation.publish_reaped(status, identity.process_id, Some(&identity.start_token), timed_out, stop_requested, reason);
+        }
+        #[cfg(not(target_os = "linux"))]
+        let _ = (status, timed_out, stop_requested, reason);
+    })
+}
+
+fn try_wait_observed_child(
+    child: &mut OwnedWorkerProcess, timed_out: bool, stop_requested: bool, reason: Option<&str>,
+    #[cfg(target_os = "linux")] observation: Option<&accepted_worker_exit_observation::ObservationPublisher>,
+) -> std::io::Result<Option<ExitStatus>> {
+    #[cfg(target_os = "linux")]
+    let identity = child.pre_reap_identity().clone();
+    child.try_wait_with_reap_observer(|status| {
+        #[cfg(target_os = "linux")]
+        if let Some(observation) = observation {
+            observation.publish_reaped(status, identity.process_id, Some(&identity.start_token), timed_out, stop_requested, reason);
+        }
+        #[cfg(not(target_os = "linux"))]
+        let _ = (status, timed_out, stop_requested, reason);
+    })
+}
+
+fn observe_child_with_observation<H, C>(
     mut child: OwnedWorkerProcess,
     timeout: Option<Duration>,
     heartbeat_interval: Option<Duration>,
     mut heartbeat: H,
     mut stop_requested: C,
+    #[cfg(target_os = "linux")] observation: Option<&accepted_worker_exit_observation::ObservationPublisher>,
 ) -> Result<ObservedWorkerProcess>
 where
     H: FnMut() -> Result<bool>,
     C: FnMut() -> Result<bool>,
 {
     let process_id = child.id();
+    #[cfg(target_os = "linux")]
+    let captured_start_token: Result<Option<String>> = Ok(Some(child.pre_reap_identity().start_token.clone()));
+    #[cfg(not(target_os = "linux"))]
+    let captured_start_token = process_start_token(process_id);
+    #[cfg(target_os = "linux")]
+    if let Some(observation) = observation { observation.bind_child(child.pre_reap_identity()); }
     let stdout = child
         .stdout
         .take()
@@ -2044,29 +2289,31 @@ where
     let stdout_reader = spawn_output_reader(stdout);
     let stderr_reader = spawn_output_reader(stderr);
     if let Some(reason) = child.take_startup_failure() {
-        let status = child
-            .wait()
-            .context("confirm failed worker startup cleanup")?;
+        let status = wait_observed_child(&mut child, false, false, Some(&reason),
+            #[cfg(target_os = "linux")] observation,
+        ).context("confirm failed worker startup cleanup")?;
         let mut outcome = collect_child_output(
             status,
             false,
             false,
             process_id,
-            None,
+            captured_start_token.as_ref().ok().cloned().flatten(),
             stdout_reader,
             stderr_reader,
+            Some(reason.clone()),
+            #[cfg(target_os = "linux")] observation,
         )?;
         outcome.control_failure_reason = Some(reason);
         return Ok(outcome);
     }
-    let process_start_token = match process_start_token(process_id) {
+    let process_start_token = match captured_start_token {
         Ok(token) => token,
         Err(error) => {
             let reason = format!("inspect accepted worker process identity: {error:#}");
             let _ = child.kill();
-            let status = child
-                .wait()
-                .context("reap accepted worker after process identity failure")?;
+            let status = wait_observed_child(&mut child, false, false, Some(&reason),
+                #[cfg(target_os = "linux")] observation,
+            ).context("reap accepted worker after process identity failure")?;
             let mut outcome = collect_child_output(
                 status,
                 false,
@@ -2075,6 +2322,8 @@ where
                 None,
                 stdout_reader,
                 stderr_reader,
+                Some(reason.clone()),
+                #[cfg(target_os = "linux")] observation,
             )?;
             outcome.control_failure_reason = Some(reason);
             return Ok(outcome);
@@ -2088,7 +2337,9 @@ where
     let mut heartbeat_failing_since: Option<Instant> = None;
 
     loop {
-        if let Some(status) = child.try_wait().context("observe accepted worker exit")? {
+        if let Some(status) = try_wait_observed_child(&mut child, false, stop_observed, None,
+            #[cfg(target_os = "linux")] observation,
+        ).context("observe accepted worker exit")? {
             return collect_child_output(
                 status,
                 false,
@@ -2097,13 +2348,15 @@ where
                 process_start_token,
                 stdout_reader,
                 stderr_reader,
+                None,
+                #[cfg(target_os = "linux")] observation,
             );
         }
         if timeout.is_some_and(|limit| started.elapsed() >= limit) {
             if let Err(error) = child.kill() {
-                if let Some(status) = child
-                    .try_wait()
-                    .context("recheck accepted worker after timeout kill race")?
+                if let Some(status) = try_wait_observed_child(&mut child, false, stop_observed, None,
+                    #[cfg(target_os = "linux")] observation,
+                ).context("recheck accepted worker after timeout kill race")?
                 {
                     return collect_child_output(
                         status,
@@ -2113,13 +2366,15 @@ where
                         process_start_token,
                         stdout_reader,
                         stderr_reader,
+                        None,
+                        #[cfg(target_os = "linux")] observation,
                     );
                 }
                 return Err(error).context("terminate accepted worker after timeout");
             }
-            let status = child
-                .wait()
-                .context("confirm accepted worker termination after timeout")?;
+            let status = wait_observed_child(&mut child, true, stop_observed, None,
+                #[cfg(target_os = "linux")] observation,
+            ).context("confirm accepted worker termination after timeout")?;
             return collect_child_output(
                 status,
                 true,
@@ -2128,6 +2383,8 @@ where
                 process_start_token,
                 stdout_reader,
                 stderr_reader,
+                None,
+                #[cfg(target_os = "linux")] observation,
             );
         }
         let stop_requested_now = match stop_requested() {
@@ -2152,9 +2409,9 @@ where
             Err(error) => {
                 let reason = format!("poll durable worker Stop request: {error:#}");
                 let _ = child.kill();
-                let status = child
-                    .wait()
-                    .context("reap accepted worker after Stop polling failure")?;
+                let status = wait_observed_child(&mut child, false, stop_observed, Some(&reason),
+                    #[cfg(target_os = "linux")] observation,
+                ).context("reap accepted worker after Stop polling failure")?;
                 let mut outcome = collect_child_output(
                     status,
                     false,
@@ -2163,6 +2420,8 @@ where
                     process_start_token,
                     stdout_reader,
                     stderr_reader,
+                    Some(reason.clone()),
+                    #[cfg(target_os = "linux")] observation,
                 )?;
                 outcome.control_failure_reason = Some(reason);
                 return Ok(outcome);
@@ -2204,9 +2463,9 @@ where
                     }
                     let reason = format!("renew accepted-worker heartbeat: {error:#}");
                     let _ = child.kill();
-                    let status = child
-                        .wait()
-                        .context("reap accepted worker after heartbeat failure")?;
+                    let status = wait_observed_child(&mut child, false, stop_observed, Some(&reason),
+                        #[cfg(target_os = "linux")] observation,
+                    ).context("reap accepted worker after heartbeat failure")?;
                     let mut outcome = collect_child_output(
                         status,
                         false,
@@ -2215,6 +2474,8 @@ where
                         process_start_token,
                         stdout_reader,
                         stderr_reader,
+                        Some(reason.clone()),
+                        #[cfg(target_os = "linux")] observation,
                     )?;
                     outcome.control_failure_reason = Some(reason);
                     return Ok(outcome);
@@ -2224,6 +2485,22 @@ where
         }
         std::thread::sleep(Duration::from_millis(10));
     }
+}
+
+#[cfg(test)]
+fn observe_child<H, C>(
+    child: OwnedWorkerProcess,
+    timeout: Option<Duration>,
+    heartbeat_interval: Option<Duration>,
+    heartbeat: H,
+    stop_requested: C,
+) -> Result<ObservedWorkerProcess>
+where
+    H: FnMut() -> Result<bool>,
+    C: FnMut() -> Result<bool>,
+{
+    observe_child_with_observation(child, timeout, heartbeat_interval, heartbeat, stop_requested,
+        #[cfg(target_os = "linux")] None)
 }
 
 fn spawn_output_reader<R>(mut stream: R) -> JoinHandle<std::io::Result<Vec<u8>>>
@@ -2245,7 +2522,13 @@ fn collect_child_output(
     process_start_token: Option<String>,
     stdout_reader: JoinHandle<std::io::Result<Vec<u8>>>,
     stderr_reader: JoinHandle<std::io::Result<Vec<u8>>>,
+    control_failure_reason: Option<String>,
+    #[cfg(target_os = "linux")] observation: Option<&accepted_worker_exit_observation::ObservationPublisher>,
 ) -> Result<ObservedWorkerProcess> {
+    #[cfg(target_os = "linux")]
+    if let Some(observation) = observation {
+        observation.confirm_cleanup();
+    }
     let stdout = join_output_reader(stdout_reader, "stdout")?;
     let stderr = join_output_reader(stderr_reader, "stderr")?;
     Ok(ObservedWorkerProcess {
@@ -2258,7 +2541,7 @@ fn collect_child_output(
         stop_requested,
         process_id,
         process_start_token,
-        control_failure_reason: None,
+        control_failure_reason,
     })
 }
 
@@ -2324,8 +2607,10 @@ fn reconcile_worker_exit(
     let durable_success = phase == CoordinatorPhase::Terminal
         && checkpoint.task.lifecycle == TaskLifecycle::Succeeded;
     if durable_success && inbox_checkpoint.pending.as_ref() == Some(start) {
-        fullmag_runtime_control::validate_study_task_completion(store, claim)
-            .context("validate completion before reconciling pending Start")?;
+        retry_store_writer_busy(|| {
+            fullmag_runtime_control::validate_study_task_completion(store, claim)
+        })
+        .context("validate completion before reconciling pending Start")?;
         inbox
             .confirm_applied(start)
             .map_err(|error| anyhow::anyhow!(error.to_string()))?;
@@ -2333,8 +2618,10 @@ fn reconcile_worker_exit(
     }
 
     if durable_success {
-        fullmag_runtime_control::validate_study_task_completion(store, claim)
-            .context("validate terminal worker completion")?;
+        retry_store_writer_busy(|| {
+            fullmag_runtime_control::validate_study_task_completion(store, claim)
+        })
+        .context("validate terminal worker completion")?;
         if inbox_checkpoint.pending.is_some()
             || !inbox_checkpoint
                 .applied
@@ -2811,6 +3098,63 @@ fn claim_from_worker_process_exit(
             heartbeat_sequence: lease.heartbeat_sequence,
         },
     })
+}
+
+#[cfg(target_os = "linux")]
+fn raw_slot_path(store: &SessionStore, resource_id: &str) -> Result<PathBuf> {
+    fullmag_session::repository_path::checked_path(store.root(), &format!(
+        "{SUPERVISOR_DIRECTORY}/resource-{}", fullmag_session::hex_sha256(resource_id.as_bytes()),
+    ))
+}
+
+#[cfg(target_os = "linux")]
+fn promote_owned_wait_observation(
+    store: &SessionStore, run_id: &str, task_id: &str, resource_id: &str,
+) -> Result<()> {
+    let Some(raw) = accepted_worker_exit_observation::read_pending(store, run_id, task_id, resource_id)?
+    else { return Ok(()); };
+    let catalog = store.read_run_catalog(run_id)?.context("raw wait observation requires its current catalog")?;
+    let task = catalog.tasks.iter().find(|task| task.task_id == task_id)
+        .context("raw wait observation task is missing")?;
+    if task.attempt_id.as_deref() != Some(raw.claim.attempt_id.as_str())
+        || task.ownership_epoch != Some(raw.claim.ownership_epoch.value())
+        || task.resource_id.as_deref() != Some(resource_id) {
+        bail!("raw wait observation differs from the current exact task attempt");
+    }
+    if let Some(receipt) = worker_process_exit_receipt_for_current_task(store, run_id, task_id)? {
+        raw.validate_receipt(&receipt)?;
+        accepted_worker_exit_observation::archive_published(store, &raw_slot_path(store, resource_id)?)?;
+        return Ok(());
+    }
+    let mut lease = retry_store_writer_busy(|| store.read_resource_lease(
+        run_id, &raw.lease.resource_id, &raw.lease.lease_token,
+    ))?.context("pending raw wait observation has no retained resource lease")?;
+    if lease.state != fullmag_session::FmsResourceLeaseState::Active {
+        bail!("unpromoted raw wait observation requires its exact active lease");
+    }
+    let outcome = raw.outcome();
+    let recovered = retry_store_writer_busy(|| fullmag_runtime_control::recover_coordinator(store, &raw.claim))?;
+    if recovered.commands.iter().filter(|command| command.claim.matches_claim(&raw.claim)
+        && matches!(&command.command, WorkerCommand::Start)).count() != 1 {
+        bail!("raw wait observation requires exactly one existing Start for its claim");
+    }
+    // Recover only the existing heartbeat acknowledgement; never Start/Solve.
+    let heartbeat = reconcile_final_resource_heartbeat(store, &raw.claim, &mut lease);
+    let current = receipt_lease_after_final_heartbeat(store, &raw.claim, &lease, &heartbeat)?;
+    let current_claim = claim_from_worker_process_exit(
+        &worker_process_exit_receipt(&raw.claim, &current, &outcome)?, &current,
+    )?;
+    if !raw.claim.is_same_or_renewed_by(&current_claim) {
+        bail!("pending raw wait observation lease/claim changed before canonical publication");
+    }
+    let receipt = persist_worker_process_exit_receipt(store, &raw.claim, &current, &outcome)?;
+    raw.validate_receipt(&receipt)?;
+    match heartbeat {
+        Ok(FinalHeartbeatReconciliation::Reconciled) => accepted_worker_exit_observation::archive_published(store, &raw_slot_path(store, resource_id)?),
+        Ok(FinalHeartbeatReconciliation::Unacknowledged { .. }) if !receipt.status_success => accepted_worker_exit_observation::archive_published(store, &raw_slot_path(store, resource_id)?),
+        Ok(FinalHeartbeatReconciliation::Unacknowledged { .. }) => bail!("raw wait observation retained: final successful heartbeat is unacknowledged"),
+        Err(error) => Err(error.context("raw wait observation retained after heartbeat recovery failure")),
+    }
 }
 
 fn reconcile_durable_worker_exit_before_spawn(
@@ -3633,6 +3977,96 @@ mod tests {
         assert!(!transiently_missing_store_file(&not_ready));
     }
 
+
+    #[cfg(unix)]
+    #[test]
+    fn worker_failure_reason_keeps_rt0_center_witness() {
+        assert_worker_failure_reason_keeps_rt0_center_witness("fullmag.rt0_center_failure.v1");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn worker_failure_reason_keeps_rt0_center_witness_v2() {
+        assert_worker_failure_reason_keeps_rt0_center_witness("fullmag.rt0_center_failure.v2");
+    }
+
+    #[cfg(unix)]
+    fn assert_worker_failure_reason_keeps_rt0_center_witness(schema: &str) {
+        use std::os::unix::process::ExitStatusExt;
+        let hexes = (0..12).map(|i| format!("{:016x}", u64::MAX - i)).collect::<Vec<_>>();
+        let mut witness = serde_json::json!({
+            "schema": schema,
+            "element": "ffffffffffffffff", "axis": 0,
+            "vertex_ids": ["ffffffffffffffff", "0000000000000011", "0000000000000005", "0000000000000009"],
+            "vertex_xyz_bits": hexes, "vertex_j_bits": hexes,
+            "center_xyz_bits": ["8000000000000000", "0000000000000000", "0000000000000001"],
+            "center_j_bits": ["7ff8123456789abc", "8000000000000000", "7fefffffffffffff"],
+            "mean_bits": "4020000000000000", "scale_bits": "4020000000000000",
+            "difference_bits": "7ff8123456789abc", "budget_bits": "3d50000000000000",
+            "face_flux_bits": ["8000000000000000", "7fefffffffffffff", "0000000000000001", null]
+        });
+        if schema == "fullmag.rt0_center_failure.v2" {
+            let object = witness.as_object_mut().unwrap();
+            for key in ["mean_bits", "scale_bits", "difference_bits", "budget_bits"] {
+                object.remove(key);
+            }
+            object.insert("comparison_policy".into(), "canonical_rt0_at_stored_point.v1".into());
+            object.insert("axis_scale_bits".into(), "4020000000000000".into());
+        }
+        let message = format!("closed-loop identity refused: cell-local J interpolation mismatch {schema}={witness}");
+        assert!(message.is_ascii() && message.len() <= 2048);
+        let error = anyhow::Error::new(fullmag_runner::RunError { message })
+            .context("execute canonical full-volume inspection")
+            .context("execute accepted worker Start");
+        let report = format!("{WORKER_FAILURE_MARKER} {error:#}");
+        assert!(report.len() <= WORKER_FAILURE_REPORT_BYTES);
+        let outcome = ObservedWorkerProcess {
+            output: Output {
+                status: ExitStatus::from_raw(256),
+                stdout: "x".repeat(2 * WORKER_FAILURE_STDOUT_BYTES).into_bytes(),
+                stderr: format!("{}\n{report}\n{}", "startup noise ".repeat(300), "native tail ".repeat(300)).into_bytes(),
+            },
+            timed_out: false, stop_requested: false, process_id: 7,
+            process_start_token: None, control_failure_reason: None,
+        };
+        let reason = worker_failure_reason(&outcome);
+        assert!(reason.len() <= 4096);
+        assert!(reason.ends_with(&"x".repeat(WORKER_FAILURE_STDOUT_BYTES)));
+        let parsed = |reason: &str| {
+            let (_, json) = reason.split_once(&format!(" {schema}=")).unwrap();
+            serde_json::Deserializer::from_str(json).into_iter::<serde_json::Value>()
+                .next().unwrap().unwrap()
+        };
+        assert_eq!(parsed(&reason), witness);
+        let now = chrono::Utc::now();
+        let lease = FmsResourceLease {
+            schema_version: fullmag_session::FMS_RESOURCE_LEASE_SCHEMA.into(),
+            resource_id: "resource-rt0".into(), kind: fullmag_session::FmsResourceKind::Cpu,
+            budget: fullmag_session::FmsResourceBudget {
+                cpu_millis: 1000, memory_bytes: 1, gpu_memory_bytes: 0, storage_bytes: 0,
+            },
+            run_id: "run-rt0".into(), task_id: "task-rt0".into(), attempt_id: "attempt-rt0".into(),
+            ownership_epoch: 1, lease_token: "lease-rt0".into(),
+            state: fullmag_session::FmsResourceLeaseState::Active,
+            acquired_at: now, heartbeat_at: now, heartbeat_sequence: 2,
+            released_at: None, host_launch_binding: None,
+        };
+        let receipt = FmsWorkerProcessExitReceipt {
+            schema_version: FMS_WORKER_PROCESS_EXIT_RECEIPT_SCHEMA.into(), receipt_id: "exit-rt0".into(),
+            run_id: lease.run_id.clone(), task_id: lease.task_id.clone(), attempt_id: lease.attempt_id.clone(),
+            ownership_epoch: lease.ownership_epoch, resource_id: lease.resource_id.clone(),
+            lease_token: lease.lease_token.clone(), lease_heartbeat_sequence: lease.heartbeat_sequence,
+            process_id: 7, process_start_token: None, status_success: false, exit_code: Some(1),
+            timed_out: false, stop_requested: false, failure_reason: Some(reason), observed_at: now,
+        };
+        receipt.validate_for_lease(&lease).unwrap();
+        let decoded: FmsWorkerProcessExitReceipt =
+            serde_json::from_slice(&serde_json::to_vec(&receipt).unwrap()).unwrap();
+        decoded.validate_for_lease(&lease).unwrap();
+        assert_eq!(decoded, receipt);
+        assert_eq!(parsed(decoded.failure_reason.as_deref().unwrap()), witness);
+    }
+
     #[cfg(unix)]
     #[test]
     fn worker_failure_reason_keeps_the_worker_error_report() {
@@ -4128,6 +4562,7 @@ accepted worker failed: execute accepted worker Start: controlled failure\n";
         std::fs::remove_file(snapshot_path).unwrap();
 
         let mut retries = 0;
+        let retry_started = Instant::now();
         let error = verify_host_solver_claim_before_spawn_with_timeout(
             &fixture.host,
             &fixture.store,
@@ -4137,7 +4572,8 @@ accepted worker failed: execute accepted worker Start: controlled failure\n";
         )
         .unwrap_err();
 
-        assert!(retries > 0, "missing sample should be retried before deferral");
+        assert!(retries > 0 || retry_started.elapsed() >= Duration::from_millis(250),
+            "missing sample must retry while its deadline is open: {error:#}");
         assert!(error.chain().any(|cause| {
             cause.is::<fullmag_session::host_resource_ledger::ComputeNodeSampleNotCurrent>()
         }));
@@ -4190,6 +4626,7 @@ accepted worker failed: execute accepted worker Start: controlled failure\n";
         let fixture = host_launch_test_fixture();
         drop(fixture._inventory_owner);
         let mut retries = 0;
+        let retry_started = Instant::now();
         let error = verify_host_solver_claim_before_spawn_with_timeout(
             &fixture.host,
             &fixture.store,
@@ -4198,7 +4635,8 @@ accepted worker failed: execute accepted worker Start: controlled failure\n";
             || retries += 1,
         )
         .unwrap_err();
-        assert!(retries > 0, "{error:#}");
+        assert!(retries > 0 || retry_started.elapsed() >= Duration::from_millis(250),
+            "inactive owner must retry while its deadline is open: {error:#}");
         assert!(error.downcast_ref::<
             fullmag_session::host_resource_ledger::ComputeNodeSampleNotCurrent,
         >().is_some());

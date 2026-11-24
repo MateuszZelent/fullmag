@@ -3,6 +3,8 @@ import ast
 import copy
 import hashlib
 import json
+import os
+from unittest.mock import patch
 from pathlib import Path
 import sys
 import tempfile
@@ -1120,46 +1122,349 @@ class DispatchTests(unittest.TestCase):
 
     def test_completed_recreation_replays_pinned_linux_stop_with_removed_service_snapshots(self):
         from types import SimpleNamespace
-        from unittest.mock import patch
 
         backend, frontend, image = 'b' * 64, 'f' * 64, 'sha256:' + 'a' * 64
-        compose = {'name': 'fullmag-fixture'}
+        project, volume = 'fullmag-fixture', 'fixture-control'
+        recreate_attempt = 'e' * 32
+        recreate_root = 'recreate-services/attempts/' + recreate_attempt
+        prior_root = 'development/attempts/' + 'a' * 32
+        journal_path = 'verification/stop-failed-' + backend + '.json'
+        compose = {'name': project}
         config_sha = subject.sha(subject.canonical(compose))
-        previous = dict(attempt='attempt', backend_container=backend, frontend_container=frontend,
+        previous = dict(attempt='a' * 32, backend_container=backend, frontend_container=frontend,
                         config_sha256=config_sha, state_root='/retained',
+                        backend_volumes={'package': 'fixture-package'}, frontend_volume='fixture-frontend',
                         inputs={'image_id': image, 'source_root': '/source'})
-        stop_probe = dict(process_receipt_sha256='1' * 64, owner_sha256='2' * 64,
-                          config_raw_sha256='3' * 64)
-        terminal_probe = dict(stop_probe, process_receipt_sha256='4' * 64)
-        stopped = dict(Running=False, Pid=0, OOMKilled=False, StartedAt='stopped-boot')
-        services = {'backend': {'Id': backend, 'State': stopped}, 'frontend': {'Id': frontend, 'State': stopped}}
+        stopped = dict(Running=False, Pid=0, OOMKilled=False, StartedAt='stopped-boot',
+                       FinishedAt='finished-boot', ExitCode=0)
+        services = {name: {'Id': identifier, 'Image': image, 'State': stopped}
+                    for name, identifier in {'backend': backend, 'frontend': frontend}.items()}
+        terminal = dict(schema='fullmag.docker-build-operation.v1', phase='recreate-services',
+                        state='succeeded', attempt=recreate_attempt, compose_project=project,
+                        control_volume=volume, fresh_state=False, removed_containers=[backend, frontend],
+                        previous_state_root=previous['state_root'], retained_volumes=previous['backend_volumes'],
+                        retained_frontend_volume=previous['frontend_volume'],
+                        inputs={'attempt': previous['attempt'], 'config_sha256': config_sha})
+        records = {
+            recreate_root + '/terminal.json': terminal,
+            recreate_root + '/receipt.json': terminal,
+            recreate_root + '/retained-containers.json': services,
+            prior_root + '/terminal.json': previous,
+            prior_root + '/compose.json': compose,
+            'development/current.json': previous,
+            'development/verified.json': previous,
+        }
         proof = dict(schema='fullmag.docker-removed-recreation-container.v1',
-                     container_id=backend, frontend_container=frontend, image_id=image)
-        journal = dict(schema='fullmag.stop-failed-admission.v1', state='stopped-confirmed',
-                       failure_kind=subject.KIND, container_id=backend, image_id=image,
-                       source_root='/source', development_attempt='attempt', compose_config_sha256=config_sha,
-                       namespace_processes_absent=True, scope={}, terminal_only=True,
-                       service_pins={name: ['stopped-boot', service['Id']] for name, service in services.items()},
-                       supervision_probe=stop_probe, terminal_process_receipt_sha256='4' * 64,
-                       previous_config_sha256='3' * 64, cancellation={'proof': 'original'})
-        control = SimpleNamespace(project='fullmag-fixture',
-                                  read=lambda key: compose if key.endswith('compose.json') else previous)
-        journal_raw = subject.canonical(journal)
-        with patch('docker_build_control.docker_capture') as docker, \
-             patch('docker_volume_dev._retained_certificate'), \
-             patch('docker_volume_reconcile.fingerprint', side_effect=lambda service: service['Id']), \
-             patch.object(subject, '_probe', return_value=terminal_probe) as probe, \
-             patch.object(subject, 'cancellation', return_value=journal['cancellation']):
-            context = subject.retained_context(control, previous, journal, journal_raw, backend, False,
-                                               removed_container_proof=proof, retained_services=services)
-            self.assertEqual(context['previous_config_sha256'], '3' * 64)
-            probe.assert_called_once_with(control, services['backend'], image, stopped=True, terminal_only=True)
-            wrong = dict(services, frontend={'Id': 'c' * 64, 'State': stopped})
-            with self.assertRaisesRegex(ValueError, 'stopped service pin changed'):
-                subject.retained_context(control, previous, journal, journal_raw, backend, False,
-                                         removed_container_proof=proof, retained_services=wrong)
-            docker.assert_not_called()
+                     container_id=backend, frontend_container=frontend, image_id=image,
+                     recreation_operation_id=recreate_attempt,
+                     container_state={'id': backend, 'image': image, 'started_at': stopped['StartedAt'],
+                                      'finished_at': stopped['FinishedAt'], 'exit_code': stopped['ExitCode']})
 
+        def raw(key):
+            return subject.canonical(records[key]) + b'\n'
+
+        for key, path in {
+            'recreation_terminal_sha256': recreate_root + '/terminal.json',
+            'retained_snapshot_sha256': recreate_root + '/retained-containers.json',
+            'prior_terminal_sha256': prior_root + '/terminal.json',
+            'prior_compose_sha256': prior_root + '/compose.json',
+        }.items():
+            proof[key] = subject.sha(raw(path))
+        control = SimpleNamespace(project=project, volume=volume, read=records.__getitem__, read_bytes=raw)
+
+        for profile in ('v1', subject.PROFILE_V2):
+            with self.subTest(profile=profile):
+                schema = subject.SCHEMA if profile == 'v1' else subject.SCHEMA_V2
+                stop_probe = dict(schema=schema, process_receipt_sha256='1' * 64, owner_sha256='2' * 64,
+                                  config_raw_sha256='3' * 64)
+                journal = dict(schema='fullmag.stop-failed-admission.v1', state='stopped-confirmed',
+                               failure_kind=subject.KIND, container_id=backend, image_id=image,
+                               source_root='/source', development_attempt=previous['attempt'],
+                               compose_config_sha256=config_sha, namespace_processes_absent=True,
+                               scope={}, terminal_only=True, exit_code=stopped['ExitCode'],
+                               stopped_started_at=stopped['StartedAt'],
+                               service_pins={name: [stopped['StartedAt'], service['Id']]
+                                             for name, service in services.items()},
+                               supervision_probe=stop_probe, terminal_process_receipt_sha256='4' * 64,
+                               previous_config_sha256='3' * 64, cancellation={'proof': 'original'})
+                if profile == subject.PROFILE_V2:
+                    pin = subject.profile_pin(profile)
+                    journal['preservation_profile'] = stop_probe['preservation_profile'] = pin
+                terminal_probe = dict(stop_probe, process_receipt_sha256='4' * 64)
+                records[journal_path] = journal
+                journal_raw = raw(journal_path)
+
+                def retained_context(snapshot):
+                    return subject.retained_context(control, previous, journal, journal_raw, backend, False,
+                                                    removed_container_proof=proof, actual=snapshot)
+
+                with patch('docker_build_control.docker_capture',
+                           return_value=SimpleNamespace(returncode=0, stdout=b'')) as docker, \
+                     patch('docker_volume_dev._retained_certificate'), \
+                     patch('docker_volume_reconcile.fingerprint', side_effect=lambda service: service['Id']), \
+                     patch.object(subject, '_probe', return_value=terminal_probe) as probe, \
+                     patch.object(subject, 'cancellation', return_value=journal['cancellation']):
+                    context = retained_context(services)
+                    self.assertEqual(context['previous_config_sha256'], '3' * 64)
+                    probe.assert_called_once_with(control, services['backend'], image, stopped=True,
+                                                  terminal_only=True, profile=profile)
+                    self.assertEqual([call.args for call in docker.call_args_list], [
+                        ('ps', '--all', '--quiet', '--no-trunc', '--filter', 'id=' + identifier)
+                        for identifier in (backend, frontend) * 2
+                    ])
+                    wrong = dict(services, frontend=dict(services['frontend'], Id='c' * 64))
+                    with self.assertRaisesRegex(ValueError, 'frozen snapshots differ'):
+                        retained_context(wrong)
+
+                    def change_receipt(*args, **kwargs):
+                        records[recreate_root + '/receipt.json'] = dict(terminal, state='failed')
+                        return terminal_probe
+
+                    probe.side_effect = change_receipt
+                    try:
+                        with self.assertRaisesRegex(ValueError, 'completed recreation receipt changed'):
+                            retained_context(services)
+                    finally:
+                        records[recreate_root + '/receipt.json'] = terminal
+
+
+def digest_file(stream):
+    digest=hashlib.sha256()
+    while True:
+        chunk=stream.read(1024*1024)
+        if not chunk: return digest.hexdigest()
+        digest.update(chunk)
+
+def science(store, size=17*1024*1024, name='antenna-inspection.bundle', protocol='worker_protocol.v4'):
+    run, task, attempt, epoch = 'run-a', 'task-a', 'attempt-a', 1
+    root = store / 'runs/run-a/worker-attempts/task-a/attempt-a/epoch-1'
+    root.mkdir(parents=True)
+    budget = {'cpu_millis':1000, 'memory_bytes':1024*1024*1024, 'storage_bytes':64*1024*1024, 'gpu_memory_bytes':0}
+    admitted = {'schema_version':'resource_lease.v1','run_id':run,'task_id':task,'attempt_id':attempt,
+                'ownership_epoch':epoch,'resource_id':'cpu-a','lease_token':'lease-a','kind':'cpu','budget':budget,
+                'state':'active','heartbeat_sequence':0}
+    claim = {'run_id':run,'task_id':task,'attempt_id':attempt,'ownership_epoch':epoch,
+             'lease':{k: admitted[k] for k in ('resource_id','lease_token','kind','budget')}}
+    write(root/'worker_execution_started.v1.json', {'identity':{'schema_version':'fullmag.accepted_worker_execution.v1',
+          'claim':claim,'start_message_id':'command-start','start_sequence':2,'case_id':'default','plan_fingerprint':'a'*64}})
+    write(store/'runs/run-a/task_admissions/task-a/attempt-a.json', {'schema_version':'task_admission.v1',
+          'task':{'task_id':task,'attempt_id':attempt,'ownership_epoch':epoch},'lease':admitted})
+    released = dict(admitted, state='released')
+    write(store/'runs/run-a/resource_leases/cpu-a/lease-a.json', released)
+    identity = {'run_id':run,'task_id':task,'attempt_id':attempt,'ownership_epoch':epoch,'lease_token':'lease-a'}
+    envelope = {'schema_version':protocol,'message_id':'command-start','sequence':2,'claim':identity,'command':{'kind':'start'}}
+    write(store/'runs/run-a/coordinator_journal/command/command-start.json', dict(identity,
+          entry_id='command-start',direction='command',sequence=2,payload={'message':{'envelope':envelope}}))
+    path = root/name
+    magic = b'FMACLB01' if name == 'antenna-inspection.bundle' else b'FMARCF1\0'
+    header = magic + (2).to_bytes(8,'little')
+    if name == 'antenna-inspection.bundle': header += (1).to_bytes(4,'little')
+    with path.open('wb') as f:
+        f.write(header+b'{}'); f.truncate(size)
+    return path
+
+
+class ProposalTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+        self.store = self.root/'store'
+        (self.store/'runs').mkdir(parents=True)
+
+    def test_v1_small_tree_and_default_limits_remain_unchanged(self):
+        (self.store/'runs/a.json').write_bytes(b'{}')
+        self.assertEqual(subject.tree(self.store/'runs'), {'directories':['.'], 'files':{'a.json':subject.sha(b'{}')}})
+        self.assertEqual((subject.MAX_BYTES,subject.MAX_FILES),(16*1024*1024,8192))
+        self.assertIsNone(subject.profile_pin('v1'))
+
+    def test_over_8192_files_remain_refused_v1_but_full_v2_inventory_is_retained(self):
+        for i in range(8193): (self.store/'runs'/f'{i}.json').write_bytes(b'{}')
+        with self.assertRaisesRegex(ValueError,'inventory too large'): subject.tree(self.store/'runs')
+        got=subject.tree_v2(self.store/'runs',self.store,subject.PreservationBudget())
+        self.assertEqual(len(got['files']),8193)
+        self.assertEqual(len(got['directories']),1)
+        self.assertEqual(set(got['files']),{f'{i}.json' for i in range(8193)})
+
+    def test_typed_science_over_16m_streams_and_binds_original_owner(self):
+        path=science(self.store)
+        with self.assertRaisesRegex(ValueError,'unbounded/nonregular'): subject.tree(self.store/'runs')
+        budget=subject.PreservationBudget()
+        got=subject.tree_v2(self.store/'runs',self.store,budget)
+        key=str(path.relative_to(self.store/'runs'))
+        with path.open('rb') as f: digest=digest_file(f)
+        self.assertEqual(got['files'][key]['sha256'],digest)
+        self.assertEqual(got['files'][key]['byte_count'],17*1024*1024)
+        self.assertLess(budget.metadata,128*1024*1024)
+
+    def test_both_retained_v6_v7_families_bind_without_adding_history_authority(self):
+        for protocol in ('worker_protocol.v6','worker_protocol.v7'):
+            with self.subTest(protocol=protocol), tempfile.TemporaryDirectory() as tmp:
+                store=Path(tmp); path=science(store,4096,'antenna-retained-current-field.bundle',protocol)
+                limit,magic=subject.scientific_bundle_binding(store,str(path.relative_to(store/'runs')),subject.PreservationBudget())
+                self.assertEqual(magic,b'FMARCF1\0')
+                self.assertEqual(limit,64*1024*1024)
+
+    def test_owner_budget_start_protocol_and_released_lease_mismatches_refuse(self):
+        path=science(self.store,4096)
+        cases=[('task_admissions/task-a/attempt-a.json',lambda v:v['lease']['budget'].__setitem__('memory_bytes',1)),
+               ('resource_leases/cpu-a/lease-a.json',lambda v:v.__setitem__('state','active')),
+               ('coordinator_journal/command/command-start.json',lambda v:v['payload']['message']['envelope'].__setitem__('schema_version','worker_protocol.v7'))]
+        for relative,change in cases:
+            file=self.store/'runs/run-a'/relative; before=file.read_bytes(); value=json.loads(before);change(value);write(file,value)
+            with self.subTest(relative=relative),self.assertRaises(ValueError):
+                subject.scientific_bundle_binding(self.store,str(path.relative_to(self.store/'runs')),subject.PreservationBudget())
+            file.write_bytes(before)
+        started=path.parent/'worker_execution_started.v1.json';value=json.loads(started.read_bytes());value['identity']['claim']['task_id']='task-other';write(started,value)
+        with self.assertRaisesRegex(ValueError,'Started identity'):
+            subject.scientific_bundle_binding(self.store,str(path.relative_to(self.store/'runs')),subject.PreservationBudget())
+
+    def test_unknown_family_malformed_header_and_alias_refuse(self):
+        path=science(self.store,4096)
+        unknown=path.with_name('other.bundle');unknown.write_bytes(path.read_bytes())
+        with self.assertRaisesRegex(ValueError,'unknown scientific bundle family'):
+            subject.tree_v2(self.store/'runs',self.store,subject.PreservationBudget())
+        unknown.unlink()
+        data=path.read_bytes();path.write_bytes(b'FMACLB01'+b'\0'*12+data[20:])
+        with self.assertRaisesRegex(ValueError,'manifest header'):
+            subject.tree_v2(self.store/'runs',self.store,subject.PreservationBudget())
+        path.write_bytes(data); os.link(path,path.with_name('alias'))
+        with self.assertRaisesRegex(ValueError,'nonregular'):
+            subject.tree_v2(self.store/'runs',self.store,subject.PreservationBudget())
+
+    def test_metadata_count_total_io_and_per_payload_boundaries_fail_before_large_read(self):
+        path=self.root/'metadata';path.write_bytes(b'1234')
+        with patch.dict(subject.PROFILE_V2_LIMITS,metadata_total_bytes=4,total_io_bytes=8,inventory_entries=2):
+            b=subject.PreservationBudget();b.record(path)
+            with self.assertRaisesRegex(ValueError,'metadata byte budget'):b.record(path)
+            b=subject.PreservationBudget();b.charge(8)
+            with self.assertRaisesRegex(ValueError,'IO budget'):b.charge(1)
+            b=subject.PreservationBudget();b.entry();b.entry()
+            with self.assertRaisesRegex(ValueError,'inventory too large'):b.entry()
+        with path.open('wb') as f:f.truncate(16*1024*1024+1)
+        with self.assertRaises(ValueError):subject.read(path)
+        with self.assertRaises(ValueError):subject.PreservationBudget().record(path)
+        with path.open('wb') as f:f.truncate(512*1024*1024+1)
+        with self.assertRaisesRegex(ValueError,'typed bound'):subject.PreservationBudget().stream(path,512*1024*1024)
+
+    def test_replacement_growth_and_cached_path_aba_refuse(self):
+        path=self.root/'data';path.write_bytes(b'x'*64)
+        original_fstat=os.fstat;calls=[0]
+        def replace(fd):
+            calls[0]+=1
+            if calls[0]==2:
+                replacement=path.with_name('replacement');replacement.write_bytes(path.read_bytes());replacement.replace(path)
+            return original_fstat(fd)
+        with patch.object(subject.os,'fstat',side_effect=replace),self.assertRaisesRegex(ValueError,'changed'):
+            subject.PreservationBudget().stream(path,1024)
+        b=subject.PreservationBudget();b.stream(path,1024)
+        replacement=path.with_name('replacement');replacement.write_bytes(path.read_bytes());replacement.replace(path)
+        with self.assertRaisesRegex(ValueError,'cached preservation source changed'):b.stream(path,1024)
+        calls=[0]
+        def grow(fd):
+            calls[0]+=1
+            if calls[0]==2:
+                with path.open('ab') as out:out.write(b'y')
+            return original_fstat(fd)
+        with patch.object(subject.os,'fstat',side_effect=grow),self.assertRaisesRegex(ValueError,'changed'):
+            subject.PreservationBudget().stream(path,1024)
+
+    def test_metadata_charge_uses_open_descriptor_not_prior_path_stat(self):
+        path=self.root/'metadata';path.write_bytes(b'x'*64)
+        with patch.object(subject.os,'stat',side_effect=AssertionError('path stat must not authorize read')):
+            budget=subject.PreservationBudget();self.assertEqual(budget.record(path),b'x'*64)
+            self.assertEqual((budget.metadata,budget.total),(64,64))
+        with patch.dict(subject.PROFILE_V2_LIMITS,metadata_total_bytes=63),self.assertRaisesRegex(ValueError,'metadata byte budget'):
+            subject.PreservationBudget().record(path)
+
+    def test_metadata_and_stream_reopen_all_ancestors_after_read(self):
+        for mode in ('record','stream','binary'):
+            with self.subTest(mode=mode),tempfile.TemporaryDirectory() as tmp:
+                directory=Path(tmp)/'objects';directory.mkdir();path=directory/'data';path.write_bytes(b'x'*64)
+                saved=directory.with_name('saved');real_fstat=os.fstat;calls=[0]
+                def swap(fd):
+                    calls[0]+=1
+                    if calls[0]==2:
+                        directory.rename(saved);directory.symlink_to(saved,target_is_directory=True)
+                    return real_fstat(fd)
+                with patch.object(subject.os,'fstat',side_effect=swap),self.assertRaises(OSError):
+                    budget=subject.PreservationBudget()
+                    if mode=='record':budget.record(path)
+                    else:budget.stream(path,1024,allow_alias=mode=='binary')
+
+    def test_binary_stream_charges_same_descriptor_and_retains_installed_hardlink_allowance(self):
+        path=self.root/'binary';path.write_bytes(b'x'*64);os.link(path,self.root/'binary-alias')
+        with patch.object(subject.os,'stat',side_effect=AssertionError('path stat must not authorize read')):
+            budget=subject.PreservationBudget();got=budget.stream(path,1024,allow_alias=True)
+            self.assertEqual(got['sha256'],subject.sha(b'x'*64));self.assertEqual(budget.total,64)
+        with self.assertRaisesRegex(ValueError,'aliased'):subject.PreservationBudget().stream(path,1024)
+
+    def test_directory_replacement_with_symlink_is_rejected_at_final_recheck(self):
+        path=self.store/'runs'; backup=self.store/'retained-runs'
+        real_fstat=os.fstat; calls=[0]
+        def replace(fd):
+            calls[0]+=1
+            if calls[0]==2:
+                path.rename(backup);path.symlink_to(backup,target_is_directory=True)
+            return real_fstat(fd)
+        with patch.object(subject.os,'fstat',side_effect=replace),self.assertRaisesRegex(ValueError,'directory changed'):
+            subject.tree_v2(path,self.store,subject.PreservationBudget())
+
+    def test_changed_byte_or_skipped_file_changes_full_proof(self):
+        p=self.store/'runs/a.json';p.write_bytes(b'aa')
+        def observation():return {'schema':subject.SCHEMA_V2,'preservation_profile':subject.profile_pin(subject.PROFILE_V2),
+                                  'store':subject.tree_v2(self.store/'runs',self.store,subject.PreservationBudget())}
+        before=observation();p.write_bytes(b'ab')
+        with self.assertRaisesRegex(ValueError,'retained evidence'):subject._same_retained(before,observation())
+        p.unlink()
+        with self.assertRaisesRegex(ValueError,'retained evidence'):subject._same_retained(before,observation())
+
+    def test_profile_is_pinned_and_v1_cannot_be_upgraded_or_v2_downgraded(self):
+        pin=subject.profile_pin(subject.PROFILE_V2)
+        valid={'preservation_profile':pin,'supervision_probe':{'schema':subject.SCHEMA_V2,'preservation_profile':pin}}
+        self.assertEqual(subject.profile_from_journal(valid),subject.PROFILE_V2)
+        self.assertEqual(subject.profile_from_journal({'supervision_probe':{'schema':subject.SCHEMA}}),'v1')
+        for mutate in [lambda v:v.pop('preservation_profile'),lambda v:v['supervision_probe'].pop('preservation_profile'),
+                       lambda v:v['supervision_probe'].__setitem__('schema',subject.SCHEMA),
+                       lambda v:v['preservation_profile']['limits'].__setitem__('inventory_entries',32769)]:
+            value=copy.deepcopy(valid);mutate(value)
+            with self.assertRaises(ValueError):subject.profile_from_journal(value)
+        with self.assertRaises(ValueError):subject.profile_pin('v3')
+
+    def test_large_model_cas_is_streamed_not_json_decoded_and_study_limit_remains_16m(self):
+        ledger=self.root/'ledger';(ledger/'proofs').mkdir(parents=True)
+        for name in ('temp','recovery'):(self.store/name).mkdir()
+        objects=self.store/'objects/sha256';objects.mkdir(parents=True)
+        def blob(size,byte):
+            p=objects/'pending'
+            with p.open('wb') as f:
+                f.write(byte);f.truncate(size)
+            with p.open('rb') as f:h=digest_file(f)
+            p.rename(objects/h);return h
+        definition=blob(17*1024*1024,b'd');catalog=blob(17*1024*1024,b'c');study=blob(2,b'{}')
+        intent={'run_id':'run-a','specification':{'snapshot':{'definition_sha256':definition},'study':{'plan_sha256':study},'study_catalog_sha256':catalog}}
+        write(self.store/'runs/run-a/run_intent.json',intent)
+        write(self.store/'runs/run-a/run_catalog.json',{'run_id':'run-a','tasks':[{'task_id':'task-a','lifecycle':'cancelled'}]})
+        write(ledger/'HOST_RESOURCE_LEDGER.json',{'reservations':[]})
+        with self.assertRaisesRegex(ValueError,'unbounded/nonregular'):subject.observe_store(self.store,ledger,'store')
+        got=subject.observe_store(self.store,ledger,'store',profile=subject.PROFILE_V2)
+        self.assertEqual(got['immutable_objects'][definition]['byte_count'],17*1024*1024)
+        intent['specification']['study']['plan_sha256']=catalog;write(self.store/'runs/run-a/run_intent.json',intent)
+        with self.assertRaisesRegex(ValueError,'typed bound'):subject.observe_store(self.store,ledger,'store',profile=subject.PROFILE_V2)
+
+class V2RuntimeProofTests(RuntimeProofTests):
+    def full(self, stopped=False):
+        return subject.observe(self.state,self.control,self.ledger,self.image,stopped=stopped,
+            proc_root=self.proc,binary=self.binary,profile=subject.PROFILE_V2)
+
+    def test_explicit_v2_profile_is_preserved_in_full_pre_and_post_stop_proofs(self):
+        before=self.full()
+        self.assertEqual(before['schema'],subject.SCHEMA_V2)
+        self.assertEqual(before['preservation_profile'],subject.profile_pin(subject.PROFILE_V2))
+        self.process.update(state='shutdown_unknown',api_exit_code=-15,shutdown_error='runtime service owner is not ready')
+        write(self.control/'runtime-service/process-tree.json',self.process)
+        (self.proc/'103/environ').unlink();(self.proc/'103').rmdir()
+        subject._same_retained(before,self.full(stopped=True))
 
 if __name__ == '__main__':
     unittest.main()

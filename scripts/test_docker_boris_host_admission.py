@@ -43,5 +43,30 @@ class BorisHostAdmissionTests(unittest.TestCase):
                 self.exercise(controller, "posix", "darwin", ValueError, "Windows and Linux/WSL hosts")
 
 
+class BorisPrivateCacheTests(unittest.TestCase):
+    def test_copy_uses_the_same_build_subpath_as_backend(self):
+        control = SimpleNamespace(helper_args=lambda *args, **kwargs:
+            ["docker", "run", "--entrypoint", "sh", "helper"])
+        for subpath in ("", "private/backend", "task/private/backend"):
+            with self.subTest(subpath=subpath):
+                cache = dict(volume_names=dict(build="selected-build"))
+                if subpath:
+                    cache.update(group_volume="selected-build", build_subpath=subpath)
+                argv = producer.copy_args(control, "a"*32, cache)
+                mount = argv[argv.index("--mount")+1]
+                self.assertEqual(mount, "type=volume,src=selected-build,dst=/build,volume-nocopy" +
+                    (",volume-subpath="+subpath if subpath else ""))
+                self.assertEqual(argv[argv.index("--entrypoint")+1], "/usr/bin/python3")
+                self.assertIn(producer.ASSET, argv)
+                self.assertNotIn("--privileged", argv)
+
+    def test_group_cache_never_falls_back_to_volume_root(self):
+        control = SimpleNamespace(helper_args=lambda *args, **kwargs: [])
+        for value in (None, "", "../backend", "/private/backend", "private//backend", "x,readonly"):
+            with self.subTest(subpath=value), self.assertRaises(producer.BuildControlError):
+                producer.copy_args(control, "a"*32, dict(group_volume="selected-build",
+                    volume_names=dict(build="selected-build"), build_subpath=value))
+
+
 if __name__ == "__main__":
     unittest.main()

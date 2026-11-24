@@ -2869,18 +2869,43 @@ async function qualifyMagneticTextureMutationStability(page, inspector, fixture)
   notFoundResponseEvidenceTasks.length = 0;
 }
 
-async function expandPhysicsInteractionChecklist(inspector) {
-  const interactionSection = inspector
-    .locator('[data-slot="inspector-group-trigger"], button')
-    .filter({ hasText: /Physics Interaction|Interaction parameters/ })
-    .first();
-  assert(
-    (await interactionSection.count()) === 1,
-    "Physics Interaction / Interaction parameters section is missing from the interaction inspector.",
-  );
-  if ((await interactionSection.getAttribute("aria-expanded")) !== "true") {
-    await interactionSection.click();
+async function stageConflictingPhysicsTerm(inspector, fixture, conflictMessage, label) {
+  const section = inspector.locator('[data-section-id="physics-module-params"]');
+  const sectionTrigger = section.getByRole("button", {
+    name: "Interaction parameters",
+    exact: true,
+  });
+  await sectionTrigger.waitFor({ state: "visible", timeout: 30_000 });
+  if ((await sectionTrigger.getAttribute("aria-expanded")) !== "true") {
+    await sectionTrigger.click();
   }
+
+  const enableTerm = section.getByRole("switch", {
+    name: "Enable Hamiltonian term",
+    exact: true,
+  });
+  await enableTerm.waitFor({ state: "visible", timeout: 30_000 });
+  assert(
+    (await enableTerm.getAttribute("aria-checked")) === "false",
+    `${label} must start disabled in the fixture.`,
+  );
+
+  const requestStart = fixture.requests.length;
+  await enableTerm.click();
+  await inspector.getByText(conflictMessage).first().waitFor({ state: "visible", timeout: 5_000 });
+  assert(
+    (await enableTerm.getAttribute("aria-checked")) === "true",
+    `${label} did not stage an enabled draft.`,
+  );
+  const stagedApply = inspector
+    .locator('[data-slot="commit-bar-staged-actions"]')
+    .getByRole("button", { name: /^Apply(?:\s|$)/ });
+  await stagedApply.waitFor({ state: "visible", timeout: 5_000 });
+  assert(
+    await stagedApply.isDisabled(),
+    `${label} must lock Apply while the DMI scopes conflict.`,
+  );
+  return requestStart;
 }
 
 async function qualifyPhysicsScopeExclusivity(page, inspector, fixture) {
@@ -2928,49 +2953,12 @@ async function qualifyPhysicsScopeExclusivity(page, inspector, fixture) {
     { timeout: 60_000 },
   );
 
-  await expandPhysicsInteractionChecklist(inspector);
-
-  const requestStart = fixture.requests.length;
-  const canonicalEnableSwitch = inspector.getByRole("switch", {
-    name: "Enable Hamiltonian term",
-    exact: true,
-  });
-  if (await canonicalEnableSwitch.count()) {
-    if ((await canonicalEnableSwitch.getAttribute("aria-checked")) !== "true") {
-      await canonicalEnableSwitch.click();
-    }
-    await inspector
-      .getByText(
-        /Rotated interfacial DMI conflicts with active object-scoped interfacial_dmi/,
-      )
-      .first()
-      .waitFor({ state: "visible", timeout: 5_000 });
-    const stagedApply = inspector
-      .locator('[data-slot="commit-bar-staged-actions"] button')
-      .last();
-    if (await stagedApply.count()) {
-      assert(
-        await stagedApply.isDisabled(),
-        "Canonical PhysicsModule CommitBar must lock Apply while rotated DMI conflicts with object interfacial_dmi.",
-      );
-    }
-  } else {
-    const rotatedToggle = inspector.getByRole("checkbox", {
-      name: /^Rotated interfacial DMI(?:\s|$)/,
-    });
-    await rotatedToggle.check();
-    const apply = inspector.getByRole("button", {
-      name: "Apply Interaction",
-      exact: true,
-    });
-    assert(!(await apply.isDisabled()), "Rotated DMI guard fixture did not enable Apply.");
-    await apply.click();
-    await inspector
-      .getByText(
-        /Rotated interfacial DMI conflicts with active object-scoped interfacial_dmi/,
-      )
-      .waitFor({ state: "visible", timeout: 5_000 });
-  }
+  const requestStart = await stageConflictingPhysicsTerm(
+    inspector,
+    fixture,
+    /Rotated interfacial DMI conflicts with active object-scoped interfacial_dmi/,
+    "Rotated interfacial DMI",
+  );
   await page.waitForTimeout(200);
   // A delayed viewport client ACK records display observation; it does not
   // mutate authored physics. Keep every other mutation in this guard assertion.
@@ -3007,48 +2995,12 @@ async function qualifyPhysicsScopeExclusivity(page, inspector, fixture) {
     owner: "physics-graph-module",
     label: "Object interfacial DMI recovery",
   });
-  await expandPhysicsInteractionChecklist(inspector);
-  const inverseRequestStart = fixture.requests.length;
-  const inverseEnableSwitch = inspector.getByRole("switch", {
-    name: "Enable Hamiltonian term",
-    exact: true,
-  });
-  if (await inverseEnableSwitch.count()) {
-    if ((await inverseEnableSwitch.getAttribute("aria-checked")) !== "true") {
-      await inverseEnableSwitch.click();
-    }
-    await inspector
-      .getByText(
-        /Object-scoped interfacial_dmi conflicts with active study-level rotated interfacial DMI/,
-      )
-      .first()
-      .waitFor({ state: "visible", timeout: 5_000 });
-    const inverseApply = inspector
-      .locator('[data-slot="commit-bar-staged-actions"] button')
-      .last();
-    if (await inverseApply.count()) {
-      assert(
-        await inverseApply.isDisabled(),
-        "Canonical PhysicsModule CommitBar must lock Apply while object interfacial_dmi conflicts with study rotated DMI.",
-      );
-    }
-  } else {
-    const interfacialToggle = inspector.getByRole("checkbox", {
-      name: /^Interfacial DMI(?:\s|$)/,
-    });
-    await interfacialToggle.check();
-    const inverseApply = inspector.getByRole("button", {
-      name: "Apply Interaction",
-      exact: true,
-    });
-    assert(!(await inverseApply.isDisabled()), "Object DMI inverse guard did not enable Apply.");
-    await inverseApply.click();
-    await inspector
-      .getByText(
-        /Object-scoped interfacial_dmi conflicts with active study-level rotated interfacial DMI/,
-      )
-      .waitFor({ state: "visible", timeout: 5_000 });
-  }
+  const inverseRequestStart = await stageConflictingPhysicsTerm(
+    inspector,
+    fixture,
+    /Object-scoped interfacial_dmi conflicts with active study-level rotated interfacial DMI/,
+    "Object-scoped interfacial DMI",
+  );
   await page.waitForTimeout(200);
   const inverseRequests = fixture.requests
     .slice(inverseRequestStart)

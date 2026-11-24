@@ -94,6 +94,12 @@ def _semantic_scene(scene: dict[str, object]) -> dict[str, object]:
         for key, value in geometry.items()
         if key not in {"bounds_min", "bounds_max"}
     }
+    # Scratch builders can omit the asset key and the generated primitive name.
+    geometry.setdefault("geometry_name", f"{object_entry['name']}_geom")
+    params = dict(geometry["geometry_params"])
+    if params.get("name") == object_entry["name"]:
+        params.pop("name")
+    geometry["geometry_params"] = params
     material = {
         key: value
         for key, value in scene["materials"][0]["properties"].items()
@@ -149,6 +155,7 @@ def _semantic_scene(scene: dict[str, object]) -> dict[str, object]:
             "id": object_entry["id"],
             "name": object_entry["name"],
             "geometry": geometry,
+            "transform": object_entry["transform"],
             "material_ref": object_entry["material_ref"],
             "magnetization_ref": object_entry["magnetization_ref"],
         },

@@ -686,3 +686,23 @@ describe("PlanarSurface lifecycle", () => {
     }
   });
 });
+
+
+describe("PlanarSurface explicit axis exaggeration", () => {
+  it("keeps thin-domain bounds and probe units while expanding only the displayed aspect", () => {
+    const model = makeRenderModel([1, 2], [-2e-6, 2e-6, -22.4e-9, -5e-9]);
+    const html = renderToStaticMarkup(<PlanarSurface model={model} verticalExaggeration={100} />);
+    const aspect = Number(html.match(/--fm-planar-aspect:([^";]+)/)?.[1]);
+    expect(aspect).toBeCloseTo(4e-6 / 17.4e-9 / 100);
+    expect(html).toContain("Vertical axis ×100; display only");
+    expect(model.bounds).toEqual([-2e-6, 2e-6, -22.4e-9, -5e-9]);
+    expect(model.scalar).toEqual(new Float64Array([1, 2]));
+  });
+
+  it("preserves equal physical scales by default", () => {
+    const model = makeRenderModel([1, 2], [0, 4, 0, 1]);
+    const html = renderToStaticMarkup(<PlanarSurface model={model} />);
+    expect(html).toContain("--fm-planar-aspect:4");
+    expect(html).toContain("Equal physical axis scales");
+  });
+});

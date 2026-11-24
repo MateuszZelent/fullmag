@@ -1622,6 +1622,9 @@ fn historical_export_snapshot(state: &AppState, source: &AcceptedRunExportSource
     // gate used by accepted HTTP reads. No new Solve is submitted for export.
     let mut inspections = 0;
     for step in &accepted.study.steps {
+        if step.enabled && matches!(step.kind, fullmag_authoring::StudyStepKind::RetainedCurrentFieldInspection { .. }) {
+            return Err(invalid("retained-current H-only historical export requires its own portable parent evidence closure".into()));
+        }
         if !step.enabled || !matches!(step.kind, fullmag_authoring::StudyStepKind::ClosedLoopInspection { .. }) { continue; }
         let task_id = fullmag_session::task_id_for_study_step(run.as_str(), &step.step_id).map_err(|e| invalid(e.to_string()))?;
         let task = catalog.tasks.iter().find(|task| task.task_id == task_id).ok_or_else(|| invalid("inspection task absent".into()))?;
@@ -3186,6 +3189,11 @@ pub(crate) async fn export_session_with_context(
     } else {
         let run_ref = format!("runs/{}/run_manifest.json", snapshot.session.run_id);
         session_manifest.run_refs.push(run_ref);
+        if snapshot.metadata.as_ref().and_then(|metadata| metadata.pointer("/execution_plan/backend_plan/kind"))
+            .and_then(serde_json::Value::as_str) == Some("antenna_retained_current_field_inspection") {
+            return Err(ApiError::conflict_with_code("retained_current_accepted_archive_required",
+                "retained-current H-only archive requires its verified accepted provenance closure; legacy live export is forbidden"));
+        }
         let is_field_only = snapshot.metadata.as_ref()
             .and_then(|metadata| metadata.get("execution_plan"))
             .and_then(|plan| serde_json::from_value::<fullmag_ir::ExecutionPlanIR>(plan.clone()).ok())

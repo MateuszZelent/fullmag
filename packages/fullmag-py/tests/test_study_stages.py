@@ -926,6 +926,8 @@ def build():
             {
                 "kind": "run",
                 "entrypoint_kind": "build",
+                "interactive_session_requested": False,
+                "wait_for_solve": False,
                 "integrator": "rk4",
                 "fixed_timestep": "1e-15",
                 "adaptive_timestep": None,

@@ -100,15 +100,17 @@ function closedLoopReferenceMessages(mode: AntennaPortModeResource, transport: R
     if (record(cuts[0]?.region)?.object_id !== mode.source_object_id) messages.push("source cut belongs to a different object");
     return messages;
   }
-  if (source?.object_id !== mode.source_object_id || mode.branches.length !== 2) {
-    messages.push("prepared v3 requires two observed branches of the same source object");
+  const materialParts = Array.isArray(source?.material_parts) ? source.material_parts.length : 0;
+  if (source?.object_id !== mode.source_object_id ||
+      !(materialParts === 4 && mode.branches.length === 2 || materialParts === 5 && mode.branches.length === 3)) {
+    messages.push("prepared v3 requires the observed microstrip or GSG branches of the same source object");
   }
   const observations = Array.isArray(source?.terminal_observations) ? source.terminal_observations.map(record) : [];
   for (const branch of mode.branches) {
     const inlet = observations.filter((item) => item?.id === branch.inlet_terminal_ref);
     const outlet = observations.filter((item) => item?.id === branch.outlet_terminal_ref);
-    if (inlet.length !== 1 || outlet.length !== 1 || !text(inlet[0]?.part_id)
-        || inlet[0]?.part_id !== outlet[0]?.part_id || inlet[0]?.selector !== "local_u_min"
+    if (inlet.length !== 1 || outlet.length !== 1 || inlet[0]?.part_id !== branch.id
+        || outlet[0]?.part_id !== branch.id || inlet[0]?.selector !== "local_u_min"
         || outlet[0]?.selector !== "local_u_max") {
       messages.push(`branch '${branch.id}' requires unique inlet/outlet observations on the same conductor part`);
     }

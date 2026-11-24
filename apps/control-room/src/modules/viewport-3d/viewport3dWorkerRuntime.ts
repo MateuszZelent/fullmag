@@ -151,18 +151,15 @@ export function acquireViewport3DWorkerRuntime(): Viewport3DWorkerRuntimeLease {
   return sharedRuntime.acquire();
 }
 
-/** Own the module-scoped worker clients for exactly one mounted 3D viewport. */
+/** Hold a lease for a DOM viewport or independently reconciled 3D scene. */
 export function useViewport3DWorkerRuntime(
   onSnapshot?: (snapshot: Viewport3DWorkerRuntimeSnapshot) => void,
 ): void {
   useEffect(() => {
     const lease = acquireViewport3DWorkerRuntime();
     const runtime = sharedRuntime;
-    if (!runtime) {
-      lease.release();
-      return;
-    }
-    const publish = () => onSnapshot?.(getViewport3DWorkerRuntimeSnapshot());
+    if (!runtime || !onSnapshot) return lease.release;
+    const publish = () => onSnapshot(getViewport3DWorkerRuntimeSnapshot());
     publish();
     const unsubscribeRuntime = runtime.subscribe(publish);
     const unsubscribeSchedulers = viewport3DWorkerRuntimeEvents.subscribe(() => {

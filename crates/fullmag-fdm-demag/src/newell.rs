@@ -12,6 +12,9 @@ use std::f64::consts::PI;
 
 use crate::types::{CellPairTensor, KernelBuildError};
 
+mod mixed_single_layer;
+pub use mixed_single_layer::compute_single_layer_mixed_newell_kernels;
+
 // ---------------------------------------------------------------------------
 // Base functions (Boris formulation with log1p for numerical stability)
 // ---------------------------------------------------------------------------

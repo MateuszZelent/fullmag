@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import copy
+from contextlib import contextmanager, ExitStack
 import json
 from pathlib import Path
 import sys
@@ -87,6 +88,15 @@ class ContainerRecoveryTests(unittest.TestCase):
 
 
 
+
+    def test_recover_accepts_control_relative_and_absolute_paths_on_host_python(self):
+        relative = "verification/recovery/authorization.json"
+        for reference in (relative, recovery.CONTROL_ROOT + "/" + relative):
+            with self.subTest(reference=reference):
+                with patch.object(recovery, "_relative_control_path", side_effect=RuntimeError("path reached")) as validate:
+                    with self.assertRaisesRegex(RuntimeError, "path reached"):
+                        recovery.recover(SimpleNamespace(recovery_authorization=reference))
+                validate.assert_called_once_with(relative)
 
     def test_operator_authorization_binds_prior_journal_not_shutdown_receipt(self):
         value = recovery.validate_operator_authorization(self.operator())
@@ -653,6 +663,296 @@ class ContainerRecoveryTests(unittest.TestCase):
         remove = source.index('docker_capture("rm"')
         self.assertLess(boundary, pin)
         self.assertLess(pin, remove)
+
+
+
+class ContainerRecoveryStorageLayoutTests(unittest.TestCase):
+    """Exercise the real recovery controller with Docker/storage boundaries faked."""
+
+    def run_recovery(self, *, previous_layout="group-volume-v1",
+                     group_owner=True, absent=False, changed_authorization=False,
+                     fresh_generation=False, invalid_archive=False,
+                     helper_image=None):
+        import docker_build_control as build
+        import docker_dev as dev
+        import docker_volume_dev as volume
+        import docker_group_ledger as ledger
+
+        source = Path(__file__).resolve().parents[1]
+        project = "fullmag-test"
+        compose = {"name": project, "services": {"backend": {"environment": {}}}}
+        journal = {"state": "stopped"}
+        operator = ContainerRecoveryTests.operator(
+            source_root=str(source), compose_project=project,
+            compose_config_sha256=recovery._sha256(recovery._canonical(compose)),
+            prior_stop_journal_sha256=recovery._sha256(recovery._canonical(journal)),
+        )
+        authorization = recovery.validate_operator_authorization(operator)
+        reference = "verification/operator.json"
+        terminal = {"phase": "development", "attempt": "a" * 32,
+                    "state_root": str(source / "fake-state"),
+                    "inputs": {"gpu_access_requested": "disabled"}}
+        if previous_layout is not None:
+            terminal["private_group_storage"] = previous_layout
+
+        class Control:
+            def __init__(self):
+                self.project = project
+                self.image = "image@sha256:" + "5" * 64
+                self.lease_image = None
+                self.records = {}
+                self.operation_record = None
+                self.removed = []
+                self.teardown_receipt = None
+                self.start_receipt = None
+                self.start_script = "not-started"
+
+            def prepare(self):
+                pass
+
+            def read_bytes(self, relative, *, optional=False):
+                if optional:
+                    return self.records.get(relative)
+                return self.records[relative]
+
+            def read(self, relative, *, optional=False):
+                raw = self.read_bytes(relative, optional=optional)
+                return json.loads(raw) if raw is not None else None
+
+            def write_bytes(self, relative, raw):
+                self.records[relative] = bytes(raw)
+
+            def write(self, relative, value):
+                self.write_bytes(relative, recovery._canonical(value))
+
+            @contextmanager
+            def operation(self, phase, inputs):
+                self.lease_image = self.image
+                self.operation_record = {
+                    "root": phase + "/attempts/" + "b" * 32,
+                    "receipt": {"phase": phase, "attempt": "b" * 32, "inputs": inputs},
+                }
+                yield self.operation_record
+
+        control = self.recovery_control = Control()
+        control.write(reference, operator)
+        control.write("development/attempts/" + "a" * 32 + "/terminal.json", terminal)
+        control.write("development/attempts/" + "a" * 32 + "/compose.json", compose)
+        control.write(authorization["stop_journal_path"], journal)
+        if group_owner:
+            control.write("private/.owner.json",
+                          {"schema": "fullmag.docker-group-storage-owner.v1"})
+
+        if fresh_generation:
+            token = "e" * 32
+            archive_path = ("recreate-services/attempts/" + token
+                            + "/runtime-control-archive-terminal.json")
+            archive = {"state": "succeeded", "operation_attempt": token,
+                       "compose_project": project,
+                       "preserved_group_ledger_volume": "archived-ledger"}
+            control.write(archive_path, archive)
+            generation = {
+                "schema": "fullmag.docker-group-ledger-generation.v1",
+                "compose_project": project, "generation": token,
+                "archive_terminal_path": archive_path,
+                "preserved_volume": "archived-ledger",
+                "archive_terminal_sha256": recovery._sha256(recovery._canonical(archive)),
+            }
+            if invalid_archive:
+                generation["archive_terminal_sha256"] = "0" * 64
+            control.write("group-ledger-generation.json", generation)
+
+        def container(service, identifier):
+            return {
+                "Id": identifier, "Image": authorization["old_image_id"],
+                "Config": {"Labels": {"com.docker.compose.project": project,
+                                      "com.docker.compose.service": service},
+                           "Env": ["FULLMAG_DOCKER_DEVICE_ACCESS=cpu"]},
+                "HostConfig": {"PidMode": "", "DeviceRequests": None},
+                "State": {"Status": "exited", "Running": False, "Pid": 0,
+                          "FinishedAt": "2026-11-11T00:00:00Z"},
+            }
+
+        backend = container("backend", authorization["backend_container_id"])
+        frontend = container("frontend", authorization["frontend_container_id"])
+        pins = [recovery._container_pin(item, role, project)
+                for item, role in [(backend, "backend"), (frontend, "frontend")]]
+        transition = {
+            "backend": backend, "frontend": frontend, "pins": pins,
+            "network_name": "fullmag-private", "manifest": {},
+            "manifest_sha": "1" * 64, "request": {}, "request_raw": b"{}",
+            "request_sha": "2" * 64, "prepared_sha": "3" * 64,
+            "absence": {"state": "old-containers-absent"} if absent else None,
+            "absence_sha": "4" * 64, "network_state": "absent",
+            "present": {} if absent else {"backend": backend, "frontend": frontend},
+        }
+        proof = {"store_root_sha256": "a" * 64, "ledger_root_sha256": "b" * 64,
+                 "ledger_snapshot_sha256": "c" * 64}
+        fresh = {
+            "backend": backend, "frontend": frontend, "network_name": "fullmag-private",
+            "owner": {}, "launch_sha": authorization["launch_sha256"],
+            "runtime_config": {"store_root": "/state/store"},
+            "config_sha": authorization["config_sha256"], "old_access": "cpu",
+            "device_release": {}, "device_mapping": {}, "engine_id": "engine",
+            "engine_sha": "d" * 64, "pins": pins, "storage_proof": proof,
+            "transition": transition,
+        }
+        identity = {"project_name": project, "project_id": "project",
+                    "worktree_id": "worktree", "checkout_kind": "worktree"}
+        configured = {"services": {"fem-gpu-toolchain": {"build": {
+            "args": {"FULLMAG_CUDA_BASE_IMAGE": "image@sha256:" + "5" * 64}}}}}
+        toolchain = {"inputs": {"build_args": {"FULLMAG_CUDA_BASE_IMAGE":
+                                                "image@sha256:" + "5" * 64}}}
+
+        def read(_control, relative, *, optional=False):
+            raw = control.read_bytes(relative, optional=optional)
+            if changed_authorization and relative == reference and control.operation_record:
+                return b"changed"
+            return raw
+
+        def remove(*args, **kwargs):
+            self.assertEqual(args[0], "rm")
+            control.teardown_receipt = copy.deepcopy(control.operation_record["receipt"])
+            control.removed.extend(args[1:])
+
+        def start(args, *, operation, **kwargs):
+            # Keep the existing allocation guard real, as it is in production.
+            volume._uses_private_group_storage(control, operation)
+            control.start_receipt = copy.deepcopy(operation["receipt"])
+            control.start_script = args.script
+
+        with ExitStack() as stack:
+            values = [
+                (recovery, "BuildControl", control),
+                (recovery, "toolchain_configuration", configured),
+                (recovery, "_load_recovery_transition", transition),
+                (recovery, "_runtime_process_receipt", ({}, b"process", authorization["process_receipt_sha256"])),
+                (recovery, "_runtime_owner", ({}, b"owner", authorization["owner_sha256"])),
+                (recovery, "_runtime_launch", ({}, b"launch", authorization["launch_sha256"])),
+                (recovery, "_runtime_config", ({"store_root": "/state/store"}, b"config", authorization["config_sha256"])),
+                (recovery, "_device_release_from_config", ({}, {})),
+                (recovery, "_docker_engine_sha", "d" * 64),
+                (recovery, "_ledger_and_store_snapshot", proof),
+                (recovery, "_revalidate_recovery_boundary", fresh),
+                (recovery, "_validate_reused_session_before_removal",
+                 {"state": "/state", "host_certificate": "/state/certificate",
+                  "owner_marker": "/state/owner"}),
+                (recovery, "_verify_network_after_removal", "absent"),
+                (recovery, "_build_attestation", {}),
+                (recovery, "_runtime_authorization", {}),
+                (recovery, "_prepared_context", {}),
+                (dev, "_select_source", (source, {})),
+                (dev, "_compose_identity", identity),
+                (dev, "_resolve_gpu_access", "cpu"),
+                (dev, "_verify_docker_gpu_access", "cpu"),
+                (volume, "_operator_probe_record_from_retained", {}),
+                (ledger, "is_group_ledger_backend", True),
+                (build, "build_volume_toolchain", toolchain),
+                (build, "build_volume_runtime_images",
+                 {"backend": {"image_id": "sha256:" + "6" * 64},
+                  "dev": {"image_id": helper_image if helper_image is not None
+                          else "sha256:" + "7" * 64}}),
+            ]
+            for module, name, value in values:
+                stack.enter_context(patch.object(module, name, return_value=value))
+            for name in ["_validate_pre_admission_stop_journal",
+                         "_validate_process_receipt_owner", "_validate_owner_host",
+                         "_assert_container_absent"]:
+                stack.enter_context(patch.object(recovery, name))
+            stack.enter_context(patch.object(recovery, "_control_bytes", side_effect=read))
+            stack.enter_context(patch.object(recovery, "docker_capture", side_effect=remove))
+            stack.enter_context(patch.object(recovery, "bounded_capture",
+                                            side_effect=AssertionError("Unexpected Docker helper")))
+            stack.enter_context(patch.object(volume, "start", side_effect=start))
+            stack.enter_context(patch("fullmag_docker_runtime.assert_loopback_port_available"))
+            recovery.recover(SimpleNamespace(
+                recovery_authorization=reference, source_root=source, repo_root=source,
+                port=3197, script="must-not-replay.py",
+            ))
+        return control
+
+    def test_recovery_inherits_group_storage_before_teardown(self):
+        control = self.run_recovery()
+        self.assertEqual(control.teardown_receipt.get("private_group_storage"),
+                         "group-volume-v1")
+        self.assertEqual(control.start_receipt.get("private_group_storage"),
+                         "group-volume-v1")
+        self.assertEqual(control.removed, ["2" * 64, "3" * 64])
+        self.assertIsNone(control.start_script)
+
+    def test_recovery_keeps_legacy_storage_layout(self):
+        control = self.run_recovery(previous_layout=None, group_owner=False)
+        self.assertNotIn("private_group_storage", control.teardown_receipt)
+        self.assertNotIn("private_group_storage", control.start_receipt)
+        self.assertIsNone(control.start_script)
+
+    def test_recovery_refuses_unpinned_group_storage_before_teardown(self):
+        from docker_build_control import BuildControlError
+        with self.assertRaisesRegex(BuildControlError, "cannot fall back"):
+            self.run_recovery(previous_layout=None)
+        self.assertEqual(self.recovery_control.removed, [])
+        self.assertIsNone(self.recovery_control.start_receipt)
+
+    def test_recovery_refuses_unknown_storage_layout_before_teardown(self):
+        from docker_build_control import BuildControlError
+        with self.assertRaisesRegex(BuildControlError, "Unknown previous"):
+            self.run_recovery(previous_layout="unknown-v9")
+        self.assertEqual(self.recovery_control.removed, [])
+        self.assertIsNone(self.recovery_control.start_receipt)
+
+    def test_recovery_refuses_changed_authorization_before_teardown(self):
+        with self.assertRaisesRegex(recovery.ContainerRecoveryError,
+                                    "authorization changed before"):
+            self.run_recovery(changed_authorization=True)
+        self.assertEqual(self.recovery_control.removed, [])
+        self.assertIsNone(self.recovery_control.start_receipt)
+
+    def test_recovery_absence_continuation_does_not_remove_containers_again(self):
+        control = self.run_recovery(absent=True)
+        self.assertEqual(control.removed, [])
+        self.assertEqual(control.start_receipt.get("private_group_storage"),
+                         "group-volume-v1")
+        self.assertIsNone(control.start_script)
+
+
+    def test_fresh_generation_selects_python_image_before_lease(self):
+        control = self.run_recovery(fresh_generation=True)
+        self.assertEqual(control.lease_image, "sha256:" + "7" * 64)
+        self.assertEqual(control.start_receipt["private_group_storage"], "group-volume-v1")
+
+    def test_no_fresh_generation_keeps_configured_helper_image(self):
+        control = self.run_recovery()
+        self.assertEqual(control.lease_image, "image@sha256:" + "5" * 64)
+
+    def test_invalid_fresh_archive_refuses_before_lease(self):
+        from docker_build_control import BuildControlError
+        with self.assertRaisesRegex(BuildControlError, "exact completed runtime archive"):
+            self.run_recovery(fresh_generation=True, invalid_archive=True)
+        self.assertIsNone(self.recovery_control.operation_record)
+        self.assertEqual(self.recovery_control.removed, [])
+        self.assertIsNone(self.recovery_control.start_receipt)
+
+    def test_mutable_fresh_helper_image_refuses_before_lease(self):
+        with self.assertRaisesRegex(recovery.ContainerRecoveryError, "helper image"):
+            self.run_recovery(fresh_generation=True, helper_image="fullmag-dev:latest")
+        self.assertIsNone(self.recovery_control.operation_record)
+        self.assertEqual(self.recovery_control.removed, [])
+        self.assertIsNone(self.recovery_control.start_receipt)
+
+    def test_fresh_absence_continuation_keeps_layout_without_remove_or_script(self):
+        control = self.run_recovery(fresh_generation=True, absent=True)
+        self.assertEqual(control.lease_image, "sha256:" + "7" * 64)
+        self.assertEqual(control.start_receipt["private_group_storage"], "group-volume-v1")
+        self.assertEqual(control.removed, [])
+        self.assertIsNone(control.start_script)
+
+    def test_fresh_generation_still_refuses_changed_authorization(self):
+        with self.assertRaisesRegex(recovery.ContainerRecoveryError,
+                                    "authorization changed before"):
+            self.run_recovery(fresh_generation=True, changed_authorization=True)
+        self.assertEqual(self.recovery_control.lease_image, "sha256:" + "7" * 64)
+        self.assertEqual(self.recovery_control.removed, [])
+        self.assertIsNone(self.recovery_control.start_receipt)
 
 
 if __name__ == "__main__":

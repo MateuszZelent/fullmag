@@ -207,6 +207,30 @@ class InterruptedDevelopmentTests(unittest.TestCase):
                     "certificate_sha256": digest(cert_raw), "logs_sha256": digest(logs_raw),
                 }
 
+    def test_starting_services_binds_both_container_ids_and_start_times(self):
+        request = {**self.request, "schema": "fullmag.docker-development-starting-services-interrupted.v1",
+                   "storage_identity": {"root_inode": 42, "retained_device": 2128,
+                                        "observed_device": 2096}}
+        original = {**self.original, "state": "starting-services", "state_root": str(self.state_root)}
+        document = copy.deepcopy(self.document)
+        document["services"]["backend"]["volumes"] = [
+            {"type": "bind", "source": str(self.state_root), "target": "/state"}]
+        for service, actual in self.actual.items():
+            original[service + "_container"] = actual["Id"]
+            original[service + "_started_at"] = actual["State"]["StartedAt"]
+        recovery.validate_request(request)
+        recovery.validate_original(original, document, request, self.control, self.source)
+        for field, value in (("backend_container", "0" * 64), ("worker_cgroup", {"state": "ready"}),
+                             ("config_sha256", "1" * 64)):
+            with self.subTest(field=field), self.assertRaises(BuildControlError):
+                recovery.validate_original({**original, field: value}, document, request,
+                                           self.control, self.source)
+        recovery.validate_starting_service(self.actual["backend"], "backend", original)
+        changed = {**self.actual["backend"], "State": {**self.actual["backend"]["State"],
+                                                     "StartedAt": "2026-10-23T20:33:36Z"}}
+        with self.assertRaises(BuildControlError):
+            recovery.validate_starting_service(changed, "backend", original)
+
     def test_valid_contract(self):
         recovery.validate_request(self.request)
         recovery.validate_original(self.original, self.document, self.request, self.control, self.source)

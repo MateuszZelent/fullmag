@@ -11,6 +11,7 @@ import { useSessionResourceIdentity } from "@/kernel/resources/useSessionStatus"
 import { antennaPortTerminalChoices } from "@/shared/domain/physics/antennaPortValidation";
 import { Button } from "@/shared/ui/Button";
 
+import { antennaPortCreationTransports } from "./AntennaPortComposerModel";
 import { useRegisterInspectorEditSession } from "../../InspectorEditSession";
 import { FeedbackBanner } from "../../primitives/FeedbackBanner";
 import { FieldRow } from "../../primitives/FieldRow";
@@ -81,6 +82,7 @@ export function AntennaPortEditor({ objectId, portId, scene, sceneScopeKey, stat
   }
   const canApply = Boolean(dirty && request && !reason && !pending && !conflict);
   const branches = draft?.branches ?? [];
+  const transports = antennaPortCreationTransports(currentScene, objectId);
   const terminalChoices = mode && draft ? antennaPortTerminalChoices(currentScene, { ...mode, current_transport_id: draft.currentTransportId }) : [];
 
   function update(patch: Partial<Pick<AntennaPortDraft, "currentTransportId" | "branches">>) {
@@ -147,8 +149,13 @@ export function AntennaPortEditor({ objectId, portId, scene, sceneScopeKey, stat
     <FieldRow label="Port identity" value={portId} mono />
     <FieldRow label="Source identity" value={objectId} mono />
     <p className="fm-inspector-hint">Edit existing authoring references only. No terminals, source drives or current closure are created. Port identity, schema and normalization are unchanged. Recompute dependent field solutions after a change.</p>
-    <FormField label="Current transport" mono value={draft?.currentTransportId ?? ""} disabled={!editable}
-      onChange={(event) => update({ currentTransportId: event.currentTarget.value })} />
+    <FormField label="Current transport" type="select" value={draft?.currentTransportId ?? ""} disabled={!editable}
+      onChange={(event) => update({ currentTransportId: event.currentTarget.value })}>
+      <option value="" disabled>Select an existing current transport</option>
+      {draft?.currentTransportId && !transports.some(transport => transport.name === draft.currentTransportId)
+        ? <option value={draft.currentTransportId} disabled>{draft.currentTransportId} · unavailable</option> : null}
+      {transports.map(transport => <option key={transport.name} value={transport.name}>{transport.name}</option>)}
+    </FormField>
     {terminalChoices.length === 0 ? <p className="fm-inspector-hint">No selectable terminal inventory is available for this transport. Existing references are preserved; prepare the terminal observations before choosing replacements.</p> : null}
     {branches.map((branch, index) => <div className="fm-inspector-panel" key={branch.rowKey}>
       <FormField label={`Branch ${index + 1} ID`} mono value={branch.id} disabled={!editable}

@@ -6,6 +6,8 @@ use fullmag_session::runtime_service::{
     RUNTIME_SERVICE_CONTAINER_RECOVERY_REQUEST_SCHEMA_V3,
     RUNTIME_SERVICE_CONTAINER_RECOVERY_REQUEST_SCHEMA_V4,
     RUNTIME_SERVICE_CONTAINER_RECOVERY_REQUEST_SCHEMA_V5,
+    RUNTIME_SERVICE_CONTAINER_RECOVERY_REQUEST_SCHEMA_V6,
+    RUNTIME_SERVICE_CONTAINER_RECOVERY_REQUEST_SCHEMA_V7,
 };
 
 pub(crate) fn document() -> serde_json::Value {
@@ -18,6 +20,8 @@ pub(crate) fn document() -> serde_json::Value {
             RUNTIME_SERVICE_CONTAINER_RECOVERY_REQUEST_SCHEMA_V3,
             RUNTIME_SERVICE_CONTAINER_RECOVERY_REQUEST_SCHEMA_V4,
     RUNTIME_SERVICE_CONTAINER_RECOVERY_REQUEST_SCHEMA_V5,
+    RUNTIME_SERVICE_CONTAINER_RECOVERY_REQUEST_SCHEMA_V6,
+    RUNTIME_SERVICE_CONTAINER_RECOVERY_REQUEST_SCHEMA_V7,
         ],
         "build_identity": {
             "version": fullmag_build_info::version(),
@@ -58,6 +62,15 @@ mod tests {
     }
 
     #[test]
+    fn preview_command_is_separate_and_requires_all_authority_pins() {
+        let cli = Cli::try_parse_from(["fullmag", "runtime", "service-preview-container-recovery",
+            "--config", "/config.json", "--request", "/request.json", "--request-sha256", "abc",
+            "--attestation", "/attestation.json", "--attestation-sha256", "def"]).unwrap();
+        assert!(matches!(cli.command, Command::Runtime(RuntimeCommand::ServicePreviewContainerRecovery { .. })));
+        assert!(Cli::try_parse_from(["fullmag", "runtime", "service-preview-container-recovery"]).is_err());
+    }
+
+    #[test]
     fn container_recovery_capabilities_bind_build_and_request_schemas() {
         let evidence = document();
         assert_eq!(
@@ -72,6 +85,8 @@ mod tests {
                 RUNTIME_SERVICE_CONTAINER_RECOVERY_REQUEST_SCHEMA_V3,
                 RUNTIME_SERVICE_CONTAINER_RECOVERY_REQUEST_SCHEMA_V4,
     RUNTIME_SERVICE_CONTAINER_RECOVERY_REQUEST_SCHEMA_V5,
+    RUNTIME_SERVICE_CONTAINER_RECOVERY_REQUEST_SCHEMA_V6,
+    RUNTIME_SERVICE_CONTAINER_RECOVERY_REQUEST_SCHEMA_V7,
             ])
         );
         assert_eq!(

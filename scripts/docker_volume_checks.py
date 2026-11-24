@@ -874,7 +874,7 @@ def main():
     parser.add_argument('--offline', action='store_true', help='Run interpreted checks in a private group helper when backend is stopped')
     parser.add_argument('--initial-attempt', help='Pinned pre-service development attempt for offline checks')
     parser.add_argument('--modules', nargs='+', help='Explicit unittest modules (offline mode only)')
-    parser.add_argument('--scope', choices=('gpu-temperature-contracts', 'material-library-contracts', 'material-library-python-contracts', 'authoring-contracts', 'time-expression-contracts', 'stl-api-contracts', 'live-observation-contracts', 'accepted-runtime-ownership-contracts', 'fem-live-control-contracts', 'fem-response-codec-contracts', 'fem-response-input-contracts', 'fem-response-preparation-contracts', 'fem-response-preparer-contracts', 'fem-response-descriptor-contracts', 'fem-response-worker-contracts', 'fem-preparation-contracts', 'stl-classification-contracts', 'stl-meshing-contracts', 'all', 'source-capture', 'activation-history', 'frontend-stl', 'frontend-import', 'frontend-antenna', 'frontend-field-map', FIELD_MAP_SOURCE_SCOPE, 'frontend-airbox', 'frontend-camera', 'frontend-visualization', 'frontend-tools', 'field-only', 'network-failure', 'empty-authoring', 'frontend-materials', 'frontend-materials-full', 'frontend-telemetry', 'frontend-telemetry-focused', 'frontend-telemetry-source', 'frontend-performance-source', 'frontend-performance'), default='all')
+    parser.add_argument('--scope', choices=('gpu-temperature-contracts', 'material-library-contracts', 'material-library-python-contracts', 'authoring-contracts', 'time-expression-contracts', 'stl-api-contracts', 'live-observation-contracts', 'accepted-runtime-ownership-contracts', 'fem-live-control-contracts', 'fem-response-codec-contracts', 'fem-response-input-contracts', 'fem-response-preparation-contracts', 'fem-response-preparer-contracts', 'fem-response-descriptor-contracts', 'fem-response-worker-contracts', 'fem-preparation-contracts', 'stl-classification-contracts', 'stl-meshing-contracts', 'all', 'source-capture', 'activation-history', 'gsg-preparation', 'frontend-stl', 'frontend-import', 'frontend-antenna', 'frontend-field-map', FIELD_MAP_SOURCE_SCOPE, 'frontend-airbox', 'frontend-camera', 'frontend-visualization', 'frontend-tools', 'field-only', 'network-failure', 'empty-authoring', 'frontend-materials', 'frontend-materials-full', 'frontend-telemetry', 'frontend-telemetry-focused', 'frontend-telemetry-source', 'frontend-performance-source', 'frontend-performance'), default='all')
     args = parser.parse_args()
     if args.initial_attempt is not None and not args.offline:
         raise BuildControlError('--initial-attempt requires --offline')
@@ -957,14 +957,32 @@ if sys.argv[1] == 'network-failure':
     command = [sys.executable, '-B', '-m', 'unittest', 'test_docker_volume_network_failure_reconcile', 'test_docker_volume_checks']
 if sys.argv[1] == 'empty-authoring':
     command = [sys.executable, '-B', '-m', 'unittest', 'test_docker_volume_receipts', 'test_docker_saved_authoring_history', 'test_docker_preclaim_cancelled_restart', 'test_docker_volume_prestart_recovery', 'test_docker_volume_checks']
+if sys.argv[1] == 'gsg-preparation':
+    import hashlib
+    tool = pathlib.Path('/opt/fullmag/control/verification/gsg-edges92-20261112/tools/just')
+    expected_just_sha256 = 'fd103ebd407b481066bf3fcec1ce443f67f829a6230a1291224ab7aa42b5d1e2'
+    if tool.is_symlink() or hashlib.sha256(tool.read_bytes()).hexdigest() != expected_just_sha256:
+        raise RuntimeError('Pinned just test tool differs')
+    environment['PATH'] = str(tool.parent) + os.pathsep + environment.get('PATH', '')
+    command = [sys.executable, '-B', '-m', 'unittest',
+        'test_docker_gsg_mesh_preparation', 'test_docker_gsg_mesh_preparation_route',
+        'test_docker_gsg_reference', 'test_run_gsg_junction_reference',
+        'test_compare_gsg_source_convergence',
+        'test_antenna_metal_thickness_diagnostic',
+        'test_antenna_saved_flux_admissibility',
+        'test_antenna_gsg_current_correction',
+        'test_antenna_gsg_convergence_reference.GsgJunctionFineBudgetTests',
+        'test_antenna_gsg_convergence_reference.GsgConvergenceBudgetTests.test_corner12p5_cell_limit_profile_is_closed_and_preserves_completeness',
+        'test_antenna_gsg_convergence_reference.GsgConvergenceBudgetTests.test_profile_is_exact_immutable_and_default_limits_stay_unchanged',
+        'test_docker_volume_checks.FrontendAntennaShellBoundaryTests']
 if sys.argv[1] == 'field-only':
     environment.update(PYTHONPATH='/opt/fullmag/source/packages/fullmag-py/src', FULLMAG_TEST_TEMP_ROOT='/build/verification-tmp')
     result = subprocess.call([sys.executable, '-B', '-m', 'unittest', 'discover',
         '-s', '/opt/fullmag/source/packages/fullmag-py/tests', '-p', 'test_antenna_field_only_nonmagnetic.py', '-v'],
         cwd='/opt/fullmag/source', env=environment)
 else:
-    result = subprocess.call(command,cwd='/opt/fullmag/source/scripts',env=environment) if sys.argv[1] in ('all', 'activation-history', 'frontend-tools', 'network-failure', 'empty-authoring') else 0
-if result == 0 and sys.argv[1] not in ('field-only', 'activation-history', 'frontend-tools', 'network-failure', 'empty-authoring'):
+    result = subprocess.call(command,cwd='/opt/fullmag/source/scripts',env=environment) if sys.argv[1] in ('all', 'activation-history', 'frontend-tools', 'network-failure', 'empty-authoring', 'gsg-preparation') else 0
+if result == 0 and sys.argv[1] not in ('field-only', 'activation-history', 'frontend-tools', 'network-failure', 'empty-authoring', 'gsg-preparation'):
     result = subprocess.call([sys.executable, '-B', '/opt/fullmag/source/scripts/verify_accepted_source_scene_capture.py',
                               '--fullmag-root', '/opt/fullmag/source/packages/fullmag-py/src/fullmag',
                               '--output-dir', '/build/verification-tmp'], env=environment)
@@ -981,7 +999,8 @@ sys.exit(result)
              'stdout':result.stdout.decode('utf-8','replace'), 'stderr':result.stderr.decode('utf-8','replace')}
     if oracle_dependency is not None:
         receipt['oracle_dependency'] = oracle_dependency
-    control.write('verification/interpreted-activation-history-checks.json' if args.scope == 'activation-history' else
+    control.write('verification/interpreted-gsg-preparation-checks.json' if args.scope == 'gsg-preparation' else
+                  'verification/interpreted-activation-history-checks.json' if args.scope == 'activation-history' else
                   'verification/interpreted-empty-authoring-checks.json' if args.scope == 'empty-authoring' else
                   'verification/interpreted-network-failure-checks.json' if args.scope == 'network-failure' else
                   'verification/interpreted-frontend-tools-checks.json' if args.scope == 'frontend-tools' else

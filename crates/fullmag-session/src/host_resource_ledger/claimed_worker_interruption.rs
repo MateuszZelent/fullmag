@@ -544,6 +544,7 @@ impl super::HostResourceLedger {
             preparation_launch_owner: None,
             orphan_teardown: None,
             claimed_interruption: Some(receipt.clone()),
+            succeeded_namespace_teardown: None,
         };
         let bytes = bounded_json_bytes(
             &proof,

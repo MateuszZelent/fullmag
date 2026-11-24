@@ -4053,6 +4053,7 @@ mod tests {
     #[test]
     fn identity_geometry_transform_preserves_region_target_name() {
         let geometry = SceneGeometry {
+            geometry_name: None,
             source_asset: None,
             geometry_kind: "Transform".to_string(),
             geometry_params: serde_json::json!({

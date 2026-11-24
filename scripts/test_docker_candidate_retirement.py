@@ -351,6 +351,24 @@ class CandidateRetirementTests(unittest.TestCase):
         if not hasattr(backend, "_qualify_ready_candidate_retirements"):
             self.skipTest("candidate-retirement start integration is not in this source snapshot")
 
+    def test_private_archive_remains_valid_after_shared_store_activation(self):
+        with self._fixture("stale") as fixture:
+            spec = self._qualify(fixture)
+            archive = retirement._archive_target(backend, spec)
+            manifest, _ = retirement._read_archive_manifest(backend, archive)
+            with patch.dict(os.environ, {"FULLMAG_SHARED_BACKEND_STORE": "/shared"}), patch.object(
+                backend, "_dev_cuda_architectures", return_value="86-real"
+            ):
+                retirement._validate_archive_contents(backend, archive, manifest)
+                self.assertFalse(backend._package_matches_fresh_live_manifest(
+                    spec.receipt, archive / "source" / "live-manifest.json",
+                    fixture["toolchain"], backend.BACKEND_CARGO_PROFILE,
+                ))
+                sealed = archive / "source" / "live-manifest.json"
+                sealed.write_bytes(sealed.read_bytes() + b" ")
+                with self.assertRaises(backend.BackendBuildError):
+                    retirement._validate_archive_contents(backend, archive, manifest)
+
     def test_malformed_live_manifest_does_not_use_prepared_fallback(self):
         with self._fixture("stale") as fixture:
             spec = self._qualify(fixture)

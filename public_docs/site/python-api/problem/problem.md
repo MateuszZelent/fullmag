@@ -130,6 +130,7 @@ does not alter their normalization and does not imply solver execution on all la
 
 | Python | Type | Default | SI | Construction validation | Meaning | Support | ProblemIR |
 |---|---|---|---|---|---|---|---|
+| `Problem.auxiliary_geometry_names` | `Mapping[str, str]` | `{}` | $1$ | Keys must identify existing auxiliary geometry and labels must be nonempty | Editable auxiliary-object display labels | Shared FDM/FEM CPU/GPU authoring | `physics_objects[].name and physics_graph.objects[].name` |
 | `Problem.auxiliary_geometry_object_ids` | `Mapping[str, str]` | `{}` | $1$ | non-empty names and IDs; keys belong to auxiliary_geometry_roles; unique object_ids across magnets | immutable auxiliary-entity identity, independent of display name | shared FDM/FEM CPU/GPU authoring; execution follows explicit capabilities | `physics_objects[].object_id` |
 | `Problem.antenna_port_modes` | `Sequence[AntennaPortMode]` | `()` | $1$ | AntennaPortMode entries; unique id within collection | port current-basis declarations without automatic solve | shared FDM/FEM CPU/GPU authoring; execution follows explicit capabilities | `antenna_port_modes` |
 | `Problem.antenna_field_solve_stages` | `Sequence[AntennaFieldSolveStage]` | `()` | $1$ | AntennaFieldSolveStage entries; unique id within collection | field-solve declarations separated from explicit stage action | shared FDM/FEM CPU/GPU authoring; execution follows explicit capabilities | `antenna_field_solve_stages` |
@@ -142,7 +143,10 @@ preflight of cross-references between port, solve, projection, and drive declara
 IR/planner/runtime boundary must verify that before execution. A valid collection type alone must
 never be treated as a solved or available basis.
 
-`auxiliary_geometry_object_ids` maps a display name to an immutable `object_id`; keys must appear
+`auxiliary_geometry_names` maps an auxiliary geometry key to an editable display label.
+The label defaults to the geometry key. Changing a label preserves the object and geometry IDs.
+
+`auxiliary_geometry_object_ids` maps an auxiliary geometry key to an immutable `object_id`; keys must appear
 in `auxiliary_geometry_roles`. When omitted, the serializer preserves the `object_id = name`
 compatibility fallback. In each `physics_objects[]` entry, `name` stays a separate field,
 `geometry_id` references the geometry, and `type` comes from the explicit role. Antenna type or

@@ -125,6 +125,22 @@ def _checked_worker_receipt(value,admission):
     return state=="native_build_and_abi_verified_not_benchmark"
 
 
+def copy_args(control, token, cache_profile):
+    require(re.fullmatch(r"[a-f0-9]{32}", token), "invalid producer attempt")
+    name = cache_profile["volume_names"]["build"]
+    require(isinstance(name, str) and re.fullmatch(r"[a-zA-Z0-9][a-zA-Z0-9_.-]+", name), "invalid build volume")
+    mount = "type=volume,src="+name+",dst=/build,volume-nocopy"
+    if cache_profile.get("group_volume"):
+        subpath = cache_profile.get("build_subpath")
+        require(isinstance(subpath, str) and re.fullmatch(r"[a-zA-Z0-9_-]+(?:/[a-zA-Z0-9_-]+)*", subpath),
+                "private build subpath required")
+        mount += ",volume-subpath="+subpath
+    command = control.helper_args("", name="fullmag-boris-copy-"+token)
+    point = command.index("--entrypoint")
+    command[point:] = ["--mount", mount, "--entrypoint", "/usr/bin/python3", ASSET, "-B", "-c", WRAPPER]
+    return command
+
+
 def run(args):
     from docker_dev import _select_source,_compose_identity
     from docker_dev_host import require_host
@@ -181,10 +197,7 @@ def run(args):
                 require(False,"mounted sources differ from actual Fullmag package")
             token=operation["receipt"]["attempt"];prefix="/build/external-reference-boris/"+token+"/prefix"
             copy_doc=dict(mode="copy",order=["supplier"],modules={"supplier":modules["supplier"]},target=prefix)
-            command=control.helper_args("",name="fullmag-boris-copy-"+token)
-            point=command.index("--entrypoint")
-            command[point:]=["--mount","type=volume,src="+cache_profile["volume_names"]["build"]+",dst=/build,volume-nocopy",
-                "--entrypoint","/usr/bin/python3",ASSET,"-B","-c",WRAPPER]
+            command=copy_args(control,token,cache_profile)
             operation["daemon_pending"]=True
             copied=bounded_capture(command,data=canonical(copy_doc),timeout=300)
             if copied.returncode:raise BuildControlError("retained payload copy failed: "+copied.stderr.decode('utf-8','replace')[-4096:])

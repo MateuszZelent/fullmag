@@ -1,6 +1,8 @@
 //! Native accepted-run service. UI is an attaching client, never its owner.
 use crate::accepted_study_supervisor;
 mod failed_worker_recovery;
+mod succeeded_worker_recovery;
+mod succeeded_namespace_recovery;
 mod failed_preclaim_cancellation;
 mod runtime_service_unclaimed_cancellation;
 mod claimed_worker_interruption;
@@ -2734,6 +2736,12 @@ fn run() -> Result<()> {
         Some(value) if value == OsString::from("--initialize-docker-host") => {
             initialize_docker_host(args)
         }
+        Some(value) if value == OsString::from("--recover-succeeded-namespace") => {
+            succeeded_namespace_recovery::run(args)
+        }
+        Some(value) if value == OsString::from("--release-succeeded-worker") => {
+            succeeded_worker_recovery::run(args)
+        }
         Some(value) if value == OsString::from("--fail-reaped-worker") => {
             failed_worker_recovery::run(args)
         }
@@ -2768,7 +2776,7 @@ fn run() -> Result<()> {
             }
             run_service(path)
         }
-        _ => bail!("usage: fullmag-runtime-service --complete-reaped-worker-archive --config <absolute-json-path> --request <original-absolute-json-path> --request-sha256 <sha256> --completion <absolute-json-path> --completion-sha256 <sha256> [--verify-only] | --fail-reaped-worker --config <absolute-json-path> --request <absolute-json-path> --request-sha256 <sha256> [--verify-only] | --config <absolute-json-path> | --cancel-failed-no-spawn --config <absolute-json-path> --request <absolute-json-path> | --cancel-unclaimed --config <absolute-json-path> --request <absolute-json-path> | --prepare-orphan-teardown --config <absolute-json-path> --request <absolute-json-path> | --recover-orphan-after-teardown --config <absolute-json-path> --request <absolute-json-path> --attestation <absolute-json-path> | --initialize-docker-host --ledger-root <absolute-path> --store-root <absolute-path> [--device-access cpu|gpu] [--native-fem-readiness <absolute-json-path>] [--host-id <stable-id>]")
+        _ => bail!("usage: fullmag-runtime-service --release-succeeded-worker --config <absolute-json-path> --request <absolute-json-path> --request-sha256 <sha256> [--verify-only] | --complete-reaped-worker-archive --config <absolute-json-path> --request <original-absolute-json-path> --request-sha256 <sha256> --completion <absolute-json-path> --completion-sha256 <sha256> [--verify-only] | --fail-reaped-worker --config <absolute-json-path> --request <absolute-json-path> --request-sha256 <sha256> [--verify-only] | --config <absolute-json-path> | --cancel-failed-no-spawn --config <absolute-json-path> --request <absolute-json-path> | --cancel-unclaimed --config <absolute-json-path> --request <absolute-json-path> | --prepare-orphan-teardown --config <absolute-json-path> --request <absolute-json-path> | --recover-orphan-after-teardown --config <absolute-json-path> --request <absolute-json-path> --attestation <absolute-json-path> | --initialize-docker-host --ledger-root <absolute-path> --store-root <absolute-path> [--device-access cpu|gpu] [--native-fem-readiness <absolute-json-path>] [--host-id <stable-id>]")
     }
 }
 

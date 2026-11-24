@@ -7,7 +7,7 @@ import {
 import { act, createElement, useSyncExternalStore } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { GeometryRealizationResource, SceneResource } from "@/kernel/api/apiTypes";
+import type { GeometryRealizationResource, MergePatchTransactionRequest, SceneResource } from "@/kernel/api/apiTypes";
 import { EventBus } from "@/kernel/events/EventBus";
 import type { KernelEventMap } from "@/kernel/events/eventTypes";
 import { findElement } from "@/kernel/layout/simulationPreparationTestDom.test-support";
@@ -268,7 +268,8 @@ vi.mock("@/kernel/resources/geometryLifecycleResources", () => ({
     data: mockSceneState.data,
     error: null,
     refetch: mockSceneState.refetch,
-    revision: 5,
+    revision: mockSceneState.data?.revision ?? null,
+    sessionScopeKey: "session=session-antenna-core&epoch=1&request_scope_epoch=1",
     status: "ready" as const,
   }),
 }));
@@ -327,7 +328,15 @@ describe("Task 20 AntennaCoreSpecs — 100% Wave 5 Slice 5 Parity", { timeout: 2
       status: "ready",
     };
     commitTransactionMock.mockReset();
-    commitTransactionMock.mockResolvedValue({ scene_revision: 6 });
+    commitTransactionMock.mockImplementation(async (request: MergePatchTransactionRequest) => ({
+      scene_revision: 6,
+      committed_scene: {
+        ...mockSceneState.data,
+        ...request.merge_patch,
+        revision: 6,
+        scene_revision: 6,
+      },
+    }));
     publishCommittedSceneMock.mockClear();
     selectionSetMock.mockClear();
   });
@@ -1150,6 +1159,131 @@ describe("Task 20 AntennaCoreSpecs — 100% Wave 5 Slice 5 Parity", { timeout: 2
     );
     const sigInExt = prep?.extensions.find((e) => e.observation_id === "signal:inlet");
     expect(sigInExt?.boundary_markers).toEqual([expectedMarker]);
+  });
+
+  function geometryInspector() {
+    return createElement(
+      InspectorEditSessionProvider,
+      null,
+      createElement(AntennaGeometryInspectorSpecPanel, {
+        selection: {
+          kind: "object.antenna.geometry",
+          label: "Geometry & Layout",
+          moduleSource: "explorer",
+          nodeId: "model:object:ant-1:antenna:geometry",
+          objectId: "ant-1",
+          ref: null,
+        },
+      }),
+    );
+  }
+
+  async function renderConductorLayout() {
+    await act(async () => harness.root.render(geometryInspector()));
+    const tab = findElement(harness.container, (el) =>
+      el.getAttribute("role") === "tab" && el.textContent.includes("Conductor Layout"));
+    await act(async () => tab!.click());
+  }
+
+  function applyGeometryButton() {
+    return findElement(harness.container, (el) =>
+      el.tagName === "BUTTON" && el.textContent.includes("Apply"));
+  }
+
+  it("keeps the Geometry Inspector stable while saving a width station", async () => {
+    const original = mockSceneState.data!;
+    const [antenna, ...otherObjects] = original.objects!;
+    const localTransform = { rotation_matrix: [[0, -1, 0], [1, 0, 0], [0, 0, 1]] };
+    const geometry = antenna!.geometry as {
+      geometry_kind: string;
+      geometry_params: Record<string, unknown>;
+    };
+    mockSceneState.data = {
+      ...original,
+      objects: [{
+        ...antenna!,
+        geometry: {
+          ...geometry,
+          geometry_params: { ...geometry.geometry_params, transform: localTransform },
+        },
+      }, ...otherObjects],
+    } as unknown as SceneResource;
+
+    let acknowledge: (() => void) | undefined;
+    commitTransactionMock.mockImplementationOnce((request: MergePatchTransactionRequest) =>
+      new Promise((resolve) => {
+        acknowledge = () => resolve({
+          scene_revision: 6,
+          committed_scene: { ...mockSceneState.data, ...request.merge_patch, revision: 6, scene_revision: 6 },
+        });
+      }),
+    );
+    await renderConductorLayout();
+
+    const findStation = (i: number) => findElement(harness.container, (el) =>
+      el.getAttribute("aria-label") === `Station ${i} signal width`);
+    const panel = findElement(harness.container, (el) => el.getAttribute("data-slot") === "inspector-root");
+    const station = findStation(1)!;
+    await setTestInputValue(station, "160e-9");
+    await act(async () => applyGeometryButton()!.click());
+
+    expect(commitTransactionMock).toHaveBeenCalledWith(expect.objectContaining({
+      kind: "merge_patch",
+      base_revision: 5,
+      merge_patch: expect.objectContaining({
+        objects: expect.arrayContaining([expect.objectContaining({
+          id: "ant-1",
+          transform: antenna!.transform,
+          geometry: expect.objectContaining({
+            geometry_params: expect.objectContaining({
+              stations: [{ s: 0, signal_width_m: 160e-9 }, { s: 1, signal_width_m: 150e-9 }],
+              transform: localTransform,
+            }),
+          }),
+        })]),
+      }),
+    }), { sessionScopeKey: "session=session-antenna-core&epoch=1&request_scope_epoch=1" });
+    expect(findElement(harness.container, (el) => el.getAttribute("data-slot") === "inspector-root")).toBe(panel);
+    expect(findStation(1)).toBe(station);
+    expect(findStation(2)!.disabled).toBe(false);
+    await act(async () => acknowledge?.());
+    expect(publishCommittedSceneMock.mock.calls[0]?.[1]).toMatchObject({ revision: 6 });
+  });
+
+  it("requires explicit rebase if server geometry changes during a local station edit", async () => {
+    await renderConductorLayout();
+    const station = findElement(harness.container, (el) =>
+      el.getAttribute("aria-label") === "Station 1 signal width")!;
+    await setTestInputValue(station, "160e-9");
+
+    const original = mockSceneState.data!;
+    const [antenna, ...otherObjects] = original.objects!;
+    const geometry = antenna!.geometry as {
+      geometry_kind: string;
+      geometry_params: Record<string, unknown>;
+    };
+    mockSceneState.data = {
+      ...original,
+      revision: 6,
+      scene_revision: 6,
+      objects: [{
+        ...antenna!,
+        geometry: {
+          ...geometry,
+          geometry_params: { ...geometry.geometry_params, return_width_m: 400e-9 },
+        },
+      }, ...otherObjects],
+    } as unknown as SceneResource;
+    await act(async () => harness.root.render(geometryInspector()));
+
+    expect(harness.container.textContent).toContain("Conductor geometry changed on the server");
+    expect(applyGeometryButton()!.disabled).toBe(true);
+    expect(commitTransactionMock).not.toHaveBeenCalled();
+    expect(station.value).toBe("160e-9");
+    const rebase = findElement(harness.container, (el) =>
+      el.tagName === "BUTTON" && el.textContent.includes("Rebase draft"));
+    await act(async () => rebase!.click());
+    expect(applyGeometryButton()!.disabled).toBe(false);
   });
 
   it("serializes editable CPW stations, computes AABB placement from realization, preserves transform.rotation, and commits closed-loop circuits via buildMicrostripCircuitPatch", async () => {

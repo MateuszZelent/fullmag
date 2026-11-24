@@ -2060,107 +2060,96 @@ pub async fn get_run(
     let run_id = RunId::parse(run_id)
         .map_err(|error| ApiError::bad_request(format!("invalid run_id: {error}")))?;
     let resource = tokio::task::spawn_blocking(move || {
-        let store_root = state
-            .submit_store_root
-            .as_ref()
-            .ok_or_else(|| ApiError::internal("managed project run storage is not configured"))?;
-        if !store_root.exists() {
-            return Err(ApiError::not_found("accepted run intent is missing"));
-        }
-        let store = fullmag_session::SessionStore::open_existing(store_root)
-            .map_err(|error| ApiError::internal(error.to_string()))?;
-        let intent = store
-            .read_run_intent(run_id.as_str())
-            .map_err(|error| ApiError::internal(error.to_string()))?
-            .ok_or_else(|| ApiError::not_found("accepted run intent is missing"))?;
-        let specification: RunSpecification = serde_json::from_value(intent.specification.clone())
-            .map_err(|error| ApiError::internal(format!("invalid durable RunSpec: {error}")))?;
-        if specification.snapshot.project_id != project_id {
-            return Err(ApiError::conflict("run belongs to another project"));
-        }
-        if specification.run_id != run_id
-            || specification
-                .fingerprint()
-                .map_err(|error| ApiError::internal(error.to_string()))?
-                != intent.payload_sha256
-        {
-            return Err(ApiError::internal(
-                "durable run identity or fingerprint is inconsistent",
-            ));
-        }
-        let catalog = store
-            .read_run_catalog(run_id.as_str())
-            .map_err(|error| ApiError::internal(error.to_string()))?;
-        let artifact_catalog = store
-            .read_artifact_catalog(run_id.as_str())
-            .map_err(|error| ApiError::internal(error.to_string()))?;
-        let (catalog_state, catalog_revision, tasks) = match catalog {
-            Some(catalog) => {
-                let mut task_execution_by_id = project_run_task_execution_by_id(
-                    &store,
-                    &intent,
-                    &specification,
-                )?;
-                let has_immutable_study_refs = task_execution_by_id.is_some();
-                let mut tasks = Vec::with_capacity(catalog.tasks.len());
-                for task in catalog.tasks {
-                    let execution = task_execution_by_id
-                        .as_mut()
-                        .and_then(|entries| entries.remove(&task.task_id));
-                    if has_immutable_study_refs && execution.is_none() {
-                        return Err(ApiError::internal(format!(
-                            "durable task `{}` has no matching immutable Study step",
-                            task.task_id
-                        )));
-                    }
-                    tasks.push(project_run_task_resource(
-                        &store,
-                        run_id.as_str(),
-                        artifact_catalog.as_ref(),
-                        catalog.revision,
-                        execution,
-                        task,
-                    )?);
-                }
-                if task_execution_by_id.is_some_and(|entries| !entries.is_empty()) {
-                    return Err(ApiError::internal(
-                        "accepted Study catalog contains steps without durable run tasks",
-                    ));
-                }
-                (
-                    ProjectRunCatalogState::Materialized,
-                    Some(catalog.revision),
-                    tasks,
-                )
+        crate::readonly_result_archive::with_run(&state, &project_id, &run_id, |store, intent| {
+            let specification: RunSpecification = serde_json::from_value(intent.specification.clone())
+                .map_err(|error| ApiError::internal(format!("invalid durable RunSpec: {error}")))?;
+            if specification.snapshot.project_id != project_id {
+                return Err(ApiError::conflict("run belongs to another project"));
             }
-            None => (
-                ProjectRunCatalogState::PendingMaterialization,
-                None,
-                Vec::new(),
-            ),
-        };
-        Ok(ProjectRunResource {
-            project_id: project_id.as_str().into(),
-            run_id: run_id.as_str().into(),
-            payload_fingerprint: intent.payload_sha256,
-            scheduling_priority: specification.scheduling_priority,
-            requested_execution: ProjectRunRequestedExecutionResource {
-                backend: specification.requested_execution.backend,
-                device: specification.requested_execution.device,
-                precision: specification.requested_execution.precision,
-                mode: specification.requested_execution.mode,
-                minimum_resources: specification.requested_execution.minimum_resources.map(
-                    |resources| ProjectRunMinimumResourceBudgetResource {
-                        cpu_millis: resources.cpu_millis,
-                        memory_bytes: resources.memory_bytes,
-                        gpu_memory_bytes: resources.gpu_memory_bytes,
-                        storage_bytes: resources.storage_bytes,
-                    },
+            if specification.run_id != run_id
+                || specification
+                    .fingerprint()
+                    .map_err(|error| ApiError::internal(error.to_string()))?
+                    != intent.payload_sha256
+            {
+                return Err(ApiError::internal(
+                    "durable run identity or fingerprint is inconsistent",
+                ));
+            }
+            let catalog = store
+                .read_run_catalog(run_id.as_str())
+                .map_err(|error| ApiError::internal(error.to_string()))?;
+            let artifact_catalog = store
+                .read_artifact_catalog(run_id.as_str())
+                .map_err(|error| ApiError::internal(error.to_string()))?;
+            let (catalog_state, catalog_revision, tasks) = match catalog {
+                Some(catalog) => {
+                    let mut task_execution_by_id = project_run_task_execution_by_id(
+                        &store,
+                        &intent,
+                        &specification,
+                    )?;
+                    let has_immutable_study_refs = task_execution_by_id.is_some();
+                    let mut tasks = Vec::with_capacity(catalog.tasks.len());
+                    for task in catalog.tasks {
+                        let execution = task_execution_by_id
+                            .as_mut()
+                            .and_then(|entries| entries.remove(&task.task_id));
+                        if has_immutable_study_refs && execution.is_none() {
+                            return Err(ApiError::internal(format!(
+                                "durable task `{}` has no matching immutable Study step",
+                                task.task_id
+                            )));
+                        }
+                        tasks.push(project_run_task_resource(
+                            &store,
+                            run_id.as_str(),
+                            artifact_catalog.as_ref(),
+                            catalog.revision,
+                            execution,
+                            task,
+                        )?);
+                    }
+                    if task_execution_by_id.is_some_and(|entries| !entries.is_empty()) {
+                        return Err(ApiError::internal(
+                            "accepted Study catalog contains steps without durable run tasks",
+                        ));
+                    }
+                    (
+                        ProjectRunCatalogState::Materialized,
+                        Some(catalog.revision),
+                        tasks,
+                    )
+                }
+                None => (
+                    ProjectRunCatalogState::PendingMaterialization,
+                    None,
+                    Vec::new(),
                 ),
-            },
-            catalog_state,
-            catalog_revision,
-            tasks,
+            };
+            Ok(ProjectRunResource {
+                project_id: project_id.as_str().into(),
+                run_id: run_id.as_str().into(),
+                payload_fingerprint: intent.payload_sha256,
+                scheduling_priority: specification.scheduling_priority,
+                requested_execution: ProjectRunRequestedExecutionResource {
+                    backend: specification.requested_execution.backend,
+                    device: specification.requested_execution.device,
+                    precision: specification.requested_execution.precision,
+                    mode: specification.requested_execution.mode,
+                    minimum_resources: specification.requested_execution.minimum_resources.map(
+                        |resources| ProjectRunMinimumResourceBudgetResource {
+                            cpu_millis: resources.cpu_millis,
+                            memory_bytes: resources.memory_bytes,
+                            gpu_memory_bytes: resources.gpu_memory_bytes,
+                            storage_bytes: resources.storage_bytes,
+                        },
+                    ),
+                },
+                catalog_state,
+                catalog_revision,
+                tasks,
+            })
         })
     })
     .await
@@ -2194,114 +2183,98 @@ pub async fn list_runs(
             "run list limit must be from 1 to 100",
         ));
     }
-    let cursor = query
-        .cursor
-        .map(RunId::parse)
-        .transpose()
-        .map_err(|error| ApiError::bad_request(format!("invalid run cursor: {error}")))?;
+    let cursor = crate::readonly_result_archive::decode_cursor(&state, &project_id, query.cursor.as_deref())?;
     let resource = tokio::task::spawn_blocking(move || {
-        let store_root = state
-            .submit_store_root
-            .as_ref()
-            .ok_or_else(|| ApiError::internal("managed project run storage is not configured"))?;
-        if !store_root.exists() {
-            return Ok(ProjectRunListResource {
-                project_id: project_id.as_str().into(),
-                runs: Vec::new(),
-                next_cursor: None,
-            });
-        }
-        let store = fullmag_session::SessionStore::open_existing(store_root)
-            .map_err(|error| ApiError::internal(error.to_string()))?;
-        let mut matched = Vec::new();
-        for intent in store
-            .list_run_intents()
-            .map_err(|error| ApiError::internal(error.to_string()))?
-        {
-            if intent.specification["snapshot"]["project_id"].as_str() != Some(project_id.as_str())
-            {
-                continue;
+        crate::readonly_result_archive::with_sources(&state, |current, saved| {
+            let mut matched = Vec::new();
+            for (intent, archived) in crate::readonly_result_archive::list_intents(&state, current, saved)? {
+                if intent.specification["snapshot"]["project_id"].as_str() != Some(project_id.as_str())
+                {
+                    continue;
+                }
+                let specification: RunSpecification =
+                    serde_json::from_value(intent.specification.clone()).map_err(|error| {
+                        ApiError::internal(format!("invalid durable RunSpec: {error}"))
+                    })?;
+                if specification.run_id.as_str() != intent.run_id
+                    || specification
+                        .fingerprint()
+                        .map_err(|error| ApiError::internal(error.to_string()))?
+                        != intent.payload_sha256
+                {
+                    return Err(ApiError::internal(
+                        "durable run identity or fingerprint is inconsistent",
+                    ));
+                }
+                matched.push((intent, specification, archived));
             }
-            let specification: RunSpecification =
-                serde_json::from_value(intent.specification.clone()).map_err(|error| {
-                    ApiError::internal(format!("invalid durable RunSpec: {error}"))
-                })?;
-            if specification.run_id.as_str() != intent.run_id
-                || specification
-                    .fingerprint()
-                    .map_err(|error| ApiError::internal(error.to_string()))?
-                    != intent.payload_sha256
-            {
-                return Err(ApiError::internal(
-                    "durable run identity or fingerprint is inconsistent",
-                ));
-            }
-            matched.push((intent, specification));
-        }
-        let start = if let Some(cursor) = cursor {
-            matched
-                .iter()
-                .position(|(intent, _)| intent.run_id == cursor.as_str())
-                .map(|position| position + 1)
-                .ok_or_else(|| ApiError::bad_request("run cursor is not in this project"))?
-        } else {
-            0
-        };
-        let mut page = matched
-            .into_iter()
-            .skip(start)
-            .take(limit as usize + 1)
-            .collect::<Vec<_>>();
-        let has_more = page.len() > limit as usize;
-        if has_more {
-            page.pop();
-        }
-        let next_cursor = if has_more {
-            page.last().map(|(intent, _)| intent.run_id.clone())
-        } else {
-            None
-        };
-        let mut runs = Vec::with_capacity(page.len());
-        for (intent, specification) in page {
-            let catalog = store
-                .read_run_catalog(&intent.run_id)
-                .map_err(|error| ApiError::internal(error.to_string()))?;
-            let (catalog_state, catalog_revision, task_count) = match catalog {
-                Some(catalog) => (
-                    ProjectRunCatalogState::Materialized,
-                    Some(catalog.revision),
-                    catalog.tasks.len() as u64,
-                ),
-                None => (ProjectRunCatalogState::PendingMaterialization, None, 0),
+            let start = if let Some(cursor) = cursor {
+                matched
+                    .iter()
+                    .position(|(intent, _, _)| intent.run_id == cursor.as_str())
+                    .map(|position| position + 1)
+                    .ok_or_else(|| ApiError::bad_request("run cursor is not in this project"))?
+            } else {
+                0
             };
-            runs.push(ProjectRunSummaryResource {
-                run_id: intent.run_id,
-                accepted_at: intent.accepted_at.to_rfc3339(),
-                payload_fingerprint: intent.payload_sha256,
-                scheduling_priority: specification.scheduling_priority,
-                requested_execution: ProjectRunRequestedExecutionResource {
-                    backend: specification.requested_execution.backend,
-                    device: specification.requested_execution.device,
-                    precision: specification.requested_execution.precision,
-                    mode: specification.requested_execution.mode,
-                    minimum_resources: specification.requested_execution.minimum_resources.map(
-                        |resources| ProjectRunMinimumResourceBudgetResource {
-                            cpu_millis: resources.cpu_millis,
-                            memory_bytes: resources.memory_bytes,
-                            gpu_memory_bytes: resources.gpu_memory_bytes,
-                            storage_bytes: resources.storage_bytes,
-                        },
+            let mut page = matched
+                .into_iter()
+                .skip(start)
+                .take(limit as usize + 1)
+                .collect::<Vec<_>>();
+            let has_more = page.len() > limit as usize;
+            if has_more {
+                page.pop();
+            }
+            let next_cursor = if has_more {
+                page.last().map(|(intent, _, _)| crate::readonly_result_archive::encode_cursor(&state, &project_id, &intent.run_id)).transpose()?
+            } else {
+                None
+            };
+            let mut runs = Vec::with_capacity(page.len());
+            for (intent, specification, archived) in page {
+                let store = if archived { saved } else { current }
+                    .ok_or_else(|| ApiError::internal("selected run reader missing"))?;
+                let catalog = store
+                    .read_run_catalog(&intent.run_id)
+                    .map_err(|error| ApiError::internal(error.to_string()))?;
+                let (catalog_state, catalog_revision, task_count) = match catalog {
+                    Some(catalog) => (
+                        ProjectRunCatalogState::Materialized,
+                        Some(catalog.revision),
+                        catalog.tasks.len() as u64,
                     ),
-                },
-                catalog_state,
-                catalog_revision,
-                task_count,
-            });
-        }
-        Ok(ProjectRunListResource {
-            project_id: project_id.as_str().into(),
-            runs,
-            next_cursor,
+                    None => (ProjectRunCatalogState::PendingMaterialization, None, 0),
+                };
+                runs.push(ProjectRunSummaryResource {
+                    run_id: intent.run_id,
+                    accepted_at: intent.accepted_at.to_rfc3339(),
+                    payload_fingerprint: intent.payload_sha256,
+                    scheduling_priority: specification.scheduling_priority,
+                    requested_execution: ProjectRunRequestedExecutionResource {
+                        backend: specification.requested_execution.backend,
+                        device: specification.requested_execution.device,
+                        precision: specification.requested_execution.precision,
+                        mode: specification.requested_execution.mode,
+                        minimum_resources: specification.requested_execution.minimum_resources.map(
+                            |resources| ProjectRunMinimumResourceBudgetResource {
+                                cpu_millis: resources.cpu_millis,
+                                memory_bytes: resources.memory_bytes,
+                                gpu_memory_bytes: resources.gpu_memory_bytes,
+                                storage_bytes: resources.storage_bytes,
+                            },
+                        ),
+                    },
+                    catalog_state,
+                    catalog_revision,
+                    task_count,
+                });
+            }
+            Ok(ProjectRunListResource {
+                project_id: project_id.as_str().into(),
+                runs,
+                next_cursor,
+            })
         })
     })
     .await

@@ -33,6 +33,7 @@ use crate::{
 pub mod retained_cancelled_runs;
 pub mod retained_terminal_runs;
 pub mod retained_attempt_histories;
+pub mod retained_pending_inboxes;
 pub mod retained_held_manual_runs;
 pub mod container_recovery_proof;
 mod retained_snapshot;
@@ -59,6 +60,8 @@ pub const RUNTIME_SERVICE_CONTAINER_RECOVERY_REQUEST_SCHEMA_V4: &str =
     "runtime_service_container_recovery_request.v4";
 pub const RUNTIME_SERVICE_CONTAINER_RECOVERY_REQUEST_SCHEMA_V5: &str =
     "runtime_service_container_recovery_request.v5";
+pub const RUNTIME_SERVICE_CONTAINER_RECOVERY_REQUEST_SCHEMA_V6: &str = "runtime_service_container_recovery_request.v6";
+pub const RUNTIME_SERVICE_CONTAINER_RECOVERY_REQUEST_SCHEMA_V7: &str = "runtime_service_container_recovery_request.v7";
 pub const RUNTIME_SERVICE_CONTAINER_RECOVERY_SCHEMA: &str =
     "runtime_service_container_recovery.v1";
 
@@ -284,6 +287,10 @@ pub struct RuntimeServiceContainerRecoveryRequest {
     pub retained_held_manual_runs: Option<Vec<retained_held_manual_runs::RetainedHeldManualRunPin>>,
     #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "deserialize_attempt_histories")]
     pub retained_attempt_histories: Option<Vec<retained_attempt_histories::RetainedAttemptHistoryPin>>,
+    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "deserialize_pending_inboxes")]
+    pub retained_pending_inboxes: Option<Vec<retained_pending_inboxes::RetainedPendingInboxPin>>,
+    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "deserialize_absent_inboxes")]
+    pub retained_absent_inboxes: Option<Vec<retained_pending_inboxes::RetainedAbsentInboxPin>>,
 }
 
 // Absence preserves old requests; explicit null is not an alternate way to
@@ -293,14 +300,24 @@ where D: serde::Deserializer<'de> {
     Vec::<retained_attempt_histories::RetainedAttemptHistoryPin>::deserialize(deserializer).map(Some)
 }
 
+fn deserialize_pending_inboxes<'de, D: serde::Deserializer<'de>>(d: D) -> std::result::Result<Option<Vec<retained_pending_inboxes::RetainedPendingInboxPin>>, D::Error> {
+    Vec::<retained_pending_inboxes::RetainedPendingInboxPin>::deserialize(d).map(Some)
+}
+
+fn deserialize_absent_inboxes<'de, D: serde::Deserializer<'de>>(d: D) -> std::result::Result<Option<Vec<retained_pending_inboxes::RetainedAbsentInboxPin>>, D::Error> {
+    Vec::<retained_pending_inboxes::RetainedAbsentInboxPin>::deserialize(d).map(Some)
+}
+
 impl RuntimeServiceContainerRecoveryRequest {
     pub fn validate(&self) -> Result<()> {
-        if self.schema_version != RUNTIME_SERVICE_CONTAINER_RECOVERY_REQUEST_SCHEMA_V5
+        if !matches!(self.schema_version.as_str(), RUNTIME_SERVICE_CONTAINER_RECOVERY_REQUEST_SCHEMA_V5 | RUNTIME_SERVICE_CONTAINER_RECOVERY_REQUEST_SCHEMA_V6 | RUNTIME_SERVICE_CONTAINER_RECOVERY_REQUEST_SCHEMA_V7)
             && self.retained_attempt_histories.is_some()
         { bail!("attempt-history pins require the separate v5 recovery contract"); }
-        if !matches!(self.schema_version.as_str(), RUNTIME_SERVICE_CONTAINER_RECOVERY_REQUEST_SCHEMA_V4 | RUNTIME_SERVICE_CONTAINER_RECOVERY_REQUEST_SCHEMA_V5)
+        if !matches!(self.schema_version.as_str(), RUNTIME_SERVICE_CONTAINER_RECOVERY_REQUEST_SCHEMA_V4 | RUNTIME_SERVICE_CONTAINER_RECOVERY_REQUEST_SCHEMA_V5 | RUNTIME_SERVICE_CONTAINER_RECOVERY_REQUEST_SCHEMA_V6 | RUNTIME_SERVICE_CONTAINER_RECOVERY_REQUEST_SCHEMA_V7)
             && self.retained_held_manual_runs.is_some()
         { bail!("held-manual run pins require the separate v4 recovery contract"); }
+        if !matches!(self.schema_version.as_str(), RUNTIME_SERVICE_CONTAINER_RECOVERY_REQUEST_SCHEMA_V6 | RUNTIME_SERVICE_CONTAINER_RECOVERY_REQUEST_SCHEMA_V7) && self.retained_pending_inboxes.is_some() { bail!("pending inbox pins require v6"); }
+        if self.schema_version != RUNTIME_SERVICE_CONTAINER_RECOVERY_REQUEST_SCHEMA_V7 && self.retained_absent_inboxes.is_some() { bail!("absent inbox pins require v7"); }
         let retains_runs = match self.schema_version.as_str() {
             RUNTIME_SERVICE_CONTAINER_RECOVERY_REQUEST_SCHEMA
                 if self.retained_cancelled_runs.is_none()
@@ -338,13 +355,17 @@ impl RuntimeServiceContainerRecoveryRequest {
                 retained_manual_held_run_ids(terminal, held)?;
                 true
             }
-            RUNTIME_SERVICE_CONTAINER_RECOVERY_REQUEST_SCHEMA_V5 => {
+            RUNTIME_SERVICE_CONTAINER_RECOVERY_REQUEST_SCHEMA_V5 | RUNTIME_SERVICE_CONTAINER_RECOVERY_REQUEST_SCHEMA_V6 | RUNTIME_SERVICE_CONTAINER_RECOVERY_REQUEST_SCHEMA_V7 => {
                 if self.retained_cancelled_runs.is_some() { bail!("v5 cannot carry the cancelled-only list"); }
                 let terminal = self.retained_terminal_runs.as_deref().context("v5 requires an explicit terminal subset")?;
                 let held = self.retained_held_manual_runs.as_deref().context("v5 requires an explicit held-manual subset")?;
                 retained_manual_held_run_ids(terminal, held)?;
                 let histories = self.retained_attempt_histories.as_deref().context("v5 requires explicit attempt-history pins")?;
                 retained_attempt_histories::validate_pins(histories, terminal)?;
+                if matches!(self.schema_version.as_str(), RUNTIME_SERVICE_CONTAINER_RECOVERY_REQUEST_SCHEMA_V6 | RUNTIME_SERVICE_CONTAINER_RECOVERY_REQUEST_SCHEMA_V7) { retained_pending_inboxes::validate_pins(self.retained_pending_inboxes.as_deref().context("v6 requires pending inbox pins")?, terminal)?; }
+                if self.schema_version == RUNTIME_SERVICE_CONTAINER_RECOVERY_REQUEST_SCHEMA_V7 {
+                    retained_pending_inboxes::validate_absent_pins(self.retained_absent_inboxes.as_deref().context("v7 requires absent inbox pins")?, terminal, self.retained_pending_inboxes.as_deref().context("v7 requires pending pins")?, histories)?;
+                }
                 true
             }
             _ => bail!("unsupported runtime service container recovery request schema"),
@@ -562,7 +583,7 @@ fn validate_manual_held_union(
     terminal: &[retained_terminal_runs::RetainedTerminalRunPin],
     held: &[retained_held_manual_runs::RetainedHeldManualRunPin],
 ) -> Result<BTreeSet<String>> {
-    validate_retained_union(store, terminal, held, None)
+    validate_retained_union(store, terminal, held, None, &[], &[])
 }
 
 fn validate_attempt_history_union(
@@ -572,7 +593,7 @@ fn validate_attempt_history_union(
     histories: &[retained_attempt_histories::RetainedAttemptHistoryPin],
 ) -> Result<BTreeSet<String>> {
     retained_attempt_histories::validate_pins(histories, terminal)?;
-    validate_retained_union(store, terminal, held, Some(histories))
+    validate_retained_union(store, terminal, held, Some(histories), &[], &[])
 }
 
 fn validate_retained_union(
@@ -580,6 +601,8 @@ fn validate_retained_union(
     terminal: &[retained_terminal_runs::RetainedTerminalRunPin],
     held: &[retained_held_manual_runs::RetainedHeldManualRunPin],
     histories: Option<&[retained_attempt_histories::RetainedAttemptHistoryPin]>,
+    pending: &[retained_pending_inboxes::RetainedPendingInboxPin],
+    absent: &[retained_pending_inboxes::RetainedAbsentInboxPin],
 ) -> Result<BTreeSet<String>> {
     let expected = retained_manual_held_run_ids(terminal, held)?;
     let mut budget = if histories.is_some() { retained_cancelled_runs::ReadBudget::for_attempt_history_v5() }
@@ -598,7 +621,7 @@ fn validate_retained_union(
     )?;
     let mut refs = held_facts.referenced_object_refs;
     let terminal_tasks = if let Some(histories) = histories {
-        retained_terminal_runs::validate_terminal_runs_subset_with_histories(store, terminal, &mut budget, &mut refs, histories)?
+        retained_terminal_runs::validate_terminal_runs_subset_with_absences(store, terminal, &mut budget, &mut refs, histories, pending, absent)?
     } else {
         retained_terminal_runs::validate_terminal_runs_subset(store, terminal, &mut budget, &mut refs)?
     };
@@ -705,6 +728,8 @@ impl RuntimeServiceContainerRecoveryReceipt {
                 | "retained_terminal_runs_recovered"
                 | "retained_manual_held_runs_recovered"
                 | "retained_attempt_history_recovered"
+                | "retained_pending_inboxes_recovered"
+                | "retained_absent_inboxes_recovered"
         ) {
             bail!("runtime service container recovery has an unsupported outcome");
         }
@@ -903,6 +928,90 @@ pub struct RuntimeServiceOwnerLockGuard {
 }
 
 impl RuntimeServiceOwnerLockGuard {
+    /// Finish only a proof-backed successful-worker namespace recovery. The
+    /// task remains successful; the old service owner failed, with unknown exits.
+    pub fn finish_succeeded_namespace_recovery(
+        &self, store: &SessionStore, expected: &RuntimeServiceOwnerDescriptor,
+        before_sha256: &str, request: &crate::SucceededWorkerNamespaceTeardownRequest,
+        attestation: &crate::SucceededWorkerNamespaceTeardownAttestation,
+        ledger: &crate::host_resource_ledger::HostResourceLedger,
+        candidate: Option<&crate::SucceededRecoveryCandidateStorage>,
+    ) -> Result<()> {
+        validate_descriptor(expected)?;
+        #[cfg(not(target_os="linux"))]
+        bail!("succeeded namespace owner recovery requires Linux");
+        #[cfg(target_os="linux")]
+        {
+            use std::os::unix::fs::MetadataExt;
+            let lock_path=checked_path(store.root(),RUNTIME_SERVICE_OWNER_LOCK_PATH)?;
+            reject_link(&lock_path)?;
+            let actual=fs::metadata(lock_path)?;
+            let held=self._lock.metadata()?;
+            if actual.dev()!=held.dev() || actual.ino()!=held.ino()
+                || fs::read_link("/proc/self/ns/pid")?.to_string_lossy()!=attestation.new_pid_namespace {
+                bail!("namespace owner recovery is not holding this store's owner lock in the replacement namespace");
+            }
+            ledger.with_succeeded_namespace_teardown_release_fence(store,request,attestation,candidate, |_| {
+                let path=checked_path(store.root(),RUNTIME_SERVICE_OWNER_DESCRIPTOR_PATH)?;
+                let current=read_stable_regular_path(&path,MAX_RECOVERY_REQUEST_BYTES,"namespace owner")?;
+                let mut failed=expected.clone();
+                failed.state=RuntimeServiceState::Failed;
+                failed.control_address=None;
+                failed.children.clear();
+                validate_descriptor(&failed)?;
+                let after=serde_json::to_vec_pretty(&failed)?;
+                if current!=after && (crate::hex_sha256(&current)!=before_sha256
+                    || serde_json::from_slice::<RuntimeServiceOwnerDescriptor>(&current)?!=*expected) {
+                    bail!("namespace owner changed before the exact recovery transition");
+                }
+                let receipt=serde_json::to_vec(&serde_json::json!({
+                    "schema_version":"runtime_service_succeeded_namespace_owner_recovery.v1",
+                    "teardown_request_sha256":request.request_sha256()?,"attestation_sha256":attestation.sha256()?,
+                    "owner_sha256_before":before_sha256,"owner_sha256_after":crate::hex_sha256(&after),
+                    "task_outcome":"succeeded","process_exit_status":"unknown","solve_replayed":false}))?;
+                let relative=format!("runtime-services/succeeded-namespace-recovery/{}/owner-transition.json",request.request_id);
+                let receipt_path=create_parent(store.root(),&relative)?;
+                let mut options=OpenOptions::new();
+                options.write(true).create_new(true);
+                use std::os::unix::fs::OpenOptionsExt;
+                options.custom_flags(libc::O_NOFOLLOW);
+                match options.open(&receipt_path) {
+                    Ok(mut file)=>{file.write_all(&receipt)?;file.sync_all()?;crate::durability::sync_directory(receipt_path.parent().context("owner recovery parent absent")?)?;},
+                    Err(e) if e.kind()==std::io::ErrorKind::AlreadyExists=>{
+                        if read_stable_regular_path(&receipt_path,MAX_RECOVERY_REQUEST_BYTES,"owner recovery receipt")?!=receipt {
+                            bail!("namespace owner recovery receipt differs from the immutable transition");
+                        }
+                    },
+                    Err(e)=>return Err(e.into()),
+                }
+                // Exact replay can observe cached bytes after an interrupted
+                // fsync. Re-establish file and directory durability before owner.
+                let mut durable_options=OpenOptions::new();
+                durable_options.read(true).custom_flags(libc::O_NOFOLLOW|libc::O_NONBLOCK);
+                let mut durable=durable_options.open(&receipt_path)?;
+                let held=durable.metadata()?;
+                let named=fs::symlink_metadata(&receipt_path)?;
+                if !held.is_file() || held.nlink()!=1 || held.dev()!=named.dev() || held.ino()!=named.ino()
+                    || read_bounded_from_file(&mut durable,MAX_RECOVERY_REQUEST_BYTES,"durable namespace owner receipt")?!=receipt {
+                    bail!("namespace owner recovery receipt inode or bytes changed");
+                }
+                durable.sync_all()?;
+                crate::durability::sync_directory(receipt_path.parent().context("owner recovery parent absent")?)?;
+                let mut ancestor=receipt_path.parent().context("owner recovery parent absent")?;
+                loop {
+                    crate::durability::sync_directory(ancestor)?;
+                    if ancestor==store.root() {break;}
+                    ancestor=ancestor.parent().context("owner recovery archive escaped store")?;
+                }
+                if current!=after {persist_descriptor(&path,&failed)?;}
+                if read_stable_regular_path(&path,MAX_RECOVERY_REQUEST_BYTES,"recovered namespace owner")?!=after {
+                    bail!("namespace owner recovery publication differs");
+                }
+                Ok(())
+            })
+        }
+    }
+
     /// Try to hold the existing owner lock without creating it.
     pub fn try_acquire_existing(root: &Path) -> Result<Option<Self>> {
         let path = checked_path(root, RUNTIME_SERVICE_OWNER_LOCK_PATH)?;
@@ -1231,10 +1340,11 @@ fn open_existing_owner_lock(path: &Path) -> Result<File> {
 
 fn try_open_existing_owner_lock(path: &Path) -> Result<Option<File>> {
     reject_link(path)?;
-    let mut file = OpenOptions::new()
-        .read(true)
-        .write(true)
-        .open(path)
+    let mut options=OpenOptions::new();
+    options.read(true).write(true);
+    #[cfg(unix)]
+    { use std::os::unix::fs::OpenOptionsExt; options.custom_flags(libc::O_NOFOLLOW|libc::O_NONBLOCK); }
+    let mut file = options.open(path)
         .with_context(|| format!("opening existing runtime service owner lock {}", path.display()))?;
     match file.try_lock() {
         Ok(()) => {}
@@ -1243,6 +1353,10 @@ fn try_open_existing_owner_lock(path: &Path) -> Result<Option<File>> {
             return Err(error).context("acquiring native runtime service owner lock")
         }
     }
+    reject_link(path)?;
+    #[cfg(unix)]
+    { use std::os::unix::fs::MetadataExt; let held=file.metadata()?;let named=fs::symlink_metadata(path)?;
+      if held.dev()!=named.dev() || held.ino()!=named.ino() || held.nlink()!=1 {bail!("runtime owner lock inode changed");} }
     let descriptor = read_bounded_from_file(
         &mut file,
         LOCK_DESCRIPTOR.len(),
@@ -1950,6 +2064,29 @@ impl RuntimeServiceLaunchGuard {
         })
     }
 
+    pub fn try_acquire_existing(root: &Path) -> Result<Option<Self>> {
+        crate::writer::require_local_filesystem(root)?;
+        let path = checked_path(root, "runtime-services/LAUNCH.lock")?;
+        reject_link(&path)?;
+        let mut options=OpenOptions::new();
+        options.read(true).write(true);
+        #[cfg(unix)]
+        { use std::os::unix::fs::OpenOptionsExt; options.custom_flags(libc::O_NOFOLLOW|libc::O_NONBLOCK); }
+        let lock = options.open(&path)?;
+        if !lock.metadata()?.is_file() { bail!("runtime launch lock must be a regular file"); }
+        match lock.try_lock() {
+            Ok(()) => {
+                reject_link(&path)?;
+                #[cfg(unix)]
+                { use std::os::unix::fs::MetadataExt; let held=lock.metadata()?; let named=fs::symlink_metadata(&path)?;
+                  if held.dev()!=named.dev() || held.ino()!=named.ino() || held.nlink()!=1 {bail!("runtime launch lock inode changed");} }
+                Ok(Some(Self { _lock: lock, record_path: checked_path(root, "runtime-services/LAUNCH.json")? }))
+            },
+            Err(TryLockError::WouldBlock) => Ok(None),
+            Err(TryLockError::Error(error)) => Err(error.into()),
+        }
+    }
+
     pub fn try_acquire(root: &Path) -> Result<Option<Self>> {
         crate::writer::require_local_filesystem(root)?;
         let path = match create_parent(root, "runtime-services/LAUNCH.lock") {
@@ -2462,6 +2599,46 @@ impl RuntimeServiceConfig {
         recovery_build_commit: &str,
         recovery_build_snapshot: &str,
     ) -> Result<RuntimeServiceContainerRecoveryReceipt> {
+        Self::container_recovery_with_proof_mode(store, candidate, configuration_bytes, request, request_sha256, proof, recovery_build_commit, recovery_build_snapshot, false)
+    }
+
+    pub fn preview_container_with_proof(
+        store: &SessionStore,
+        candidate: &Self,
+        configuration_bytes: &[u8],
+        request: &RuntimeServiceContainerRecoveryRequest,
+        request_sha256: &str,
+        proof: &container_recovery_proof::RuntimeServiceContainerRecoveryProof,
+        recovery_build_commit: &str,
+        recovery_build_snapshot: &str,
+    ) -> Result<serde_json::Value> {
+        let receipt = Self::container_recovery_with_proof_mode(store, candidate, configuration_bytes, request, request_sha256, proof, recovery_build_commit, recovery_build_snapshot, true)?;
+        Ok(serde_json::json!({
+            "schema_version": "runtime_service_container_recovery_preview.v1",
+            "status": "validated",
+            "request_sha256": request_sha256,
+            "config_sha256": request.config_sha256,
+            "owner_sha256": request.owner_sha256,
+            "launch_sha256": request.launch_sha256,
+            "attestation_sha256": proof.sha256()?,
+            "ledger_snapshot_sha256": request.ledger_snapshot_sha256,
+            "executor_build_commit": recovery_build_commit,
+            "executor_build_snapshot": recovery_build_snapshot,
+            "expected_outcome": receipt.outcome,
+        }))
+    }
+
+    fn container_recovery_with_proof_mode(
+        store: &SessionStore,
+        candidate: &Self,
+        configuration_bytes: &[u8],
+        request: &RuntimeServiceContainerRecoveryRequest,
+        request_sha256: &str,
+        proof: &container_recovery_proof::RuntimeServiceContainerRecoveryProof,
+        recovery_build_commit: &str,
+        recovery_build_snapshot: &str,
+        preview_only: bool,
+    ) -> Result<RuntimeServiceContainerRecoveryReceipt> {
         candidate.validate()?;
         request.validate()?;
         proof.validate_for_request(request, request_sha256)?;
@@ -2547,18 +2724,33 @@ impl RuntimeServiceConfig {
             require_existing_regular_path(store.root(), relative)?;
         }
 
-        let _startup_guard = RuntimeServiceStartupGuard::try_acquire(store.root())?
+        let _startup_guard = (if preview_only { RuntimeServiceStartupGuard::try_acquire_existing(store.root()) }
+            else { RuntimeServiceStartupGuard::try_acquire(store.root()) })?
             .context("runtime service startup gate is busy during container recovery")?;
-        let _launch_guard = RuntimeServiceLaunchGuard::try_acquire(store.root())?
+        let _launch_guard = (if preview_only { RuntimeServiceLaunchGuard::try_acquire_existing(store.root()) }
+            else { RuntimeServiceLaunchGuard::try_acquire(store.root()) })?
             .context("runtime service launch gate is busy during container recovery")?;
         let owner_lock_path = checked_path(store.root(), RUNTIME_SERVICE_OWNER_LOCK_PATH)?;
         let owner_lock = open_existing_owner_lock(&owner_lock_path)?;
-        let ledger = crate::host_resource_ledger::HostResourceLedger::open(
-            &host_execution.ledger_root,
-            host_execution.policy.clone(),
-        )?;
-        let result = ledger.with_container_runtime_recovery_quiescence(|ledger_snapshot| {
-            let _store_writer = store.write_transaction()?;
+        let ledger = if preview_only {
+            crate::host_resource_ledger::HostResourceLedger::open_read_only(&host_execution.ledger_root, host_execution.policy.clone())?
+        } else {
+            crate::host_resource_ledger::HostResourceLedger::open(&host_execution.ledger_root, host_execution.policy.clone())?
+        };
+        let validate = |ledger_snapshot: &HostResourceLedgerSnapshot| {
+            let _store_reader = if preview_only { Some(store.read_transaction()?) } else { None };
+            let _store_writer = if preview_only { None } else { Some(store.write_transaction()?) };
+            if preview_only { crate::writer::validate_existing_writer_admission(store.root())?; }
+            if matches!(request.schema_version.as_str(), RUNTIME_SERVICE_CONTAINER_RECOVERY_REQUEST_SCHEMA_V6 | RUNTIME_SERVICE_CONTAINER_RECOVERY_REQUEST_SCHEMA_V7) {
+                for pin in request.retained_pending_inboxes.as_deref().context("v6 pending pins disappeared")? {
+                    if pin.kind == "cancelled_before_spawn" { ledger.validate_retained_no_spawn_locked(store, pin)?; }
+                }
+            }
+            if request.schema_version == RUNTIME_SERVICE_CONTAINER_RECOVERY_REQUEST_SCHEMA_V7 {
+                for pin in request.retained_absent_inboxes.as_deref().context("v7 absent pins disappeared")? {
+                    ledger.validate_retained_absent_no_spawn_locked(store, pin)?;
+                }
+            }
             recover_container_proof_locked(
                 store,
                 candidate,
@@ -2571,8 +2763,11 @@ impl RuntimeServiceConfig {
                 ledger_snapshot,
                 &recovery_relative,
                 &owner_lock,
+                preview_only,
             )
-        })?;
+        };
+        let result = if preview_only { ledger.with_container_runtime_recovery_read_quiescence(validate)? }
+            else { ledger.with_container_runtime_recovery_quiescence(validate)? };
         drop(owner_lock);
         Ok(result)
     }
@@ -3366,6 +3561,17 @@ fn archive_exact_file(
     maximum: usize,
     archived: &mut BTreeMap<String, String>,
 ) -> Result<Vec<u8>> {
+    archive_exact_file_mode(root, archive_relative, source_relative, maximum, archived, false)
+}
+
+fn archive_exact_file_mode(
+    root: &Path,
+    archive_relative: &str,
+    source_relative: &str,
+    maximum: usize,
+    archived: &mut BTreeMap<String, String>,
+    preview_only: bool,
+) -> Result<Vec<u8>> {
     validate_relative_path(source_relative)?;
     let source = checked_path(root, source_relative)?;
     let bytes = read_stable_regular_path(&source, maximum, source_relative)?;
@@ -3377,7 +3583,7 @@ fn archive_exact_file(
     validate_store_id(name)?;
     let destination_relative = format!("{archive_relative}/{name}");
     let destination_path = checked_path(root, &destination_relative)?;
-    let destination = if destination_path.exists() {
+    let destination = if preview_only || destination_path.exists() {
         destination_path
     } else {
         create_parent(root, &destination_relative)?
@@ -3391,7 +3597,7 @@ fn archive_exact_file(
         if existing != bytes {
             bail!("runtime recovery archive evidence changed for {source_relative}");
         }
-    } else {
+    } else if !preview_only {
         crate::durability::atomic_write_owner(&destination, &bytes)?;
     }
     if archived
@@ -3412,6 +3618,19 @@ fn archive_exact_bytes(
     maximum: usize,
     archived: &mut BTreeMap<String, String>,
 ) -> Result<()> {
+    archive_exact_bytes_mode(root, archive_relative, archive_name, source_key, bytes, maximum, archived, false)
+}
+
+fn archive_exact_bytes_mode(
+    root: &Path,
+    archive_relative: &str,
+    archive_name: &str,
+    source_key: &str,
+    bytes: &[u8],
+    maximum: usize,
+    archived: &mut BTreeMap<String, String>,
+    preview_only: bool,
+) -> Result<()> {
     validate_relative_path(source_key)?;
     validate_store_id(archive_name)?;
     if bytes.len() > maximum {
@@ -3420,7 +3639,7 @@ fn archive_exact_bytes(
     let digest = crate::hex_sha256(bytes);
     let destination_relative = format!("{archive_relative}/{archive_name}");
     let destination_path = checked_path(root, &destination_relative)?;
-    let destination = if destination_path.exists() {
+    let destination = if preview_only || destination_path.exists() {
         destination_path
     } else {
         create_parent(root, &destination_relative)?
@@ -3434,7 +3653,7 @@ fn archive_exact_bytes(
         if existing != bytes {
             bail!("runtime recovery archive evidence changed for {source_key}");
         }
-    } else {
+    } else if !preview_only {
         crate::durability::atomic_write_owner(&destination, bytes)?;
     }
     if archived.insert(source_key.to_owned(), digest).is_some() {
@@ -3912,6 +4131,7 @@ fn archive_container_runtime_evidence(
     attestation_sha256: &str,
     ledger_snapshot_sha256: &str,
     prior_ready_owner_proof_sha256: &str,
+    preview_only: bool,
 ) -> Result<(
     String,
     String,
@@ -3939,7 +4159,7 @@ fn archive_container_runtime_evidence(
         if source == CONTAINER_RECOVERY_ARCHIVED_CONFIGURATION_KEY {
             continue;
         }
-        archive_exact_file(
+        archive_exact_file_mode(
             store.root(),
             &archive_relative,
             source,
@@ -3949,9 +4169,10 @@ fn archive_container_runtime_evidence(
                 MAX_RECOVERY_REQUEST_BYTES
             },
             &mut archived,
+            preview_only,
         )?;
     }
-    archive_exact_bytes(
+    archive_exact_bytes_mode(
         store.root(),
         &archive_relative,
         CONTAINER_RECOVERY_ARCHIVED_CONFIGURATION_KEY,
@@ -3959,6 +4180,7 @@ fn archive_container_runtime_evidence(
         configuration_bytes,
         MAX_RECOVERY_REQUEST_BYTES,
         &mut archived,
+        preview_only,
     )?;
     if archived.len() + absent_sources.len() < mandatory_sources.len()
         || archived.len() + absent_sources.len() > MAX_RECOVERY_ARCHIVED_FILES
@@ -3981,7 +4203,8 @@ fn archive_container_runtime_evidence(
         bail!("runtime service container recovery archive manifest exceeds its byte budget");
     }
     let manifest_relative = format!("{archive_relative}/manifest.json");
-    let manifest_path = create_parent(store.root(), &manifest_relative)?;
+    let manifest_path = if preview_only { checked_path(store.root(), &manifest_relative)? }
+        else { create_parent(store.root(), &manifest_relative)? };
     let published_manifest = match read_optional_stable_regular_path(
         &manifest_path,
         MAX_RECOVERY_RECEIPT_BYTES,
@@ -3992,7 +4215,7 @@ fn archive_container_runtime_evidence(
         }
         Some(existing) => existing,
         None => {
-            crate::durability::atomic_write_owner(&manifest_path, &manifest_bytes)?;
+            if !preview_only { crate::durability::atomic_write_owner(&manifest_path, &manifest_bytes)?; }
             manifest_bytes
         }
     };
@@ -4024,6 +4247,8 @@ fn validate_container_receipt_for_request(
         RUNTIME_SERVICE_CONTAINER_RECOVERY_REQUEST_SCHEMA_V3 => "retained_terminal_runs_recovered",
         RUNTIME_SERVICE_CONTAINER_RECOVERY_REQUEST_SCHEMA_V4 => "retained_manual_held_runs_recovered",
         RUNTIME_SERVICE_CONTAINER_RECOVERY_REQUEST_SCHEMA_V5 => "retained_attempt_history_recovered",
+        RUNTIME_SERVICE_CONTAINER_RECOVERY_REQUEST_SCHEMA_V6 => "retained_pending_inboxes_recovered",
+        RUNTIME_SERVICE_CONTAINER_RECOVERY_REQUEST_SCHEMA_V7 => "retained_absent_inboxes_recovered",
         _ => bail!("unsupported runtime service container recovery request schema"),
     };
     if receipt.request_id != request.request_id
@@ -4243,6 +4468,7 @@ fn recover_container_proof_locked(
     ledger_snapshot: &HostResourceLedgerSnapshot,
     recovery_relative: &str,
     owner_lock: &File,
+    preview_only: bool,
 ) -> Result<RuntimeServiceContainerRecoveryReceipt> {
     owner_lock
         .metadata()
@@ -4275,11 +4501,13 @@ fn recover_container_proof_locked(
             require_empty_batch_namespace(store)?;
             require_runtime_recovery_scheduler_state(store, candidate, Some(&retained_ids))?;
         }
-        RUNTIME_SERVICE_CONTAINER_RECOVERY_REQUEST_SCHEMA_V5 => {
+        RUNTIME_SERVICE_CONTAINER_RECOVERY_REQUEST_SCHEMA_V5 | RUNTIME_SERVICE_CONTAINER_RECOVERY_REQUEST_SCHEMA_V6 | RUNTIME_SERVICE_CONTAINER_RECOVERY_REQUEST_SCHEMA_V7 => {
             let terminal = request.retained_terminal_runs.as_deref().context("v5 lost its terminal subset")?;
             let held = request.retained_held_manual_runs.as_deref().context("v5 lost its held-manual subset")?;
             let histories = request.retained_attempt_histories.as_deref().context("v5 lost its attempt-history pins")?;
-            let retained_ids = validate_attempt_history_union(store, terminal, held, histories)?;
+            let retained_ids = if matches!(request.schema_version.as_str(), RUNTIME_SERVICE_CONTAINER_RECOVERY_REQUEST_SCHEMA_V6 | RUNTIME_SERVICE_CONTAINER_RECOVERY_REQUEST_SCHEMA_V7) {
+                validate_retained_union(store, terminal, held, Some(histories), request.retained_pending_inboxes.as_deref().context("v6 pending pins disappeared")?, request.retained_absent_inboxes.as_deref().unwrap_or(&[]))?
+            } else { validate_attempt_history_union(store, terminal, held, histories)? };
             for relative in ["manifests", "live_command_journals", "recovery", "temp"] { require_empty_store_namespace(store, relative)?; }
             require_empty_batch_namespace(store)?;
             require_runtime_recovery_scheduler_state(store, candidate, Some(&retained_ids))?;
@@ -4366,7 +4594,7 @@ fn recover_container_proof_locked(
             );
         }
         verify_container_recovery_archive(store, candidate, request, &receipt)?;
-        if receipt.status == "recovered" {
+        if preview_only || receipt.status == "recovered" {
             return Ok(receipt);
         }
         let mut completed = receipt;
@@ -4439,6 +4667,7 @@ fn recover_container_proof_locked(
                 &attestation_sha256,
                 &request.ledger_snapshot_sha256,
                 &request.prior_ready_owner_proof_sha256,
+                preview_only,
             )?,
         };
     let historical_build_commit = request
@@ -4471,6 +4700,8 @@ fn recover_container_proof_locked(
             RUNTIME_SERVICE_CONTAINER_RECOVERY_REQUEST_SCHEMA_V5 => {
                 "retained_attempt_history_recovered"
             }
+            RUNTIME_SERVICE_CONTAINER_RECOVERY_REQUEST_SCHEMA_V6 => "retained_pending_inboxes_recovered",
+        RUNTIME_SERVICE_CONTAINER_RECOVERY_REQUEST_SCHEMA_V7 => "retained_absent_inboxes_recovered",
             _ => bail!("unsupported runtime service container recovery request schema"),
         })
         .into(),
@@ -4503,10 +4734,17 @@ fn recover_container_proof_locked(
     if receipt.owner_sha256_after != owner_sha256_after {
         bail!("prepared runtime service container recovery transition differs from request");
     }
-    verify_container_recovery_archive(store, candidate, request, &receipt)?;
+    if !preview_only || was_prepared {
+        verify_container_recovery_archive(store, candidate, request, &receipt)?;
+    }
     let receipt_bytes = serde_json::to_vec_pretty(&receipt)?;
     if receipt_bytes.len() > MAX_RECOVERY_RECEIPT_BYTES {
         bail!("runtime service container recovery receipt exceeds its byte budget");
+    }
+    if preview_only {
+        let owner_before = read_stable_regular_path(&owner_path, MAX_RECOVERY_REQUEST_BYTES, "preview owner recheck")?;
+        if owner_before != owner_bytes { bail!("runtime recovery owner changed during preview"); }
+        return Ok(receipt);
     }
     if !was_prepared {
         create_parent(store.root(), recovery_relative)?;
@@ -6014,6 +6252,8 @@ mod container_recovery_contract_tests {
             retained_terminal_runs: None,
             retained_held_manual_runs: None,
             retained_attempt_histories: None,
+            retained_pending_inboxes: None,
+            retained_absent_inboxes: None,
         }
     }
 
@@ -6257,6 +6497,8 @@ mod container_recovery_contract_tests {
             retained_terminal_runs: None,
             retained_held_manual_runs: None,
             retained_attempt_histories: None,
+            retained_pending_inboxes: None,
+            retained_absent_inboxes: None,
         };
         let request_sha256 = request.canonical_sha256().unwrap();
         let observed_containers = request
@@ -6404,6 +6646,60 @@ mod container_recovery_contract_tests {
         oversized.retained_attempt_histories.as_mut().unwrap()[0].attempts = (1..=129).map(|epoch| {
             let mut claim = template.clone(); claim.attempt_id = format!("attempt-{epoch}"); claim.ownership_epoch = epoch; claim
         }).collect(); assert!(oversized.validate().is_err());
+    }
+
+    #[test]
+    fn v7_absence_pins_are_explicit_bounded_disjoint_and_rejected_by_v1_to_v6() {
+        let pin = retained_pending_inboxes::RetainedAbsentInboxPin {
+            run_id: "absent-run".into(), task_id: "task".into(), attempt_id: "attempt".into(), resource_id: "cpu".into(),
+            ownership_epoch: 1, inbox_absence: "directory_absent".into(), release_proof_sha256: "a".repeat(64),
+        };
+        let terminal = vec![retained_terminal_runs::RetainedTerminalRunPin { run_id: pin.run_id.clone(), run_intent_sha256: "b".repeat(64), run_catalog_sha256: "c".repeat(64), artifact_catalog_sha256: None }];
+        retained_pending_inboxes::validate_absent_pins(std::slice::from_ref(&pin), &terminal, &[], &[]).unwrap();
+        assert!(retained_pending_inboxes::validate_absent_pins(&[], &terminal, &[], &[]).is_err());
+        assert!(retained_pending_inboxes::validate_absent_pins(&vec![pin.clone();129], &terminal, &[], &[]).is_err());
+        let mut bad = pin.clone(); bad.inbox_absence = "empty".into(); assert!(retained_pending_inboxes::validate_absent_pins(&[bad], &terminal, &[], &[]).is_err());
+        assert!(retained_pending_inboxes::validate_absent_pins(std::slice::from_ref(&pin), &[], &[], &[]).is_err());
+        for schema in [RUNTIME_SERVICE_CONTAINER_RECOVERY_REQUEST_SCHEMA, RUNTIME_SERVICE_CONTAINER_RECOVERY_REQUEST_SCHEMA_V2,
+            RUNTIME_SERVICE_CONTAINER_RECOVERY_REQUEST_SCHEMA_V3, RUNTIME_SERVICE_CONTAINER_RECOVERY_REQUEST_SCHEMA_V4,
+            RUNTIME_SERVICE_CONTAINER_RECOVERY_REQUEST_SCHEMA_V5, RUNTIME_SERVICE_CONTAINER_RECOVERY_REQUEST_SCHEMA_V6] {
+            let mut legacy = request(); legacy.schema_version = schema.into(); legacy.retained_absent_inboxes = Some(vec![pin.clone()]);
+            assert!(legacy.validate().is_err());
+            let mut raw = serde_json::to_value(request()).unwrap(); raw["schema_version"] = serde_json::json!(schema);
+            raw["retained_absent_inboxes"] = serde_json::Value::Null;
+            assert!(serde_json::from_value::<RuntimeServiceContainerRecoveryRequest>(raw).is_err());
+        }
+        let history = retained_attempt_histories::RetainedAttemptHistoryPin { run_id: pin.run_id.clone(), run_evidence_sha256: "d".repeat(64), attempts: Vec::new() };
+        assert!(retained_pending_inboxes::validate_absent_pins(&[pin], &terminal, &[], &[history]).is_err());
+    }
+
+    #[test]
+    fn v6_pending_inbox_field_is_explicit_and_cannot_widen_legacy_contracts() {
+        let mut value = serde_json::to_value(request()).unwrap();
+        value["retained_pending_inboxes"] = serde_json::Value::Null;
+        assert!(serde_json::from_value::<RuntimeServiceContainerRecoveryRequest>(value).is_err());
+        let pin = retained_pending_inboxes::RetainedPendingInboxPin {
+            run_id: "terminal-history".into(), task_id: "task-history".into(), attempt_id: "attempt-history".into(),
+            resource_id: "compute-cpu".into(), ownership_epoch: 1, inbox_sha256: "d".repeat(64),
+            kind: "failed_final_heartbeat".into(), release_proof_sha256: None,
+        };
+        for schema in [RUNTIME_SERVICE_CONTAINER_RECOVERY_REQUEST_SCHEMA, RUNTIME_SERVICE_CONTAINER_RECOVERY_REQUEST_SCHEMA_V2,
+            RUNTIME_SERVICE_CONTAINER_RECOVERY_REQUEST_SCHEMA_V3, RUNTIME_SERVICE_CONTAINER_RECOVERY_REQUEST_SCHEMA_V4,
+            RUNTIME_SERVICE_CONTAINER_RECOVERY_REQUEST_SCHEMA_V5] {
+            let mut legacy = request(); legacy.schema_version = schema.into(); legacy.retained_pending_inboxes = Some(vec![pin.clone()]);
+            assert!(legacy.validate().is_err());
+        }
+        let terminal = vec![retained_terminal_runs::RetainedTerminalRunPin { run_id: pin.run_id.clone(),
+            run_intent_sha256: "a".repeat(64), run_catalog_sha256: "b".repeat(64), artifact_catalog_sha256: None }];
+        retained_pending_inboxes::validate_pins(std::slice::from_ref(&pin), &terminal).unwrap();
+        assert!(retained_pending_inboxes::validate_pins(&[], &terminal).is_err());
+        assert!(retained_pending_inboxes::validate_pins(&vec![pin.clone(); 129], &terminal).is_err());
+        let mut invalid = pin.clone(); invalid.release_proof_sha256 = Some("a".repeat(64));
+        assert!(retained_pending_inboxes::validate_pins(&[invalid], &terminal).is_err());
+        let mut no_spawn = pin; no_spawn.kind = "cancelled_before_spawn".into();
+        assert!(retained_pending_inboxes::validate_pins(std::slice::from_ref(&no_spawn), &terminal).is_err());
+        no_spawn.release_proof_sha256 = Some("e".repeat(64));
+        retained_pending_inboxes::validate_pins(&[no_spawn], &terminal).unwrap();
     }
 
     #[test]
@@ -6838,6 +7134,54 @@ mod container_recovery_contract_tests {
             expected_owner: owner,
         };
         assert!(request.validate().is_err());
+    }
+
+    #[test]
+    fn container_preview_is_read_only_before_apply_and_during_prepared_completion() {
+        fn snapshot(root: &Path) -> BTreeMap<PathBuf, Vec<u8>> {
+            fn walk(root: &Path, path: &Path, result: &mut BTreeMap<PathBuf, Vec<u8>>) {
+                for entry in fs::read_dir(path).unwrap() {
+                    let path = entry.unwrap().path();
+                    if path.is_dir() { walk(root, &path, result); }
+                    else { result.insert(path.strip_prefix(root).unwrap().to_owned(), fs::read(path).unwrap()); }
+                }
+            }
+            let mut result = BTreeMap::new(); walk(root, root, &mut result); result
+        }
+        let fixture = executable_fixture();
+        let proof = container_recovery_proof::RuntimeServiceContainerRecoveryProof::Exited(fixture.attestation.clone());
+        let preview = || RuntimeServiceConfig::preview_container_with_proof(&fixture.store, &fixture.config,
+            &fixture.configuration_bytes, &fixture.request, &fixture.request_sha256, &proof,
+            &fixture.recovery_build_commit, &fixture.recovery_build_snapshot);
+        let before = snapshot(fixture.store.root());
+        let report = preview().unwrap();
+        assert_eq!(report["schema_version"], "runtime_service_container_recovery_preview.v1");
+        assert_eq!(report["status"], "validated");
+        assert_eq!(report["request_sha256"], fixture.request_sha256);
+        assert_eq!(before, snapshot(fixture.store.root()));
+        assert!(!fixture.store.root().join(format!("runtime-services/container-recovery/{}", fixture.request_sha256)).exists());
+        let mut receipt = RuntimeServiceConfig::recover_container_with_proof(&fixture.store, &fixture.config,
+            &fixture.configuration_bytes, &fixture.request, &fixture.request_sha256, &proof,
+            &fixture.recovery_build_commit, &fixture.recovery_build_snapshot).unwrap();
+        receipt.status = "prepared".into(); receipt.completed_at = None;
+        let receipt_path = fixture.store.root().join(format!("runtime-services/container-recovery/{}/receipt.json", fixture.request_sha256));
+        fs::write(&receipt_path, serde_json::to_vec_pretty(&receipt).unwrap()).unwrap();
+        let before_completion = snapshot(fixture.store.root());
+        preview().unwrap();
+        assert_eq!(before_completion, snapshot(fixture.store.root()));
+    }
+
+    #[test]
+    fn archive_preview_rejects_conflicting_destination_without_writing() {
+        let root = tempfile::tempdir().unwrap();
+        fs::write(root.path().join("source.json"), b"source").unwrap();
+        let mut archived = BTreeMap::new();
+        archive_exact_file_mode(root.path(), "archive", "source.json", 64, &mut archived, true).unwrap();
+        assert!(!root.path().join("archive").exists());
+        fs::create_dir(root.path().join("archive")).unwrap();
+        fs::write(root.path().join("archive/source.json"), b"conflict").unwrap();
+        assert!(archive_exact_file_mode(root.path(), "archive", "source.json", 64, &mut BTreeMap::new(), true).is_err());
+        assert_eq!(fs::read(root.path().join("archive/source.json")).unwrap(), b"conflict");
     }
 
     #[test]

@@ -860,6 +860,161 @@ tolerances are scale-relative, $\varepsilon_x=c\,h_e$ with a fixed
 dimensionless $c$, and reference containment uses $\varepsilon_\xi$; the same
 mesh expressed in nm, µm or mm yields the same weights after rescaling.
 
+
+(planar-monitor-saved-owned-sample-contract)=
+### Przekrój zapisanych próbek pola anteny — kontrakt inspekcji
+
+Stan na 30.10.2026: **implementacja saved-planar działa w zarządzanym runtime
+oraz widoku 2D; kwalifikacja naukowa pozostaje `NotVerified`**. Dwa rzeczywiste
+zapisane wyniki (microstrip: 1145 próbek, GSG: 247 próbek) przeszły po 66
+kontroli HTTP. Nie jest to kwalifikacja rozwiązania pola ani sprzężenia LLG.
+Ten kontrakt rozszerza
+inspekcję o trzecią tożsamość źródła: niezmienny zapisany dataset, niezależny od
+aktywnej sesji i jej `Default`. Nie tworzy monitora ani nowego Solve.
+
+Zapisane `owned_sample_values` pola Oersteda są wartościami w jawnych punktach
+obserwacji. Nie są współczynnikami solverowej funkcji FEM P1. Gdy zapisano
+również zgodną siatkę Tet4, można jawnie zdefiniować **rekonstrukcję liniową do
+inspekcji** na tych punktach. Dla źródła rzeczywiście oznaczonego jako FEM P1
+identyczna algebra odtwarza jego funkcję elementową; dla próbek anteny jest
+nową aproksymacją pomiędzy punktami, a nie dowodem działania solvera FEM H.
+
+```{math}
+:label: eq-planar-saved-owned-vector
+\widehat{\mathbf H}(\mathbf x)
+ =\sum_{a=1}^{4}N_a(\mathbf x)\mathbf H_a,
+\qquad \mathbf x\in K,\quad K\in\mathcal T_s,
+\qquad \widehat H_{\mathrm{mag}}(\mathbf x)
+ =\left\|\sum_{a=1}^{4}N_a(\mathbf x)\mathbf H_a\right\|_2 .
+```
+
+Funkcje $N_a$ są tymi samymi współrzędnymi barycentrycznymi co w
+{eq}`eq-planar-fem-p1`. Najpierw rekonstruuje się trzy składowe, następnie normę
+lub komponent w układzie monitora według {eq}`eq-planar-components`.
+Interpolacja norm węzłowych byłaby inną wielkością. Podział jedności zapewnia
+odtworzenie pola stałego, a baza liniowa — pola afinicznego; jest to własność
+interpolacji [1], nie kwalifikacja oryginalnego rozwiązania anteny.
+
+| Dokładny token LaTeX | Znaczenie | Jednostka SI |
+|---|---|---|
+| $\mathbf H_a$ | Zapisana próbka wektorowa pola w wierzchołku Tet4 o lokalnym indeksie $a$ | $\mathrm{A\,m^{-1}}$ |
+| $\widehat{\mathbf H}$ | Rekonstrukcja wektora do inspekcji | $\mathrm{A\,m^{-1}}$ |
+| $\widehat H_{\mathrm{mag}}$ | Norma zrekonstruowanego wektora | $\mathrm{A\,m^{-1}}$ |
+| $K$ | Komórka Tet4 zapisanej siatki obserwacji | $\mathrm{m^3}$ |
+| $\mathcal T_s$ | Zapisana topologia komórek obserwacji | $1$ |
+
+Poza komórkami zapisanej siatki nie ma rekonstrukcji: próbka jest `empty`,
+bez fizycznej wartości, wyłączona z ekstremów i automatycznej skali. Punkt
+poza ramką jest `outside`. Nie wolno przedłużać wartości najbliższego punktu,
+zerować pola w powietrzu ani używać `Ms`, `m`, `frozen_spins` lub maski
+magnetycznej do wyboru próbek H. Wektor zerowy wewnątrz nośnika pozostaje
+poprawnym polem zerowym; jego orientacja może być niezdefiniowana. Wspólne
+ściany wymagają deterministycznego wyboru komórki i jawnej diagnostyki
+sprzecznych nakładających się nośników. Żądanie nie może ekstrapolować nawet
+wtedy, gdy obrys prostokąta przekroju wychodzi poza siatkę.
+
+Zakres pierwszej realizacji obejmuje `plane_sample` i kompletny, skończony,
+trójskładowy payload w kolejności węzłów przypiętej siatki Tet4. Odrzuca brak
+wiązania geometrii, niezgodne hashe/liczności, osobliwe komórki, nieobsługiwany
+nośnik, element-local J i wyższy rząd. Nie zmienia ich etykiety na P1.
+Dla szybkozmiennego pola blisko krawędzi przewodnika gęsta mapa pikselowa nie
+zwiększa rozdzielczości zapisanych próbek. Bez badania zagęszczenia siatki i
+niezależnej oceny pola nie ma oszacowania błędu tej rekonstrukcji. Nie wolno
+z niej wnioskować kwalifikacji sprzężenia LLG, bazy na amper ani odtworzenia
+wyników publikacji.
+
+#### Parametry i tożsamość zasobu saved-planar
+
+DTO `SavedPlanarQuery` jest zdefiniowane w
+`crates/fullmag-api/src/schemas/saved_planar.rs`. Pięć odczytowych zasobów
+`/saved-planar/meta`, `/scalar`, `/vectors`, `/occupancy`, `/probe` rozszerza
+ścieżkę przypiętego artefaktu persistence; nie korzysta z aktywnej sesji.
+Scalar i vectors używają FMVP v2, occupancy — jawnego binarnego maskowania.
+Nie dodaje się parametrów do
+`fm.study`, `ProblemIR` ani planera; dotychczasowy przykład Python i jego
+lowering pozostają bez zmian. Rekonstrukcja jest inspekcją istniejącego wyniku,
+a nie etapem obliczeń fizycznych.
+
+| Parametr semantyczny | Typ | Domyślna wartość | SI | Walidacja i znaczenie | Python / ProblemIR |
+|---|---|---|---|---|---|---|
+| Właściciel wyniku | identyfikatory projektu, runu, solution, rewizja, member, dataset | wymagany | $1$ | Dokładny istniejący dataset; bez fallbacku na latest lub aktywną sesję | brak |
+| Tożsamość nośnika | hashe manifestów, tensora, geometrii i support/layout | wymagana z przypiętego datasetu | $1$ | Zgodność z historyczną rewizją właściciela tensora, także gdy rewizja kontenera wyniku jest nowsza | brak |
+| Ramka i extent | origin, osie, normalna, jawne granice | wymagane | $\mathrm{m}$ dla origin/granic, $1$ dla osi | Skończona prawoskrętna ramka i rosnące granice; wspólna walidacja planar | brak |
+| Operator | `plane_sample` | wymagany | $1$ | Inne redukcje jawnie niedostępne w pierwszej realizacji | brak |
+| Komponent | istniejący komponent wektora planar | wymagany | $\mathrm{A\,m^{-1}}$, orientacja $1$ | Wybór po interpolacji komponentów, bez zmiany tensora | brak |
+| Rozdzielczość | para dodatnich liczb całkowitych | wymagana | $1$ | Istniejące ograniczenia rastra i budżetu odpowiedzi; brak cichego obniżania jakości | brak |
+
+Wszystkie pola żądania są wymagane, bez ukrytych wartości domyślnych:
+
+| Pole HTTP | Typ i SI | Walidacja / znaczenie |
+|---|---|---|
+| `expected_dataset_manifest_object_ref`, `expected_geometry_manifest_object_ref`, `expected_geometry_object_ref` | string, $1$ | Dokładne hashe przypiętego manifestu datasetu, manifestu geometrii i jej payloadu |
+| `plane` | string, $1$ | `xy`, `xz`, `yz`; adapter nie udostępnia obecnie płaszczyzn ukośnych |
+| `position_m` | float64, $\mathrm{m}$ | Skończone położenie płaszczyzny na osi prostopadłej |
+| `u_min_m`, `u_max_m`, `v_min_m`, `v_max_m` | float64, $\mathrm{m}$ | Skończone, rosnące granice ramki |
+| `width`, `height` | uint32, $1$ | Dodatnie; łącznie najwyżej 1048576 pikseli |
+| `component` | string, $1$ | `magnitude`, `x`, `y`, `z`, `u`, `v`, `normal`; wartości pola w $\mathrm{A\,m^{-1}}$ |
+| `max_response_bytes` | string dziesiętny, $1$ | Dodatni kanoniczny budżet bajtów, z nagłówkiem; limit serwera 32 MiB |
+| `pixel_x`, `pixel_y` (tylko probe) | uint32, $1$ | Indeks piksela rastra; nie najbliższy węzeł |
+
+Źródłowe payloady podlegają limitowi 64 MiB. Większa liczba pikseli nie
+powiększa liczby niezależnych próbek obliczenia. Odpowiedź jawnie podaje
+`reconstruction=tet4_linear_inspection_v1` i `qualification=not_verified`.
+
+Resolver musi odczytać dokładnego historycznego właściciela poprzez istniejące
+`resolve_saved_geometry`, a nie podstawić geometrię bieżącej sesji. Adapter
+może przekazać zwalidowaną rekonstrukcję do istniejącego
+`PlanarSamplingEngine::sample_fem_cached`; nazwa funkcji nie nadaje próbom
+statusu solverowego FEM P1. Metadane muszą osobno podawać typ źródła
+`owned_sample_values`, zastosowaną rekonstrukcję, jednostkę, kolejność próbek,
+ramkę, rozdzielczość, wersję algorytmu oraz CPU jako wykonawcę próbkowania.
+Identyfikator próbki i klucz cache obejmują pełną niezmienną tożsamość źródła,
+geometrię, ramkę, operator i rozdzielczość; zmiana komponentu może współdzielić
+operator geometryczny, ale nie może zwrócić skalaru innego komponentu.
+
+Kwalifikacja `NotVerified` źródła i historyczny status próby pozostają
+niezmienione. Poprawna odpowiedź inspekcji nie zamienia `Failed` na `Succeeded`.
+Wynik wyświetlania jest pochodnym zasobem tylko do odczytu, bez publikowania
+nowego zaakceptowanego pola. UI korzysta z kanonicznych resource hooks i
+binarnych rastrów scalar/vector/occupancy; nie interpoluje Tet4 samodzielnie.
+
+| Źródłowy solver / urządzenie | Proponowana realizacja inspekcji | Stan rozszerzenia |
+|---|---|---|
+| FEM CPU | Odczyt przypiętych próbek H i Tet4, rekonstrukcja na CPU binary64 | Runtime HTTP i podstawowe UI sprawdzone; nauka `NotVerified` |
+| FEM GPU | Taka sama inspekcja CPU dopiero po sprawdzonym transporcie i provenance źródła | `NotImplemented`, brak dowodu GPU; nie jest samplerem GPU |
+| FDM CPU | Nie jest objęty adapterem Tet4; wymaga właściwego zapisanego nośnika structured grid | `NotImplemented` dla saved-planar, bez fallbacku do Tet4 |
+| FDM GPU | Jak FDM CPU, dodatkowo jawne provenance urządzenia źródłowego | `NotImplemented`, brak dowodu GPU |
+
+#### Wymagana walidacja rozszerzenia
+
+Poniższe bramki pozostają całościowo `NOT VERIFIED`; częściowe dowody opisano poniżej:
+
+- **PM-S01**: stały i afiniczny wektor na skośnym Tet4, płaszczyzna osiowa i
+  ukośna; interpolacja składowych i normy zgadza się z wzorem; fixture z
+  przeciwnymi wektorami rozróżnia normę interpolacji od interpolacji norm.
+- **PM-S02**: zerowe pole wewnątrz, punkty poza nośnikiem i poza ramką;
+  occupancy i zakres kolorów nie zamieniają braku danych na zero.
+- **PM-S03**: zmiana rewizji sesji lub brak sesji nie zmienia zapisanego
+  przekroju; błędny hash, liczność, właściciel i layout odrzucają żądanie;
+  nowsza rewizja solution zachowuje historycznego właściciela tensora.
+- **PM-S04**: rzeczywisty zapis Universe H, zmiana położenia przekroju i
+  komponentu w UI, zgodne jednostki, probe, maska i overlay; powrót 2D/3D
+  zachowuje tożsamość datasetu. Licznik Solve i hashe wyników bez zmian.
+- **PM-S05**: cache nie miesza źródeł/ramek; odpowiedzi są ograniczone
+  budżetem, stare odpowiedzi nie nadpisują nowego wyboru; brak aktywnych
+  animacji/renderów i żądań po uspokojeniu widoku.
+
+Dowody 30.10.2026: `scripts/verify_saved_planar_http.py` porównuje rzeczywiste
+rastry z niezależną interpolacją zapisanych próbek, kontroluje normę po
+interpolacji, puste przekroje, probe, ETag oraz odrzucanie błędnych pinów i
+budżetów. Dwa raporty w wolumenie grupy to
+`verification/saved-planar-http-20261030/report.json` i `gsg-report.json`.
+UI sprawdzono bez aktywnej sesji: XY/XZ/YZ, komponent Hy, położenie poza domeną
+i powrót do 3D. Pusty przekrój nie pokazuje legendy 0–0 A/m.
+Nie zamyka to pełnego PM-S01 (w tym płaszczyzny ukośnej), wszystkich błędnych
+nośników PM-S03 ani testów współbieżności/cache/bezczynności PM-S05.
+Pełna regresja WebGL, trwałe screenshoty i kwalifikacja fizyki pozostają otwarte.
+
 (planar-monitor-mixed-element-bases)=
 ### Hex8 and Pyramid5 bases
 
@@ -1431,3 +1586,6 @@ symbols, not line-number claims.
 | Nearest node | `crates/fullmag-api/src/planar_sampling/target.rs`; `crates/fullmag-api/src/router_v2/handlers/data/planar_fields.rs` | `PlanarTarget::nearest_node`; `PlanarNearestNode`; `planar_probe_response` | FEM nearest vertex / FDM cell centre, projection, distances, status | FDM/FEM CPU sampler | PM-N31; tests **NOT RUN** | planned (plan Task 4) | pending integration |
 | Session crop and layer model | `crates/fullmag-api/src/schemas/visualization_state.rs`; `crates/fullmag-api/src/router_v2/handlers/visualization/display.rs`; `crates/fullmag-api/src/session_persistence.rs` | `PlanarCropState`; `PlanarLayerModel`; `migrate_planar_layer_model` | Persisted crop (source of $W^{\mathrm{req}}$), crop validation, legacy-to-layers migration | API visualization | plan Task 2 tests; **NOT RUN** | planned (plan Task 2) | pending integration |
 | Canvas renderer | `apps/control-room/src/modules/field-map/renderer/PlanarSurface.tsx` | `PlanarSurface` | Render sampled raster and overlays | browser | `PlanarSurface.test.tsx`; Task 0 visible-canvas timeout | browser RED | [source](https://github.com/MateuszZelent/fullmag/blob/5138078f7fd7b65dfc231faa4aa11c02d8ebf52d/apps/control-room/src/modules/field-map/renderer/PlanarSurface.tsx) |
+| Rekonstrukcja zapisanych próbek H | `docs/physics/0970-planar-monitor-sampling-and-projection.md` | `DOC-ANCHOR:planar-monitor-saved-owned-sample-contract` | Kontrakt inspekcji, odrębny od solverowego P1 | FEM CPU inspection; pozostałe według tabeli | PM-S01–PM-S05 częściowo | NotVerified; HTTP/UI częściowo potwierdzone | worktree evidence |
+| Dokładny historyczny właściciel zapisanej geometrii | `crates/fullmag-api/src/router_v2/handlers/persistence/solutions/saved_geometry.rs` | `resolve_saved_geometry` | Odczyt datasetu, geometrii i tensora z kontrolą ich zgodności | persistence CPU | PM-S03 dla nowego adaptera niewykonany | istniejący resolver, nie dowód saved-planar | pending integration |
+| Wspólny sampler z cache | `crates/fullmag-api/src/planar_sampling/contract.rs` | `sample_fem_cached` | Istniejący operator geometryczny i komponent po interpolacji | CPU postprocessing | PM-S01 dla adaptera niewykonany | istniejący sampler, adapter ma dowód HTTP, nauka NotVerified | worktree evidence |

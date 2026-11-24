@@ -6,6 +6,7 @@ import hashlib
 import json
 from pathlib import Path, PurePosixPath
 import re
+import time
 import uuid
 
 from docker_build_control import BuildControl, BuildControlError, canonical, docker_capture
@@ -13,11 +14,17 @@ import docker_volume_startup_diagnostic as inspection
 
 REQUEST_SCHEMA = "fullmag.docker-startup-diagnostic-stop-request.v1"
 JOURNAL_SCHEMA = "fullmag.docker-startup-diagnostic-stop.v1"
+READY_REQUEST_SCHEMA = "fullmag.docker-startup-diagnostic-stop-request.v2"
+READY_JOURNAL_SCHEMA = "fullmag.docker-startup-diagnostic-stop.v2"
 FIELDS = {"schema", "request_id", "source_root", "compose_project", "development_attempt",
           "compose_config_sha256", "resume_attempt", "resume_terminal_sha256",
           "backend_container_id", "backend_image_id", "backend_started_at",
           "frontend_container_id", "frontend_image_id", "frontend_started_at",
           "inspection_relative", "inspection_sha256", "historical_process_receipt_sha256", "reason"}
+
+
+
+READY_FIELDS = FIELDS - {"resume_attempt", "resume_terminal_sha256"} | {"development_terminal_sha256"}
 
 
 def require(value, message):
@@ -30,16 +37,19 @@ def sha(raw):
 
 
 def validate_request(request):
-    require(isinstance(request, dict) and set(request) == FIELDS, "Stop request fields differ")
-    require(request["schema"] == REQUEST_SCHEMA, "Unsupported startup diagnostic stop request")
+    require(isinstance(request, dict), "Stop request must be an object")
+    ready = request.get("schema") == READY_REQUEST_SCHEMA
+    require(set(request) == (READY_FIELDS if ready else FIELDS), "Stop request fields differ")
+    require(request["schema"] in {REQUEST_SCHEMA, READY_REQUEST_SCHEMA}, "Unsupported startup diagnostic stop request")
     try:
         identifier = uuid.UUID(request["request_id"])
     except (ValueError, TypeError, AttributeError) as error:
         raise BuildControlError("Request ID must be a canonical nonzero UUID") from error
     require(identifier.int != 0 and str(identifier) == request["request_id"], "Request UUID is not canonical")
-    for field in ("development_attempt", "resume_attempt"):
+    for field in (("development_attempt",) if ready else ("development_attempt", "resume_attempt")):
         require(re.fullmatch(r"[0-9a-f]{32}", str(request[field])), "Incomplete attempt: " + field)
-    for field in ("compose_config_sha256", "resume_terminal_sha256", "backend_container_id",
+    terminal_pin = "development_terminal_sha256" if ready else "resume_terminal_sha256"
+    for field in ("compose_config_sha256", terminal_pin, "backend_container_id",
                   "frontend_container_id", "inspection_sha256", "historical_process_receipt_sha256"):
         require(re.fullmatch(r"[0-9a-f]{64}", str(request[field])), "Incomplete digest/identity: " + field)
     for field in ("backend_image_id", "frontend_image_id"):
@@ -106,6 +116,52 @@ def validate_resume(resume, request, project, volume):
             "Resume lacks exact cgroup admission for this backend")
 
 
+def validate_development_start(record, request, project, volume):
+    require(record.get("schema") == "fullmag.docker-build-operation.v1"
+            and record.get("phase") == "development" and record.get("state") == "failed-confirmed"
+            and record.get("attempt") == request["development_attempt"]
+            and record.get("compose_project") == project and record.get("control_volume") == volume
+            and record.get("config_sha256") == request["compose_config_sha256"]
+            and record.get("backend_container") == request["backend_container_id"]
+            and record.get("backend_started_at") == request["backend_started_at"]
+            and record.get("inputs", {}).get("image_id") == request["backend_image_id"],
+            "Startup stop requires the exact terminal failed-confirmed development")
+    group = record.get("worker_cgroup", {})
+    require(group.get("schema") == "fullmag.worker-cgroup-ready.v1"
+            and group.get("state") == "ready" and group.get("container_id") == request["backend_container_id"]
+            and group.get("image_id") == request["backend_image_id"] and group.get("compose_project") == project,
+            "Development lacks exact cgroup admission for this backend")
+
+
+def start_terminal(control, request):
+    ready = request["schema"] == READY_REQUEST_SCHEMA
+    relative = ("development/attempts/" + request["development_attempt"] + "/terminal.json" if ready
+                else "resume/attempts/" + request["resume_attempt"] + "/terminal.json")
+    raw, record = pinned_json(control, relative, request["development_terminal_sha256" if ready else "resume_terminal_sha256"])
+    validator = validate_development_start if ready else validate_resume
+    validator(record, request, control.project, control.volume)
+    return raw, record
+
+
+def ready_source_pins():
+    return {"inspection_controller_sha256": sha(Path(inspection.__file__).read_bytes()),
+            "ready_owner_validator_sha256": inspection.ready_validator_sha256()}
+
+
+def terminate_backend(backend_id, expected):
+    from docker_dev_recovery_build import inspect_one
+    docker_capture("kill", "--signal", "SIGTERM", backend_id, timeout=20)
+    deadline = time.monotonic() + 60
+    while True:
+        observed = inspect_one("container", backend_id)
+        require(container_pins(observed) == expected and observed["State"].get("OOMKilled") is not True,
+                "Backend incarnation changed during SIGTERM observation")
+        if observed["State"].get("Running") is False and observed["State"].get("Pid") == 0:
+            return observed
+        require(time.monotonic() < deadline, "Backend SIGTERM stop is not confirmed; no escalation")
+        time.sleep(0.25)
+
+
 def verify(control, request, selected):
     import docker_volume_dev as dev
     import docker_volume_container_recovery as recovery
@@ -122,11 +178,10 @@ def verify(control, request, selected):
     document_raw, document = pinned_json(control, "development/attempts/" + request["development_attempt"] + "/compose.json")
     require(sha(canonical(document)) == request["compose_config_sha256"]
             and document.get("name") == control.project, "Compose authority differs")
-    resume_raw, resume = pinned_json(control, "resume/attempts/" + request["resume_attempt"] + "/terminal.json",
-                                     request["resume_terminal_sha256"])
-    validate_resume(resume, request, control.project, control.volume)
+    _, start = start_terminal(control, request)
+    ready = request["schema"] == READY_REQUEST_SCHEMA
     inspection_raw, report = pinned_json(control, request["inspection_relative"], request["inspection_sha256"])
-    require(report.get("schema") == inspection.SCHEMA and report.get("state") == "inspected"
+    require(report.get("schema") == (inspection.READY_SCHEMA if ready else inspection.SCHEMA) and report.get("state") == "inspected"
             and report.get("source_root") == str(selected) and report.get("compose_project") == control.project
             and report.get("backend_container_id") == request["backend_container_id"]
             and report.get("image_id") == request["backend_image_id"]
@@ -145,9 +200,20 @@ def verify(control, request, selected):
                 and actual["State"]["StartedAt"] == request[service + "_started_at"]
                 and actual["State"].get("OOMKilled") is not True, "Service incarnation/image differs: " + service)
     require(container_pins(backend)["fingerprint"] == report["container_fingerprint"], "Backend properties changed")
-    result = docker_capture("exec", backend["Id"], "python3", "-B", "-c", inspection.PROBE, timeout=60)
-    require(result.returncode == 0, "Startup diagnostic probe did not succeed")
-    guest = json.loads(result.stdout)
+    guest = inspection.capture_probe(backend["Id"], expected_owner_state="ready" if ready else "failed")
+    if ready:
+        require(report.get("ready_owner_validator_sha256") == inspection.ready_validator_sha256(),
+                "Ready owner validator changed")
+        group = start["worker_cgroup"]
+        require(group.get("pid") == guest["supervisor"]["pid"]
+                and group.get("process_start_token") == str(guest["supervisor"]["start_ticks"]),
+                "Development supervisor incarnation differs from cgroup admission")
+        expected_error = ("Runtime startup failed; diagnostic API retained: " + inspection.READY_FAILURE_REASON
+                          + ". Diagnostic: " + guest["fence_path"])
+        require(start.get("error") == expected_error, "Development failure does not pin this API fence")
+        require(document["services"]["backend"]["environment"].get("FULLMAG_STARTUP_ENABLED") != "1"
+                and control.read_bytes("activation/unresolved.json", optional=True) is None,
+                "Unresolved startup activation remains")
     require(guest == report.get("guest"), "Startup API, owner, fence or resource evidence changed")
     require(guest["historical_process_receipt_sha256"] == request["historical_process_receipt_sha256"],
             "Historical process receipt changed")
@@ -197,11 +263,13 @@ def main():
     require(request_raw == canonical(request) + b"\n", "Stop request must use canonical control JSON")
     require(request["source_root"] == str(selected) and request["compose_project"] == control.project
             and request["backend_image_id"] == args.image_id, "Request source/project/image differs")
+    ready = request["schema"] == READY_REQUEST_SCHEMA
     inputs = {"request_sha256": args.request_sha256, "source_root": str(selected),
               "controller_sha256": sha(Path(__file__).read_bytes()), "probe_sha256": sha(inspection.PROBE.encode())}
-    # Refuse an active/unknown resume before trying to acquire its control lease.
-    _, resume = pinned_json(control, "resume/attempts/" + request["resume_attempt"] + "/terminal.json", request["resume_terminal_sha256"])
-    validate_resume(resume, request, control.project, control.volume)
+    if ready:
+        inputs.update(ready_source_pins())
+    # Refuse an active/unknown start before acquiring its control lease.
+    start_terminal(control, request)
     if args.apply:
         preview = control.read("startup-diagnostic-stop-preview/verified.json")
         require(isinstance(preview, dict) and preview.get("phase") == "startup-diagnostic-stop-preview" and preview.get("state") == "succeeded"
@@ -224,15 +292,18 @@ def main():
         # Recheck immutable process and namespace pins immediately before the only signal.
         fresh, _, _ = verify(control, request, selected)
         require(fresh == evidence, "Stop evidence changed under the operation lease")
-        journal = {"schema": JOURNAL_SCHEMA, "state": "stop-planned", "request": request,
+        if ready:
+            current_sources = ready_source_pins()
+            require(current_sources == {key: inputs[key] for key in current_sources},
+                    "Ready controller sources changed before SIGTERM")
+        journal = {"schema": READY_JOURNAL_SCHEMA if ready else JOURNAL_SCHEMA, "state": "stop-planned", "request": request,
                    "request_sha256": args.request_sha256, "inspection_sha256": request["inspection_sha256"], **evidence,
                    "stop_operation": {"phase": phase, "attempt": operation["receipt"]["attempt"], "root": operation["root"]}}
         relative = "verification/stop-startup-diagnostic-" + backend["Id"] + ".json"
         require(control.read(relative, optional=True) is None, "A stop intent already exists; do not repeat the signal")
         control.write(relative, journal)
         operation["daemon_pending"] = True
-        docker_capture("stop", "--time", "60", backend["Id"], timeout=90)
-        stopped = inspect_one("container", backend["Id"])
+        stopped = terminate_backend(backend["Id"], evidence["backend_before"])
         current_frontend = inspect_one("container", frontend["Id"])
         require(container_pins(stopped) == evidence["backend_before"]
                 and stopped["State"].get("Running") is False and stopped["State"].get("Pid") == 0

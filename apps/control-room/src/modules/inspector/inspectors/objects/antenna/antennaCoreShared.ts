@@ -6,8 +6,8 @@ import {
   type JsonRecord,
 } from "../../../panels/antenna/AntennaCoreHelpers";
 import {
+  antennaCircuitFields,
   CPW_STATION_FIELDS,
-  MICROSTRIP_LOOP_FIELDS,
   type WidthStationDraft,
 } from "../../../panels/antenna/MicrostripGeometryEditorModel";
 
@@ -68,11 +68,13 @@ export const DEFAULT_LOOP_PARAMETERS: Readonly<Record<string, string>> = {
   inlet_connection_offset_v_m: "0",
   inlet_connection_part_id: "inlet_bridge",
   inlet_connection_width_m: "120e-9",
+  inlet_crossbar_length_m: "50e-9",
   outlet_connection_conductivity_s_per_m: "5.96e7",
   outlet_connection_length_m: "200e-9",
   outlet_connection_offset_v_m: "0",
   outlet_connection_part_id: "outlet_bridge",
   outlet_connection_width_m: "120e-9",
+  outlet_crossbar_length_m: "50e-9",
 };
 
 export interface Waypoint3DDraft {
@@ -443,8 +445,9 @@ export function validateWaypointsDraft(waypoints: readonly Waypoint3DDraft[]): s
 
 export function validateLoopParametersDraft(
   parameters: Readonly<Record<string, string>>,
+  geometryKind: string,
 ): string | null {
-  for (const field of MICROSTRIP_LOOP_FIELDS) {
+  for (const field of antennaCircuitFields({ geometry_kind: geometryKind })) {
     const raw = parameters[field.key] ?? "";
     if (!raw.trim()) {
       return `${field.label} is required when closed-loop return is enabled.`;

@@ -100,21 +100,54 @@ impl ClosedLoopPreparationReceipt {
     }
 }
 
-/// Two concrete readiness records, with their distinct immutable wire schemas.
+/// Concrete readiness records with distinct immutable wire schemas.
 #[derive(Debug, Clone)]
 pub enum AcceptedPreparationReceipt {
     Solver(PreparationReceipt),
     ClosedLoop(ClosedLoopPreparationReceipt),
+    RetainedCurrent(crate::RetainedCurrentPreparationReceipt),
+    RetainedAssetField(crate::RetainedAssetFieldPreparationReceipt),
 }
 impl AcceptedPreparationReceipt {
     pub fn binding(&self) -> Result<PreparationBinding, crate::PreparationReceiptError> {
-        match self { Self::Solver(receipt) => PreparationBinding::from_receipt(receipt), Self::ClosedLoop(receipt) => { receipt.validate()?; receipt.binding() } }
+        match self {
+            Self::Solver(receipt) => PreparationBinding::from_receipt(receipt),
+            Self::ClosedLoop(receipt) => { receipt.validate()?; receipt.binding() }
+            Self::RetainedCurrent(receipt) => { receipt.validate()?; receipt.binding() }
+            Self::RetainedAssetField(receipt) => { receipt.validate()?; receipt.binding() }
+        }
     }
-    pub fn preparation_id(&self) -> &str { match self { Self::Solver(receipt) => &receipt.preparation_id, Self::ClosedLoop(receipt) => &receipt.preparation_id } }
-    pub fn plan_fingerprint(&self) -> &str { match self { Self::Solver(receipt) => &receipt.plan_fingerprint, Self::ClosedLoop(receipt) => &receipt.plan_fingerprint } }
-    pub fn payload(&self) -> Result<serde_json::Value, serde_json::Error> { match self { Self::Solver(receipt) => serde_json::to_value(receipt), Self::ClosedLoop(receipt) => serde_json::to_value(receipt) } }
+    pub fn preparation_id(&self) -> &str {
+        match self {
+            Self::Solver(receipt) => &receipt.preparation_id,
+            Self::ClosedLoop(receipt) => &receipt.preparation_id,
+            Self::RetainedCurrent(receipt) => &receipt.preparation_id,
+            Self::RetainedAssetField(receipt) => &receipt.preparation_id,
+        }
+    }
+    pub fn plan_fingerprint(&self) -> &str {
+        match self {
+            Self::Solver(receipt) => &receipt.plan_fingerprint,
+            Self::ClosedLoop(receipt) => &receipt.plan_fingerprint,
+            Self::RetainedCurrent(receipt) => &receipt.plan_fingerprint,
+            Self::RetainedAssetField(receipt) => &receipt.plan_fingerprint,
+        }
+    }
+    pub fn payload(&self) -> Result<serde_json::Value, serde_json::Error> {
+        match self {
+            Self::Solver(receipt) => serde_json::to_value(receipt),
+            Self::ClosedLoop(receipt) => serde_json::to_value(receipt),
+            Self::RetainedCurrent(receipt) => serde_json::to_value(receipt),
+            Self::RetainedAssetField(receipt) => serde_json::to_value(receipt),
+        }
+    }
     pub fn source(&self) -> Result<&AcceptedRunPreparationSource, crate::PreparationReceiptError> {
-        match self { Self::Solver(receipt) => receipt.accepted_run_source.as_ref().ok_or_else(|| failure("accepted preparation has no source")), Self::ClosedLoop(receipt) => Ok(&receipt.plan.source) }
+        match self {
+            Self::Solver(receipt) => receipt.accepted_run_source.as_ref().ok_or_else(|| failure("accepted preparation has no source")),
+            Self::ClosedLoop(receipt) => Ok(&receipt.plan.source),
+            Self::RetainedCurrent(receipt) => Ok(&receipt.plan.source),
+            Self::RetainedAssetField(receipt) => Ok(&receipt.plan.source),
+        }
     }
 }
 

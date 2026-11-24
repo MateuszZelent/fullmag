@@ -5,7 +5,12 @@ pub mod bundle;
 pub mod charge;
 pub mod current_display;
 pub mod package;
+pub mod retained_current;
+pub mod sample_carrier;
+pub mod source_preparation;
 pub mod solution;
+
+pub use sample_carrier::AntennaSampleCarrier;
 
 #[derive(Debug)]
 pub struct ArtifactError {
