@@ -78,6 +78,7 @@ _SOURCE_LABEL_VALUE_RE = re.compile(r"[a-z0-9][a-z0-9._-]*")
 _MAX_RETAINED_CONTAINER_IDS = 16
 _MAX_RETAINED_CONTAINER_LIST_BYTES = 16 * 1024
 OPERATOR_PROBE_ENVIRONMENT_SCHEMA = "fullmag.operator-probe-environment.v1"
+RUN_PERFORMANCE_STEP_CSV_ENV = "FULLMAG_RUN_PERFORMANCE_STEP_CSV"
 OPERATOR_PROBE_ENVIRONMENT_DEFAULTS = {
     "FULLMAG_MIXED_P1_DEVICE": "gpu",
     "FULLMAG_ARTIFACT_FIELD_STORAGE": "json",
@@ -85,6 +86,7 @@ OPERATOR_PROBE_ENVIRONMENT_DEFAULTS = {
 OPERATOR_PROBE_ENVIRONMENT_ALLOWED = {
     "FULLMAG_MIXED_P1_DEVICE": frozenset({"cpu", "gpu"}),
     "FULLMAG_ARTIFACT_FIELD_STORAGE": frozenset({"json", "zarr"}),
+    RUN_PERFORMANCE_STEP_CSV_ENV: frozenset({"0", "1"}),
 }
 
 
@@ -95,15 +97,17 @@ def _validate_device_access(value: object) -> str:
 
 
 def _normalize_operator_probe_environment(value: Mapping[str, object]) -> dict[str, str]:
-    """Validate the exact two-key operator-probe boundary."""
+    """Validate the operator controls in old and new launch receipts."""
 
-    if not isinstance(value, Mapping) or set(value) != set(OPERATOR_PROBE_ENVIRONMENT_ALLOWED):
+    if (not isinstance(value, Mapping)
+            or not OPERATOR_PROBE_ENVIRONMENT_DEFAULTS.keys() <= value.keys()
+            or not value.keys() <= OPERATOR_PROBE_ENVIRONMENT_ALLOWED.keys()):
         raise ValueError(
-            "operator_probe_environment must contain exactly the bounded probe controls"
+            "operator_probe_environment must contain exactly the required controls and only allowed options"
         )
     normalized: dict[str, str] = {}
-    for name, allowed in OPERATOR_PROBE_ENVIRONMENT_ALLOWED.items():
-        raw = value[name]
+    for name, raw in value.items():
+        allowed = OPERATOR_PROBE_ENVIRONMENT_ALLOWED[name]
         if not isinstance(raw, str):
             raise ValueError(f"{name} must be a string")
         candidate = raw.strip().lower()
@@ -1075,6 +1079,9 @@ def compose_spec(image, state, port, host_certificate=None, *, repo=None, inputs
     configured = json.loads(docker("compose", "--project-name", project,
                                    "--project-directory", str(repo), *definitions,
                                    "config", "--format", "json", environment=environment))
+    if operator_probe_values is not None and RUN_PERFORMANCE_STEP_CSV_ENV in operator_probe_values:
+        backend_environment = configured["services"]["backend"].setdefault("environment", {})
+        backend_environment[RUN_PERFORMANCE_STEP_CSV_ENV] = operator_probe_values[RUN_PERFORMANCE_STEP_CSV_ENV]
     if previous_config_sha256 is not None:
         backend = configured.get("services", {}).get("backend")
         if not isinstance(backend, dict):

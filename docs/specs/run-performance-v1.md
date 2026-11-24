@@ -10,6 +10,8 @@ rejestrator nie włącza jego dodatkowych synchronizacji, logów ani prób.
 W katalogu `performance/` powstają `resources.csv`, `live.v1.json` i
 `summary.json` (`fullmag.run_performance.v1`). Pełny ślad `steps.csv` wymaga
 `FULLMAG_RUN_PERFORMANCE_STEP_CSV=1` w środowisku procesu solvera przed startem.
+Przy tworzeniu backendu Docker DEV w Linux/WSL przekaż ustawienie jako
+`FULLMAG_RUN_PERFORMANCE_STEP_CSV=1 just docker-dev <source_root> <port>`. Zapisana konfiguracja grupy zachowuje wybór przy wznowieniu.
 Rozmiar włączonego śladu rośnie z liczbą callbacków. Zegar, liczniki i agregaty
 działają w obu trybach. Podsumowanie zapisuje `artifacts.steps_csv_enabled`
 i ścieżkę śladu, gdy writer go otworzył. Są to diagnostyki przebiegu,

@@ -221,8 +221,10 @@ jobs:
           cargo test -p fullmag-runtime-control --lib scheduler::accepted_start_tests
           cargo test -p fullmag-api --bin fullmag-api live_accepted_projection::tests
           cargo test --locked -p fullmag-api --bin fullmag-api accepted_run_performance::tests
-          env -u FULLMAG_RUN_PERFORMANCE_STEP_CSV cargo test --locked -p fullmag-runner --lib run_performance
+          cargo test --locked -p fullmag-runner --lib run_performance
+          cargo test --locked -p fullmag-runner --lib performance_observes_each_numerical_settle_but_not_hysteresis_progress
           PYTHONPATH=scripts python3 -B -m unittest test_report_run_performance
+          PYTHONPATH=scripts python3 -B -m unittest test_docker_volume_receipts.VolumeReceiptTests.test_step_csv_opt_in_reaches_only_the_backend_and_is_pinned
           cargo test -p fullmag-api --bin fullmag-api accepted_fem_study_worker::source_contract_tests
           cargo test -p fullmag-api --bin fullmag-api-accepted-worker accepted_fem_study_worker::source_contract_tests
           cargo test -p fullmag-api --bin fullmag-api live_scene_preparation::tests

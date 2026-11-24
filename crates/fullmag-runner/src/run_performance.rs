@@ -1546,7 +1546,8 @@ mod tests {
     #[test]
     fn automatic_diagnostics_keep_the_clock_and_summary_without_step_csv() {
         let output = TestDir::new();
-        let mut recorder = RunPerformanceRecorder::start(&output.0, json!({}), "fdm_cpu");
+        let mut recorder =
+            RunPerformanceRecorder::start_with_step_csv(&output.0, json!({}), "fdm_cpu", false);
         let mut sample = stats(0);
         sample.dt = 1e-12;
         recorder.observe(&sample);
