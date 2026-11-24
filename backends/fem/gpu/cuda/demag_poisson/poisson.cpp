@@ -182,6 +182,26 @@ uint64_t gpu_demag_poisson_device_bytes(const Context &ctx)
 #endif
 }
 
+GpuDemagPoissonLinearSolver gpu_demag_poisson_linear_solver(const Context &ctx)
+{
+#if FULLMAG_HAS_MFEM_STACK
+    if (!ctx.demag.enabled ||
+        ctx.poisson_demag.gpu_demag_mode != FULLMAG_FEM_GPU_DEMAG_DEVICE_HYPRE_POISSON) {
+        return GpuDemagPoissonLinearSolver::Unavailable;
+    }
+    const GpuDemagPoissonWorkspace *workspace = workspace_ptr(ctx);
+    if (workspace == nullptr || !workspace->ready) {
+        return GpuDemagPoissonLinearSolver::Unavailable;
+    }
+    return workspace->direct_solver != nullptr
+        ? GpuDemagPoissonLinearSolver::CudssDirect
+        : GpuDemagPoissonLinearSolver::HypreKrylov;
+#else
+    (void)ctx;
+    return GpuDemagPoissonLinearSolver::Unavailable;
+#endif
+}
+
 const char *gpu_demag_poisson_operator_mode(const Context &ctx)
 {
     if (!ctx.demag.enabled) {

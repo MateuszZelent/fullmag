@@ -46,6 +46,7 @@
 #include "cpu/frequency_domain/operators/poisson_airbox_shared_domain.hpp"
 #include "gpu/cuda/demag_poisson/operators.hpp"
 #include "gpu/cuda/demag_poisson/hypre_device_solver.hpp"
+#include "gpu/cuda/demag_poisson/poisson.hpp"
 #include "gpu/cuda/demag_poisson/stage_compute.hpp"
 #include "gpu/cuda/fields/vector_field_kernels.hpp"
 #include "gpu/cuda/integrators/rk/rk.hpp"
@@ -323,8 +324,11 @@ void apply_demag_solver_policy_to_step_stats(
     const fullmag::fem::Context &ctx,
     fullmag_fem_step_stats &stats)
 {
+    // No AMG profile when no AMG ran: the cuDSS direct solve builds none.
     if (!ctx.demag.enabled ||
-        ctx.demag.solver.preconditioner != FULLMAG_FEM_PRECONDITIONER_AMG) {
+        ctx.demag.solver.preconditioner != FULLMAG_FEM_PRECONDITIONER_AMG ||
+        fullmag::fem::gpu_demag_poisson_linear_solver(ctx) ==
+            fullmag::fem::GpuDemagPoissonLinearSolver::CudssDirect) {
         stats.demag_amg_relax_type = 0;
         stats.demag_amg_coarsening = 0;
         stats.demag_amg_interpolation = 0;
@@ -7421,6 +7425,37 @@ int fullmag_fem_backend_get_gpu_demag_amg_coarse_relax_type_v1(
         return FULLMAG_FEM_ERR_INTERNAL;
     }
     *out_relax_type = relax_type;
+    return FULLMAG_FEM_OK;
+}
+
+int fullmag_fem_backend_get_gpu_demag_linear_solver_v1(
+    fullmag_fem_backend *handle,
+    uint32_t *out_linear_solver
+) {
+    if (out_linear_solver == nullptr) {
+        fullmag_fem_set_handle_error(
+            handle,
+            "fullmag_fem_backend_get_gpu_demag_linear_solver_v1 "
+            "received null out_linear_solver");
+        return FULLMAG_FEM_ERR_INVALID;
+    }
+    if (handle == nullptr) {
+        fullmag_fem_set_global_error(
+            "fullmag_fem_backend_get_gpu_demag_linear_solver_v1 received null handle");
+        return FULLMAG_FEM_ERR_INVALID;
+    }
+    switch (fullmag::fem::gpu_demag_poisson_linear_solver(handle->context)) {
+    case fullmag::fem::GpuDemagPoissonLinearSolver::HypreKrylov:
+        *out_linear_solver = FULLMAG_FEM_GPU_DEMAG_LINEAR_SOLVER_HYPRE_KRYLOV;
+        break;
+    case fullmag::fem::GpuDemagPoissonLinearSolver::CudssDirect:
+        *out_linear_solver = FULLMAG_FEM_GPU_DEMAG_LINEAR_SOLVER_CUDSS_DIRECT;
+        break;
+    case fullmag::fem::GpuDemagPoissonLinearSolver::Unavailable:
+    default:
+        *out_linear_solver = FULLMAG_FEM_GPU_DEMAG_LINEAR_SOLVER_UNAVAILABLE;
+        break;
+    }
     return FULLMAG_FEM_OK;
 }
 

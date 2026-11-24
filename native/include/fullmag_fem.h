@@ -3581,6 +3581,12 @@ typedef enum {
 #define FULLMAG_FEM_GPU_OPERATOR_PRECONDITIONER (UINT64_C(1) << 9)
 #define FULLMAG_FEM_GPU_OPERATOR_PROJECTED_GRADIENT_BB (UINT64_C(1) << 10)
 #define FULLMAG_FEM_GPU_OPERATOR_NONLINEAR_CG (UINT64_C(1) << 11)
+/*
+ * The linear solve applied a sparse direct factorization; no Krylov iteration
+ * and no preconditioner ran. Excludes FULLMAG_FEM_GPU_OPERATOR_PRECONDITIONER
+ * and requires FULLMAG_FEM_GPU_OPERATOR_DEMAG_SOLVE (docs/physics/0997).
+ */
+#define FULLMAG_FEM_GPU_OPERATOR_DIRECT_SOLVE (UINT64_C(1) << 12)
 
 typedef struct {
     uint32_t abi_version;
@@ -4310,6 +4316,23 @@ FULLMAG_FEM_API int fullmag_fem_backend_get_gpu_state_info(
 FULLMAG_FEM_API int fullmag_fem_backend_get_gpu_demag_amg_coarse_relax_type_v1(
     fullmag_fem_backend *handle,
     int32_t *out_relax_type
+);
+
+/*
+ * Linear-solver realization of the initialized device Poisson demag workspace
+ * (`device_hypre_poisson`, docs/physics/0997). UNAVAILABLE when no such
+ * workspace is ready: demag disabled, FEM CPU, FEM/BEM or the explicit hybrid
+ * CPU-Poisson mode.
+ */
+typedef enum {
+    FULLMAG_FEM_GPU_DEMAG_LINEAR_SOLVER_UNAVAILABLE = 0,
+    FULLMAG_FEM_GPU_DEMAG_LINEAR_SOLVER_HYPRE_KRYLOV = 1,
+    FULLMAG_FEM_GPU_DEMAG_LINEAR_SOLVER_CUDSS_DIRECT = 2,
+} fullmag_fem_gpu_demag_linear_solver_v1;
+
+FULLMAG_FEM_API int fullmag_fem_backend_get_gpu_demag_linear_solver_v1(
+    fullmag_fem_backend *handle,
+    uint32_t *out_linear_solver
 );
 
 FULLMAG_FEM_API int fullmag_fem_backend_get_gpu_rk_plan_info(

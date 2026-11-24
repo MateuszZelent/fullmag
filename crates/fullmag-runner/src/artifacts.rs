@@ -1235,8 +1235,19 @@ fn demag_runtime_metadata(
             let relative_tolerance = resolved_policy.map_or(policy.rtol, |entry| entry.rtol);
             let max_iterations =
                 resolved_policy.map_or(policy.max_iterations, |entry| entry.max_iterations);
-            let amg_profile = demag_amg_profile_metadata(&preconditioner, last);
-            let (runtime_solver, runtime_preconditioner) = if matches!(
+            // The realization that ran (docs/physics/0997); the fields above
+            // keep the requested policy.
+            let resolved_linear_solver =
+                resolved_policy.and_then(|entry| entry.resolved_linear_solver.clone());
+            let direct_solve = resolved_linear_solver.as_deref() == Some("cudss_direct");
+            let amg_profile = if direct_solve {
+                serde_json::Value::Null
+            } else {
+                demag_amg_profile_metadata(&preconditioner, last)
+            };
+            let (runtime_solver, runtime_preconditioner) = if direct_solve {
+                (Some("CudssDirect"), None)
+            } else if matches!(
                 provenance.fem_demag_operator_mode.as_deref(),
                 Some("device_hypre_poisson") | Some("device_hypre_fem_bem")
             ) {
@@ -1278,6 +1289,7 @@ fn demag_runtime_metadata(
                 },
                 "linear_solver": linear_solver,
                 "preconditioner": preconditioner,
+                "resolved_linear_solver": resolved_linear_solver,
                 "runtime_solver": runtime_solver,
                 "runtime_preconditioner": runtime_preconditioner,
                 "amg_profile": amg_profile,
@@ -7103,6 +7115,57 @@ mod tests {
         assert_eq!(metadata["preconditioner"], "JACOBI");
         assert_eq!(metadata["runtime_solver"], "HypreGMRES");
         assert_eq!(metadata["runtime_preconditioner"], "HypreDiagScale");
+    }
+
+    #[test]
+    fn gpu_demag_runtime_metadata_reports_the_resolved_linear_solver() {
+        let mut plan = test_fem_execution_plan();
+        let BackendPlanIR::Fem(fem) = &mut plan.backend_plan else {
+            panic!("test plan must be FEM");
+        };
+        fem.enable_demag = true;
+        fem.demag_realization = Some(fullmag_ir::ResolvedFemDemagIR::PoissonRobin);
+        let provenance = |resolved: &str| ExecutionProvenance {
+            execution_engine: "fem_native_gpu".to_string(),
+            fem_demag_operator_mode: Some("device_hypre_poisson".to_string()),
+            fem_poisson_demag: Some(crate::types::FemPoissonDemagProvenance {
+                linear_solver: "CG".to_string(),
+                preconditioner: "AMG".to_string(),
+                resolved_linear_solver: Some(resolved.to_string()),
+                ..Default::default()
+            }),
+            ..ExecutionProvenance::default()
+        };
+        let stats = StepStats {
+            demag_amg_relax_type: 18,
+            ..StepStats::default()
+        };
+
+        let krylov = demag_runtime_metadata(&plan, &provenance("hypre_krylov"), &[stats.clone()]);
+        assert_eq!(krylov["resolved_linear_solver"], "hypre_krylov");
+        assert_eq!(krylov["runtime_solver"], "HyprePCG");
+        assert_eq!(krylov["runtime_preconditioner"], "HypreBoomerAMG");
+        assert!(krylov["amg_profile"].is_object());
+
+        let direct = demag_runtime_metadata(&plan, &provenance("cudss_direct"), &[stats]);
+        assert_eq!(direct["resolved_linear_solver"], "cudss_direct");
+        assert_eq!(direct["linear_solver"], "CG", "requested policy stays visible");
+        assert_eq!(direct["preconditioner"], "AMG", "requested policy stays visible");
+        assert_eq!(direct["runtime_solver"], "CudssDirect");
+        assert!(direct["runtime_preconditioner"].is_null());
+        assert!(direct["amg_profile"].is_null(), "no AMG ran under the direct solve");
+
+        let serialized = serde_json::to_value(provenance("cudss_direct")).unwrap();
+        assert_eq!(
+            serialized["fem_poisson_demag"]["resolved_linear_solver"],
+            "cudss_direct"
+        );
+        let legacy = serde_json::to_value(ExecutionProvenance {
+            fem_poisson_demag: Some(crate::types::FemPoissonDemagProvenance::default()),
+            ..ExecutionProvenance::default()
+        })
+        .unwrap();
+        assert!(legacy["fem_poisson_demag"].get("resolved_linear_solver").is_none());
     }
 
     #[test]

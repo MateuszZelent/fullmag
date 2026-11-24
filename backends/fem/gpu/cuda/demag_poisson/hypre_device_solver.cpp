@@ -653,12 +653,12 @@ bool validate_demag_poisson_hypre_device_solve(
         return false;
     }
     if (gpu_execution_receipt_attempt_active(ctx.gpu_state.execution_receipt)) {
-        // The required operator mask follows the requested CG/AMG policy, so the
-        // cuDSS factor, applied in place of the preconditioned solve, keeps the
-        // PRECONDITIONER bit (docs/physics/0997, limitations).
+        // Record the realization that ran; the planner requires the same bit
+        // (gpu_rk_required_operator_mask, docs/physics/0997).
         gpu_execution_receipt_note_device(
             ctx.gpu_state.execution_receipt,
-            FEM_GPU_OPERATOR_DEMAG_SOLVE | FEM_GPU_OPERATOR_PRECONDITIONER);
+            FEM_GPU_OPERATOR_DEMAG_SOLVE |
+                (direct ? FEM_GPU_OPERATOR_DIRECT_SOLVE : FEM_GPU_OPERATOR_PRECONDITIONER));
     }
     return true;
 #else

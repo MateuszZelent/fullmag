@@ -38,6 +38,15 @@ bool has_direct_torque_operator(const Context &ctx)
     return ctx.stt.slonczewski_enabled || ctx.stt.zhang_li_enabled || ctx.sot.enabled;
 }
 
+// The linear-solve bit follows the realization the device Poisson workspace
+// resolved, not the requested Krylov policy (docs/physics/0997).
+uint64_t demag_linear_solve_operator(const Context &ctx)
+{
+    return gpu_demag_poisson_linear_solver(ctx) == GpuDemagPoissonLinearSolver::CudssDirect
+        ? FEM_GPU_OPERATOR_DIRECT_SOLVE
+        : FEM_GPU_OPERATOR_PRECONDITIONER;
+}
+
 } // namespace
 
 uint64_t gpu_rk_required_operator_mask(const Context &ctx)
@@ -58,7 +67,7 @@ uint64_t gpu_rk_required_operator_mask(const Context &ctx)
             FEM_GPU_OPERATOR_DEMAG_RHS |
             FEM_GPU_OPERATOR_DEMAG_SOLVE |
             FEM_GPU_OPERATOR_DEMAG_RECOVERY |
-            FEM_GPU_OPERATOR_PRECONDITIONER;
+            demag_linear_solve_operator(ctx);
     }
     return mask;
 }

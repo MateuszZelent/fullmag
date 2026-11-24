@@ -1,6 +1,23 @@
 #include "gpu/cuda/runtime/execution_receipt.hpp"
 
 namespace fullmag::fem {
+
+// The internal operator bits are the public ABI v1 bits.
+static_assert(FEM_GPU_OPERATOR_EXCHANGE == FULLMAG_FEM_GPU_OPERATOR_EXCHANGE);
+static_assert(FEM_GPU_OPERATOR_DEMAG_RHS == FULLMAG_FEM_GPU_OPERATOR_DEMAG_RHS);
+static_assert(FEM_GPU_OPERATOR_DEMAG_SOLVE == FULLMAG_FEM_GPU_OPERATOR_DEMAG_SOLVE);
+static_assert(FEM_GPU_OPERATOR_DEMAG_RECOVERY == FULLMAG_FEM_GPU_OPERATOR_DEMAG_RECOVERY);
+static_assert(FEM_GPU_OPERATOR_LOCAL_FIELDS == FULLMAG_FEM_GPU_OPERATOR_LOCAL_FIELDS);
+static_assert(FEM_GPU_OPERATOR_DIRECT_TORQUES == FULLMAG_FEM_GPU_OPERATOR_DIRECT_TORQUES);
+static_assert(FEM_GPU_OPERATOR_LLG_RHS == FULLMAG_FEM_GPU_OPERATOR_LLG_RHS);
+static_assert(FEM_GPU_OPERATOR_RK_STEPPER == FULLMAG_FEM_GPU_OPERATOR_RK_STEPPER);
+static_assert(FEM_GPU_OPERATOR_REDUCTIONS == FULLMAG_FEM_GPU_OPERATOR_REDUCTIONS);
+static_assert(FEM_GPU_OPERATOR_PRECONDITIONER == FULLMAG_FEM_GPU_OPERATOR_PRECONDITIONER);
+static_assert(
+    FEM_GPU_OPERATOR_PROJECTED_GRADIENT_BB == FULLMAG_FEM_GPU_OPERATOR_PROJECTED_GRADIENT_BB);
+static_assert(FEM_GPU_OPERATOR_NONLINEAR_CG == FULLMAG_FEM_GPU_OPERATOR_NONLINEAR_CG);
+static_assert(FEM_GPU_OPERATOR_DIRECT_SOLVE == FULLMAG_FEM_GPU_OPERATOR_DIRECT_SOLVE);
+
 namespace {
 
 void clear_attempt(FemGpuExecutionReceiptRuntimeState &state) {
@@ -54,6 +71,15 @@ bool plan_class_matches_masks(
     return false;
 }
 
+// A demag solve has one linear-solve realization: a preconditioned Krylov
+// solve or a direct factorization, never both (docs/physics/0997).
+bool linear_solve_bits_are_consistent(uint64_t required) {
+    const bool krylov = (required & FEM_GPU_OPERATOR_PRECONDITIONER) != 0;
+    const bool direct = (required & FEM_GPU_OPERATOR_DIRECT_SOLVE) != 0;
+    return !(krylov && direct) &&
+        (!direct || (required & FEM_GPU_OPERATOR_DEMAG_SOLVE) != 0);
+}
+
 bool plan_masks_are_valid(
     uint64_t required,
     uint64_t device,
@@ -62,6 +88,7 @@ bool plan_masks_are_valid(
     FemGpuExecutionClass execution_class) {
     const uint64_t all_masks = required | device | host | unknown;
     return (all_masks & ~FEM_GPU_OPERATOR_KNOWN_MASK) == 0 &&
+        linear_solve_bits_are_consistent(required) &&
         !masks_overlap(device, host, unknown) &&
         (device | host | unknown) == required &&
         plan_class_matches_masks(execution_class, required, device, host, unknown);
