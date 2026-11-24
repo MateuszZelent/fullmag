@@ -692,6 +692,7 @@ pub(crate) fn test_app_state() -> Arc<AppState> {
         current_command_journal_store_root: None,
         current_command_journal_revision: Arc::new(AtomicU64::new(0)),
         current_live_state: Arc::new(RwLock::new(None)),
+        session_previews: Default::default(),
         accepted_run_reattach_identity: Arc::new(RwLock::new(None)),
         current_live_session_transition: Arc::new(Mutex::new(())),
         request_scope_instance_id: "test-api-instance".to_string(),
@@ -1197,6 +1198,213 @@ async fn set_running_stage_execution(state: &Arc<AppState>, state_version: u64) 
 
 fn test_router() -> axum::Router {
     build_v2_router().with_state(test_app_state())
+}
+
+#[tokio::test]
+async fn session_previews_coexist_with_live_run_and_close_independently() {
+    use serde_json::json;
+
+    let state = test_app_state_with_live_session().await;
+    let (live_session_id, run_id) = {
+        let mut current = state.current_live_state.write().await;
+        let current = current.as_mut().unwrap();
+        current.runtime_status = RuntimeStatusView {
+            kind: RuntimeStatus::Running,
+            code: "running".into(),
+            is_busy: true,
+            can_accept_commands: false,
+        };
+        (
+            current.session.session_id.clone(),
+            current.session.run_id.clone(),
+        )
+    };
+    let epoch = state
+        .current_live_session_epoch
+        .load(std::sync::atomic::Ordering::Acquire);
+    let app = build_v2_router().with_state(state.clone());
+    let open = |name: &str| {
+        let scene = crate::router_v2::handlers::sessions::create::create_empty_scene_document(
+            &crate::schemas::sessions::CreateSessionRequest {
+                name: name.into(),
+                backend: "fdm".into(),
+                device: "cpu".into(),
+                precision: "double".into(),
+                replace_current: false,
+                output_storage: None,
+            },
+        )
+        .unwrap();
+        Request::post("/v2/sessions/previews")
+            .header("content-type", "application/json")
+            .body(Body::from(
+                serde_json::to_vec(&json!({ "scene_document": scene })).unwrap(),
+            ))
+            .unwrap()
+    };
+    let (first, second) = tokio::join!(
+        app.clone().oneshot(open("First preview")),
+        app.clone().oneshot(open("Second preview")),
+    );
+    let first = first.unwrap();
+    let second = second.unwrap();
+    assert_eq!(first.status(), StatusCode::CREATED);
+    assert_eq!(second.status(), StatusCode::CREATED);
+    let first = body_json(first).await;
+    let second = body_json(second).await;
+    let first_id = first["session_id"].as_str().unwrap();
+    let second_id = second["session_id"].as_str().unwrap();
+    assert_ne!(first_id, second_id);
+
+    let response = app
+        .clone()
+        .oneshot(Request::get("/v2/sessions").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    let collection = body_json(response).await;
+    assert_eq!(collection["sessions"].as_array().unwrap().len(), 3);
+    assert_eq!(collection["sessions"][0]["session_id"], live_session_id);
+    assert_eq!(collection["sessions"][0]["current"], true);
+
+    let first_path = format!("/v2/sessions/previews/{first_id}");
+    let second_path = format!("/v2/sessions/previews/{second_id}");
+    let response = app
+        .clone()
+        .oneshot(
+            Request::get(first_path.as_str())
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let scene = body_json(response).await;
+    assert_eq!(scene["scene"]["name"], "First preview");
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::post(format!("{second_path}/simulation/commands"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+
+    for (method, path, expected) in [
+        ("DELETE", &first_path, StatusCode::NO_CONTENT),
+        ("GET", &first_path, StatusCode::NOT_FOUND),
+        ("GET", &second_path, StatusCode::OK),
+    ] {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(method)
+                    .uri(path.as_str())
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), expected);
+    }
+
+    let current = state.current_live_state.read().await;
+    let current = current.as_ref().unwrap();
+    assert_eq!(current.session.session_id, live_session_id);
+    assert_eq!(current.session.run_id, run_id);
+    assert_eq!(
+        state
+            .current_live_session_epoch
+            .load(std::sync::atomic::Ordering::Acquire),
+        epoch
+    );
+    assert!(state.current_control_queue.lock().await.is_empty());
+}
+
+#[tokio::test]
+async fn opening_scene_preview_from_python_requires_explicit_consent() {
+    let state = test_app_state_with_live_session().await;
+    let response = build_v2_router()
+        .with_state(state.clone())
+        .oneshot(
+            Request::post("/v2/sessions/previews/from-script")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(serde_json::json!({
+                    "source": { "name": "test.py", "text": "raise AssertionError('unexpected execution')" }
+                }).to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(body_json(response).await["code"], "consent_required");
+    assert!(state.session_previews.summaries().await.is_empty());
+}
+
+#[tokio::test]
+async fn opening_scene_preview_from_python_captures_only_the_authored_model() {
+    let workspace = tempfile::tempdir().unwrap();
+    let mut state = test_app_state_with_live_session().await;
+    let app_state = Arc::get_mut(&mut state).unwrap();
+    app_state.repo_root = crate::script::repo_root();
+    app_state.current_workspace_root = workspace.path().to_path_buf();
+
+    let script = r#"
+import fullmag as fm
+study = fm.study("Preview film")
+study.engine("fdm")
+study.device("cpu", precision="double")
+study.universe(mode="manual", size=(80e-9, 160e-9, 10e-9))
+study.cell(5e-9, 5e-9, 5e-9)
+film = study.geometry(fm.Box(size=(40e-9, 120e-9, 10e-9)), name="Film")
+film.Ms = 752000.0
+film.Aex = 1.55e-11
+film.alpha = 0.1
+film.m = fm.texture.uniform(0.0, 1.0, 0.0)
+study.exchange()
+study.solver(fix_dt=1e-13, g=2.115)
+study.stages.add_relax(algorithm="llg_overdamped", dt=1e-13, tolA=1e-4, max_steps=4)
+"#;
+    let app = build_v2_router().with_state(state.clone());
+    let response = app
+        .clone()
+        .oneshot(
+            Request::post("/v2/sessions/previews/from-script")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "source": { "name": "film.py", "text": script },
+                        "consent": { "executed_by_user": true }
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = response.status();
+    let summary = body_json(response).await;
+    assert_eq!(status, StatusCode::CREATED, "{summary}");
+    assert_eq!(summary["name"], "Preview film");
+    let id = summary["session_id"].as_str().unwrap();
+    let response = app
+        .oneshot(
+            Request::get(format!("/v2/sessions/previews/{id}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let resource = body_json(response).await;
+    assert_eq!(resource["objects"][0]["name"], "Film");
+    let current = state.current_live_state.read().await;
+    assert_eq!(current.as_ref().unwrap().session.run_id, "test-run");
+    assert!(state.current_control_queue.lock().await.is_empty());
+    assert!(std::fs::read_dir(workspace.path()).unwrap().next().is_none());
 }
 
 #[tokio::test]
@@ -3266,6 +3474,7 @@ async fn test_router_with_session_store_state() -> (axum::Router, Arc<AppState>,
         current_command_journal_store_root: None,
         current_command_journal_revision: Arc::new(AtomicU64::new(0)),
         current_live_state: Arc::new(RwLock::new(None)),
+        session_previews: Default::default(),
         accepted_run_reattach_identity: Arc::new(RwLock::new(None)),
         current_live_session_transition: Arc::new(Mutex::new(())),
         request_scope_instance_id: "test-api-instance".to_string(),

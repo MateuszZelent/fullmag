@@ -32,6 +32,13 @@ describe("session collection facade", () => {
     ).toBe("ready");
   });
 
+  it("does not bootstrap the execution workspace from previews alone", () => {
+    expect(resolveSessionCollectionState({
+      schema_version: "2.0.0",
+      sessions: [{ current: false, name: "Preview", session_id: "preview-1", status: "preview" }],
+    })).toBe("no-session");
+  });
+
   it("does not turn an initial collection error into an empty workspace", () => {
     expect(
       resolveSessionCollectionResourceState({ data: null, status: "error" }),

@@ -141,6 +141,8 @@ pub(crate) struct AppState {
     pub current_command_journal_revision: Arc<AtomicU64>,
     /// Sessionless local-live workspace snapshot used by the root `/` GUI.
     pub current_live_state: Arc<RwLock<Option<SessionStateResponse>>>,
+    /// Independent, read-only authored scenes. They never own a run or lease.
+    pub session_previews: Arc<crate::router_v2::handlers::sessions::preview::SessionPreviews>,
     /// Process-local proof installed only after explicit accepted-run
     /// reattach validation. It authorizes the read-only projector to rebind
     /// the durable run from an old API instance to this new process.

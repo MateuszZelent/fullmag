@@ -11,14 +11,21 @@ import { useSessionTabAddress } from "./useSessionTabAddress";
 import { homeView, useHomeViewOpen } from "./homeView";
 import { instanceTabLabel, sessionTone } from "./instanceTabModel";
 import { instanceOrigin, instanceTabs, useInstanceTabs, usePageLocation } from "./instanceTabs";
+import { sessionPreviewSelection, useSessionPreviewSelection } from "./sessionPreviewSelection";
 import { WorkspaceFullscreenButton } from "./WorkspaceFullscreenButton";
 import { useWorkspaceFullscreen } from "./workspaceFullscreenPreference";
 
 const HOME_TAB = "home";
 const SESSION_TAB = "session";
 const INSTANCE_TAB_PREFIX = "instance:";
+const PREVIEW_TAB_PREFIX = "preview:";
 
 function selectTab(next: string): void {
+  if (next.startsWith(PREVIEW_TAB_PREFIX)) {
+    sessionPreviewSelection.select(next.slice(PREVIEW_TAB_PREFIX.length));
+    return;
+  }
+  sessionPreviewSelection.select(null);
   if (next === HOME_TAB) {
     instanceTabs.activate(null);
     homeView.open();
@@ -52,6 +59,8 @@ export function InstanceTabStrip() {
   const sessionTabAddress = useSessionTabAddress();
   const location = usePageLocation();
   const current = sessions.resource.data?.sessions.find((entry) => entry.current) ?? null;
+  const previewId = useSessionPreviewSelection();
+  const previews = sessions.resource.data?.sessions.filter((entry) => entry.status === "preview") ?? [];
   // Instance status refreshes while it is on screen: Home (always shown
   // without a session) or any open instance tab. An idle workspace with no
   // instance tabs issues no discovery requests.
@@ -66,9 +75,9 @@ export function InstanceTabStrip() {
   const awaitingSession = !homeOpen && sessionTabAddress !== false && sessions.state !== "no-session";
   const value = tabs.activePort !== null
     ? `${INSTANCE_TAB_PREFIX}${tabs.activePort}`
-    : current && !homeOpen
-      ? SESSION_TAB
-      : awaitingSession ? "" : HOME_TAB;
+    : previewId
+      ? `${PREVIEW_TAB_PREFIX}${previewId}`
+      : current && !homeOpen ? SESSION_TAB : awaitingSession ? "" : HOME_TAB;
 
   return (
     <nav aria-label="Sessions" className="fm-instance-tabs" data-instance-tabs="">
@@ -89,6 +98,19 @@ export function InstanceTabStrip() {
               <span className="fm-instance-tabs__name">{current.name || "Untitled simulation"}</span>
             </TabsTrigger>
           ) : null}
+          {previews.map(({ session_id: id, name }) => (
+            <TabsTrigger
+              aria-controls="fm-session-preview"
+              className="fm-instance-tabs__tab"
+              data-tab-kind="preview"
+              id={`fm-tab-${id}`}
+              key={id}
+              title={`${name} · Model preview`}
+              value={`${PREVIEW_TAB_PREFIX}${id}`}
+            >
+              <span className="fm-instance-tabs__name">{name}</span>
+            </TabsTrigger>
+          ))}
           {tabs.openPorts.map((port) => {
             const instance = instances.get(port);
             const session = instance?.sessions.find((entry) => entry.current);
@@ -145,7 +167,7 @@ export function InstanceTabStrip() {
           <ExternalLink aria-hidden="true" size={12} />
           Open in window
         </a>
-      ) : workspaceFullscreen && !homeOpen ? (
+      ) : workspaceFullscreen && !homeOpen && previewId === null ? (
         <div className="fm-instance-tabs__actions">
           <WorkspaceFullscreenButton variant="strip" />
         </div>

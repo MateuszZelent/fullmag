@@ -7,6 +7,8 @@ import { homeView } from "@/kernel/layout/homeView";
 import { instanceTabs, useEmbeddedInstanceTab } from "@/kernel/layout/instanceTabs";
 import { useInstanceDiscovery } from "@/kernel/resources/instanceDiscoveryResources";
 import { useProjectDocumentSnapshot } from "@/kernel/persistence/ProjectDocumentStatus";
+import { SESSIONS_PATH } from "@/kernel/api/apiPaths";
+import { sessionPreviewSelection } from "@/kernel/layout/sessionPreviewSelection";
 import { createAndActivateScriptProject } from "@/kernel/persistence/ScriptProjectActivation";
 import { useSessionCollection } from "@/kernel/resources/useSessionCollection";
 import { useSessionResourceIdentity, useSessionStatusSelector } from "@/kernel/resources/useSessionStatus";
@@ -138,7 +140,7 @@ export function StartScreen({ kernel }: ModuleProps) {
   // simulation stays reachable (including sessions a Python script created).
   const activeSessions = useMemo(
     () =>
-      (sessions.resource.data?.sessions ?? []).map((entry) => ({
+      (sessions.resource.data?.sessions ?? []).filter((entry) => entry.current).map((entry) => ({
         sessionId: entry.session_id,
         name: entry.name,
         status: entry.status,
@@ -154,8 +156,7 @@ export function StartScreen({ kernel }: ModuleProps) {
     () =>
       (discovery.data?.instances ?? []).flatMap((instance) => {
         if (instance.is_self) return [];
-        const session =
-          instance.sessions.find((entry) => entry.current) ?? instance.sessions[0] ?? null;
+        const session = instance.sessions.find((entry) => entry.current);
         return [{
           port: instance.port,
           session: session ? { name: session.name, status: session.status } : null,
@@ -163,10 +164,8 @@ export function StartScreen({ kernel }: ModuleProps) {
       }),
     [discovery.data],
   );
-  // An empty collection is a confirmed no-session. A non-empty collection
-  // requires a matching current-status identity before replacement can be
-  // offered; a ready collection with a failed or mismatched status must stay
-  // fail-closed until the user retries.
+  // Replacement requires a matching execution-session status. Previews have
+  // their own lifecycle and never count as the current authoring workspace.
   const canCreateProblem =
     sessions.state === "no-session" ||
     (sessions.state === "ready" && sessionIdentity !== null);
@@ -375,6 +374,20 @@ export function StartScreen({ kernel }: ModuleProps) {
         }
       }
     : null;
+
+  const previewCreator: ProjectCreator = async (script) => {
+    try {
+      const api = kernel.api;
+      const scope = api.resourceCacheScope;
+      const preview = await api.sessions.previews.fromScript(buildFromScriptRequest(script));
+      if (api.resourceCacheScope !== scope) throw new Error("The API connection changed.");
+      kernel.resources.invalidate(SESSIONS_PATH, `opened:${preview.session_id}`);
+      sessionPreviewSelection.select(preview.session_id);
+      return { kind: "preview" };
+    } catch (error) {
+      return { kind: "failed", message: error instanceof Error ? error.message : "Unable to open the preview." };
+    }
+  };
 
   // Legacy navigation for callers without the standalone playback command.
   const openResults = async (entry: RecentEntry): Promise<string | null> => {
@@ -595,6 +608,7 @@ export function StartScreen({ kernel }: ModuleProps) {
               onCreateFemWorkspace={createFemWorkspace}
               onImportStl={importStl}
               projectCreator={projectCreator}
+              previewCreator={previewCreator}
               scriptSaver={scriptSaver}
               openDisabledReason={browseDisabledReason}
               stlWorkspaceState={stlWorkspaceState}

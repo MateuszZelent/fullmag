@@ -52,6 +52,19 @@ describe("tab addresses", () => {
     expect(formatTabRoute({ kind: "instance", port: 3201 })).toBe("/instance/3201");
   });
 
+  it("addresses independent preview tabs by ID and falls back after close", () => {
+    const id = `preview-${"a".repeat(32)}`;
+    const route = { kind: "preview", id } as const;
+    expect(tabRouteHref(route, "")).toBe(`/model-preview/${id}`);
+    const context = { currentSessionName: "Running", instances: null };
+    expect(parseTabRoute(formatTabRoute(route), "")).toEqual(route);
+    expect(resolveTabRoute(route, { ...context, previewIds: new Set([id]) })).toEqual(route);
+    expect(resolveTabRoute(route, context)).toEqual({ kind: "home" });
+    expect(tabRouteChangePushes(route, { kind: "home" }, [])).toBe(true);
+    expect(tabRouteChangePushes(route, { kind: "home" }, [], id)).toBe(false);
+    expect(activeTabRoute({ ...context, activePort: null, homeOpen: true, previewId: id })).toEqual(route);
+  });
+
   it("keeps query parameters the tab address does not own", () => {
     const session = { kind: "session", slug: "rings", port: null } as const;
     expect(tabRouteHref(session, "")).toBe("/session/rings");

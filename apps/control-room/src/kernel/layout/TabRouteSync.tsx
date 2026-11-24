@@ -8,6 +8,7 @@ import { useInstanceDiscovery } from "../resources/instanceDiscoveryResources";
 import { useSessionCollection } from "../resources/useSessionCollection";
 import { homeView, useHomeViewOpen } from "./homeView";
 import { instanceTabLabel } from "./instanceTabModel";
+import { sessionPreviewSelection, useSessionPreviewSelection } from "./sessionPreviewSelection";
 import { instanceTabs, isEmbeddedInstanceTab, useInstanceTabs } from "./instanceTabs";
 import {
   activeTabRoute,
@@ -28,6 +29,11 @@ function locationRoute(): TabRoute {
 }
 
 function applyTabRouteAction(action: TabRouteAction, hasSession: boolean): void {
+  if (action.kind === "preview") {
+    sessionPreviewSelection.select(action.id);
+    return;
+  }
+  if (action.kind !== "none") sessionPreviewSelection.select(null);
   switch (action.kind) {
     case "home":
       instanceTabs.activate(null);
@@ -55,6 +61,7 @@ function applyTabRouteAction(action: TabRouteAction, hasSession: boolean): void 
 export function TabRouteSync() {
   const sessions = useSessionCollection();
   const tabs = useInstanceTabs();
+  const previewId = useSessionPreviewSelection();
   const homeOpen = useHomeViewOpen();
   const discovery = useInstanceDiscovery();
   // The address to honour once the data it names is known: the page's own
@@ -81,7 +88,8 @@ export function TabRouteSync() {
     // Opening an address only corrects the address bar afterwards.
     let correction = false;
     if (requested !== null && handled.current !== requested) {
-      const action = resolveTabRoute(requested, { currentSessionName, instances });
+      const previewIds = new Set(collection.sessions.filter((entry) => entry.status === "preview").map((entry) => entry.session_id));
+      const action = resolveTabRoute(requested, { currentSessionName, instances, previewIds });
       if (action === "wait") return;
       handled.current = requested;
       applyTabRouteAction(action, currentSessionName !== null);
@@ -96,16 +104,20 @@ export function TabRouteSync() {
       activePort,
       currentSessionName,
       instances: byPort,
+      previewId: sessionPreviewSelection.getSnapshot(),
     });
     document.title = `${
       route.kind === "home"
         ? "Home"
         : activePort !== null
           ? instanceTabLabel(byPort?.get(activePort))
-          : currentSessionName || "Untitled simulation"
+          : route.kind === "preview"
+            ? collection.sessions.find((entry) => entry.session_id === route.id)?.name || "Model preview"
+            : currentSessionName || "Untitled simulation"
     } | ${APP_TITLE}`;
 
     const shown = locationRoute();
+    const closedPreview = sessionPreviewSelection.takeClosed();
     // Until discovery names an instance's session, keep the address that
     // already points at its tab.
     if (route.kind === "instance" && byPort === null && tabRouteKey(shown) === tabRouteKey(route)) {
@@ -113,13 +125,13 @@ export function TabRouteSync() {
     }
     const href = tabRouteHref(route, window.location.search);
     if (href === `${window.location.pathname}${window.location.search}`) return;
-    if (!correction && tabRouteChangePushes(shown, route, openPorts)) {
+    if (!correction && tabRouteChangePushes(shown, route, openPorts, closedPreview)) {
       window.history.pushState(null, "", href);
     } else {
       window.history.replaceState(null, "", href);
     }
     notifyTabRouteAddressChanged();
-  }, [collection, currentSessionName, homeOpen, instances, requested, tabs.activePort, tabs.openPorts]);
+  }, [collection, currentSessionName, homeOpen, instances, previewId, requested, tabs.activePort, tabs.openPorts]);
 
   return null;
 }

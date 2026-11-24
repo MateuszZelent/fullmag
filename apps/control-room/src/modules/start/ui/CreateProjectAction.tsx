@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useId, useState } from "react";
 
 import { Button } from "@/shared/ui/Button";
 import {
@@ -27,6 +27,7 @@ export interface CreateProjectActionProps {
   readonly creator: ProjectCreator | null;
   readonly label?: string;
   readonly variant?: "primary" | "secondary";
+  readonly preview?: boolean;
   readonly size?: "sm" | "md";
   readonly className?: string;
   /** Extra reason that keeps the action off (for example a running save). */
@@ -43,11 +44,13 @@ export function CreateProjectAction({
   creator,
   label = "Create project…",
   variant = "primary",
+  preview = false,
   size = "md",
   className,
   disabled = false,
 }: CreateProjectActionProps) {
   const state = projectCreateState(source, creator);
+  const descriptionId = useId();
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [failure, setFailure] = useState<string | null>(null);
@@ -83,7 +86,13 @@ export function CreateProjectAction({
     }
   };
 
-  const copy = source ? consentCopy(source, hash) : null;
+  const projectCopy = source ? consentCopy(source, hash) : null;
+  const copy = preview && projectCopy ? {
+    ...projectCopy,
+    title: "Run this script to open a model preview?",
+    body: "Fullmag evaluates the Python script to read its model. Only continue if you trust it. The preview has no solver.",
+    confirmLabel: "Run script and open preview",
+  } : projectCopy;
 
   return (
     <>
@@ -109,10 +118,10 @@ export function CreateProjectAction({
         open={open && copy !== null}
       >
         {copy ? (
-          <DialogContent aria-describedby="fm-start-project-consent-body">
+          <DialogContent aria-describedby={descriptionId}>
             <DialogHeader>
               <DialogTitle>{copy.title}</DialogTitle>
-              <DialogDescription id="fm-start-project-consent-body">{copy.body}</DialogDescription>
+              <DialogDescription id={descriptionId}>{copy.body}</DialogDescription>
             </DialogHeader>
             <div className="fm-dialog__body">
               <dl className="fm-start-kv__grid">

@@ -50,3 +50,5 @@ export {
   Viewport3DExportPanelOutlet,
   Viewport3DInspectorOutlet,
 } from "./components/Viewport3DInspectorOutlet";
+
+export { SessionPreviewViewport } from "./SessionPreviewViewport";

@@ -9,12 +9,14 @@ import type { DiscoveredInstance } from "../api/apiTypes";
  * - `/session/<slug>` — this instance's session;
  * - `/session/<slug>?port=<port>` — the session of another instance's tab;
  * - `/instance/<port>` — another instance's tab while it has no session.
+ * - `/model-preview/<id>` — an independent read-only model preview.
  *
  * `/` and `/workspace` are aliases that resolve to whichever tab is in front.
  * Every address serves the same page; switching tabs never reloads it.
  */
 export type TabRoute =
   | { readonly kind: "home" }
+  | { readonly kind: "preview"; readonly id: string }
   | { readonly kind: "session"; readonly slug: string; readonly port: number | null }
   | { readonly kind: "instance"; readonly port: number }
   | { readonly kind: "default" };
@@ -44,6 +46,9 @@ export function sessionSlug(name: string): string {
 export function parseTabRoute(pathname: string, search: string): TabRoute {
   const segments = pathname.split("/").filter(Boolean);
   if (segments.length === 1 && segments[0] === "home") return { kind: "home" };
+  if (segments.length === 2 && segments[0] === "model-preview" && /^preview-[0-9a-f]{32}$/.test(segments[1])) {
+    return { kind: "preview", id: segments[1] };
+  }
   if (segments.length === 2 && segments[0] === "instance") {
     const port = parsePort(segments[1]);
     return port === null ? { kind: "default" } : { kind: "instance", port };
@@ -65,6 +70,8 @@ export function formatTabRoute(route: Exclude<TabRoute, { kind: "default" }>): s
   switch (route.kind) {
     case "home":
       return "/home";
+    case "preview":
+      return `/model-preview/${encodeURIComponent(route.id)}`;
     case "instance":
       return `/instance/${route.port}`;
     case "session":
@@ -93,6 +100,8 @@ export function tabRouteKey(route: TabRoute): string | null {
   switch (route.kind) {
     case "home":
       return "home";
+    case "preview":
+      return route.id;
     case "instance":
       return `instance:${route.port}`;
     case "session":
@@ -104,12 +113,13 @@ export function tabRouteKey(route: TabRoute): string | null {
 
 /** The session an instance tab shows: its current one, as the tab label does. */
 function instanceSession(instance: DiscoveredInstance | undefined) {
-  return instance?.sessions.find((entry) => entry.current) ?? instance?.sessions[0];
+  return instance?.sessions.find((entry) => entry.current);
 }
 
 export interface ActiveTabState {
   readonly homeOpen: boolean;
   readonly activePort: number | null;
+  readonly previewId?: string | null;
   /** This instance's current session, or null when it has none. */
   readonly currentSessionName: string | null;
   /** Discovered instances by port, or null before discovery answered. */
@@ -124,6 +134,7 @@ export function activeTabRoute(state: ActiveTabState): Exclude<TabRoute, { kind:
       ? { kind: "session", slug: sessionSlug(session.name), port: state.activePort }
       : { kind: "instance", port: state.activePort };
   }
+  if (state.previewId) return { kind: "preview", id: state.previewId };
   if (state.currentSessionName !== null && !state.homeOpen) {
     return { kind: "session", slug: sessionSlug(state.currentSessionName), port: null };
   }
@@ -133,11 +144,13 @@ export function activeTabRoute(state: ActiveTabState): Exclude<TabRoute, { kind:
 /** What opening an address does to the tabs. */
 export type TabRouteAction =
   | { readonly kind: "home" }
+  | { readonly kind: "preview"; readonly id: string }
   | { readonly kind: "session" }
   | { readonly kind: "instance"; readonly port: number }
   | { readonly kind: "none" };
 
 export interface TabRouteContext {
+  readonly previewIds?: ReadonlySet<string>;
   /** This instance's current session, or null when it has none. */
   readonly currentSessionName: string | null;
   /** Discovered instances, or null while discovery has not answered. */
@@ -155,6 +168,8 @@ export function resolveTabRoute(route: TabRoute, context: TabRouteContext): TabR
       return { kind: "none" };
     case "home":
       return { kind: "home" };
+    case "preview":
+      return context.previewIds?.has(route.id) ? route : { kind: "home" };
     case "instance":
       return { kind: "instance", port: route.port };
     case "session": {
@@ -184,7 +199,9 @@ export function tabRouteChangePushes(
   current: TabRoute,
   next: TabRoute,
   openPorts: readonly number[],
+  closedPreview: string | null = null,
 ): boolean {
+  if (current.kind === "preview" && current.id === closedPreview) return false;
   const currentKey = tabRouteKey(current);
   if (currentKey === null || currentKey === tabRouteKey(next)) return false;
   const currentPort =

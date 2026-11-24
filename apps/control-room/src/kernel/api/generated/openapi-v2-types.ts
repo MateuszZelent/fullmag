@@ -5067,6 +5067,54 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v2/sessions/previews": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["sessions_post_sessions_previews"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/sessions/previews/from-script": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["sessions_post_sessions_previews_from_script"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/sessions/previews/{session_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["sessions_get_sessions_previews_session_id"];
+        put?: never;
+        post?: never;
+        delete: operations["sessions_delete_sessions_previews_session_id"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v2/workspace/items": {
         parameters: {
             query?: never;
@@ -7513,6 +7561,10 @@ export interface components {
             status: string;
             /** Format: double */
             utilization_cpu_percent: number;
+        };
+        CreateSessionPreviewRequest: {
+            /** @description A captured authored SceneDocument (scene.v2). */
+            scene_document: Record<string, unknown>;
         };
         CreateSessionRequest: {
             backend: components["schemas"]["ScratchSessionBackend"];
@@ -34904,6 +34956,161 @@ export interface operations {
                 };
             };
             /** @description No active workspace */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    sessions_post_sessions_previews: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateSessionPreviewRequest"];
+            };
+        };
+        responses: {
+            /** @description Read-only session preview created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionSummaryResource"];
+                };
+            };
+            /** @description Invalid authored scene */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Preview scene exceeds 8 MiB */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Preview capacity exhausted */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    sessions_post_sessions_previews_from_script: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ProjectFromScriptRequest"];
+            };
+        };
+        responses: {
+            /** @description Model preview created after explicit consent to evaluate Python */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionSummaryResource"];
+                };
+            };
+            /** @description Missing consent, source or valid model */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Script or preview scene exceeds its size bound */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The helper could not export an authored scene */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Preview capacity exhausted */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    sessions_get_sessions_previews_session_id: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Read-only preview session ID */
+                session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Authored preview scene */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SceneResource"];
+                };
+            };
+            /** @description Preview session not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    sessions_delete_sessions_previews_session_id: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Read-only preview session ID */
+                session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Preview session closed */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Preview session not found */
             404: {
                 headers: {
                     [name: string]: unknown;
