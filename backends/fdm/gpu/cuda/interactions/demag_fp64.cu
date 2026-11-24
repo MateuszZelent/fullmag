@@ -75,24 +75,24 @@ __global__ void pack_magnetization_fft_fp64_kernel(
     const double * __restrict__ mz,
     const uint8_t * __restrict__ active_mask,
     const double * __restrict__ volume_fraction,
-    cufftDoubleComplex * __restrict__ fx,
-    cufftDoubleComplex * __restrict__ fy,
-    cufftDoubleComplex * __restrict__ fz,
+    double * __restrict__ fx,
+    double * __restrict__ fy,
+    double * __restrict__ fz,
     int nx, int ny, int nz,
-    int px, int py, int pz,
+    int real_pitch_x, int py, int pz,
     int has_active_mask,
     int has_volume_fraction,
     double ms_scalar,
     const double * __restrict__ ms_field)
 {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
-    int total = px * py * pz;
+    int total = real_pitch_x * py * pz;
     if (idx >= total) return;
 
-    int z = idx / (py * px);
-    int rem = idx - z * py * px;
-    int y = rem / px;
-    int x = rem - y * px;
+    int z = (pz == 1) ? 0 : (idx / (py * real_pitch_x));
+    int rem = idx - z * py * real_pitch_x;
+    int y = rem / real_pitch_x;
+    int x = rem - y * real_pitch_x;
 
     if (x < nx && y < ny && z < nz) {
         int src = z * ny * nx + y * nx + x;
@@ -100,22 +100,22 @@ __global__ void pack_magnetization_fft_fp64_kernel(
         if (has_volume_fraction) {
             // T0/T1: φ-weighted packing — M_i = φ_i × Ms × m_i
             double phi = volume_fraction[src];
-            fx[idx] = make_cuDoubleComplex(phi * ms * mx[src], 0.0);
-            fy[idx] = make_cuDoubleComplex(phi * ms * my[src], 0.0);
-            fz[idx] = make_cuDoubleComplex(phi * ms * mz[src], 0.0);
+            fx[idx] = phi * ms * mx[src];
+            fy[idx] = phi * ms * my[src];
+            fz[idx] = phi * ms * mz[src];
         } else if (!has_active_mask || active_mask[src] != 0) {
-            fx[idx] = make_cuDoubleComplex(ms * mx[src], 0.0);
-            fy[idx] = make_cuDoubleComplex(ms * my[src], 0.0);
-            fz[idx] = make_cuDoubleComplex(ms * mz[src], 0.0);
+            fx[idx] = ms * mx[src];
+            fy[idx] = ms * my[src];
+            fz[idx] = ms * mz[src];
         } else {
-            fx[idx] = make_cuDoubleComplex(0.0, 0.0);
-            fy[idx] = make_cuDoubleComplex(0.0, 0.0);
-            fz[idx] = make_cuDoubleComplex(0.0, 0.0);
+            fx[idx] = 0.0;
+            fy[idx] = 0.0;
+            fz[idx] = 0.0;
         }
     } else {
-        fx[idx] = make_cuDoubleComplex(0.0, 0.0);
-        fy[idx] = make_cuDoubleComplex(0.0, 0.0);
-        fz[idx] = make_cuDoubleComplex(0.0, 0.0);
+        fx[idx] = 0.0;
+        fy[idx] = 0.0;
+        fz[idx] = 0.0;
     }
 }
 
@@ -124,16 +124,17 @@ __global__ void spectral_projection_fp64_kernel(
     cufftDoubleComplex * __restrict__ fy,
     cufftDoubleComplex * __restrict__ fz,
     int px, int py, int pz,
+    int sx,
     double dx, double dy, double dz)
 {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
-    int total = px * py * pz;
+    int total = sx * py * pz;
     if (idx >= total) return;
 
-    int z = idx / (py * px);
-    int rem = idx - z * py * px;
-    int y = rem / px;
-    int x = rem - y * px;
+    int z = (pz == 1) ? 0 : (idx / (py * sx));
+    int rem = idx - z * py * sx;
+    int y = rem / sx;
+    int x = rem - y * sx;
 
     double lx = px * dx;
     double ly = py * dy;
@@ -158,13 +159,13 @@ __global__ void spectral_projection_fp64_kernel(
         kx * mx.x + ky * my.x + kz * mz.x,
         kx * mx.y + ky * my.y + kz * mz.y);
 
-    double sx = -kx / k2;
-    double sy = -ky / k2;
-    double sz = -kz / k2;
+    double sx_f = -kx / k2;
+    double sy_f = -ky / k2;
+    double sz_f = -kz / k2;
 
-    fx[idx] = make_cuDoubleComplex(kdotm.x * sx, kdotm.y * sx);
-    fy[idx] = make_cuDoubleComplex(kdotm.x * sy, kdotm.y * sy);
-    fz[idx] = make_cuDoubleComplex(kdotm.x * sz, kdotm.y * sz);
+    fx[idx] = make_cuDoubleComplex(kdotm.x * sx_f, kdotm.y * sx_f);
+    fy[idx] = make_cuDoubleComplex(kdotm.x * sy_f, kdotm.y * sy_f);
+    fz[idx] = make_cuDoubleComplex(kdotm.x * sz_f, kdotm.y * sz_f);
 }
 
 __global__ void tensor_convolution_fp64_kernel(
@@ -196,9 +197,9 @@ __global__ void tensor_convolution_fp64_kernel(
 }
 
 __global__ void unpack_demag_fft_fp64_kernel(
-    const cufftDoubleComplex * __restrict__ fx,
-    const cufftDoubleComplex * __restrict__ fy,
-    const cufftDoubleComplex * __restrict__ fz,
+    const double * __restrict__ fx,
+    const double * __restrict__ fy,
+    const double * __restrict__ fz,
     const uint8_t * __restrict__ active_mask,
     double * __restrict__ hx,
     double * __restrict__ hy,
@@ -207,7 +208,7 @@ __global__ void unpack_demag_fft_fp64_kernel(
     double * __restrict__ hy_visual,
     double * __restrict__ hz_visual,
     int nx, int ny, int nz,
-    int px, int py,
+    int real_pitch_x, int py,
     int has_active_mask,
     double normalisation)
 {
@@ -215,15 +216,15 @@ __global__ void unpack_demag_fft_fp64_kernel(
     int total = nx * ny * nz;
     if (idx >= total) return;
 
-    int z = idx / (ny * nx);
+    int z = (nz == 1) ? 0 : (idx / (ny * nx));
     int rem = idx - z * ny * nx;
     int y = rem / nx;
     int x = rem - y * nx;
-    int src = z * py * px + y * px + x;
+    int src = z * py * real_pitch_x + y * real_pitch_x + x;
 
-    const double hx_value = fx[src].x * normalisation;
-    const double hy_value = fy[src].x * normalisation;
-    const double hz_value = fz[src].x * normalisation;
+    const double hx_value = fx[src] * normalisation;
+    const double hy_value = fy[src] * normalisation;
+    const double hz_value = fz[src] * normalisation;
     hx_visual[idx] = hx_value;
     hy_visual[idx] = hy_value;
     hz_visual[idx] = hz_value;
@@ -670,8 +671,16 @@ void launch_demag_field_fp64(Context &ctx) {
         }
     }
 
-    int total_padded = static_cast<int>(ctx.fft_cell_count);
-    int grid_padded = (total_padded + BLOCK_SIZE - 1) / BLOCK_SIZE;
+    if (!ctx.fft_plan_valid || !ctx.fft_plan_inv_valid || !ctx.fft_x || ctx.fft_half_nx == 0) {
+        ctx.last_error = "launch_demag_field_fp64: demag FFT workspace is not initialized";
+        return;
+    }
+
+    int real_pitch_x = static_cast<int>(ctx.fft_half_nx * 2u);
+    int total_real = static_cast<int>(ctx.fft_real_stride);
+    int grid_real = (total_real + BLOCK_SIZE - 1) / BLOCK_SIZE;
+    int total_half = static_cast<int>(ctx.fft_half_cell_count);
+    int grid_half = (total_half + BLOCK_SIZE - 1) / BLOCK_SIZE;
     int total_physical = static_cast<int>(ctx.cell_count);
     int grid_physical = (total_physical + BLOCK_SIZE - 1) / BLOCK_SIZE;
     cudaStream_t stream = context_compute_stream(ctx);
@@ -679,19 +688,19 @@ void launch_demag_field_fp64(Context &ctx) {
         return;
     }
 
-    pack_magnetization_fft_fp64_kernel<<<grid_padded, BLOCK_SIZE, 0, stream>>>(
+    pack_magnetization_fft_fp64_kernel<<<grid_real, BLOCK_SIZE, 0, stream>>>(
         static_cast<const double*>(ctx.m.x),
         static_cast<const double*>(ctx.m.y),
         static_cast<const double*>(ctx.m.z),
         ctx.active_mask,
         ctx.volume_fraction,
-        static_cast<cufftDoubleComplex*>(ctx.fft_x),
-        static_cast<cufftDoubleComplex*>(ctx.fft_y),
-        static_cast<cufftDoubleComplex*>(ctx.fft_z),
+        static_cast<double*>(ctx.fft_x),
+        static_cast<double*>(ctx.fft_y),
+        static_cast<double*>(ctx.fft_z),
         static_cast<int>(ctx.nx),
         static_cast<int>(ctx.ny),
         static_cast<int>(ctx.nz),
-        static_cast<int>(ctx.fft_nx),
+        real_pitch_x,
         static_cast<int>(ctx.fft_ny),
         static_cast<int>(ctx.fft_nz),
         ctx.has_active_mask ? 1 : 0,
@@ -699,20 +708,19 @@ void launch_demag_field_fp64(Context &ctx) {
         ctx.Ms,
         ctx.ms_field);
 
-    cufftResult err = cufftExecZ2Z(
+    cufftResult err = cufftExecD2Z(
         ctx.fft_plan,
-        static_cast<cufftDoubleComplex*>(ctx.fft_x),
-        static_cast<cufftDoubleComplex*>(ctx.fft_x),
-        CUFFT_FORWARD);
+        static_cast<cufftDoubleReal*>(ctx.fft_x),
+        static_cast<cufftDoubleComplex*>(ctx.fft_x));
     if (err != CUFFT_SUCCESS) {
-        set_cufft_error(ctx, "cufftExecZ2Z(batch, forward)", err);
+        set_cufft_error(ctx, "cufftExecD2Z(batch, forward)", err);
         context_end_compute_stream_work(ctx, "launch_demag_field_fp64");
         return;
     }
     ++ctx.endpoint_field_cache.demag_forward_fft_count;
 
     if (ctx.has_demag_tensor_kernel) {
-        tensor_convolution_fp64_kernel<<<grid_padded, BLOCK_SIZE, 0, stream>>>(
+        tensor_convolution_fp64_kernel<<<grid_half, BLOCK_SIZE, 0, stream>>>(
             static_cast<cufftDoubleComplex*>(ctx.fft_x),
             static_cast<cufftDoubleComplex*>(ctx.fft_y),
             static_cast<cufftDoubleComplex*>(ctx.fft_z),
@@ -722,36 +730,36 @@ void launch_demag_field_fp64(Context &ctx) {
             static_cast<const cufftDoubleComplex*>(ctx.demag_kernel.xy),
             static_cast<const cufftDoubleComplex*>(ctx.demag_kernel.xz),
             static_cast<const cufftDoubleComplex*>(ctx.demag_kernel.yz),
-            total_padded);
+            total_half);
     } else {
-        spectral_projection_fp64_kernel<<<grid_padded, BLOCK_SIZE, 0, stream>>>(
+        spectral_projection_fp64_kernel<<<grid_half, BLOCK_SIZE, 0, stream>>>(
             static_cast<cufftDoubleComplex*>(ctx.fft_x),
             static_cast<cufftDoubleComplex*>(ctx.fft_y),
             static_cast<cufftDoubleComplex*>(ctx.fft_z),
             static_cast<int>(ctx.fft_nx),
             static_cast<int>(ctx.fft_ny),
             static_cast<int>(ctx.fft_nz),
+            static_cast<int>(ctx.fft_half_nx),
             ctx.dx,
             ctx.dy,
             ctx.dz);
     }
 
-    err = cufftExecZ2Z(
-        ctx.fft_plan,
+    err = cufftExecZ2D(
+        ctx.fft_plan_inv,
         static_cast<cufftDoubleComplex*>(ctx.fft_x),
-        static_cast<cufftDoubleComplex*>(ctx.fft_x),
-        CUFFT_INVERSE);
+        static_cast<cufftDoubleReal*>(ctx.fft_x));
     if (err != CUFFT_SUCCESS) {
-        set_cufft_error(ctx, "cufftExecZ2Z(batch, inverse)", err);
+        set_cufft_error(ctx, "cufftExecZ2D(batch, inverse)", err);
         context_end_compute_stream_work(ctx, "launch_demag_field_fp64");
         return;
     }
     ++ctx.endpoint_field_cache.demag_inverse_fft_count;
 
     unpack_demag_fft_fp64_kernel<<<grid_physical, BLOCK_SIZE, 0, stream>>>(
-        static_cast<const cufftDoubleComplex*>(ctx.fft_x),
-        static_cast<const cufftDoubleComplex*>(ctx.fft_y),
-        static_cast<const cufftDoubleComplex*>(ctx.fft_z),
+        static_cast<const double*>(ctx.fft_x),
+        static_cast<const double*>(ctx.fft_y),
+        static_cast<const double*>(ctx.fft_z),
         ctx.active_mask,
         static_cast<double*>(ctx.h_demag.x),
         static_cast<double*>(ctx.h_demag.y),
@@ -762,7 +770,7 @@ void launch_demag_field_fp64(Context &ctx) {
         static_cast<int>(ctx.nx),
         static_cast<int>(ctx.ny),
         static_cast<int>(ctx.nz),
-        static_cast<int>(ctx.fft_nx),
+        real_pitch_x,
         static_cast<int>(ctx.fft_ny),
         ctx.has_active_mask ? 1 : 0,
         1.0 / static_cast<double>(ctx.fft_cell_count));
