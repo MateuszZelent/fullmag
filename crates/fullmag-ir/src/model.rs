@@ -39,6 +39,65 @@ pub struct GeometryIR {
     pub entries: Vec<GeometryEntryIR>,
 }
 
+pub const MAX_ARRAY_AXIS_COUNT: u32 = 10_000;
+pub const MAX_EXPANDED_SCENE_OBJECTS: usize = 256;
+pub const MAX_ARRAY_INSTANCES_FEM_OCC: usize = 2_500;
+pub const MAX_ARRAY_INSTANCES_FDM: usize = 100_000;
+pub const MAX_ARRAY_FDM_CANDIDATES_PER_QUERY: usize = 256;
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum ArrayDirectionIR {
+    #[default]
+    #[serde(alias = "+")]
+    Positive,
+    #[serde(alias = "-")]
+    Negative,
+    #[serde(alias = "+-", alias = "±")]
+    Symmetric,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum ArraySpacingModeIR {
+    #[default]
+    LatticeStep,
+    BoundingBoxGap,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ArrayAxisIR {
+    pub axis: String,
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default = "default_array_axis_count")]
+    pub count: u32,
+    #[serde(default)]
+    pub direction: ArrayDirectionIR,
+    #[serde(default)]
+    pub spacing_mode: ArraySpacingModeIR,
+    #[serde(default)]
+    pub pitch_m: f64,
+    #[serde(default = "default_array_relative_factor")]
+    pub relative_factor: f64,
+    #[serde(default)]
+    pub gap_m: f64,
+    #[serde(default)]
+    pub step_translation_extra_m: [f64; 3],
+    #[serde(default)]
+    pub step_rotation_euler_deg: [f64; 3],
+    #[serde(default = "default_texture_scale")]
+    pub step_scale_factor: [f64; 3],
+}
+
+fn default_array_axis_count() -> u32 {
+    1
+}
+
+fn default_array_relative_factor() -> f64 {
+    1.0
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum GeometryEntryIR {
@@ -139,6 +198,67 @@ pub enum GeometryEntryIR {
         base: std::boxed::Box<GeometryEntryIR>,
         by: [f64; 3],
     },
+    Transform {
+        name: String,
+        child: std::boxed::Box<GeometryEntryIR>,
+        #[serde(default)]
+        translation: [f64; 3],
+        #[serde(default = "default_texture_rotation_quat")]
+        rotation_quat: [f64; 4],
+        #[serde(default = "default_texture_scale")]
+        scale: [f64; 3],
+        #[serde(default = "default_texture_pivot")]
+        pivot: [f64; 3],
+    },
+    SlicePlane {
+        name: String,
+        child: std::boxed::Box<GeometryEntryIR>,
+        plane_origin: [f64; 3],
+        plane_normal: [f64; 3],
+        #[serde(default = "default_slice_keep_side")]
+        keep_side: String,
+    },
+    Cone {
+        name: String,
+        radius_bottom: f64,
+        radius_top: f64,
+        height: f64,
+        #[serde(default = "default_geometry_z_axis")]
+        axis: [f64; 3],
+    },
+    Torus {
+        name: String,
+        major_radius: f64,
+        minor_radius: f64,
+        #[serde(default = "default_geometry_z_axis")]
+        axis: [f64; 3],
+    },
+    PolygonPrism {
+        name: String,
+        vertices_xy: Vec<[f64; 2]>,
+        thickness: f64,
+    },
+    Xor {
+        name: String,
+        left: std::boxed::Box<GeometryEntryIR>,
+        right: std::boxed::Box<GeometryEntryIR>,
+    },
+    #[serde(rename = "array_3d", alias = "array3d", alias = "array3_d", alias = "Array3D")]
+    Array3D {
+        name: String,
+        child: std::boxed::Box<GeometryEntryIR>,
+        axes: [ArrayAxisIR; 3],
+        #[serde(default)]
+        merge_overlapping: bool,
+    },
+}
+
+fn default_geometry_z_axis() -> [f64; 3] {
+    [0.0, 0.0, 1.0]
+}
+
+fn default_slice_keep_side() -> String {
+    "positive".to_string()
 }
 
 impl GeometryEntryIR {
@@ -157,7 +277,14 @@ impl GeometryEntryIR {
             | Self::Difference { name, .. }
             | Self::Union { name, .. }
             | Self::Intersection { name, .. }
-            | Self::Translate { name, .. } => name,
+            | Self::Translate { name, .. }
+            | Self::Transform { name, .. }
+            | Self::SlicePlane { name, .. }
+            | Self::Cone { name, .. }
+            | Self::Torus { name, .. }
+            | Self::PolygonPrism { name, .. }
+            | Self::Xor { name, .. }
+            | Self::Array3D { name, .. } => name,
         }
     }
 }

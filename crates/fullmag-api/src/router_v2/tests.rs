@@ -154,6 +154,11 @@ fn sample_scene_document() -> fullmag_authoring::SceneDocument {
                 alpha: 0.02,
                 dind: None,
                 dbulk: None,
+                ku1: None,
+                ku2: None,
+                kc1: None,
+                kc2: None,
+                kc3: None,
             },
             magnetization: fullmag_authoring::ScriptBuilderMagnetizationState {
                 kind: "preset_texture".to_string(),
@@ -21384,7 +21389,7 @@ async fn authoring_geometry_realization_reports_blocked_csg() {
     let mut scene = sample_scene_document();
     scene.objects[0].geometry.geometry_kind = "Csg".to_string();
     scene.objects[0].geometry.geometry_params = serde_json::json!({
-        "op": "union",
+        "op": "fillet",
         "children": []
     });
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {

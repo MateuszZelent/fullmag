@@ -1136,15 +1136,43 @@ fn geometry_override_value(geo: &ScriptBuilderGeometryEntry) -> Value {
         "bounds_max".to_string(),
         serde_json::to_value(geo.bounds_max).unwrap_or(Value::Null),
     );
-    map.insert(
-        "material".to_string(),
-        serde_json::json!({
-            "Ms": geo.material.ms,
-            "Aex": geo.material.aex,
-            "alpha": geo.material.alpha,
-            "Dind": geo.material.dind,
-        }),
+    let mut material_map = Map::new();
+    material_map.insert(
+        "Ms".to_string(),
+        serde_json::to_value(geo.material.ms).unwrap_or(Value::Null),
     );
+    material_map.insert(
+        "Aex".to_string(),
+        serde_json::to_value(geo.material.aex).unwrap_or(Value::Null),
+    );
+    material_map.insert(
+        "alpha".to_string(),
+        serde_json::to_value(geo.material.alpha).unwrap_or(Value::Null),
+    );
+    material_map.insert(
+        "Dind".to_string(),
+        serde_json::to_value(geo.material.dind).unwrap_or(Value::Null),
+    );
+    material_map.insert(
+        "Dbulk".to_string(),
+        serde_json::to_value(geo.material.dbulk).unwrap_or(Value::Null),
+    );
+    if let Some(ku1) = geo.material.ku1 {
+        material_map.insert("Ku1".to_string(), Value::from(ku1));
+    }
+    if let Some(ku2) = geo.material.ku2 {
+        material_map.insert("Ku2".to_string(), Value::from(ku2));
+    }
+    if let Some(kc1) = geo.material.kc1 {
+        material_map.insert("Kc1".to_string(), Value::from(kc1));
+    }
+    if let Some(kc2) = geo.material.kc2 {
+        material_map.insert("Kc2".to_string(), Value::from(kc2));
+    }
+    if let Some(kc3) = geo.material.kc3 {
+        material_map.insert("Kc3".to_string(), Value::from(kc3));
+    }
+    map.insert("material".to_string(), Value::Object(material_map));
     map.insert(
         "absorbing_boundary".to_string(),
         serde_json::to_value(&geo.absorbing_boundary).unwrap_or(Value::Null),
@@ -1411,6 +1439,20 @@ fn geometry_mesh_override_value(mesh: &ScriptBuilderPerGeometryMeshState) -> Val
     map.insert(
         "per_element_quality".to_string(),
         serde_json::to_value(mesh.per_element_quality).unwrap_or(Value::Null),
+    );
+    map.insert(
+        "bulk_hmax".to_string(),
+        mesh.bulk_hmax
+            .as_deref()
+            .map(parse_optional_text_f64)
+            .unwrap_or(Value::Null),
+    );
+    map.insert(
+        "bulk_hmin".to_string(),
+        mesh.bulk_hmin
+            .as_deref()
+            .map(parse_optional_text_f64)
+            .unwrap_or(Value::Null),
     );
     map.insert(
         "interface_hmax".to_string(),
@@ -3132,6 +3174,11 @@ mod tests {
                     alpha: 0.1,
                     dind: None,
                     dbulk: None,
+                    ku1: None,
+                    ku2: None,
+                    kc1: None,
+                    kc2: None,
+                    kc3: None,
                 },
                 magnetization: ScriptBuilderMagnetizationState {
                     kind: "sampled".to_string(),

@@ -45,6 +45,7 @@ export type ExplorerNodeKind =
   | "object.root"
   | "object.frozen-spins"
   | "object.geometry"
+  | "object.geometry.node"
   | "object.antenna"
   | "object.antenna.geometry"
   | "object.antenna.regional"
@@ -377,6 +378,10 @@ export interface ExplorerNode {
   crossSectionPlotId?: string;
   fieldId?: string;
   extensionId?: string;
+  geometryNodeId?: string;
+  operandId?: string;
+  geometryNodeEnabled?: boolean;
+  geometryNodeRole?: string;
   fieldOrientation?: string;
   fieldRevision?: number | string;
   cellOrdinal?: string;
@@ -471,6 +476,7 @@ export interface ModelTreeObjectSnapshot {
   id: string;
   hasAbsorbingBoundary?: boolean;
   label: string;
+  geometry?: unknown;
   geometryKind?: string | null;
   magnetization?: string | null;
   magnetizationKind?: string | null;

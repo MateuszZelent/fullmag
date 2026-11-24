@@ -708,6 +708,12 @@ export function InspectorTemplate<TDraft>({
     [draft, spec],
   );
   const notices = useMemo(() => spec.notices?.(draft) ?? [], [draft, spec]);
+  const noticesBeforeContent = notices.filter(
+    (notice) => notice.placement !== "after-content",
+  );
+  const noticesAfterContent = notices.filter(
+    (notice) => notice.placement === "after-content",
+  );
   const detailsEntries = useMemo(() => spec.details?.(draft) ?? [], [draft, spec]);
   const statePill = spec.identity.statePill(draft);
   const IdentityIcon = spec.identity.icon;
@@ -1308,7 +1314,7 @@ export function InspectorTemplate<TDraft>({
         >
           <div key={stableAnimationKey} className="fm-inspector__body-inner">
             {/* Slot 5: Notices */}
-            {(conflictFields && conflictFields.size > 0) || notices.length > 0 ? (
+            {(conflictFields && conflictFields.size > 0) || noticesBeforeContent.length > 0 ? (
               <div className="fm-inspector__notices" data-slot="inspector-notices">
                 {conflictFields && conflictFields.size > 0 ? (
                   <div
@@ -1355,7 +1361,7 @@ export function InspectorTemplate<TDraft>({
                     </div>
                   </div>
                 ) : null}
-                {notices.map((notice) => (
+                {noticesBeforeContent.map((notice) => (
                   <NoticeCard key={notice.id} ctx={actionContext} notice={notice} />
                 ))}
               </div>
@@ -1398,6 +1404,17 @@ export function InspectorTemplate<TDraft>({
                 onNotify={onNotify}
                 onOpenChange={setDetailsOpen}
               />
+            ) : null}
+            {noticesAfterContent.length > 0 ? (
+              <div
+                className="fm-inspector__notices"
+                data-placement="after-content"
+                data-slot="inspector-notices-after-content"
+              >
+                {noticesAfterContent.map((notice) => (
+                  <NoticeCard key={notice.id} ctx={actionContext} notice={notice} />
+                ))}
+              </div>
             ) : null}
           </div>
         </div>

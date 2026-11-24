@@ -1602,6 +1602,8 @@ pub struct ObjectCreateRequest {
     pub base_revision: Option<u64>,
     pub object_id: String,
     pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub role: Option<String>,
     #[schema(value_type = Object)]
     pub geometry: Value,
     #[schema(value_type = Object, nullable)]
@@ -2074,6 +2076,22 @@ pub enum MagnetizationApplyTarget {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct BooleanOperandToggle {
+    pub operand_id: String,
+    pub enabled: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct BooleanOperandInput {
+    pub label: String,
+    #[schema(value_type = Object)]
+    pub geometry: Value,
+    #[schema(value_type = Object, nullable)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub transform: Option<Value>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum AuthoringTransactionRequest {
     /// Replace an immutable profile snapshot atomically, without merging
@@ -2134,6 +2152,8 @@ pub enum AuthoringTransactionRequest {
         base_revision: Option<u64>,
         object_id: String,
         name: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        role: Option<String>,
         #[schema(value_type = Object)]
         geometry: Value,
         #[schema(value_type = Object, nullable)]
@@ -2254,6 +2274,67 @@ pub enum AuthoringTransactionRequest {
         #[serde(default)]
         base_revision: Option<u64>,
         coupling_id: String,
+    },
+    BooleanCombineObjects {
+        #[serde(default)]
+        base_revision: Option<u64>,
+        op: String,
+        target_object_id: String,
+        tool_object_ids: Vec<String>,
+        #[serde(default)]
+        keep_tools: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        region_merge_policy: Option<String>,
+    },
+    UpdateBooleanOperands {
+        #[serde(default)]
+        base_revision: Option<u64>,
+        object_id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        op: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        reorder_operand_ids: Option<Vec<String>>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        toggle_operand: Option<BooleanOperandToggle>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        remove_operand_id: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        add_operand: Option<BooleanOperandInput>,
+    },
+    SeparateObject {
+        #[serde(default)]
+        base_revision: Option<u64>,
+        object_id: String,
+        mode: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        operand_id: Option<String>,
+        #[serde(default)]
+        keep_in_boolean: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        plane_origin_m: Option<[f64; 3]>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        plane_normal: Option<[f64; 3]>,
+    },
+    DuplicateObjects {
+        #[serde(default)]
+        base_revision: Option<u64>,
+        object_ids: Vec<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        offset_m: Option<[f64; 3]>,
+        #[serde(default)]
+        copy_regions: bool,
+    },
+    #[serde(rename = "apply_array_3d")]
+    ApplyArray3d {
+        #[serde(default)]
+        base_revision: Option<u64>,
+        object_id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        target_operand_id: Option<String>,
+        axes: [fullmag_authoring::SceneArrayAxisSpec; 3],
+        #[serde(default)]
+        merge_overlapping: bool,
+        realization: String,
     },
 }
 

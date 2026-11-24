@@ -8,6 +8,7 @@ import {
   formatRegionPhysicalScalar,
   objectRegionDraftFromModel,
   objectRegionDraftKey,
+  ownerBoundsForObject,
   parseRegionPhysicalScalar,
   resolveRegionCouplingDependencies,
   resolveObjectRegionPanelModel,
@@ -1067,5 +1068,133 @@ describe("material override round-trip", () => {
     const source = { parameter: "dbulk" as const, priority: 0, conflict_policy: "error" as const, value: { kind: "constant" as const, value: 0.003, unit: "J/m^2" } };
     const draft = objectRegionDraftFromModel(modelFor([source]));
     expect(buildObjectRegionPatch({ ...draft, name: "Renamed" }).material_overrides).toEqual([source]);
+  });
+
+  it("preserves CSG region shapes verbatim across metadata and material edits (P0-FE-03)", () => {
+    const csgShape = {
+      kind: "csg" as const,
+      expression: {
+        kind: "difference",
+        base: { kind: "box", center: [0, 0, 0], size: [80e-9, 80e-9, 10e-9] },
+        tool: { kind: "cylinder", center: [0, 0, 0], radius: 15e-9, height: 12e-9, axis: [0, 0, 1] },
+      },
+    };
+    const model = resolveObjectRegionPanelModel(
+      {
+        kind: "object.region",
+        label: "Notched Core",
+        moduleSource: "explorer",
+        nodeId: "core",
+        objectId: "film",
+        ref: {
+          kind: "object.region",
+          nodeId: "core",
+          objectId: "film",
+          regionId: "film:csg-core",
+          type: "scene-object",
+          visualizationTargetId: "object:film",
+        },
+      },
+      {
+        objects: [
+          {
+            id: "film",
+            name: "Film",
+            visible: true,
+            geometry: { geometry_kind: "Box", geometry_params: { size: [100e-9, 100e-9, 10e-9] } },
+          },
+        ],
+        revision: 3,
+      },
+      {
+        scene_revision: 3,
+        geometry_realization_revision: 0,
+        regions: [
+          {
+            region_id: "film:csg-core",
+            owner_object_id: "film",
+            name: "Notched Core",
+            enabled: true,
+            priority: 2,
+            source: "authored_object_region",
+            source_object_ids: ["film"],
+            source_body_ids: [],
+            bounds_min: [-50e-9, -50e-9, -5e-9],
+            bounds_max: [50e-9, 50e-9, 5e-9],
+            mesh_part_ids: [],
+            interaction_refs: [],
+            realization_status: "authored_pending_realization",
+            material_overrides: [],
+            shape: csgShape,
+          },
+        ],
+      },
+    );
+
+    const draft = objectRegionDraftFromModel(model);
+    const edited = { ...draft, name: "Renamed CSG", priority: 9 };
+    expect(validateObjectRegionDraft(edited)).toEqual([]);
+    const patch = buildObjectRegionPatch(edited);
+    expect(patch.name).toBe("Renamed CSG");
+    expect(patch.priority).toBe(9);
+    expect(patch.shape).toEqual(csgShape);
+    expect(objectRegionDraftKey(model)).toContain('"difference"');
+  });
+
+  it("clamps object-frame regions in the owner's local centered frame even when ownerBounds carries world translation (P0-FE-04)", () => {
+    const translatedWorldOwnerBounds = {
+      center: [200e-9, -150e-9, 50e-9] as [number, number, number],
+      size: [100e-9, 50e-9, 10e-9] as [number, number, number],
+    };
+    const clampedLocal = clampObjectRegionDraftShapeToOwnerBounds(
+      {
+        axis: [0, 0, 1],
+        center: [0, 0, 0],
+        height: 10e-9,
+        kind: "box",
+        radius: 10e-9,
+        size: [20e-9, 20e-9, 4e-9],
+      },
+      translatedWorldOwnerBounds,
+      "object",
+    );
+    expect(clampedLocal.center).toEqual([0, 0, 0]);
+    expect(clampedLocal.size).toEqual([20e-9, 20e-9, 4e-9]);
+
+    const clampedEdge = clampObjectRegionDraftShapeToOwnerBounds(
+      {
+        axis: [0, 0, 1],
+        center: [1e-6, -1e-6, 0],
+        height: 10e-9,
+        kind: "box",
+        radius: 10e-9,
+        size: [20e-9, 10e-9, 4e-9],
+      },
+      translatedWorldOwnerBounds,
+      "object",
+    );
+    expect(clampedEdge.center[0]).toBeCloseTo(40e-9);
+    expect(clampedEdge.center[1]).toBeCloseTo(-20e-9);
+    expect(clampedEdge.center[2]).toBeCloseTo(0);
+
+    const sphereBounds = ownerBoundsForObject({
+      geometry: { geometry_kind: "Sphere", geometry_params: { radius: 25e-9 } },
+    });
+    expect(sphereBounds).toEqual({
+      center: [0, 0, 0],
+      size: [50e-9, 50e-9, 50e-9],
+    });
+
+    const translatedObjectBounds = ownerBoundsForObject({
+      geometry: {
+        bounds_min: [150e-9, -25e-9, -5e-9],
+        bounds_max: [250e-9, 25e-9, 5e-9],
+        geometry_kind: "Box",
+        geometry_params: { size: [100e-9, 50e-9, 10e-9] },
+      },
+      transform: { translation: [200e-9, 0, 0] },
+    });
+    expect(translatedObjectBounds?.center[0]).toBeCloseTo(0);
+    expect(translatedObjectBounds?.size).toEqual([100e-9, 50e-9, 10e-9]);
   });
 });

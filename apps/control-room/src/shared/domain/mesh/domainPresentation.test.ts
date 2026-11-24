@@ -9,6 +9,7 @@ import type { DecodedTopology } from "@/kernel/api/codecs";
 
 import {
   FMRM_INACTIVE_REGION_ID,
+  authoredObjectBounds,
   buildUniverseDomainPolicyPresentation,
   buildDomainPresentation,
   domainPresentationKey,
@@ -534,5 +535,60 @@ describe("domain presentation boundary", () => {
     expect(domainPresentationKey(presentation)).toBe(
       "fdm:domain:fdm:generation-7:grid-fingerprint-7:11:12",
     );
+  });
+
+  it("derives recursive world bounds for composite CSG Difference + Array3D objects", () => {
+    const bounds = authoredObjectBounds({
+      id: "toplayer-1",
+      name: "TopLayer",
+      role: "magnet",
+      transform: {
+        translation: [0, 0, 40e-9],
+        rotation_quat: [0, 0, 0, 1],
+        scale: [1, 1, 1],
+        pivot: [0, 0, 0],
+      },
+      geometry: {
+        geometry_kind: "Difference",
+        geometry_params: {
+          operands: [
+            {
+              operand_id: "op:1",
+              enabled: true,
+              geometry: {
+                geometry_kind: "Box",
+                geometry_params: { size: [300e-9, 300e-9, 15e-9] },
+              },
+            },
+            {
+              operand_id: "op:2",
+              enabled: true,
+              geometry: {
+                geometry_kind: "Array3D",
+                geometry_params: {
+                  base: {
+                    geometry_kind: "Cylinder",
+                    geometry_params: { radius: 25e-9, height: 25e-9, axis: "z" },
+                  },
+                  axes: [
+                    { axis: "x", enabled: true, count: 2, direction: "symmetric", spacing_mode: "pitch", pitch_m: 120e-9 },
+                    { axis: "y", enabled: true, count: 2, direction: "symmetric", spacing_mode: "pitch", pitch_m: 120e-9 },
+                    { axis: "z", enabled: false, count: 1, direction: "positive", spacing_mode: "pitch", pitch_m: 1e-9 },
+                  ],
+                },
+              },
+            },
+          ],
+        },
+      },
+    });
+
+    expect(bounds).not.toBeNull();
+    expect(bounds!.min[0]).toBeCloseTo(-150e-9, 12);
+    expect(bounds!.min[1]).toBeCloseTo(-150e-9, 12);
+    expect(bounds!.min[2]).toBeCloseTo(32.5e-9, 12);
+    expect(bounds!.max[0]).toBeCloseTo(150e-9, 12);
+    expect(bounds!.max[1]).toBeCloseTo(150e-9, 12);
+    expect(bounds!.max[2]).toBeCloseTo(47.5e-9, 12);
   });
 });

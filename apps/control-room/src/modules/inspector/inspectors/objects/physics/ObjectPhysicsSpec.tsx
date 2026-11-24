@@ -59,9 +59,12 @@ import {
   activeLaneOperationIdForModule,
   asJsonRecord,
   buildModuleHelpContent,
+  commitObjectExchangeMutation,
   errorMessage,
   isRevisionConflict,
   readObjectInteractionState,
+  resolveTargetStudyExchangeEnabled,
+  ROTATED_DMI_EXCHANGE_ERROR,
   studyRotatedDmiNumber,
   type BackendWritableObjectInteractionKind,
   type ObjectInteractionToggleRow,
@@ -333,6 +336,26 @@ function ObjectPhysicsMatrixInspectorPanel({
         });
         return;
       }
+      if (
+        kind === "exchange" &&
+        next.enabled === false &&
+        resolveTargetStudyExchangeEnabled({
+          objectId,
+          nextEnabled: false,
+          studyRec,
+          sceneObjects: scene.data?.objects,
+          sceneMaterials: scene.data?.materials,
+        }) === false
+      ) {
+        const rotVal = studyRotatedDmiNumber(studyRec);
+        if (rotVal !== null && rotVal !== 0) {
+          setMutationFeedback({
+            tone: "err",
+            text: ROTATED_DMI_EXCHANGE_ERROR,
+          });
+          return;
+        }
+      }
 
       const sceneRev = resolveSceneResourceRevision(scene.data);
       const numericSceneRev =
@@ -350,6 +373,19 @@ function ObjectPhysicsMatrixInspectorPanel({
           },
           `${label} interaction`,
           async ({ baseRevision }) => {
+            if (kind === "exchange") {
+              return commitObjectExchangeMutation({
+                objectId,
+                enabled: next.enabled !== false,
+                baseRevision: baseRevision ?? numericSceneRev,
+                studyRec,
+                sceneObjects: scene.data?.objects,
+                sceneMaterials: scene.data?.materials,
+                sessionScopeKey,
+                api: kernel.api,
+                resources: kernel.resources,
+              });
+            }
             const patchPayload: ObjectInteractionPatchRequest = {
               base_revision: baseRevision ?? numericSceneRev,
               present: next.present,

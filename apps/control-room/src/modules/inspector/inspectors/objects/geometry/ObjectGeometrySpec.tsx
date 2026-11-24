@@ -1,6 +1,6 @@
 "use client";
 
-import { Combine, Move3d, Shapes } from "lucide-react";
+import { Layers, Move3d, Shapes, Wrench } from "lucide-react";
 import {
   useCallback,
   useEffect,
@@ -11,6 +11,10 @@ import {
 } from "react";
 
 import { MODEL_SCENE_PATH } from "@/kernel/api/apiPaths";
+import {
+  computeArray3DBudgetStatus,
+  computeArray3DInstanceCount,
+} from "@/kernel/authoring/array3dModel";
 import { geometryObjectEditSessionTargetKey } from "@/kernel/authoring/object-edit/objectEditDraftModel";
 import { ObjectEditSessionController } from "@/kernel/authoring/object-edit/ObjectEditSessionController";
 import type { GeometryObjectDraft } from "@/kernel/authoring/object-edit/objectEditTypes";
@@ -33,7 +37,7 @@ import type { InspectorPanelProps } from "../../../inspectorTypes";
 import {
   rebaseGeometryObjectDraft,
   resolveGeometryObjectDraft,
-  summarizeGeometryValidationMessages,
+  summarizeGeometryOnlyValidationMessages,
 } from "../../../panels/geometryObjectPanelModel";
 import {
   buildObjectSelection,
@@ -48,6 +52,8 @@ import {
   type InspectorSpec,
 } from "../../../template";
 
+import type { DisplayLengthUnit } from "./Array3DLatticeTableSection";
+import { analyzeDeleteObjectImpact } from "./DeleteObjectImpactDialog";
 import { applyGeometryDraftMutation } from "./geometryMutations";
 import {
   buildBaselineFromScene,
@@ -59,16 +65,28 @@ import {
   extractTranslationSIFromSessionDraft,
   normalizeScaleForUniformLock,
   vec3ApproxEqual,
+  type Array3DDraftConfig,
+  type InlineOperandEditPatch,
   type ObjectGeometrySpecDraft,
   type RevisionConflictPhase,
 } from "./geometryShared";
+import { GeometryStackEditor } from "./GeometryStackEditor";
 import {
-  buildGeometryTransformAndCsgSections,
+  buildGeometryTransformSections,
   GeometryCodePreviewDialog,
-  GeometryConflictActionsBar,
   LiveDraftOverlayPublisher,
   type GeometryCodePreviewState,
 } from "./GeometryTransformSections";
+import { PrimitiveModifiersBar } from "./PrimitiveModifiersBar";
+
+function validateArray3DConfigBudget(
+  cfg: Array3DDraftConfig | null | undefined,
+): string | null {
+  if (!cfg) return null;
+  const count = computeArray3DInstanceCount(cfg.axes);
+  const status = computeArray3DBudgetStatus(count, cfg.realization);
+  return status.level === "error" ? status.message : null;
+}
 
 /* ── Shared Geometry Spec Implementation ── */
 
@@ -102,6 +120,9 @@ function SharedGeometrySpecPanel({
 
   const [lastOriginPivotObjectId, setLastOriginPivotObjectId] = useState<string | null>(null);
   const [ownCreatePending, setOwnCreatePending] = useState(false);
+  const [deletingObject, setDeletingObject] = useState(false);
+  const [arrayUnit, setArrayUnit] = useState<DisplayLengthUnit>("nm");
+  const [pendingExpandOperandId, setPendingExpandOperandId] = useState<string | null>(null);
 
   /* ── 409 Revision Conflict State (Derived During Render — Zero Effect Cascades) ── */
   const [revisionConflictPhase, setRevisionConflictPhase] =
@@ -143,6 +164,7 @@ function SharedGeometrySpecPanel({
     if (revisionConflictPhase !== null) setRevisionConflictPhase(null);
     if (conflictBaseRevision !== null) setConflictBaseRevision(null);
     if (refreshSawLoading) setRefreshSawLoading(false);
+    if (pendingExpandOperandId !== null) setPendingExpandOperandId(null);
   }
 
   if (revisionConflictPhase === "refreshing") {
@@ -181,7 +203,7 @@ function SharedGeometrySpecPanel({
   const validationMessages = useMemo(
     () =>
       baseline.mode === "committed"
-        ? summarizeGeometryValidationMessages(validation.data, baseline.objectId)
+        ? summarizeGeometryOnlyValidationMessages(validation.data, baseline.objectId)
         : [],
     [baseline.mode, baseline.objectId, validation.data],
   );
@@ -206,6 +228,28 @@ function SharedGeometrySpecPanel({
     [scene.data?.materials],
   );
 
+  const deleteImpact = useMemo(
+    () => analyzeDeleteObjectImpact(scene.data, baseline.objectId),
+    [baseline.objectId, scene.data],
+  );
+
+  const handleConfirmDeleteObject = useCallback(async () => {
+    if (deletingObject || baseline.mode !== "committed") return;
+    setDeletingObject(true);
+    try {
+      await kernel.commands.execute(
+        "geometry.delete-object",
+        createCommandContext("inspector", kernel, {
+          input: { confirmed: true, objectId: baseline.objectId },
+          resourceData: { [MODEL_SCENE_PATH]: scene.data },
+          sessionScopeKey: currentSessionScopeKey,
+        }),
+      );
+    } finally {
+      setDeletingObject(false);
+    }
+  }, [baseline.mode, baseline.objectId, currentSessionScopeKey, deletingObject, kernel, scene.data]);
+
   const createDraftSlugId = useCallback((draft: ObjectGeometrySpecDraft) => {
     const slug = draft.draftName
       .trim()
@@ -217,7 +261,9 @@ function SharedGeometrySpecPanel({
 
   const lastSyncedEditVersionRef = useRef<number>(-1);
   const lastSyncedTargetKeyRef = useRef<string | null>(null);
+  const dirtyRef = useRef(false);
   const requestApplyRef = useRef<() => Promise<boolean>>(async () => false);
+  const acknowledgeCommittedRef = useRef<() => void>(() => undefined);
 
   const handleRefetchConflict = useCallback(() => {
     setRefreshSawLoading(false);
@@ -242,6 +288,16 @@ function SharedGeometrySpecPanel({
 
   const handleRetryConflictApply = useCallback(() => {
     void requestApplyRef.current();
+  }, []);
+
+  const handleFlushDraft = useCallback(() => requestApplyRef.current(), []);
+
+  const handleCutHoleCreated = useCallback((holeOperandId: string) => {
+    setPendingExpandOperandId(holeOperandId);
+  }, []);
+
+  const handleExpandedOperandConsumed = useCallback(() => {
+    setPendingExpandOperandId(null);
   }, []);
 
   const spec = useMemo<InspectorSpec<ObjectGeometrySpecDraft>>(
@@ -277,20 +333,62 @@ function SharedGeometrySpecPanel({
               ],
         canFitView: baseline.mode === "committed",
         searchable: true,
+        deleteAction:
+          baseline.mode === "committed"
+            ? {
+                label: "Delete Object\u2026",
+                confirmTitle: (draft) => `Delete "${draft.draftName}"?`,
+                confirmDescription: () =>
+                  deleteImpact.totalDependents > 0
+                    ? `Deleting "${deleteImpact.objectName}" will also affect ${deleteImpact.totalDependents} dependent item${deleteImpact.totalDependents === 1 ? "" : "s"} (${deleteImpact.categories.map((c) => `${c.count} ${c.label.toLowerCase()}`).join(", ")}). You can undo with Ctrl+Z.`
+                    : `Remove "${deleteImpact.objectName}" from the scene. You can undo with Ctrl+Z.`,
+                onDelete: async () => {
+                  await handleConfirmDeleteObject();
+                },
+              }
+            : undefined,
       },
       identity: {
         domain: "geometry",
         icon: Shapes,
         title: (draft) =>
-          draft.mode === "draft-new" ? draft.draftName : `${draft.primitiveKind} Geometry`,
+          draft.mode === "draft-new"
+            ? draft.draftName
+            : draft.compositeSummary
+              ? draft.compositeSummary.displayLabel
+              : `${draft.primitiveKind} Geometry`,
         renameFieldKey: baseline.mode === "draft-new" ? "draftName" : undefined,
         kindLabel:
-          baseline.mode === "draft-new" ? "Primitive builder draft" : "Parametric solid geometry",
+          baseline.mode === "draft-new"
+            ? "Primitive builder draft"
+            : baseline.compositeSummary
+              ? baseline.compositeSummary.op === "array"
+                ? "Array 3D lattice geometry"
+                : "Composite CSG geometry"
+              : "Parametric solid geometry",
         entityId: baseline.mode === "committed" ? baseline.objectId : undefined,
         statePill: (draft) => draft.meshStatusPill,
       },
       facts: (draft): readonly InspectorFact[] => {
         const metrics = computeDraftSummaryMetrics(draft);
+        if (draft.compositeSummary) {
+          const summary = draft.compositeSummary;
+          return [
+            { id: "kind", label: "Geometry", value: summary.kind },
+            summary.op === "array"
+              ? {
+                  id: "instances",
+                  label: "Instances",
+                  value: `${(summary.instanceCount ?? 1).toLocaleString()} (${summary.dimensionsLabel ?? "1\u00d71\u00d71"})`,
+                }
+              : {
+                  id: "operands",
+                  label: "Operands",
+                  value: `${summary.enabledOperandCount} / ${summary.operandCount}`,
+                },
+            { id: "span", label: "Bounding span", value: metrics.spanText },
+          ];
+        }
         return [
           { id: "kind", label: "Primitive", value: draft.primitiveKind },
           { id: "span", label: "Bounding span", value: metrics.spanText },
@@ -298,9 +396,8 @@ function SharedGeometrySpecPanel({
         ];
       },
       modeTabs: [
-        { id: "shape", label: "Shape", icon: Shapes },
-        { id: "transform", label: "Transform", icon: Move3d },
-        { id: "csg", label: "Boolean CSG", icon: Combine },
+        { id: "shape", label: "Geometry", icon: Shapes },
+        { id: "transform", label: "Placement", icon: Move3d },
       ],
       notices: (draft): readonly InspectorNotice<ObjectGeometrySpecDraft>[] => {
         const list: InspectorNotice<ObjectGeometrySpecDraft>[] = [];
@@ -355,29 +452,93 @@ function SharedGeometrySpecPanel({
         return list;
       },
       sections: [
+        ...buildGeometryShapeSections({ materialOptions }),
         {
-          id: "geometry-revision-conflict-actions",
-          title: "Revision conflict recovery",
-          icon: Shapes,
+          id: "geometry-primitive-modifiers",
+          modeTabId: "shape",
+          title: "Modifiers & Boolean tools",
+          icon: Wrench,
           defaultOpen: true,
-          showWhen: () => revisionConflictPhase !== null,
+          showWhen: (d) => d.mode === "committed" && !d.compositeSummary,
           rows: [
             {
+              key: "array3dConfig",
+              label: "Array 3D modifier",
               type: "custom",
               wide: true,
-              render: () => (
-                <GeometryConflictActionsBar
-                  revisionConflictPhase={revisionConflictPhase}
-                  onRebaseConflict={handleRebaseConflict}
-                  onRefetchConflict={handleRefetchConflict}
-                  onRetryApply={handleRetryConflictApply}
+              validate: (cfg) =>
+                validateArray3DConfigBudget(cfg as Array3DDraftConfig | null),
+              render: (ctx) => (
+                <PrimitiveModifiersBar
+                  disabled={Boolean(sceneMutationLockReason)}
+                  draft={ctx.draft}
+                  hasDirtyDraft={dirtyRef.current}
+                  kernel={kernel}
+                  otherObjects={otherObjects}
+                  sceneData={scene.data}
+                  sessionScopeKey={currentSessionScopeKey}
+                  unit={arrayUnit}
+                  onArray3DChange={(nextCfg) => ctx.setField("array3dConfig", nextCfg)}
+                  onCutHoleCreated={handleCutHoleCreated}
+                  onFlushDraft={handleFlushDraft}
+                  onUnitChange={setArrayUnit}
                 />
               ),
             },
           ],
         },
-        ...buildGeometryShapeSections({ materialOptions }),
-        ...buildGeometryTransformAndCsgSections({ otherObjects }),
+        {
+          id: "geometry-interactive-stack",
+          modeTabId: "shape",
+          title: "Geometry stack",
+          icon: Layers,
+          defaultOpen: true,
+          showWhen: (d) => d.mode === "committed" && Boolean(d.compositeSummary),
+          summary: (d) => d.compositeSummary?.displayLabel ?? "",
+          rows: [
+            {
+              key: "inlineNodePatches",
+              label: "Geometry stack edits",
+              type: "custom",
+              wide: true,
+              validate: (rawPatches, draft) => {
+                const rootErr = validateArray3DConfigBudget(draft.array3dConfig);
+                if (rootErr) return rootErr;
+                const patches = rawPatches as Readonly<Record<string, InlineOperandEditPatch>>;
+                for (const patch of Object.values(patches)) {
+                  const err = validateArray3DConfigBudget(patch.array3dConfig);
+                  if (err) return err;
+                }
+                return null;
+              },
+              render: (ctx) => (
+                <GeometryStackEditor
+                  disabled={Boolean(sceneMutationLockReason)}
+                  draft={ctx.draft}
+                  hasDirtyDraft={dirtyRef.current}
+                  initialExpandedOperandId={pendingExpandOperandId}
+                  kernel={kernel}
+                  otherObjects={otherObjects}
+                  sceneData={scene.data}
+                  sessionScopeKey={currentSessionScopeKey}
+                  unit={arrayUnit}
+                  onArray3DChange={(nextCfg) => ctx.setField("array3dConfig", nextCfg)}
+                  onExpandedOperandConsumed={handleExpandedOperandConsumed}
+                  onFlushDraft={handleFlushDraft}
+                  onPatchNode={(targetPath, patch) => {
+                    const prevEntry = ctx.draft.inlineNodePatches[targetPath] ?? {};
+                    ctx.setField("inlineNodePatches", {
+                      ...ctx.draft.inlineNodePatches,
+                      [targetPath]: { ...prevEntry, ...patch },
+                    });
+                  }}
+                  onUnitChange={setArrayUnit}
+                />
+              ),
+            },
+          ],
+        },
+        ...buildGeometryTransformSections(),
       ],
       commitBar: {
         mode: "staged",
@@ -414,6 +575,7 @@ function SharedGeometrySpecPanel({
         },
         onApply: (draft) =>
           applyGeometryDraftMutation({
+            baseline,
             draft,
             kernel,
             selection,
@@ -427,6 +589,9 @@ function SharedGeometrySpecPanel({
             createDraftSlugId,
             onSyncEditVersion: (editVersion) => {
               lastSyncedEditVersionRef.current = editVersion;
+            },
+            onAcknowledgeCommitted: () => {
+              acknowledgeCommittedRef.current();
             },
             onSetOwnCreatePending: setOwnCreatePending,
             onCommittedSuccess: (originPivotObjectId) => {
@@ -447,13 +612,18 @@ function SharedGeometrySpecPanel({
       },
     }),
     [
-      baseline.draftName,
-      baseline.mode,
-      baseline.objectId,
+      arrayUnit,
+      baseline,
       canonicalSessionDraft,
       createDraftSlugId,
+      currentSessionScopeKey,
+      deleteImpact,
       editIdentity,
       forceBuilderMode,
+      handleConfirmDeleteObject,
+      handleCutHoleCreated,
+      handleExpandedOperandConsumed,
+      handleFlushDraft,
       handleRebaseConflict,
       handleRefetchConflict,
       handleRetryConflictApply,
@@ -461,6 +631,7 @@ function SharedGeometrySpecPanel({
       materialOptions,
       objectEditSession,
       otherObjects,
+      pendingExpandOperandId,
       resolveActiveScopeKey,
       revisionConflictPhase,
       scene.data,
@@ -474,8 +645,10 @@ function SharedGeometrySpecPanel({
   const controller = useInspectorSpecController(spec, selection, baseline);
 
   useLayoutEffect(() => {
+    dirtyRef.current = controller.dirty;
     requestApplyRef.current = controller.requestApply;
-  }, [controller.requestApply]);
+    acknowledgeCommittedRef.current = controller.acknowledgeCommitted;
+  }, [controller.acknowledgeCommitted, controller.dirty, controller.requestApply]);
 
   /* ── Activate & Reconcile objectEditSession + Sync 3D Gizmo Translation Into Controller ── */
   const controllerDraftRef = useRef(controller.draft);
@@ -722,6 +895,10 @@ function SharedGeometrySpecPanel({
         onRevertField={handleRevertField}
         onSelectNode={handleSelectNode}
       />
+
+      {revisionConflictPhase !== null ? (
+        <span className="sr-only" data-revision-conflict="true" />
+      ) : null}
 
       {statusToast ? (
         <span className="sr-only" role="status">

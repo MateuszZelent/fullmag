@@ -32,6 +32,7 @@ test("two Python model previews coexist with the current FDM session", async ({ 
   const previewUrl = (id: string) => new URL(`/v2/sessions/previews/${id}`, origin).href;
   const start = page.getByRole("tab", { name: "Home", exact: true });
   const canvas = page.locator("[data-session-preview-viewport] canvas");
+  const frame = page.locator(".fm-workspace-frame");
 
   const openPreview = async (name: string, dimensions: string) => {
     await start.click();
@@ -77,10 +78,14 @@ study.stages.add_run(stage_id="wave", until=1e-12)
 
   try {
     await page.goto(new URL("/workspace", origin).href);
-    await expect(page.getByRole("tab", { name: fixture.name, exact: true })).toBeVisible({ timeout: 120_000 });
+    const currentTab = page.getByRole("tab", { name: fixture.name, exact: true });
+    await expect(currentTab).toBeVisible({ timeout: 120_000 });
+    await page.getByRole("button", { name: "Full screen workspace", exact: true }).click();
+    await expect(frame).toHaveAttribute("data-workspace-fullscreen", "true");
     const first = await openPreview("First QA preview", "100e-9, 20e-9, 10e-9");
     const second = await openPreview("Second QA preview", "20e-9, 60e-9, 20e-9");
     expect(second).not.toBe(first);
+    await expect(frame).not.toHaveAttribute("data-workspace-fullscreen", "true");
     const list = await page.request.get(new URL("/v2/sessions", origin).href);
     expect(await list.json()).toMatchObject({
       sessions: expect.arrayContaining([
@@ -93,6 +98,10 @@ study.stages.add_run(stage_id="wave", until=1e-12)
     await expect(page.getByRole("heading", { name: "First QA preview" })).toBeVisible();
     await page.goBack();
     await expect(page.getByRole("heading", { name: "Second QA preview" })).toBeVisible();
+    await currentTab.click();
+    await expect(frame).toHaveAttribute("data-workspace-fullscreen", "true");
+    await page.getByRole("tab", { name: "Second QA preview", exact: true }).click();
+    await expect(frame).not.toHaveAttribute("data-workspace-fullscreen", "true");
     expect((await page.reload())?.status()).toBe(200);
     await expect(page.getByRole("heading", { name: "Second QA preview" })).toBeVisible();
     await expect(canvas).toBeVisible();

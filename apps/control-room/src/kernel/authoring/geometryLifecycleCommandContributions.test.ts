@@ -47,6 +47,7 @@ import { activeLaneCapabilityFixture } from "../resources/activeLaneCapabilityFi
 import { SelectionController } from "../selection/SelectionController";
 import { ObjectEditSessionController } from "./object-edit/ObjectEditSessionController";
 import type { GeometryObjectDraft } from "./object-edit/objectEditTypes";
+import { PendingFormRegistry } from "./PendingFormRegistry";
 
 import {
   FEM_GRID_COMMAND_NOT_APPLICABLE_REASON,
@@ -54,6 +55,8 @@ import {
   GEOMETRY_LIFECYCLE_COMMANDS,
   UNKNOWN_GRID_COMMAND_LANE_REASON,
   UNKNOWN_MESH_COMMAND_LANE_REASON,
+  csgCapabilityDisabled,
+  primitiveCapabilityDisabled,
   resolveMeshCommandLane,
   resumeMeshBuildObservation,
   restoreMeshBuildObservation,
@@ -2201,6 +2204,184 @@ describe("geometry lifecycle command contributions", () => {
       restoreMeshBuildObservation(context, "cmd-fdm-reload"),
     ).resolves.toEqual({ commandId: "cmd-fdm-reload", status: "completed" });
     expect(resources.getRevision(MESHING_SHARED_DOMAIN_MANIFEST_PATH)).toBe(15);
+  });
+
+  it("routes geometry.commit-object-draft through the active Inspector edit session for builder.primitive and object.geometry (P0-FE-01)", async () => {
+    const registry = registryWithLifecycleCommands();
+    const selection = new SelectionController(new EventBus<KernelEventMap>());
+    const pendingForms = new PendingFormRegistry();
+    const commitTransaction = vi.fn();
+
+    // 1. Active builder.primitive session with custom user edits
+    selection.set(
+      {
+        kind: "builder.primitive",
+        label: "New cylinder",
+        nodeId: "geometry:draft:cylinder",
+        objectId: null,
+        ref: null,
+      },
+      "test",
+    );
+    const applyBuilderDraft = vi.fn(async () => true);
+    const builderOwner = Symbol("builder-primitive-session");
+    pendingForms.register(builderOwner, {
+      allowCleanApply: true,
+      apply: applyBuilderDraft,
+      applying: false,
+      dirty: true,
+      mode: "staged",
+      reset: vi.fn(),
+      sessionKey: "geometry:draft:cylinder::builder.primitive::shape",
+      valid: true,
+    });
+
+    const builderContext: CommandContext = {
+      api: { model: { commitTransaction } } as never,
+      pendingForms,
+      resourceData: { [MODEL_SCENE_PATH]: { objects: [], revision: 12 } },
+      selection,
+      source: "shortcut",
+    };
+
+    expect(registry.isEnabled("geometry.commit-object-draft", builderContext)).toBe(true);
+    expect(await registry.execute("geometry.commit-object-draft", builderContext)).toEqual({
+      status: "completed",
+    });
+    expect(applyBuilderDraft).toHaveBeenCalledTimes(1);
+    expect(commitTransaction).not.toHaveBeenCalled();
+
+    // 2. Clean builder.primitive session with allowCleanApply stays enabled and delegates to session.apply()
+    pendingForms.update(builderOwner, {
+      allowCleanApply: true,
+      apply: applyBuilderDraft,
+      applying: false,
+      dirty: false,
+      mode: "staged",
+      reset: vi.fn(),
+      sessionKey: "geometry:draft:cylinder::builder.primitive::shape",
+      valid: true,
+    });
+    expect(registry.isEnabled("geometry.commit-object-draft", builderContext)).toBe(true);
+
+    // 3. Invalid builder.primitive session blocks commit without fabricating a default primitive
+    pendingForms.update(builderOwner, {
+      allowCleanApply: true,
+      apply: applyBuilderDraft,
+      applying: false,
+      dirty: true,
+      mode: "staged",
+      reset: vi.fn(),
+      sessionKey: "geometry:draft:cylinder::builder.primitive::shape",
+      valid: false,
+    });
+    expect(registry.isEnabled("geometry.commit-object-draft", builderContext)).toBe(false);
+    expect(await registry.execute("geometry.commit-object-draft", builderContext)).toMatchObject({
+      status: "failed",
+    });
+    expect(commitTransaction).not.toHaveBeenCalled();
+
+    // 4. Active object.geometry session delegates Ctrl+Enter when dirty and disables when clean
+    pendingForms.unregister(builderOwner);
+    selection.set(
+      {
+        kind: "object.geometry",
+        label: "Geometry",
+        nodeId: "model:object:film:geometry",
+        objectId: "film",
+        ref: {
+          kind: "object.geometry",
+          nodeId: "model:object:film:geometry",
+          objectId: "film",
+          type: "scene-object",
+          visualizationTargetId: "object:film",
+        },
+      },
+      "test",
+    );
+    const applyGeometryEdit = vi.fn(async () => true);
+    const geomOwner = Symbol("object-geometry-session");
+    pendingForms.register(geomOwner, {
+      allowCleanApply: false,
+      apply: applyGeometryEdit,
+      applying: false,
+      dirty: false,
+      mode: "staged",
+      reset: vi.fn(),
+      sessionKey: "model:object:film:geometry::object.geometry::shape",
+      valid: true,
+    });
+    const geomContext: CommandContext = {
+      api: { model: { commitTransaction } } as never,
+      pendingForms,
+      resourceData: { [MODEL_SCENE_PATH]: { objects: [{ id: "film" }], revision: 12 } },
+      selection,
+      source: "shortcut",
+    };
+    expect(registry.isEnabled("geometry.commit-object-draft", geomContext)).toBe(false);
+
+    pendingForms.update(geomOwner, {
+      allowCleanApply: false,
+      apply: applyGeometryEdit,
+      applying: false,
+      dirty: true,
+      mode: "staged",
+      reset: vi.fn(),
+      sessionKey: "model:object:film:geometry::object.geometry::shape",
+      valid: true,
+    });
+    expect(registry.isEnabled("geometry.commit-object-draft", geomContext)).toBe(true);
+    expect(await registry.execute("geometry.commit-object-draft", geomContext)).toEqual({
+      status: "completed",
+    });
+    expect(applyGeometryEdit).toHaveBeenCalledTimes(1);
+    expect(commitTransaction).not.toHaveBeenCalled();
+  });
+
+  it("traverses primitive_capabilities and csg_capabilities arrays accurately (P1-FE-02)", () => {
+    const registry = registryWithLifecycleCommands();
+    const capabilitiesPayload = {
+      primitive_capabilities: [
+        { id: "box", label: "Box", category: "primitive", status: "production", fem: true, fdm: true, dsl: true, boolean: true },
+        { id: "cylinder", label: "Cylinder", category: "primitive", status: "production", fem: true, fdm: false, dsl: true, boolean: true },
+        { id: "sphere", label: "Sphere", category: "primitive", status: "unsupported", fem: false, fdm: false, dsl: false, boolean: false },
+      ],
+      csg_capabilities: [
+        { op: "union", status: "production", fem: true, fdm: true, dsl: true, notes: "" },
+        { op: "difference", status: "production", fem: true, fdm: false, dsl: true, notes: "FEM only" },
+        { op: "intersection", status: "unsupported", fem: false, fdm: false, dsl: false, notes: "Unsupported" },
+      ],
+      revision: 1,
+    };
+
+    const fdmContext: CommandContext = {
+      resourceData: {
+        ...sessionStatus("fdm"),
+        [MODEL_GEOMETRY_CAPABILITIES_PATH]: capabilitiesPayload,
+      },
+      source: "test",
+    };
+    expect(registry.isEnabled("geometry.add-box", fdmContext)).toBe(true);
+    expect(registry.isEnabled("geometry.add-cylinder", fdmContext)).toBe(false);
+    expect(registry.isEnabled("geometry.add-sphere", fdmContext)).toBe(false);
+    expect(primitiveCapabilityDisabled(fdmContext, "box")).toBe(false);
+    expect(primitiveCapabilityDisabled(fdmContext, "cylinder")).toBe(true);
+    expect(primitiveCapabilityDisabled(fdmContext, "sphere")).toBe(true);
+    expect(csgCapabilityDisabled(fdmContext, "union")).toBe(false);
+    expect(csgCapabilityDisabled(fdmContext, "difference")).toBe(true);
+    expect(csgCapabilityDisabled(fdmContext, "intersection")).toBe(true);
+
+    const femContext: CommandContext = {
+      resourceData: {
+        ...sessionStatus("fem"),
+        [MODEL_GEOMETRY_CAPABILITIES_PATH]: capabilitiesPayload,
+      },
+      source: "test",
+    };
+    expect(registry.isEnabled("geometry.add-cylinder", femContext)).toBe(true);
+    expect(registry.isEnabled("geometry.add-sphere", femContext)).toBe(false);
+    expect(csgCapabilityDisabled(femContext, "difference")).toBe(false);
+    expect(csgCapabilityDisabled(femContext, "intersection")).toBe(true);
   });
 
 });

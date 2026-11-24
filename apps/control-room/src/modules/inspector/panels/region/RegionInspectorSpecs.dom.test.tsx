@@ -901,6 +901,51 @@ describe("RegionInspectorSpecs & Constraints/Extensions (Task 16 + Wave 4 Slice 
     const boolReloaded = parseRegionShapeState(boolOut, "film", ownerBounds);
     expect(boolReloaded.shapeMode).toBe("boolean_expr");
     expect(boolReloaded.selectorExpr).toEqual(boolSelector);
+
+    // Arbitrary CSG expressions (including expression.kind === "difference" or "box") stay verbatim (P0-FE-03)
+    const customCsgIn = {
+      kind: "csg" as const,
+      expression: {
+        kind: "box",
+        center: [5e-9, 0, 0],
+        size: [20e-9, 20e-9, 5e-9],
+        extra_tag: "preserved",
+      },
+    };
+    const customCsgParsed = parseRegionShapeState(customCsgIn, "film", ownerBounds);
+    expect(customCsgParsed.preservedCsgExpression).toEqual(customCsgIn.expression);
+    const customCsgOut = serializeRegionShapeState(
+      { ...customCsgParsed, frame: "object" },
+      ownerBounds,
+      customCsgParsed.shapeMode,
+    );
+    expect(customCsgOut).toEqual(customCsgIn);
+
+    // layer_z_slice in object frame clamps against local [-oz/2, +oz/2] even when ownerBounds.center is world-translated (P0-FE-04)
+    const translatedOwnerBounds = {
+      center: [300e-9, -200e-9, 100e-9] as [number, number, number],
+      size: [200e-9, 100e-9, 20e-9] as [number, number, number],
+    };
+    const localSliceOut = serializeRegionShapeState(
+      {
+        ...cylParsed,
+        shapeMode: "layer_z_slice",
+        zMin: -6e-9,
+        zMax: 4e-9,
+        frame: "object",
+      },
+      translatedOwnerBounds,
+    );
+    expect(localSliceOut).toEqual({
+      kind: "csg",
+      expression: {
+        kind: "layer_z_slice",
+        z_min: -6e-9,
+        z_max: 4e-9,
+        center: [0, 0, expect.closeTo(-1e-9, 24)],
+        size: [200e-9, 100e-9, 10e-9],
+      },
+    });
   });
 
   it("parses OpenAPI diagnostics[], guards source/target couplings on delete, and deep-clones on Duplicate Region", async () => {

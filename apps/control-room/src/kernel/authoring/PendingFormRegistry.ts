@@ -1,6 +1,7 @@
 export type PendingFormMode = "staged" | "liveViewport" | "immediate";
 
 export interface PendingForm {
+  allowCleanApply?: boolean;
   apply: () => Promise<boolean> | boolean;
   applying: boolean;
   dirty: boolean;
@@ -8,6 +9,7 @@ export interface PendingForm {
   lockReason?: string;
   mode: PendingFormMode;
   reset: () => Promise<void> | void;
+  sessionKey?: string;
   valid: boolean;
 }
 
@@ -83,7 +85,7 @@ function applyReason(form: PendingForm | null): string {
   if (form.lockReason) return form.lockReason;
   if (form.mode === "liveViewport") return "Viewport changes are applied live.";
   if (form.mode === "immediate") return "This Inspector view has no staged changes.";
-  if (!form.dirty) return "There are no unapplied Inspector changes.";
+  if (!form.dirty && !form.allowCleanApply) return "There are no unapplied Inspector changes.";
   if (form.applyBlockReason) return form.applyBlockReason;
   if (!form.valid) return "Resolve Inspector validation errors before applying.";
   if (form.applying) return "Inspector changes are already being applied.";
@@ -94,7 +96,7 @@ function canApply(form: PendingForm | null): boolean {
   return Boolean(
     form &&
       form.mode === "staged" &&
-      form.dirty &&
+      (form.dirty || form.allowCleanApply) &&
       form.valid &&
       !form.applying &&
       !form.lockReason &&

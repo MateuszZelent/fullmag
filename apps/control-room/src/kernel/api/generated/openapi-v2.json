@@ -5387,6 +5387,12 @@
                   "null"
                 ]
               },
+              "role": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
               "study_universe_mesh": {
                 "type": [
                   "object",
@@ -5882,6 +5888,266 @@
               "kind"
             ],
             "type": "object"
+          },
+          {
+            "properties": {
+              "base_revision": {
+                "format": "int64",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "keep_tools": {
+                "type": "boolean"
+              },
+              "kind": {
+                "enum": [
+                  "boolean_combine_objects"
+                ],
+                "type": "string"
+              },
+              "op": {
+                "type": "string"
+              },
+              "region_merge_policy": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "target_object_id": {
+                "type": "string"
+              },
+              "tool_object_ids": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "op",
+              "target_object_id",
+              "tool_object_ids",
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "add_operand": {
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "$ref": "#/components/schemas/BooleanOperandInput"
+                  }
+                ]
+              },
+              "base_revision": {
+                "format": "int64",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "kind": {
+                "enum": [
+                  "update_boolean_operands"
+                ],
+                "type": "string"
+              },
+              "object_id": {
+                "type": "string"
+              },
+              "op": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "remove_operand_id": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "reorder_operand_ids": {
+                "items": {
+                  "type": "string"
+                },
+                "type": [
+                  "array",
+                  "null"
+                ]
+              },
+              "toggle_operand": {
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "$ref": "#/components/schemas/BooleanOperandToggle"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "object_id",
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "base_revision": {
+                "format": "int64",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "keep_in_boolean": {
+                "type": "boolean"
+              },
+              "kind": {
+                "enum": [
+                  "separate_object"
+                ],
+                "type": "string"
+              },
+              "mode": {
+                "type": "string"
+              },
+              "object_id": {
+                "type": "string"
+              },
+              "operand_id": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "plane_normal": {
+                "items": {
+                  "format": "double",
+                  "type": "number"
+                },
+                "type": [
+                  "array",
+                  "null"
+                ]
+              },
+              "plane_origin_m": {
+                "items": {
+                  "format": "double",
+                  "type": "number"
+                },
+                "type": [
+                  "array",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "object_id",
+              "mode",
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "base_revision": {
+                "format": "int64",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "copy_regions": {
+                "type": "boolean"
+              },
+              "kind": {
+                "enum": [
+                  "duplicate_objects"
+                ],
+                "type": "string"
+              },
+              "object_ids": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "offset_m": {
+                "items": {
+                  "format": "double",
+                  "type": "number"
+                },
+                "type": [
+                  "array",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "object_ids",
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "axes": {
+                "items": {
+                  "$ref": "#/components/schemas/SceneArrayAxisSpec"
+                },
+                "type": "array"
+              },
+              "base_revision": {
+                "format": "int64",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "kind": {
+                "enum": [
+                  "apply_array_3d"
+                ],
+                "type": "string"
+              },
+              "merge_overlapping": {
+                "type": "boolean"
+              },
+              "object_id": {
+                "type": "string"
+              },
+              "realization": {
+                "type": "string"
+              },
+              "target_operand_id": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "object_id",
+              "axes",
+              "realization",
+              "kind"
+            ],
+            "type": "object"
           }
         ]
       },
@@ -6049,6 +6315,42 @@
           "dsl",
           "status",
           "notes"
+        ],
+        "type": "object"
+      },
+      "BooleanOperandInput": {
+        "properties": {
+          "geometry": {
+            "type": "object"
+          },
+          "label": {
+            "type": "string"
+          },
+          "transform": {
+            "type": [
+              "object",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "label",
+          "geometry"
+        ],
+        "type": "object"
+      },
+      "BooleanOperandToggle": {
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          },
+          "operand_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "operand_id",
+          "enabled"
         ],
         "type": "object"
       },
@@ -27703,6 +28005,12 @@
               "null"
             ]
           },
+          "role": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "study_universe_mesh": {
             "type": [
               "object",
@@ -37230,6 +37538,82 @@
           "observation_frames"
         ],
         "type": "object"
+      },
+      "SceneArrayAxisSpec": {
+        "description": "Canonical Etap C `ArrayAxisSpec` shared across `SceneGeometry { kind: \"Array3D\" }` and `apply_array_3d`.",
+        "properties": {
+          "axis": {
+            "type": "string"
+          },
+          "count": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "direction": {
+            "$ref": "#/components/schemas/SceneArrayDirection"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "gap_m": {
+            "format": "double",
+            "type": "number"
+          },
+          "pitch_m": {
+            "format": "double",
+            "type": "number"
+          },
+          "relative_factor": {
+            "format": "double",
+            "type": "number"
+          },
+          "spacing_mode": {
+            "$ref": "#/components/schemas/SceneArraySpacingMode"
+          },
+          "step_rotation_euler_deg": {
+            "items": {
+              "format": "double",
+              "type": "number"
+            },
+            "type": "array"
+          },
+          "step_scale_factor": {
+            "items": {
+              "format": "double",
+              "type": "number"
+            },
+            "type": "array"
+          },
+          "step_translation_extra_m": {
+            "items": {
+              "format": "double",
+              "type": "number"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "axis"
+        ],
+        "type": "object"
+      },
+      "SceneArrayDirection": {
+        "description": "Canonical Etap C Array3D axis direction (`+`, `-`, `±` aliases accepted on read).",
+        "enum": [
+          "positive",
+          "negative",
+          "symmetric"
+        ],
+        "type": "string"
+      },
+      "SceneArraySpacingMode": {
+        "description": "Canonical Etap C Array3D spacing mode.",
+        "enum": [
+          "lattice_step",
+          "bounding_box_gap"
+        ],
+        "type": "string"
       },
       "SceneChargeBoundary": {
         "oneOf": [

@@ -1000,4 +1000,51 @@ describe("viewport3dPrimitiveModel", () => {
       2, 2, 2,
     ]);
   });
+
+  it("preserves cylinder axis, radius, length and non-identity Transform3D on primitive models (P0-FE-05, P2-FE-07)", () => {
+    const halfSqrt2 = Math.SQRT1_2;
+    const model = buildViewport3DPrimitiveRenderModel(
+      {
+        objects: [
+          {
+            geometry: {
+              geometry_kind: "Cylinder",
+              geometry_params: {
+                axis: [1, 0, 0],
+                length: 200e-9,
+                radius: 10e-9,
+              },
+            },
+            id: "nanowire",
+            name: "Nanowire",
+            transform: {
+              pivot: [5e-9, 0, 0],
+              rotation_quat: [0, 0, halfSqrt2, halfSqrt2],
+              scale: [1, 2, 1],
+              translation: [10e-9, 20e-9, 0],
+            },
+          },
+        ],
+        revision: 9,
+      },
+      null,
+    );
+
+    const wire = model.objects[0];
+    expect(wire?.kind).toBe("cylinder");
+    expect(wire?.cylinderParams).toEqual({
+      axis: [1, 0, 0],
+      height: 200e-9,
+      radius: 10e-9,
+    });
+    expect(wire?.bounds.size[0]).toBeCloseTo(200e-9, 12);
+    expect(wire?.bounds.size[1]).toBeCloseTo(20e-9, 12);
+    expect(wire?.bounds.size[2]).toBeCloseTo(20e-9, 12);
+    expect(wire?.transform).toEqual({
+      pivot: [5e-9, 0, 0],
+      rotationQuat: [0, 0, halfSqrt2, halfSqrt2],
+      scale: [1, 2, 1],
+      translation: [10e-9, 20e-9, 0],
+    });
+  });
 });

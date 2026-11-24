@@ -27,6 +27,7 @@ import {
   buildPrimitiveTransformGizmoSegments,
   createPrimitiveObjectGeometry,
   releasePrimitiveObjectGeometry,
+  resolvePrimitiveGroupTransform,
   resolvePrimitiveObjectRenderSettings,
   shouldRenderPrimitiveObject,
   shouldRenderPrimitiveTransformGizmo,
@@ -369,6 +370,62 @@ describe("PrimitiveObjectLayer geometry resources", () => {
     cylinderGeometry.computeBoundingBox();
     expect(cylinderGeometry.boundingBox?.min.z).toBeCloseTo(-3);
     expect(cylinderGeometry.boundingBox?.max.z).toBeCloseTo(3);
+  });
+
+  it("orients cylinder geometry along arbitrary Cylinder.axis using real radius and length (P0-FE-05)", () => {
+    const xWire = createPrimitiveObjectGeometry({
+      ...primitiveObject("cylinder"),
+      bounds: { center: [0, 0, 0], radius: 100e-9, size: [200e-9, 20e-9, 20e-9] },
+      cylinderParams: { axis: [1, 0, 0], height: 200e-9, radius: 10e-9 },
+    });
+    xWire.computeBoundingBox();
+    expect(xWire.boundingBox?.min.x).toBeCloseTo(-100e-9, 12);
+    expect(xWire.boundingBox?.max.x).toBeCloseTo(100e-9, 12);
+    expect(xWire.boundingBox?.max.y).toBeCloseTo(10e-9, 12);
+    expect(xWire.boundingBox?.max.z).toBeCloseTo(10e-9, 12);
+
+    const negYWire = createPrimitiveObjectGeometry({
+      ...primitiveObject("cylinder"),
+      bounds: { center: [0, 0, 0], radius: 50e-9, size: [10e-9, 100e-9, 10e-9] },
+      cylinderParams: { axis: [0, -1, 0], height: 100e-9, radius: 5e-9 },
+    });
+    negYWire.computeBoundingBox();
+    expect(negYWire.boundingBox?.min.y).toBeCloseTo(-50e-9, 12);
+    expect(negYWire.boundingBox?.max.y).toBeCloseTo(50e-9, 12);
+    expect(negYWire.boundingBox?.max.x).toBeCloseTo(5e-9, 12);
+    expect(negYWire.boundingBox?.max.z).toBeCloseTo(5e-9, 12);
+
+    const obliqueWire = createPrimitiveObjectGeometry({
+      ...primitiveObject("cylinder"),
+      bounds: { center: [0, 0, 0], radius: 100e-9, size: [100e-9, 100e-9, 20e-9] },
+      cylinderParams: { axis: [1, 1, 0], height: 100e-9, radius: 10e-9 },
+    });
+    obliqueWire.computeBoundingBox();
+    const expectedExtent = (50e-9 + 10e-9) * Math.SQRT1_2;
+    expect(obliqueWire.boundingBox?.max.x).toBeCloseTo(expectedExtent, 11);
+    expect(obliqueWire.boundingBox?.max.y).toBeCloseTo(expectedExtent, 11);
+    expect(obliqueWire.boundingBox?.max.z).toBeCloseTo(10e-9, 12);
+  });
+
+  it("applies rotation_quat, scale, and pivot M = T(t+p) R S T(-p) on primitive group transforms (P2-FE-07)", () => {
+    const halfSqrt2 = Math.SQRT1_2;
+    const pose = resolvePrimitiveGroupTransform({
+      ...primitiveObject("box"),
+      transform: {
+        pivot: [1, 0, 0],
+        rotationQuat: [0, 0, halfSqrt2, halfSqrt2],
+        scale: [2, 1, 1],
+        translation: [10, 0, 0],
+      },
+    });
+    // R_z(90 deg) * S([2,1,1]) * p([1,0,0]) = R_z(90 deg) * (2,0,0) = (0,2,0)
+    // position = t + p - (0,2,0) = (11, -2, 0)
+    expect(pose.position[0]).toBeCloseTo(11);
+    expect(pose.position[1]).toBeCloseTo(-2);
+    expect(pose.position[2]).toBeCloseTo(0);
+    expect(pose.quaternion[2]).toBeCloseTo(halfSqrt2);
+    expect(pose.quaternion[3]).toBeCloseTo(halfSqrt2);
+    expect(pose.scale).toEqual([2, 1, 1]);
   });
 
   it("creates a visible CSG preview for box-minus-cylinder objects", () => {

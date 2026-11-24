@@ -117,6 +117,8 @@ export interface FdmCuboidBuildRequest {
   /** Admission hint; exact is accepted only with attached membership evidence. */
   membershipAdmission?: "exact" | "full-domain";
   vectorGeometryScope?: "full" | "surface";
+  /** Lift single-cell-thick sheet arrows above their own opaque surface even in "full" scope. */
+  liftThinSheetAboveSurface?: boolean;
   /** Raw user multiplier; the builder applies it to the selected target bounds and rendered count. */
   vectorLengthScale?: number;
   vectorScale: number;
@@ -398,6 +400,7 @@ export function buildViewport3DFdmCuboid(
       anchorMode: request.vectorAnchorMode,
       geometryScope: request.vectorGeometryScope ?? "full",
       cellSelection: request.cellSelection,
+      liftThinSheetAboveSurface: request.liftThinSheetAboveSurface,
       realizedRegionIds: request.realizedRegionIds,
       vectorLengthScale: request.vectorLengthScale,
       surfaceOffsetEnabled: request.vectorSurfaceOffsetEnabled,
@@ -574,14 +577,15 @@ export function buildFdmVectorSegmentsFromAnchors(
     : cellCappedScale;
   const halfScale = safeScale / 2;
   const scaleMagnitude = Math.max(maxMagnitude, 1e-12);
+  const surfaceOffsetEnabled = request.surfaceOffsetEnabled === true;
   const surfaceOffsetDistance = resolveFdmSurfaceOffsetDistance(
     safeScale,
     request.anchorMode,
-    request.surfaceOffsetEnabled === true && request.geometryScope === "surface",
+    surfaceOffsetEnabled,
     request.surfaceOffsetScale ?? 0,
   );
   const surfaceTargetCells =
-    request.geometryScope === "surface" &&
+    (request.geometryScope === "surface" || surfaceOffsetEnabled) &&
     !hasExactFdmMembership(request.realizedRegionIds, request.gridShape)
       ? new Set(candidates.map((ordinal) => cellIndices[ordinal] ?? -1))
       : null;
@@ -609,6 +613,8 @@ export function buildFdmVectorSegmentsFromAnchors(
       request.cellSelection,
       surfaceTargetCells,
       surfaceOffsetDistance,
+      request.cellSize,
+      0,
     );
     const half = request.anchorMode === "tail" ? 0 : halfScale;
     segments[target] = x - ux * half;
@@ -715,6 +721,14 @@ function resolveFdmSurfaceAnchorNormal(
   };
   if (!targetAt(cellIndex)) return null;
 
+  // Single-cell-thick sheets (e.g. thin FDM layers with nz === 1) have both
+  // opposing faces exposed so +/- cancels to 0 on interior cells and side faces
+  // dominate perimeter cells; use the canonical outward sheet normal uniformly
+  // so surface glyphs sit cleanly above the sheet while obeying Z-buffer depth.
+  if (nz === 1 && nx > 1 && ny > 1) return [0, 0, 1];
+  if (ny === 1 && nx > 1 && nz > 1) return [0, 1, 0];
+  if (nx === 1 && ny > 1 && nz > 1) return [1, 0, 0];
+
   const ix = cellIndex % nx;
   const iy = Math.floor(cellIndex / nx) % ny;
   const iz = Math.floor(cellIndex / (nx * ny)) % nz;
@@ -729,7 +743,12 @@ function resolveFdmSurfaceAnchorNormal(
   if (iz === 0 || !targetAt(cellIndex - planeStride)) normalZ -= 1;
   if (iz === nz - 1 || !targetAt(cellIndex + planeStride)) normalZ += 1;
   const length = Math.hypot(normalX, normalY, normalZ);
-  if (length <= 0) return null;
+  if (length <= 0) {
+    if (iz === nz - 1 || !targetAt(cellIndex + planeStride)) return [0, 0, 1];
+    if (iy === ny - 1 || !targetAt(cellIndex + nx)) return [0, 1, 0];
+    if (ix === nx - 1 || !targetAt(cellIndex + 1)) return [1, 0, 0];
+    return null;
+  }
   return [normalX / length, normalY / length, normalZ / length];
 }
 
@@ -743,8 +762,11 @@ function offsetFdmVectorAnchor(
   cellSelection: FdmCuboidCellSelection | undefined,
   candidateCells: ReadonlySet<number> | null,
   offsetDistance: number,
+  cellSize?: readonly [number, number, number] | null,
+  baseSurfaceClearance = 0,
 ): [number, number, number] {
-  if (offsetDistance <= 0) return [x, y, z];
+  const needsLift = offsetDistance > 0 || baseSurfaceClearance > 0;
+  if (!needsLift) return [x, y, z];
   const normal = resolveFdmSurfaceAnchorNormal(
     cellIndex,
     gridShape,
@@ -753,10 +775,25 @@ function offsetFdmVectorAnchor(
     candidateCells,
   );
   if (!normal) return [x, y, z];
+  const halfCellExtent =
+    cellSize && cellSize.length === 3
+      ? 0.5 *
+        (Math.abs(normal[0]) * Math.max(cellSize[0], 0) +
+          Math.abs(normal[1]) * Math.max(cellSize[1], 0) +
+          Math.abs(normal[2]) * Math.max(cellSize[2], 0))
+      : 0;
+  const baseClearance =
+    baseSurfaceClearance > 0
+      ? Math.max(baseSurfaceClearance, halfCellExtent * 0.08)
+      : 0;
+  const totalDistance =
+    offsetDistance > 0
+      ? halfCellExtent + baseClearance + offsetDistance
+      : halfCellExtent + baseClearance;
   return [
-    x + normal[0] * offsetDistance,
-    y + normal[1] * offsetDistance,
-    z + normal[2] * offsetDistance,
+    x + normal[0] * totalDistance,
+    y + normal[1] * totalDistance,
+    z + normal[2] * totalDistance,
   ];
 }
 
@@ -1381,6 +1418,7 @@ export function buildFdmVectorSegmentsUncached(
     cellSelection?: FdmCuboidCellSelection;
     geometryScope?: "surface" | "full";
     instanceOrdinals?: Uint32Array | null;
+    liftThinSheetAboveSurface?: boolean;
     realizedRegionIds?: Uint32Array | null;
     vectorLengthScale?: number;
     surfaceOffsetEnabled?: boolean;
@@ -1464,8 +1502,18 @@ export function buildFdmVectorSegmentsUncached(
   const scaleMagnitude = Math.max(maxMagnitude, 1e-12);
   const halfScale = effectiveScale / 2;
   const segments = new Float32Array(vectorCount * FDM_VECTOR_SEGMENT_STRIDE);
+  const [gnx, gny, gnz] = model.gridShape;
+  const isThinSingleLayerSheet =
+    (gnz === 1 && gnx > 1 && gny > 1) ||
+    (gny === 1 && gnx > 1 && gnz > 1) ||
+    (gnx === 1 && gny > 1 && gnz > 1);
+  const surfaceOffsetEnabled = options.surfaceOffsetEnabled === true;
+  const needsSurfaceLift =
+    options.geometryScope === "surface" ||
+    surfaceOffsetEnabled ||
+    (options.liftThinSheetAboveSurface === true && isThinSingleLayerSheet);
   const surfaceTargetCells =
-    options.geometryScope === "surface"
+    needsSurfaceLift
       && !hasExactFdmMembership(options.realizedRegionIds, model.gridShape)
       ? new Set(
           (options.instanceOrdinals ??
@@ -1476,9 +1524,27 @@ export function buildFdmVectorSegmentsUncached(
   const surfaceOffsetDistance = resolveFdmSurfaceOffsetDistance(
     effectiveScale,
     anchorMode,
-    options.surfaceOffsetEnabled === true && options.geometryScope === "surface",
+    surfaceOffsetEnabled,
     options.surfaceOffsetScale ?? 0,
   );
+  const thinSheetHalfThickness = isThinSingleLayerSheet
+    ? 0.5 *
+      (gnz === 1
+        ? Math.max(model.cellSize[2], 0)
+        : gny === 1
+          ? Math.max(model.cellSize[1], 0)
+          : Math.max(model.cellSize[0], 0))
+    : 0;
+  // Cap thin-sheet clearance so arrows sit ~2-4 nm above their own layer
+  // without poking through an overlying layer in multilayer stacks.
+  const baseSurfaceClearance = needsSurfaceLift
+    ? isThinSingleLayerSheet && thinSheetHalfThickness > 0
+      ? Math.min(
+          Math.max(effectiveScale * 0.14, thinSheetHalfThickness * 0.22),
+          Math.max(thinSheetHalfThickness * 0.65, effectiveScale * 0.12),
+        )
+      : effectiveScale * 0.14
+    : 0;
 
   for (let vector = 0; vector < vectorCount; vector += 1) {
     const instance = sampledInstances[vector] ?? 0;
@@ -1499,6 +1565,8 @@ export function buildFdmVectorSegmentsUncached(
       options.cellSelection,
       surfaceTargetCells,
       surfaceOffsetDistance,
+      model.cellSize,
+      baseSurfaceClearance,
     );
     const vx = fieldVector.values[valueOffset] ?? 0;
     const vy = fieldVector.values[valueOffset + 1] ?? 0;

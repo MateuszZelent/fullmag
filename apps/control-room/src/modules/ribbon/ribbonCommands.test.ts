@@ -4,18 +4,41 @@ import type {
   VisualizationStatePatch,
   VisualizationStateResource,
 } from "@/kernel/api/apiTypes";
-import { VISUALIZATION_STATE_PATH } from "@/kernel/api/apiPaths";
+import { MODEL_SCENE_PATH, VISUALIZATION_STATE_PATH } from "@/kernel/api/apiPaths";
 import { CommandRegistry } from "@/kernel/commands/CommandRegistry";
 import type { CommandContext } from "@/kernel/commands/commandTypes";
+import { EventBus } from "@/kernel/events/EventBus";
+import type { KernelEventMap } from "@/kernel/events/eventTypes";
+import { LayoutController } from "@/kernel/layout/LayoutController";
+import { activeLaneCapabilityFixture } from "@/kernel/resources/activeLaneCapabilityFixture.testSupport";
+import { SESSION_STATUS_RESOURCE_KEY } from "@/kernel/resources/useSessionStatus";
+import { SelectionController } from "@/kernel/selection/SelectionController";
 import {
   AnalysisFieldOverlayController,
   type AnalysisFieldOverlayState,
 } from "@/kernel/visualization/AnalysisFieldOverlayController";
+import {
+  AIRBOX_VISUALIZATION_TARGET,
+  ObjectVisualizationController,
+  resolveTargetVisualization,
+} from "@/kernel/visualization/ObjectVisualizationController";
 
 import {
   globalQuantityCommandInput,
+  openMagneticTextureInspectorCommandInput,
+  openVisualizationInspectorCommandInput,
   RIBBON_COMMANDS,
+  RIBBON_INSPECTOR_OPEN_AIRBOX_SETTINGS_COMMAND,
+  RIBBON_INSPECTOR_OPEN_MAGNETIC_TEXTURE_COMMAND,
+  RIBBON_INSPECTOR_OPEN_VISUALIZATION_COMMAND,
+  RIBBON_PHYSICS_SELECT_INTERACTION_COMMAND,
+  RIBBON_SELECTION_SELECT_TARGET_COMMAND,
   RIBBON_VISUALIZATION_APPLY_GLOBAL_QUANTITY_COMMAND,
+  RIBBON_VISUALIZATION_PATCH_DEFAULTS_COMMAND,
+  RIBBON_VISUALIZATION_PATCH_TARGET_COMMAND,
+  selectRibbonTargetCommandInput,
+  visualizationDefaultsCommandInput,
+  visualizationTargetCommandInput,
 } from "./ribbonCommands";
 
 function overlayForOwner(
@@ -313,5 +336,366 @@ describe("Ribbon global quantity overlay cleanup", () => {
 
     expect(result.status).toBe("failed");
     expect(overlay.getSnapshot()).toBe(originalOverlay);
+  });
+});
+
+function createRibbonCommandRegistry(): CommandRegistry {
+  const registry = new CommandRegistry();
+  for (const command of RIBBON_COMMANDS) {
+    registry.register(command);
+  }
+  return registry;
+}
+
+describe("Ribbon target visualization and inspector commands", () => {
+  it("toggles Vectors for Airbox on FDM and updates ObjectVisualizationController immediately", async () => {
+    const registry = createRibbonCommandRegistry();
+    const visualization = new ObjectVisualizationController();
+    const state = visualizationState(7);
+    const patches: VisualizationStatePatch[] = [];
+    const context: CommandContext = {
+      api: {
+        visualization: {
+          patch: vi.fn(async (patch: VisualizationStatePatch) => {
+            patches.push(patch);
+            return visualizationState(8);
+          }),
+        },
+      } as unknown as NonNullable<CommandContext["api"]>,
+      resourceData: {
+        [SESSION_STATUS_RESOURCE_KEY]: {
+          data: { domain: { discretization: "fdm" } },
+        },
+        [VISUALIZATION_STATE_PATH]: state,
+      },
+      resources: {
+        invalidate: vi.fn(),
+      } as unknown as NonNullable<CommandContext["resources"]>,
+      source: "ribbon",
+      visualization,
+    };
+
+    const result = await registry.execute(
+      RIBBON_VISUALIZATION_PATCH_TARGET_COMMAND,
+      context,
+      visualizationTargetCommandInput(AIRBOX_VISUALIZATION_TARGET, {
+        vectorsVisible: true,
+        visible: true,
+      }),
+    );
+
+    expect(result).toEqual({ status: "completed" });
+    const resolvedAirbox = resolveTargetVisualization({
+      snapshot: visualization.getSnapshot(),
+      target: AIRBOX_VISUALIZATION_TARGET,
+      visualizationState: state,
+    });
+    expect(resolvedAirbox.effectiveSettings.visible).toBe(true);
+    expect(resolvedAirbox.effectiveSettings.vectorsVisible).toBe(true);
+    expect(patches).toMatchObject([
+      {
+        layers: {
+          airbox: {
+            vectors: {
+              domain: "airbox_only",
+              visible: true,
+            },
+            visible: true,
+          },
+        },
+        overrides: [
+          {
+            display: { vectors: { visible: true } },
+            scope: "airbox",
+            scope_id: "airbox",
+            visible: true,
+          },
+        ],
+      },
+    ]);
+  });
+
+  it("toggles Vectors for a specific ferromagnet object and updates ObjectVisualizationController target state", async () => {
+    const registry = createRibbonCommandRegistry();
+    const visualization = new ObjectVisualizationController();
+    const state = visualizationState(9);
+    const patches: VisualizationStatePatch[] = [];
+    const topLayer = { id: "object:TopLayer", kind: "object" as const, label: "TopLayer" };
+    const bottomLayer = { id: "object:BottomLayer", kind: "object" as const, label: "BottomLayer" };
+    const context: CommandContext = {
+      api: {
+        visualization: {
+          patch: vi.fn(async (patch: VisualizationStatePatch) => {
+            patches.push(patch);
+            return visualizationState(10);
+          }),
+        },
+      } as unknown as NonNullable<CommandContext["api"]>,
+      resourceData: {
+        [VISUALIZATION_STATE_PATH]: state,
+      },
+      resources: {
+        invalidate: vi.fn(),
+      } as unknown as NonNullable<CommandContext["resources"]>,
+      source: "ribbon",
+      visualization,
+    };
+
+    const result = await registry.execute(
+      RIBBON_VISUALIZATION_PATCH_TARGET_COMMAND,
+      context,
+      visualizationTargetCommandInput(topLayer, { vectorsVisible: true }),
+    );
+
+    expect(result).toEqual({ status: "completed" });
+    expect(
+      resolveTargetVisualization({
+        snapshot: visualization.getSnapshot(),
+        target: topLayer,
+        visualizationState: state,
+      }).effectiveSettings.vectorsVisible,
+    ).toBe(true);
+    expect(
+      resolveTargetVisualization({
+        snapshot: visualization.getSnapshot(),
+        target: bottomLayer,
+        visualizationState: state,
+      }).effectiveSettings.vectorsVisible,
+    ).toBe(false);
+    expect(patches).toEqual([
+      {
+        overrides: [
+          {
+            display: { vectors: { visible: true } },
+            scope: "object",
+            scope_id: "TopLayer",
+          },
+        ],
+      },
+    ]);
+  });
+
+  it("clears conflicting per-object overrides when toggling Vectors on All Objects while preserving Airbox", async () => {
+    const registry = createRibbonCommandRegistry();
+    const visualization = new ObjectVisualizationController();
+    const topLayer = { id: "object:TopLayer", kind: "object" as const, label: "TopLayer" };
+    visualization.patchTarget(topLayer, { vectorsVisible: false });
+    visualization.patchTarget(AIRBOX_VISUALIZATION_TARGET, { vectorsVisible: false });
+
+    const state: VisualizationStateResource = {
+      ...visualizationState(12),
+      overrides: [
+        {
+          display: { vectors: { visible: false } },
+          scope: "object",
+          scope_id: "TopLayer",
+        },
+        {
+          display: { vectors: { visible: false } },
+          scope: "airbox",
+          scope_id: "airbox",
+        },
+      ],
+    };
+    const patches: VisualizationStatePatch[] = [];
+    const context: CommandContext = {
+      api: {
+        visualization: {
+          patch: vi.fn(async (patch: VisualizationStatePatch) => {
+            patches.push(patch);
+            return visualizationState(13);
+          }),
+        },
+      } as unknown as NonNullable<CommandContext["api"]>,
+      resourceData: {
+        [VISUALIZATION_STATE_PATH]: state,
+      },
+      resources: {
+        invalidate: vi.fn(),
+      } as unknown as NonNullable<CommandContext["resources"]>,
+      source: "ribbon",
+      visualization,
+    };
+
+    const result = await registry.execute(
+      RIBBON_VISUALIZATION_PATCH_DEFAULTS_COMMAND,
+      context,
+      visualizationDefaultsCommandInput(
+        { vectorsVisible: true },
+        ["object", "part"],
+        { clearConflictingOverrides: true },
+      ),
+    );
+
+    expect(result).toEqual({ status: "completed" });
+    expect(visualization.getSettings(topLayer).vectorsVisible).toBe(true);
+    expect(visualization.getSettings(AIRBOX_VISUALIZATION_TARGET).vectorsVisible).toBe(false);
+    expect(patches).toEqual([
+      {
+        layers: { vectors: { visible: true } },
+        overrides: [
+          {
+            display: { vectors: { visible: false } },
+            scope: "airbox",
+            scope_id: "airbox",
+          },
+        ],
+        vector_glyphs: true,
+      },
+    ]);
+  });
+
+  it("switches targets and opens Visualization, Airbox Settings, and Magnetic Texture Inspector panels", async () => {
+    const registry = createRibbonCommandRegistry();
+    const bus = new EventBus<KernelEventMap>();
+    const layout = new LayoutController(bus);
+    layout.setPanelVisible("right", false);
+    const selection = new SelectionController(bus);
+    const context: CommandContext = {
+      layout,
+      resourceData: {
+        [SESSION_STATUS_RESOURCE_KEY]: {
+          capabilities: {
+            active_lane: {
+              ...activeLaneCapabilityFixture(),
+              operations: {
+                "interaction.exchange": {
+                  state: "supported",
+                  reason: "Exchange is supported.",
+                  requires: [],
+                },
+              },
+            },
+          },
+          domain: { discretization: "fdm" },
+        },
+        [MODEL_SCENE_PATH]: {
+          objects: [
+            { id: "BottomLayer", name: "BottomLayer", role: "magnet" },
+            { id: "TopLayer", name: "TopLayer", role: "magnet" },
+          ],
+          revision: 3,
+        },
+      },
+      selection,
+      source: "ribbon",
+    };
+
+    const selectObj = await registry.execute(
+      RIBBON_SELECTION_SELECT_TARGET_COMMAND,
+      context,
+      selectRibbonTargetCommandInput({
+        objectId: "TopLayer",
+        objectLabel: "TopLayer",
+        objectRole: "magnet",
+        tab: "view",
+        targetKind: "object",
+      }),
+    );
+    expect(selectObj).toEqual({ status: "completed" });
+    expect(selection.get()).toMatchObject({
+      kind: "object.root",
+      label: "TopLayer",
+      objectId: "TopLayer",
+    });
+
+    const openObjViz = await registry.execute(
+      RIBBON_INSPECTOR_OPEN_VISUALIZATION_COMMAND,
+      context,
+      openVisualizationInspectorCommandInput({
+        objectId: "TopLayer",
+        objectLabel: "TopLayer",
+        objectRole: "magnet",
+        targetKind: "object",
+      }),
+    );
+    expect(openObjViz).toEqual({ status: "completed" });
+    expect(layout.get().panelVisible.right).toBe(true);
+    expect(selection.get()).toMatchObject({
+      kind: "object.visualization",
+      nodeId: "model:object:TopLayer:visualization",
+      objectId: "TopLayer",
+    });
+
+    const openAirboxSettings = await registry.execute(
+      RIBBON_INSPECTOR_OPEN_AIRBOX_SETTINGS_COMMAND,
+      context,
+    );
+    expect(openAirboxSettings).toEqual({ status: "completed" });
+    expect(selection.get()).toMatchObject({
+      kind: "airbox.root",
+      nodeId: "model:airbox",
+    });
+
+    const openTexInspector = await registry.execute(
+      RIBBON_INSPECTOR_OPEN_MAGNETIC_TEXTURE_COMMAND,
+      context,
+      openMagneticTextureInspectorCommandInput({
+        objectId: "BottomLayer",
+        objectLabel: "BottomLayer",
+        objectRole: "magnet",
+      }),
+    );
+    expect(openTexInspector).toEqual({ status: "completed" });
+    expect(selection.get()).toMatchObject({
+      kind: "object.magnetic-texture",
+      nodeId: "model:object:BottomLayer:magnetic-texture",
+      objectId: "BottomLayer",
+    });
+
+    // Switching Target via the single top-bar selector routes Physics interactions to the selected object.
+    const selectPhysicsTarget = await registry.execute(
+      RIBBON_SELECTION_SELECT_TARGET_COMMAND,
+      context,
+      selectRibbonTargetCommandInput({
+        objectId: "TopLayer",
+        objectLabel: "TopLayer",
+        objectRole: "magnet",
+        tab: "physics",
+        targetKind: "object",
+      }),
+    );
+    expect(selectPhysicsTarget).toEqual({ status: "completed" });
+    const selectExchange = await registry.execute(
+      RIBBON_PHYSICS_SELECT_INTERACTION_COMMAND,
+      context,
+      { interactionId: "exchange" },
+    );
+    expect(selectExchange).toEqual({ status: "completed" });
+    expect(selection.get()).toMatchObject({
+      kind: "object.physics",
+      nodeId: "model:object:TopLayer:physics:exchange",
+      objectId: "TopLayer",
+    });
+
+    // Selecting Airbox then All Objects updates selection cleanly for the single top-bar Target control.
+    const selectAirbox = await registry.execute(
+      RIBBON_SELECTION_SELECT_TARGET_COMMAND,
+      context,
+      selectRibbonTargetCommandInput({ targetKind: "airbox", tab: "view" }),
+    );
+    expect(selectAirbox).toEqual({ status: "completed" });
+    expect(selection.get()).toMatchObject({
+      kind: "airbox.visualization",
+      nodeId: "model:airbox:visualization",
+      objectId: null,
+    });
+
+    const selectAll = await registry.execute(
+      RIBBON_SELECTION_SELECT_TARGET_COMMAND,
+      context,
+      selectRibbonTargetCommandInput({ targetKind: "all", tab: "view" }),
+    );
+    expect(selectAll).toEqual({ status: "completed" });
+    expect(selection.get()).toMatchObject({
+      kind: "objects.root",
+      objectId: null,
+      ref: {
+        kind: "objects.root",
+        nodeId: "model:objects",
+        scopeId: "objects",
+        type: "model-scope",
+      },
+    });
   });
 });

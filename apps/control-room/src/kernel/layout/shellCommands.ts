@@ -1,6 +1,10 @@
 import { requestThemeToggle } from "@/design/theme/themeEvents";
 
 import { homeView } from "./homeView";
+import {
+  getWorkspaceFullscreen,
+  toggleWorkspaceFullscreen,
+} from "./workspaceFullscreenPreference";
 
 import type { CommandContext, CommandContribution } from "../commands/commandTypes";
 import { SESSION_STATUS_RESOURCE_KEY } from "../resources/useSessionStatus";
@@ -157,6 +161,19 @@ export const SHELL_COMMANDS: CommandContribution[] = [
     isActive: (ctx) => ctx.layout?.get().panelVisible.bottom ?? true,
     run: (ctx) => {
       ctx.layout?.togglePanel("bottom");
+      return { status: "completed" };
+    },
+  },
+  {
+    id: "workspace.fullscreen-toggle",
+    title: "Full Screen Workspace",
+    group: "layout",
+    category: "View",
+    scope: "global",
+    shortcut: "Alt+Shift+F",
+    isActive: () => getWorkspaceFullscreen(),
+    run: () => {
+      toggleWorkspaceFullscreen();
       return { status: "completed" };
     },
   },

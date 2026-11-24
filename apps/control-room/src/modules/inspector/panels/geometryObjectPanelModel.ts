@@ -677,9 +677,57 @@ function recordTargetsObject(record: JsonRecord, objectId: string): boolean {
   return !target || target === objectId || target === `object:${objectId}`;
 }
 
-export function summarizeGeometryValidationMessages(
+const NON_GEOMETRY_READINESS_DOMAINS = new Set([
+  "material",
+  "materials",
+  "magnetization",
+  "initial_state",
+  "physics",
+]);
+
+const NON_GEOMETRY_READINESS_CODES = new Set([
+  "GEOMETRY_OBJECT_MATERIAL_MISSING",
+  "GEOMETRY_OBJECT_MAGNETIZATION_MISSING",
+]);
+
+const NON_GEOMETRY_CODE_PATTERN =
+  /(?:^|_)(?:MATERIAL|MAGNETIZATION)_(?:MISSING|UNASSIGNED|REQUIRED)(?:$|_)|(?:^|_)MISSING_(?:MATERIAL|MAGNETIZATION)(?:$|_)/i;
+
+const NON_GEOMETRY_MESSAGE_PATTERNS: readonly RegExp[] = [
+  /references\s+(?:a\s+)?missing\s+material\b/i,
+  /\bmissing\s+material\b/i,
+  /\bmaterial\s+is\s+missing\b/i,
+  /must\s+reference\s+(?:a\s+)?magnetization\s+asset\b/i,
+  /\bmissing\s+magnetization(?:\s+asset)?\b/i,
+  /\bmagnetization(?:\s+asset)?\s+is\s+missing\b/i,
+  /\bmagnetization\s+asset\s+before\s+compute\b/i,
+];
+
+export function isNonGeometryReadinessDiagnostic(
+  record: JsonRecord,
+  message: string,
+): boolean {
+  const rawCode = asString(record.code)?.trim();
+  if (rawCode) {
+    const upperCode = rawCode.toUpperCase();
+    if (
+      NON_GEOMETRY_READINESS_CODES.has(upperCode) ||
+      NON_GEOMETRY_CODE_PATTERN.test(upperCode)
+    ) {
+      return true;
+    }
+  }
+  const rawDomain = (asString(record.domain) ?? asString(record.category))?.trim().toLowerCase();
+  if (rawDomain && NON_GEOMETRY_READINESS_DOMAINS.has(rawDomain)) {
+    return true;
+  }
+  return NON_GEOMETRY_MESSAGE_PATTERNS.some((pattern) => pattern.test(message));
+}
+
+function collectObjectValidationMessages(
   validation: unknown,
   objectId: string,
+  geometryOnly: boolean,
 ): string[] {
   const messages: string[] = [];
   const visit = (value: unknown): void => {
@@ -692,7 +740,11 @@ export function summarizeGeometryValidationMessages(
     if (!record) return;
     if (recordTargetsObject(record, objectId)) {
       const message = validationMessageFromRecord(record);
-      if (message && !messages.includes(message)) {
+      if (
+        message &&
+        (!geometryOnly || !isNonGeometryReadinessDiagnostic(record, message)) &&
+        !messages.includes(message)
+      ) {
         messages.push(message);
       }
     }
@@ -703,6 +755,25 @@ export function summarizeGeometryValidationMessages(
 
   visit(validation);
   return messages;
+}
+
+export function summarizeGeometryValidationMessages(
+  validation: unknown,
+  objectId: string,
+): string[] {
+  return collectObjectValidationMessages(validation, objectId, false);
+}
+
+/**
+ * Extracts only true geometry/shape/CSG/bounds/overlap/mesh-feature validation
+ * messages for an object, filtering out non-geometry simulation-readiness
+ * diagnostics (missing material / missing magnetization asset).
+ */
+export function summarizeGeometryOnlyValidationMessages(
+  validation: unknown,
+  objectId: string,
+): string[] {
+  return collectObjectValidationMessages(validation, objectId, true);
 }
 
 export function resolveGeometryObjectPanelModel(
