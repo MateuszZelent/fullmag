@@ -29,6 +29,8 @@ const MAX_FEM_ELEMENTS: usize = 262_144;
 const FEM_PREPARATION_REQUIRED: &str =
     "Build the current shared-domain FEM mesh before computing fields.";
 const FEM_ORDER_REQUIRED: &str = "Prepared Compute Fields requires a first-order FEM mesh.";
+const FEM_IMPORTED_GEOMETRY_PIN_REQUIRED: &str =
+    "Prepared Compute Fields requires content-pinned object-level ImportedGeometry.";
 const MAX_MESSAGE_BYTES: u64 = 64 * 1024 * 1024;
 const WORKER_TIMEOUT: Duration = Duration::from_secs(90);
 static EVALUATOR_SLOT: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(1);
@@ -68,6 +70,32 @@ fn uses_geometry_only_mesh(snapshot: &SessionStateResponse) -> bool {
     })
 }
 
+// STL snapshot verification currently covers only SceneObject.geometry.source_asset.
+// Reject nested CSG imports until their source bytes can be pinned there too.
+fn contains_nested_imported_geometry(value: &serde_json::Value) -> bool {
+    match value {
+        serde_json::Value::Object(fields) => {
+            fields
+                .get("geometry_kind")
+                .and_then(serde_json::Value::as_str)
+                == Some("ImportedGeometry")
+                || fields.values().any(contains_nested_imported_geometry)
+        }
+        serde_json::Value::Array(values) => values.iter().any(contains_nested_imported_geometry),
+        _ => false,
+    }
+}
+
+fn geometry_has_content_pinned_imports(geometry: &fullmag_authoring::SceneGeometry) -> bool {
+    (geometry.geometry_kind != "ImportedGeometry" || geometry.source_asset.is_some())
+        && !contains_nested_imported_geometry(&geometry.geometry_params)
+}
+
+fn scene_imported_geometry_content_is_pinned(scene: &fullmag_authoring::SceneDocument) -> bool {
+    fullmag_authoring::scene_solve_objects(scene)
+        .all(|object| geometry_has_content_pinned_imports(&object.geometry))
+}
+
 fn pending_apply_covers_scene(
     snapshot: &SessionStateResponse,
     scene: &fullmag_authoring::SceneDocument,
@@ -95,6 +123,9 @@ fn plan_on_geometry_mesh(
     scene: &fullmag_authoring::SceneDocument,
 ) -> Result<PublishedDomainPlan, ApiError> {
     use crate::live_geometry_mesh_build as geometry;
+    if !scene_imported_geometry_content_is_pinned(scene) {
+        return Err(ApiError::conflict(FEM_IMPORTED_GEOMETRY_PIN_REQUIRED));
+    }
     let unavailable = || ApiError::conflict(FEM_PREPARATION_REQUIRED);
     let reference =
         geometry::geometry_reuse_reference(snapshot, context).ok_or_else(unavailable)?;
@@ -116,12 +147,21 @@ fn plan_on_geometry_mesh(
     };
     let source = std::path::Path::new(&snapshot.session.script_path);
     let asset_root = source.is_absolute().then(|| source.parent()).flatten();
+    // Keep the frozen source path when binding exact scene geometry back into
+    // the captured problem. The authored source may change after capture.
+    let pinned_scene = crate::imported_geometry_sources::snapshot_pinned_stl_sources(
+        repo, workspace, asset_root, scene,
+    )?;
     let mut problem = crate::script::scene_document_to_preparation_problem_ir_with_asset_root(
-        repo, workspace, asset_root, scene, &execution,
+        repo,
+        workspace,
+        asset_root,
+        &pinned_scene,
+        &execution,
     )?;
     geometry::bind_geometry_for_prepared_fields(
         &mut problem,
-        scene,
+        &pinned_scene,
         mesh_asset,
         &reference.provenance(),
     )?;
@@ -270,6 +310,9 @@ pub(crate) fn disabled_reason(snapshot: &SessionStateResponse) -> Result<(), &'s
             return Err("Prepared Compute Fields requires double precision for FEM.");
         }
         if geometry_only {
+            if !scene_imported_geometry_content_is_pinned(scene) {
+                return Err(FEM_IMPORTED_GEOMETRY_PIN_REQUIRED);
+            }
             let mesh = snapshot.fem_mesh.as_ref().ok_or(FEM_PREPARATION_REQUIRED)?;
             validate_fem_size(mesh.nodes.len(), mesh.cell_count())?;
             if snapshot
@@ -686,6 +729,101 @@ mod tests {
         assert_eq!(validate_fem_size(0, 1), Err(FEM_PREPARATION_REQUIRED));
         assert!(validate_fem_size(MAX_FEM_NODES + 1, MAX_FEM_ELEMENTS).is_err());
         assert!(validate_fem_size(MAX_FEM_NODES, MAX_FEM_ELEMENTS + 1).is_err());
+    }
+
+    #[test]
+    fn geometry_only_prepared_fields_require_content_pinned_imports() {
+        use fullmag_authoring::{SceneGeometry, SceneImportedGeometryAssetRef};
+
+        let geometry = |kind: &str, params: serde_json::Value, source_asset| SceneGeometry {
+            geometry_kind: kind.to_owned(),
+            geometry_params: params,
+            source_asset,
+            bounds_min: None,
+            bounds_max: None,
+        };
+        let pin = SceneImportedGeometryAssetRef {
+            asset_id: "shape-stl".into(),
+            content_sha256: "a".repeat(64),
+            archive_path: "project/assets/shape.stl".into(),
+        };
+
+        assert!(geometry_has_content_pinned_imports(&geometry(
+            "Box",
+            json!({}),
+            None
+        )));
+        assert!(!geometry_has_content_pinned_imports(&geometry(
+            "ImportedGeometry",
+            json!({"source": "shape.stl"}),
+            None
+        )));
+        assert!(geometry_has_content_pinned_imports(&geometry(
+            "ImportedGeometry",
+            json!({"source": "shape.stl"}),
+            Some(pin.clone())
+        )));
+
+        for nested_pin in [None, Some(pin)] {
+            let nested = geometry(
+                "Difference",
+                json!({
+                    "base": {
+                        "geometry_kind": "ImportedGeometry",
+                        "geometry_params": {"source": "nested.stl"},
+                        "source_asset": nested_pin,
+                    },
+                    "tool": {
+                        "geometry_kind": "Box",
+                        "geometry_params": {}
+                    }
+                }),
+                None,
+            );
+            assert!(!geometry_has_content_pinned_imports(&nested));
+        }
+
+        let unpinned_magnet: fullmag_authoring::SceneDocument = serde_json::from_value(json!({
+            "objects": [{
+                "id": "magnet",
+                "name": "Magnet",
+                "material_ref": "material",
+                "geometry": {
+                    "geometry_kind": "ImportedGeometry",
+                    "geometry_params": {"source": "shape.stl"}
+                }
+            }]
+        }))
+        .unwrap();
+        assert!(!scene_imported_geometry_content_is_pinned(&unpinned_magnet));
+
+        let nonmagnetic_import: fullmag_authoring::SceneDocument = serde_json::from_value(json!({
+            "objects": [
+                {
+                    "id": "magnet",
+                    "name": "Magnet",
+                    "material_ref": "material",
+                    "geometry": {
+                        "geometry_kind": "Box",
+                        "geometry_params": {}
+                    }
+                },
+                {
+                    "id": "conductor",
+                    "name": "Conductor",
+                    "role": "conductor",
+                    "material_ref": "material",
+                    "geometry": {
+                        "geometry_kind": "ImportedGeometry",
+                        "geometry_params": {"source": "shape.stl"}
+                    }
+                }
+            ]
+        }))
+        .unwrap();
+        assert!(scene_imported_geometry_content_is_pinned(
+            &nonmagnetic_import
+        ));
     }
 
     #[test]
