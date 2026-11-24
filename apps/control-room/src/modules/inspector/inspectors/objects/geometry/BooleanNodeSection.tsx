@@ -38,7 +38,7 @@ import {
 import {
   parseCompositeGeometry,
   type NormalizedGeometryOperand,
-} from "@/modules/explorer/builders/geometryTreeExplorerNodes";
+} from "@/kernel/authoring/compositeGeometryModel";
 import { computeSceneGeometryBoundsMeters } from "@/shared/domain/geometry/sceneGeometryBounds";
 import { Badge } from "@/shared/ui/Badge";
 import { Button } from "@/shared/ui/Button";

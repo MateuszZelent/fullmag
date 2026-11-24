@@ -9,7 +9,7 @@ import {
 import type { GeometryObjectDraft } from "@/kernel/authoring/object-edit/objectEditTypes";
 import { parseDraftQuantityField } from "@/kernel/authoring/object-edit/quantityDraftFields";
 import { primitiveDraftBaseName } from "@/kernel/authoring/uniqueObjectName";
-import { parseCompositeGeometry } from "@/modules/explorer/builders/geometryTreeExplorerNodes";
+import { parseCompositeGeometry } from "@/kernel/authoring/compositeGeometryModel";
 import {
   computeSceneGeometryBoundsMeters,
   type SceneGeometryBoundsMeters,

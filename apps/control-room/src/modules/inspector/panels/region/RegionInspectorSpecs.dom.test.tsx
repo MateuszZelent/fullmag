@@ -942,7 +942,7 @@ describe("RegionInspectorSpecs & Constraints/Extensions (Task 16 + Wave 4 Slice 
         kind: "layer_z_slice",
         z_min: -6e-9,
         z_max: 4e-9,
-        center: [0, 0, -1e-9],
+        center: [0, 0, expect.closeTo(-1e-9, 24)],
         size: [200e-9, 100e-9, 10e-9],
       },
     });

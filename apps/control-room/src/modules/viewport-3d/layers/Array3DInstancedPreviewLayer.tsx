@@ -16,7 +16,7 @@ import {
   type Array3DAxes,
   type Vec3Tuple,
 } from "@/kernel/authoring/array3dModel";
-import { parseCompositeGeometry } from "@/modules/explorer/builders/geometryTreeExplorerNodes";
+import { parseCompositeGeometry } from "@/kernel/authoring/compositeGeometryModel";
 import { computeSceneGeometryBoundsMeters } from "@/shared/domain/geometry/sceneGeometryBounds";
 
 import type { Viewport3DResourceTracker } from "../viewport3dDiagnostics";

@@ -231,7 +231,7 @@ describe("Etap B Geometry Inspector models: BooleanNode, GeometryNode, Transform
     };
     const legacyPatched = patchOperandInCompositeGeometry(legacyUnion, {
       ...draft,
-      operandId: "b",
+      operandId: "op:2",
       primitiveKind: "Sphere",
       radius: 3.5e-8,
       translation: [0, 0, 0],

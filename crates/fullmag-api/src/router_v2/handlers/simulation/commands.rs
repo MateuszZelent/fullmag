@@ -2356,12 +2356,9 @@ fn scene_geometry_entry(
                 ))
             })?;
             let child_geom = nested_scene_geometry_param_any(params, &["child", "base"], object_id)?;
-            let child = scene_geometry_entry(
-                &child_geom,
-                &format!("{geometry_name}_child"),
-                object_id,
-                depth + 1,
-            )?;
+            // The identity transform is elided, so the child must keep the
+            // name used by regions that refer to this geometry.
+            let child = scene_geometry_entry(&child_geom, geometry_name, object_id, depth + 1)?;
             wrap_geometry_with_transform(child, &transform, geometry_name, object_id)
         }
         "SlicePlane" => {
@@ -4052,6 +4049,28 @@ mod tests {
     use crate::schemas::diagnostics::SolverProfileCommandConfig;
     use crate::session::default_current_live_state;
     use crate::types::CurrentLiveSnapshotRequest;
+
+    #[test]
+    fn identity_geometry_transform_preserves_region_target_name() {
+        let geometry = SceneGeometry {
+            source_asset: None,
+            geometry_kind: "Transform".to_string(),
+            geometry_params: serde_json::json!({
+                "transform": {},
+                "child": {
+                    "geometry_kind": "Sphere",
+                    "geometry_params": { "radius": 1e-9 },
+                },
+            }),
+            bounds_min: None,
+            bounds_max: None,
+        };
+
+        let lowered = scene_geometry_entry(&geometry, "magnet-1", "magnet-1", 0).unwrap();
+
+        assert!(matches!(lowered, GeometryEntryIR::Sphere { .. }));
+        assert_eq!(lowered.name(), "magnet-1");
+    }
 
     fn resolved_capability_fixture() -> fullmag_runner::BackendCapabilities {
         fullmag_runner::BackendCapabilities {

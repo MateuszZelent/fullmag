@@ -1385,6 +1385,32 @@ fn validate_geometry_node_depth(
     }
 }
 
+fn validate_csg_operand_id(
+    operand_id: &str,
+    seen_ids: &mut std::collections::BTreeSet<String>,
+    object_id: &str,
+    path: &str,
+    diagnostics: &mut Vec<GeometryDiagnostic>,
+) {
+    if operand_id.trim().is_empty() {
+        diagnostics.push(error(
+            "GEOMETRY_CSG_OPERAND_ID_INVALID",
+            "Canonical CSG operand IDs must not be empty.",
+            Some(object_id.to_string()),
+            Some(path.to_string()),
+            &["realize_geometry", "build_mesh", "run_solver"],
+        ));
+    } else if !seen_ids.insert(operand_id.to_string()) {
+        diagnostics.push(error(
+            "GEOMETRY_CSG_OPERAND_ID_DUPLICATE",
+            format!("Canonical CSG operand ID '{operand_id}' is duplicated."),
+            Some(object_id.to_string()),
+            Some(path.to_string()),
+            &["realize_geometry", "build_mesh", "run_solver"],
+        ));
+    }
+}
+
 fn validate_boolean_node(
     kind: &str,
     params: &Value,
@@ -1418,10 +1444,18 @@ fn validate_boolean_node(
             return;
         }
         let mut enabled_count = 0usize;
+        let mut operand_ids = std::collections::BTreeSet::new();
         for (index, raw_operand) in raw_operands.iter().enumerate() {
             let op_path = format!("{path}/operands[{index}]");
             match serde_json::from_value::<crate::SceneBooleanOperand>(raw_operand.clone()) {
                 Ok(operand) => {
+                    validate_csg_operand_id(
+                        &operand.operand_id,
+                        &mut operand_ids,
+                        object_id,
+                        &op_path,
+                        diagnostics,
+                    );
                     if operand.enabled {
                         enabled_count += 1;
                     }
@@ -1571,11 +1605,19 @@ fn validate_csg_node(
         ));
         return;
     }
+    let mut operand_ids = std::collections::BTreeSet::new();
     for (index, child_value) in children.iter().enumerate() {
         let child_path = format!("{path}/children[{index}]");
         if let Ok(operand) =
             serde_json::from_value::<crate::SceneBooleanOperand>(child_value.clone())
         {
+            validate_csg_operand_id(
+                &operand.operand_id,
+                &mut operand_ids,
+                object_id,
+                &child_path,
+                diagnostics,
+            );
             validate_geometry_node_depth(
                 &operand.geometry,
                 backend_target,
@@ -3790,6 +3832,56 @@ mod tests {
             params["transform"]["rotation_matrix"] = rotation;
             assert!(parse_cpw_layout(&params).is_err());
         }
+    }
+
+    #[test]
+    fn canonical_boolean_operands_require_nonempty_unique_ids() {
+        let raw_box = json!({
+            "geometry_kind": "Box",
+            "geometry_params": { "size": [1.0, 1.0, 1.0] }
+        });
+        for (ids, expected_code) in [
+            (["", "op:2"], "GEOMETRY_CSG_OPERAND_ID_INVALID"),
+            (["op:1", "op:1"], "GEOMETRY_CSG_OPERAND_ID_DUPLICATE"),
+        ] {
+            let scene = scene_with_object(SceneGeometry {
+                source_asset: None,
+                geometry_kind: "Union".to_string(),
+                geometry_params: json!({
+                    "operands": [
+                        { "operand_id": ids[0], "geometry": raw_box.clone() },
+                        { "operand_id": ids[1], "geometry": raw_box.clone() }
+                    ]
+                }),
+                bounds_min: None,
+                bounds_max: None,
+            });
+            let validation = validate_geometry_scene(&scene, GeometryBackendTarget::Fem);
+            assert!(validation
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.code == expected_code));
+            assert!(geometry_blocks_mesh_build(&scene, GeometryBackendTarget::Fem).is_some());
+        }
+    }
+
+    #[test]
+    fn legacy_raw_geometry_operand_arrays_remain_supported() {
+        let scene = scene_with_object(SceneGeometry {
+            source_asset: None,
+            geometry_kind: "Union".to_string(),
+            geometry_params: json!({ "operands": [
+                { "geometry_kind": "Box", "geometry_params": { "size": [1.0, 1.0, 1.0] } },
+                { "geometry_kind": "Box", "geometry_params": { "size": [2.0, 1.0, 1.0] } }
+            ]}),
+            bounds_min: None,
+            bounds_max: None,
+        });
+        let validation = validate_geometry_scene(&scene, GeometryBackendTarget::Fem);
+        assert!(!validation.diagnostics.iter().any(|diagnostic| matches!(
+            diagnostic.code.as_str(),
+            "GEOMETRY_CSG_OPERAND_ID_INVALID" | "GEOMETRY_CSG_OPERAND_ID_DUPLICATE"
+        )));
     }
 
     #[test]

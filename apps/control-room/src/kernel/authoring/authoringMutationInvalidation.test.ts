@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import {
   DATA_DOMAIN_FDM_MULTILAYER_LAYOUT_PATH,
+  DATA_DOMAIN_FDM_MULTILAYER_LAYER_ACTIVE_MASK_PATH,
   DATA_FDM_REGION_MEMBERSHIP_BINARY_PATH,
   DATA_FDM_REGION_MEMBERSHIPS_PATH,
   DATA_FIELDS_PATH,
@@ -26,6 +27,11 @@ import {
 } from "@/kernel/api/apiPaths";
 import { EventBus } from "@/kernel/events/EventBus";
 import type { KernelEventMap } from "@/kernel/events/eventTypes";
+import {
+  meshRegionMembershipResourceKey,
+  resolveFdmRegionMembershipBinaryResourceKey,
+  resolveMeshRegionMembershipsResourceKey,
+} from "@/kernel/resources/geometryLifecycleResources";
 import { ResourceInvalidationController } from "@/kernel/resources/ResourceInvalidationController";
 import { SESSION_STATUS_RESOURCE_KEY } from "@/kernel/resources/useSessionStatus";
 
@@ -162,17 +168,23 @@ describe("authoring mutation readiness invalidation", () => {
     }
 
     const resources = new ResourceInvalidationController(new EventBus<KernelEventMap>());
-    const fdmMembershipCb = vi.fn();
-    const meshMembershipCb = vi.fn();
-    const multilayerCb = vi.fn();
-    resources.subscribe(`${DATA_FDM_REGION_MEMBERSHIP_BINARY_PATH}/reg-1`, fdmMembershipCb);
-    resources.subscribe("/v2/sessions/current/data/mesh-region-membership/reg-1", meshMembershipCb);
-    resources.subscribe("/v2/sessions/current/data/domain/fdm-multilayer-layers/layer-0/active-mask", multilayerCb);
+    const resourceKeys = [
+      resolveFdmRegionMembershipBinaryResourceKey(null, "generation-1"),
+      resolveFdmRegionMembershipBinaryResourceKey("reg-1", "generation-1", "object-1"),
+      meshRegionMembershipResourceKey("object-1", "reg-1"),
+      resolveMeshRegionMembershipsResourceKey(["reg-1", "reg-2"]),
+      `${DATA_DOMAIN_FDM_MULTILAYER_LAYER_ACTIVE_MASK_PATH}:layout:2:layer-0:mask-1`,
+    ];
+    const callbacks = resourceKeys.map((key) => {
+      const callback = vi.fn();
+      resources.subscribe(`session=session-1&epoch=1|${key}`, callback);
+      return callback;
+    });
 
     invalidateAuthoringMutationDependents(resources, "geometry", 23);
 
-    expect(fdmMembershipCb).toHaveBeenCalledWith("scene:23");
-    expect(meshMembershipCb).toHaveBeenCalledWith("scene:23");
-    expect(multilayerCb).toHaveBeenCalledWith("scene:23");
+    for (const callback of callbacks) {
+      expect(callback).toHaveBeenCalledExactlyOnceWith("scene:23");
+    }
   });
 });

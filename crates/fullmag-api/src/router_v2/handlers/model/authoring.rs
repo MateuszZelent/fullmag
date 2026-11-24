@@ -4742,15 +4742,8 @@ fn apply_delete_object_transaction(
     object_id: &str,
 ) -> Result<(), ApiError> {
     check_base_scene_revision(scene, base_revision)?;
-    let removed_object = scene
-        .objects
-        .iter()
-        .find(|object| object.id == object_id || object.name == object_id)
-        .cloned()
-        .ok_or_else(|| ApiError::not_found(format!("object not found: {object_id}")))?;
-    scene
-        .objects
-        .retain(|object| object.id != removed_object.id);
+    let object_index = resolve_scene_object_index(&scene.objects, object_id)?;
+    let removed_object = scene.objects.remove(object_index);
     cascade_cleanup_deleted_object_references(scene, &removed_object.id, &removed_object.name);
     mark_all_object_meshes_dirty(scene);
     Ok(())
@@ -4854,11 +4847,8 @@ fn apply_patch_object_region_transaction(
     }
 
     let (canonical_object_id, object_name) = {
-        let object = scene
-            .objects
-            .iter()
-            .find(|entry| entry.id == object_id || entry.name == object_id)
-            .ok_or_else(|| ApiError::not_found(format!("object not found: {object_id}")))?;
+        let object_index = resolve_scene_object_index(&scene.objects, object_id)?;
+        let object = &scene.objects[object_index];
         (object.id.clone(), object.name.clone())
     };
     if patch.enabled == Some(false) {
@@ -5480,13 +5470,39 @@ fn find_scene_object_mut<'a>(
     find_object_mut(&mut scene.objects, object_id)
 }
 
+/// Resolve a canonical object ID first, then accept a unique legacy name alias.
+/// If the input is not an ID and matches multiple names, reject it instead of
+/// mutating whichever object happens to appear first in the scene vector.
+fn resolve_scene_object_index(
+    objects: &[SceneObject],
+    object_ref: &str,
+) -> Result<usize, ApiError> {
+    if let Some(index) = objects.iter().position(|entry| entry.id == object_ref) {
+        return Ok(index);
+    }
+
+    let mut matches = objects
+        .iter()
+        .enumerate()
+        .filter(|(_, entry)| entry.name == object_ref)
+        .map(|(index, _)| index);
+    let Some(index) = matches.next() else {
+        return Err(ApiError::not_found(format!("object not found: {object_ref}")));
+    };
+    if matches.next().is_some() {
+        return Err(ApiError::conflict(format!(
+            "object name is ambiguous: {object_ref}; use the canonical object id"
+        )));
+    }
+    Ok(index)
+}
+
 fn find_object_mut<'a>(
     objects: &'a mut [SceneObject],
     object_id: &str,
 ) -> Result<&'a mut SceneObject, ApiError> {
-    objects.iter_mut()
-        .find(|entry| entry.id == object_id || entry.name == object_id)
-        .ok_or_else(|| ApiError::not_found(format!("object not found: {object_id}")))
+    let index = resolve_scene_object_index(objects, object_id)?;
+    Ok(&mut objects[index])
 }
 
 #[derive(Clone, Copy)]
@@ -5833,7 +5849,7 @@ fn endpoint_references_region(
         fullmag_authoring::SceneCouplingEndpoint::Region {
             object,
             region_id: r_id,
-        } => (object == object_id || object == object_name) && r_id == region_id,
+        } => matches_deleted_object(object, object_id, object_name) && r_id == region_id,
         _ => false,
     }
 }
@@ -5847,13 +5863,13 @@ fn endpoint_references_object(
         fullmag_authoring::SceneCouplingEndpoint::Object { object }
         | fullmag_authoring::SceneCouplingEndpoint::Surface { object, .. }
         | fullmag_authoring::SceneCouplingEndpoint::Region { object, .. } => {
-            object == object_id || object == object_name
+            matches_deleted_object(object, object_id, object_name)
         }
     }
 }
 
 fn matches_deleted_object(candidate: &str, object_id: &str, object_name: &str) -> bool {
-    candidate == object_id || candidate == object_name
+    candidate == object_id || (!object_name.is_empty() && candidate == object_name)
 }
 
 fn field_target_matches(
@@ -6556,6 +6572,7 @@ fn cascade_cleanup_deleted_object_references(
     object_id: &str,
     object_name: &str,
 ) {
+    let object_name = unambiguous_deleted_object_name(scene, object_id, object_name);
     cascade_cleanup_scene_references(scene, object_id, object_name, None);
 
     // Study per-object FDM grid (BKG-028)
@@ -6632,7 +6649,22 @@ fn cascade_cleanup_deleted_region_references(
     object_name: &str,
     region_id: &str,
 ) {
+    let object_name = unambiguous_deleted_object_name(scene, object_id, object_name);
     cascade_cleanup_scene_references(scene, object_id, object_name, Some(region_id));
+}
+
+fn unambiguous_deleted_object_name<'a>(
+    scene: &SceneDocument,
+    object_id: &str,
+    object_name: &'a str,
+) -> &'a str {
+    if scene.objects.iter().any(|object| {
+        object.id != object_id && (object.id == object_name || object.name == object_name)
+    }) {
+        ""
+    } else {
+        object_name
+    }
 }
 
 const MAX_BOOLEAN_OPERANDS: usize = 256;
@@ -6725,6 +6757,47 @@ fn relative_transform_isotropic(
     })
 }
 
+fn embed_geometry_transform(geometry: SceneGeometry, transform: &Transform3D) -> SceneGeometry {
+    if transform.is_identity() {
+        return geometry;
+    }
+    SceneGeometry {
+        source_asset: None,
+        geometry_kind: "Transform".to_string(),
+        geometry_params: serde_json::json!({ "child": geometry, "transform": transform }),
+        bounds_min: None,
+        bounds_max: None,
+    }
+}
+
+fn boolean_tool_geometry_in_target_frame(
+    target: &Transform3D,
+    tool: &SceneObject,
+) -> Result<(SceneGeometry, Transform3D), ApiError> {
+    if is_isotropic_scale(target.scale) {
+        let relative = relative_transform_isotropic(target, &tool.transform)?;
+        return Ok((tool.geometry.clone(), relative));
+    }
+
+    // An anisotropic inverse must undo rotation before scale. Keep those
+    // operations separate so the target's object-space frame stays intact.
+    let inverse_rotation = quat_conj(quat_normalize(target.rotation_quat)?);
+    let undo_rigid = Transform3D {
+        translation: quat_rotate_vec3(inverse_rotation, target.translation.map(|v| -v)),
+        rotation_quat: inverse_rotation,
+        pivot: target.pivot,
+        ..Transform3D::default()
+    };
+    let undo_scale = Transform3D {
+        scale: target.scale.map(f64::recip),
+        pivot: target.pivot,
+        ..Transform3D::default()
+    };
+    let tool_in_world = embed_geometry_transform(tool.geometry.clone(), &tool.transform);
+    let geometry = embed_geometry_transform(tool_in_world, &undo_rigid);
+    Ok((geometry, undo_scale))
+}
+
 /// Exact TRS composition `M_parent * M_child` when `parent.scale` is isotropic.
 fn compose_transforms_isotropic(
     parent: &Transform3D,
@@ -6778,11 +6851,21 @@ fn allocate_unique_operand_id(
     existing: &[fullmag_authoring::SceneBooleanOperand],
     prefix: &str,
 ) -> String {
+    allocate_unique_operand_id_excluding(existing, &std::collections::BTreeSet::new(), prefix)
+}
+
+fn allocate_unique_operand_id_excluding(
+    existing: &[fullmag_authoring::SceneBooleanOperand],
+    reserved: &std::collections::BTreeSet<String>,
+    prefix: &str,
+) -> String {
     let clean = prefix.trim();
     let base = if clean.is_empty() { "op" } else { clean };
     let mut suffix = 1u64;
     let mut candidate = format!("{base}:{suffix}");
-    while existing.iter().any(|entry| entry.operand_id == candidate) {
+    while reserved.contains(&candidate)
+        || existing.iter().any(|entry| entry.operand_id == candidate)
+    {
         suffix += 1;
         candidate = format!("{base}:{suffix}");
     }
@@ -6799,11 +6882,32 @@ fn extract_boolean_operands(
         .or_else(|| params.get("children"))
         .and_then(Value::as_array)
     {
+        // Reserve every canonical ID before synthesizing IDs for legacy raw
+        // geometry entries, so a mixed array cannot mint an ID used later.
+        let reserved_operand_ids = raw_operands
+            .iter()
+            .filter_map(|raw| {
+                serde_json::from_value::<fullmag_authoring::SceneBooleanOperand>(raw.clone()).ok()
+            })
+            .map(|operand| operand.operand_id)
+            .collect::<std::collections::BTreeSet<_>>();
+        let mut seen_operand_ids = std::collections::BTreeSet::new();
         let mut operands = Vec::with_capacity(raw_operands.len());
         for (index, raw) in raw_operands.iter().enumerate() {
             if let Ok(operand) =
                 serde_json::from_value::<fullmag_authoring::SceneBooleanOperand>(raw.clone())
             {
+                if operand.operand_id.trim().is_empty() {
+                    return Err(ApiError::bad_request(format!(
+                        "boolean operand at index {index} must have a nonempty operand_id"
+                    )));
+                }
+                if !seen_operand_ids.insert(operand.operand_id.clone()) {
+                    return Err(ApiError::bad_request(format!(
+                        "duplicate boolean operand_id '{}'",
+                        operand.operand_id
+                    )));
+                }
                 operands.push(operand);
             } else {
                 let child_geom: SceneGeometry =
@@ -6812,8 +6916,13 @@ fn extract_boolean_operands(
                             "invalid boolean operand at index {index}: {error}"
                         ))
                     })?;
+                let operand_id = allocate_unique_operand_id_excluding(
+                    &operands,
+                    &reserved_operand_ids,
+                    "op",
+                );
                 operands.push(fullmag_authoring::SceneBooleanOperand {
-                    operand_id: format!("op:{}", index + 1),
+                    operand_id,
                     label: if index == 0 {
                         fallback_base_label.to_string()
                     } else {
@@ -6940,22 +7049,27 @@ fn apply_boolean_combine_objects_transaction(
         }
     }
 
-    let target_index = scene
-        .objects
-        .iter()
-        .position(|entry| entry.id == target_object_id || entry.name == target_object_id)
-        .ok_or_else(|| ApiError::not_found(format!("target object not found: {target_object_id}")))?;
+    let target_index = resolve_scene_object_index(&scene.objects, target_object_id)
+        .map_err(|error| {
+            if error.status == axum::http::StatusCode::NOT_FOUND {
+                ApiError::not_found(format!("target object not found: {target_object_id}"))
+            } else {
+                error
+            }
+        })?;
     let target_snapshot = scene.objects[target_index].clone();
 
     let mut seen_tool_ids = std::collections::BTreeSet::new();
     let mut tool_snapshots = Vec::with_capacity(tool_object_ids.len());
     for raw_tool_id in tool_object_ids {
-        let tool = scene
-            .objects
-            .iter()
-            .find(|entry| entry.id == *raw_tool_id || entry.name == *raw_tool_id)
-            .cloned()
-            .ok_or_else(|| ApiError::not_found(format!("tool object not found: {raw_tool_id}")))?;
+        let tool_index = resolve_scene_object_index(&scene.objects, raw_tool_id).map_err(|error| {
+            if error.status == axum::http::StatusCode::NOT_FOUND {
+                ApiError::not_found(format!("tool object not found: {raw_tool_id}"))
+            } else {
+                error
+            }
+        })?;
+        let tool = scene.objects[tool_index].clone();
         if tool.id == target_snapshot.id {
             return Err(ApiError::bad_request(format!(
                 "tool object '{}' cannot be the same as target object '{}'",
@@ -6988,61 +7102,30 @@ fn apply_boolean_combine_objects_transaction(
     }
 
     let target_kind = boolean_op_to_geometry_kind(op)?;
-    let target_is_isotropic = is_isotropic_scale(target_snapshot.transform.scale);
-    let mut operands: Vec<fullmag_authoring::SceneBooleanOperand>;
-    let new_root_transform: Transform3D;
-
-    if target_is_isotropic {
-        if target_snapshot.geometry.geometry_kind == target_kind {
-            operands = extract_boolean_operands(&target_snapshot.geometry, &target_snapshot.name)?;
-        } else {
-            operands = vec![fullmag_authoring::SceneBooleanOperand {
-                operand_id: "op:1".to_string(),
-                label: target_snapshot.name.clone(),
-                enabled: true,
-                geometry: target_snapshot.geometry.clone(),
-                transform: None,
-                source_object_id: Some(target_snapshot.id.clone()),
-            }];
-        }
-        for tool in &tool_snapshots {
-            let rel_transform =
-                relative_transform_isotropic(&target_snapshot.transform, &tool.transform)?;
-            let operand_id = allocate_unique_operand_id(&operands, "op");
-            operands.push(fullmag_authoring::SceneBooleanOperand {
-                operand_id,
-                label: tool.name.clone(),
-                enabled: true,
-                geometry: tool.geometry.clone(),
-                transform: (!rel_transform.is_identity()).then_some(rel_transform),
-                source_object_id: Some(tool.id.clone()),
-            });
-        }
-        new_root_transform = target_snapshot.transform.clone();
+    let mut operands = if target_snapshot.geometry.geometry_kind == target_kind {
+        extract_boolean_operands(&target_snapshot.geometry, &target_snapshot.name)?
     } else {
-        // Anisotropic target scale: push M_A onto operands[0] and keep each tool's world M_Bi
-        // while resetting the boolean root transform to identity so M_A^{-1} M_Bi introduces no shear.
-        operands = vec![fullmag_authoring::SceneBooleanOperand {
+        vec![fullmag_authoring::SceneBooleanOperand {
             operand_id: "op:1".to_string(),
             label: target_snapshot.name.clone(),
             enabled: true,
             geometry: target_snapshot.geometry.clone(),
-            transform: (!target_snapshot.transform.is_identity())
-                .then_some(target_snapshot.transform.clone()),
+            transform: None,
             source_object_id: Some(target_snapshot.id.clone()),
-        }];
-        for tool in &tool_snapshots {
-            let operand_id = allocate_unique_operand_id(&operands, "op");
-            operands.push(fullmag_authoring::SceneBooleanOperand {
-                operand_id,
-                label: tool.name.clone(),
-                enabled: true,
-                geometry: tool.geometry.clone(),
-                transform: (!tool.transform.is_identity()).then_some(tool.transform.clone()),
-                source_object_id: Some(tool.id.clone()),
-            });
-        }
-        new_root_transform = Transform3D::default();
+        }]
+    };
+    for tool in &tool_snapshots {
+        let (geometry, transform) =
+            boolean_tool_geometry_in_target_frame(&target_snapshot.transform, tool)?;
+        let operand_id = allocate_unique_operand_id(&operands, "op");
+        operands.push(fullmag_authoring::SceneBooleanOperand {
+            operand_id,
+            label: tool.name.clone(),
+            enabled: true,
+            geometry,
+            transform: (!transform.is_identity()).then_some(transform),
+            source_object_id: Some(tool.id.clone()),
+        });
     }
 
     if operands.len() > MAX_BOOLEAN_OPERANDS {
@@ -7065,7 +7148,6 @@ fn apply_boolean_combine_objects_transaction(
             bounds_min: None,
             bounds_max: None,
         };
-        target.transform = new_root_transform;
         if promote_regions {
             for tool in &tool_snapshots {
                 promote_tool_object_to_region(target, tool)?;
@@ -7247,11 +7329,7 @@ fn apply_separate_object_transaction(
     plane_normal: Option<[f64; 3]>,
 ) -> Result<(), ApiError> {
     check_base_scene_revision(scene, base_revision)?;
-    let target_index = scene
-        .objects
-        .iter()
-        .position(|entry| entry.id == object_id || entry.name == object_id)
-        .ok_or_else(|| ApiError::not_found(format!("object not found: {object_id}")))?;
+    let target_index = resolve_scene_object_index(&scene.objects, object_id)?;
     let source = scene.objects[target_index].clone();
 
     match mode {
@@ -7545,13 +7623,8 @@ fn apply_duplicate_objects_transaction(
     // Resolve all targets first so invalid IDs reject atomically without partial mutation.
     let mut sources = Vec::with_capacity(object_ids.len());
     for raw_id in object_ids {
-        let found = scene
-            .objects
-            .iter()
-            .find(|entry| entry.id == *raw_id || entry.name == *raw_id)
-            .cloned()
-            .ok_or_else(|| ApiError::not_found(format!("object not found: {raw_id}")))?;
-        sources.push(found);
+        let index = resolve_scene_object_index(&scene.objects, raw_id)?;
+        sources.push(scene.objects[index].clone());
     }
 
     for source in sources {
@@ -7662,11 +7735,7 @@ fn apply_array_3d_transaction(
     let (ordered_axes, total_instances) =
         fullmag_authoring::validate_and_order_array_axes(axes).map_err(ApiError::bad_request)?;
 
-    let target_index = scene
-        .objects
-        .iter()
-        .position(|entry| entry.id == object_id || entry.name == object_id)
-        .ok_or_else(|| ApiError::not_found(format!("object not found: {object_id}")))?;
+    let target_index = resolve_scene_object_index(&scene.objects, object_id)?;
 
     match realization {
         "modifier_in_object" => {
@@ -8235,6 +8304,72 @@ fn expect_object_params(
 }
 
 #[cfg(test)]
+mod boolean_frame_tests {
+    use super::*;
+
+    #[test]
+    fn combine_keeps_anisotropic_target_frame_and_tool_world_position() {
+        let half_sqrt = std::f64::consts::FRAC_1_SQRT_2;
+        let mut scene: SceneDocument = serde_json::from_value(serde_json::json!({
+            "version": "scene.v2",
+            "revision": 4,
+            "objects": [
+                {
+                    "id": "target",
+                    "name": "Target",
+                    "material_ref": "magnetic",
+                    "transform": {
+                        "translation": [5e-9, 8e-9, 0.0],
+                        "rotation_quat": [0.0, 0.0, half_sqrt, half_sqrt],
+                        "scale": [2.0, 3.0, 1.0],
+                        "pivot": [1e-9, 2e-9, 0.0],
+                    },
+                    "geometry": { "geometry_kind": "Sphere", "geometry_params": { "radius": 1e-9 } },
+                },
+                {
+                    "id": "tool",
+                    "name": "Tool",
+                    "material_ref": "magnetic",
+                    "transform": { "translation": [20e-9, 0.0, 0.0] },
+                    "geometry": { "geometry_kind": "Sphere", "geometry_params": { "radius": 1e-9 } },
+                },
+            ]
+        }))
+        .unwrap();
+        let target_frame = scene.objects[0].transform.clone();
+
+        apply_boolean_combine_objects_transaction(
+            &mut scene,
+            Some(4),
+            "union",
+            "target",
+            &["tool".to_string()],
+            false,
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(scene.objects[0].transform, target_frame);
+        let geometry = crate::router_v2::handlers::simulation::commands::scene_object_geometry_entry(
+            &scene.objects[0],
+            "target",
+        )
+        .unwrap();
+        let predicate = fullmag_plan::GeometryPredicate::from_region_shape(
+            &fullmag_ir::RegionShapeIR::Csg {
+                expression: Box::new(geometry),
+            },
+            fullmag_plan::AffineTransform3::identity(),
+            fullmag_plan::BoundaryMembership::inclusive(),
+        )
+        .unwrap();
+        assert!(predicate.contains([12e-9, 8e-9, 0.0]).unwrap());
+        assert!(predicate.contains([20e-9, 0.0, 0.0]).unwrap());
+        assert!(!predicate.contains([22e-9, 0.0, 0.0]).unwrap());
+    }
+}
+
+#[cfg(test)]
 mod regional_field_drive_tests {
     use super::*;
     use fullmag_ir::{
@@ -8435,3 +8570,192 @@ mod antenna_scene_roundtrip_tests {
 #[cfg(test)]
 #[path = "material_library_authoring_tests.rs"]
 mod material_library_authoring_tests;
+
+#[cfg(test)]
+mod geometry_object_identity_tests {
+    use super::*;
+
+    fn geometry(size_x: f64) -> Value {
+        serde_json::json!({
+            "geometry_kind": "Box",
+            "geometry_params": { "size_m": [size_x, 1.0, 1.0] }
+        })
+    }
+
+    fn object(id: &str, name: &str, size_x: f64) -> SceneObject {
+        serde_json::from_value(serde_json::json!({
+            "id": id,
+            "name": name,
+            "geometry": geometry(size_x),
+            "material_ref": ""
+        }))
+        .expect("scene object")
+    }
+
+    fn scene(objects: Vec<SceneObject>) -> SceneDocument {
+        let mut scene = SceneDocument::default();
+        scene.revision = 7;
+        scene.objects = objects;
+        scene
+    }
+
+    #[test]
+    fn geometry_patch_prefers_canonical_id_over_another_objects_name() {
+        let mut scene = scene(vec![
+            object("a", "b", 1.0),
+            object("b", "target", 2.0),
+        ]);
+
+        apply_object_geometry_patch(
+            &mut scene,
+            "b",
+            Some(7),
+            geometry(4.0),
+            None,
+        )
+        .expect("canonical ID selects object b");
+
+        assert_eq!(scene.objects[0].geometry.geometry_params["size_m"][0], 1.0);
+        assert_eq!(scene.objects[1].geometry.geometry_params["size_m"][0], 4.0);
+    }
+
+    #[test]
+    fn deleting_by_canonical_id_preserves_survivor_refs_matching_removed_name() {
+        let mut scene = scene(vec![
+            object("a", "b", 1.0),
+            object("b", "survivor", 2.0),
+        ]);
+        scene.editor.selected_object_id = Some("b".to_string());
+
+        apply_delete_object_transaction(&mut scene, Some(7), "a")
+            .expect("canonical ID deletes object a");
+
+        assert_eq!(scene.objects.len(), 1);
+        assert_eq!(scene.objects[0].id, "b");
+        assert_eq!(scene.editor.selected_object_id.as_deref(), Some("b"));
+    }
+
+    #[test]
+    fn deleting_region_does_not_remove_reference_to_survivor_named_as_owner() {
+        let mut scene = scene(vec![
+            object("owner", "survivor", 1.0),
+            object("survivor", "other", 2.0),
+        ]);
+        scene.objects[0].regions.push(
+            serde_json::from_value(serde_json::json!({
+                "region_id": "r1",
+                "owner_object": "owner",
+                "name": "Owner region",
+                "shape": { "kind": "box", "size": [1.0, 1.0, 1.0], "center": [0.0, 0.0, 0.0] }
+            }))
+            .expect("region"),
+        );
+        scene.couplings.push(
+            serde_json::from_value(serde_json::json!({
+                "coupling_id": "keep-survivor",
+                "kind": "exchange",
+                "source": { "kind": "region", "object": "survivor", "region_id": "r1" },
+                "target": { "kind": "object", "object": "other" },
+                "parameters": { "kind": "exchange", "mode": "harmonic_mean" }
+            }))
+            .expect("coupling"),
+        );
+
+        apply_delete_object_region_transaction(&mut scene, Some(7), "owner", "r1")
+            .expect("delete owner region");
+
+        assert_eq!(scene.couplings.len(), 1);
+        assert_eq!(scene.couplings[0].coupling_id, "keep-survivor");
+    }
+
+    #[test]
+    fn unique_legacy_name_fallback_is_preserved_but_ambiguous_names_conflict() {
+        let objects = vec![
+            object("a", "legacy-name", 1.0),
+            object("b", "other", 2.0),
+        ];
+        assert_eq!(
+            resolve_scene_object_index(&objects, "legacy-name").expect("unique alias"),
+            0
+        );
+
+        let ambiguous = vec![
+            object("a", "duplicate", 1.0),
+            object("b", "duplicate", 2.0),
+        ];
+        let error = resolve_scene_object_index(&ambiguous, "duplicate")
+            .expect_err("ambiguous legacy aliases must not pick by vector order");
+        assert_eq!(error.status, axum::http::StatusCode::CONFLICT);
+    }
+}
+
+#[cfg(test)]
+mod boolean_operand_identity_tests {
+    use super::*;
+
+    fn geometry(params: Value) -> SceneGeometry {
+        SceneGeometry {
+            source_asset: None,
+            geometry_kind: "Union".to_string(),
+            geometry_params: params,
+            bounds_min: None,
+            bounds_max: None,
+        }
+    }
+
+    fn raw_box() -> Value {
+        serde_json::json!({
+            "geometry_kind": "Box",
+            "geometry_params": { "size": [1.0, 1.0, 1.0] }
+        })
+    }
+
+    fn operand(id: &str) -> Value {
+        serde_json::json!({
+            "operand_id": id,
+            "label": id,
+            "enabled": true,
+            "geometry": raw_box()
+        })
+    }
+
+    #[test]
+    fn editable_operands_reject_empty_and_duplicate_canonical_ids() {
+        for (entries, expected_message) in [
+            (
+                vec![operand(""), operand("op:2")],
+                "nonempty operand_id",
+            ),
+            (
+                vec![operand("op:1"), operand("op:1")],
+                "duplicate boolean operand_id",
+            ),
+        ] {
+            let geometry = geometry(serde_json::json!({ "operands": entries }));
+            let error = extract_boolean_operands(&geometry, "Target")
+                .expect_err("invalid canonical operand identities must fail edits");
+            assert_eq!(error.status, axum::http::StatusCode::BAD_REQUEST);
+            assert!(error.message.contains(expected_message));
+        }
+    }
+
+    #[test]
+    fn mixed_legacy_and_canonical_operands_get_collision_free_ids() {
+        let geometry = geometry(serde_json::json!({
+            "operands": [raw_box(), operand("op:1"), raw_box()]
+        }));
+        let operands = extract_boolean_operands(&geometry, "Target").expect("mixed legacy array");
+        let ids: Vec<_> = operands.iter().map(|entry| entry.operand_id.as_str()).collect();
+        assert_eq!(ids, vec!["op:2", "op:1", "op:3"]);
+    }
+
+    #[test]
+    fn legacy_raw_geometry_operands_keep_synthesized_ids() {
+        let geometry = geometry(serde_json::json!({
+            "operands": [raw_box(), raw_box()]
+        }));
+        let operands = extract_boolean_operands(&geometry, "Target").expect("legacy array");
+        let ids: Vec<_> = operands.iter().map(|entry| entry.operand_id.as_str()).collect();
+        assert_eq!(ids, vec!["op:1", "op:2"]);
+    }
+}

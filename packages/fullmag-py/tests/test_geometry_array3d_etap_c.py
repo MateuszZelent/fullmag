@@ -140,6 +140,12 @@ def test_array3d_budget_and_validation_guards() -> None:
     with pytest.raises(ValueError, match="step_scale_factor"):
         box.array_3d(nx=2, dx=20e-9, step_scale=((-1.0, 1.0, 1.0), (1.0, 1.0, 1.0), (1.0, 1.0, 1.0)))
 
+    with pytest.raises(ValueError, match="count must be an integer"):
+        box.array_3d(nx=1.5)
+
+    with pytest.raises(ValueError, match="count must be an integer"):
+        box.array_3d(nx=True)
+
     # OCC limit (2500)
     too_many_occ = box.array_3d(nx=51, ny=50, dx=20e-9, dy=20e-9)  # 2550 > 2500
     assert too_many_occ.total_instances == 2550

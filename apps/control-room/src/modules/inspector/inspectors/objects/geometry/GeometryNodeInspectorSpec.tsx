@@ -35,7 +35,7 @@ import {
   geometryGhostVisibilityStore,
   geometryOperandGhostKey,
 } from "@/kernel/visualization/geometryGhostVisibilityStore";
-import { parseCompositeGeometry } from "@/modules/explorer/builders/geometryTreeExplorerNodes";
+import { parseCompositeGeometry } from "@/kernel/authoring/compositeGeometryModel";
 import { Button } from "@/shared/ui/Button";
 import { Switch } from "@/shared/ui/Switch";
 

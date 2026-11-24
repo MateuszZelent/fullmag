@@ -1,6 +1,6 @@
 import type { JsonObject } from "@/kernel/api/apiTypes";
 import { parseArray3DGeometry } from "@/kernel/authoring/array3dModel";
-import { parseCompositeGeometry } from "@/modules/explorer/builders/geometryTreeExplorerNodes";
+import { parseCompositeGeometry } from "@/kernel/authoring/compositeGeometryModel";
 
 import {
   eulerDegToQuat,
@@ -316,7 +316,7 @@ function detectContainerKind(
   if (parsedOp === "slice") return "slice-child";
   const unwrapped = unwrapTransformWrappers(containerGeometry);
   const params = geometryParamsOf(unwrapped);
-  if (Array.isArray(params.operands)) return "boolean-operand";
+  if (Array.isArray(params.operands ?? params.children)) return "boolean-operand";
   return "legacy-pair";
 }
 
@@ -740,19 +740,14 @@ function patchAtSegments(
     };
   }
 
-  // Canonical Boolean `operands[]`
-  if (Array.isArray(params.operands)) {
-    const matchIndex = params.operands.findIndex((entry, idx) => {
-      const rec = asRecord(entry);
-      if (!rec) return false;
-      const id = asString(rec.operand_id) ?? `operand-${idx}`;
-      return id === head;
-    });
-    if (matchIndex === -1) return null;
-
-    const targetEntry = asRecord(params.operands[matchIndex]);
+  const operandKey = params.operands == null ? "children" : "operands";
+  const rawOperands = params[operandKey];
+  if (Array.isArray(rawOperands)) {
+    const operand = parseCompositeGeometry(node).operands.find((entry) => entry.operandId === head);
+    if (!operand) return null;
+    const targetEntry = asRecord(rawOperands[operand.index]);
     if (!targetEntry) return null;
-    const childGeom = asRecord(targetEntry.geometry) ?? targetEntry;
+    const childGeom = operand.geometry;
 
     let updatedEntry: Record<string, unknown>;
     if (!isTarget) {
@@ -772,7 +767,7 @@ function patchAtSegments(
           ? null
           : mergeNodeTransform(existingTx, patch);
       updatedEntry = {
-        ...targetEntry,
+        ...(asRecord(targetEntry.geometry) ? targetEntry : { operand_id: operand.operandId }),
         ...(patch.enabled !== undefined ? { enabled: patch.enabled } : {}),
         ...(patch.label !== undefined && patch.label.trim().length > 0
           ? { label: patch.label.trim() }
@@ -782,14 +777,14 @@ function patchAtSegments(
       };
     }
 
-    const nextOperands = params.operands.map((entry, idx) =>
-      idx === matchIndex ? updatedEntry : entry,
+    const nextOperands = rawOperands.map((entry, index) =>
+      index === operand.index ? updatedEntry : entry,
     );
     return {
       ...node,
       [paramsKey]: {
         ...params,
-        operands: nextOperands,
+        [operandKey]: nextOperands,
       },
     };
   }
@@ -799,8 +794,9 @@ function patchAtSegments(
     const first = asRecord(params[firstKey]);
     const second = asRecord(params[secondKey]);
     if (!first || !second) continue;
-    if (head !== firstKey && head !== secondKey) return null;
-    const targetRaw = head === firstKey ? first : second;
+    if (head !== "op:1" && head !== "op:2") return null;
+    const targetKey = head === "op:1" ? firstKey : secondKey;
+    const targetRaw = head === "op:1" ? first : second;
     const nextTarget = isTarget
       ? patchWrappedGeometryAndTransform(targetRaw, patch)
       : patchAtSegments(targetRaw, rest, patch);
@@ -809,7 +805,7 @@ function patchAtSegments(
       ...node,
       [paramsKey]: {
         ...params,
-        [head]: nextTarget,
+        [targetKey]: nextTarget,
       },
     };
   }

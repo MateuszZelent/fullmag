@@ -1,8 +1,11 @@
 import {
   DATA_DOMAIN_FDM_MULTILAYER_LAYOUT_PATH,
+  DATA_DOMAIN_FDM_MULTILAYER_LAYER_ACTIVE_MASK_PATH,
   DATA_FDM_REGION_MEMBERSHIP_BINARY_PATH,
   DATA_FDM_REGION_MEMBERSHIPS_PATH,
+  DATA_FDM_REGION_MEMBERSHIP_SCOPED_PATH,
   DATA_FIELDS_PATH,
+  DATA_MESH_REGION_MEMBERSHIP_PATH,
   DATA_MESH_REGION_MEMBERSHIPS_PATH,
   DATA_OBSERVATION_FRAMES_PATH,
   DATA_SCALARS_PATH,
@@ -155,9 +158,10 @@ export function invalidateAuthoringMutationDependents(
   resources.invalidatePrefix?.(`${DATA_OBSERVATION_FRAMES_PATH}?`, sceneRevision);
   resources.invalidatePrefix?.(`${SIMULATION_STAGES_RESULTS_PATH}?`, sceneRevision);
   if (kind === "geometry") {
-    resources.invalidatePrefix?.(`${DATA_FDM_REGION_MEMBERSHIP_BINARY_PATH}/`, sceneRevision);
-    resources.invalidatePrefix?.("/v2/sessions/current/data/mesh-region-membership/", sceneRevision);
-    resources.invalidatePrefix?.("/v2/sessions/current/data/domain/fdm-multilayer-layers/", sceneRevision);
+    resources.invalidatePrefix?.(`${DATA_FDM_REGION_MEMBERSHIP_BINARY_PATH}#`, sceneRevision);
+    resources.invalidatePrefix?.(`${DATA_FDM_REGION_MEMBERSHIP_SCOPED_PATH}:`, sceneRevision);
+    resources.invalidatePrefix?.(`${DATA_MESH_REGION_MEMBERSHIP_PATH}:`, sceneRevision);
+    resources.invalidatePrefix?.(`${DATA_DOMAIN_FDM_MULTILAYER_LAYER_ACTIVE_MASK_PATH}:`, sceneRevision);
   }
   // History keys carry a window such as `?limit=` that exact invalidation never reaches.
   resources.invalidatePrefix?.(SIMULATION_SOLVER_ENERGIES_HISTORY_PATH, revision);

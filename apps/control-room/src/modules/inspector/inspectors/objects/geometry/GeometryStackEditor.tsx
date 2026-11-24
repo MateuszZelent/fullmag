@@ -13,7 +13,7 @@ import {
   type BooleanCombineOp,
 } from "@/kernel/authoring/geometryLifecycleCommands";
 import type { KernelApi } from "@/kernel/types";
-import { parseCompositeGeometry } from "@/modules/explorer/builders/geometryTreeExplorerNodes";
+import { parseCompositeGeometry } from "@/kernel/authoring/compositeGeometryModel";
 import { Badge } from "@/shared/ui/Badge";
 import { Button } from "@/shared/ui/Button";
 import {

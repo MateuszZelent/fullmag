@@ -18,7 +18,7 @@ import {
   computeArray3DInstanceTransforms,
   parseArray3DGeometry,
 } from "@/kernel/authoring/array3dModel";
-import { parseCompositeGeometry } from "@/modules/explorer/builders/geometryTreeExplorerNodes";
+import { parseCompositeGeometry } from "@/kernel/authoring/compositeGeometryModel";
 import { computeSceneGeometryBoundsMeters } from "@/shared/domain/geometry/sceneGeometryBounds";
 
 import {

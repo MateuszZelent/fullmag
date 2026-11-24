@@ -16,7 +16,7 @@ import {
   geometryGhostVisibilityStore,
   geometryOperandGhostKey,
 } from "@/kernel/visualization/geometryGhostVisibilityStore";
-import { parseCompositeGeometry } from "@/modules/explorer/builders/geometryTreeExplorerNodes";
+import { parseCompositeGeometry } from "@/kernel/authoring/compositeGeometryModel";
 
 import type { Viewport3DResourceTracker } from "../viewport3dDiagnostics";
 import { useBatchedInvalidate } from "../viewport3dBatchedInvalidate";

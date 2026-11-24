@@ -5,7 +5,7 @@ import { useEffect, useMemo, useSyncExternalStore } from "react";
 import type { SceneResource } from "@/kernel/api/apiTypes";
 import { deleteObjectDialogStore } from "@/kernel/authoring/deleteObjectDialogStore";
 import { useSceneResource } from "@/kernel/resources/geometryLifecycleResources";
-import { parseCompositeGeometry } from "@/modules/explorer/builders/geometryTreeExplorerNodes";
+import { parseCompositeGeometry } from "@/kernel/authoring/compositeGeometryModel";
 import {
   AlertDialog,
   AlertDialogAction,

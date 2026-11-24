@@ -250,7 +250,7 @@ class _GeometryOps:
         if len(extra_step) != 3 or len(step_rot_deg) != 3 or len(step_scale) != 3:
             raise ValueError("array_3d extra_step, step_rot_deg, and step_scale must have 3 entries (x, y, z)")
 
-        counts = (int(nx), int(ny), int(nz))
+        counts = (nx, ny, nz)
         pitches = (float(dx), float(dy), float(dz))
         axis_names: tuple[Literal["x", "y", "z"], ...] = ("x", "y", "z")
         specs = tuple(

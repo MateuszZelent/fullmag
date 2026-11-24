@@ -180,9 +180,20 @@ export async function checkFooterReadability(page, { assertCanvas, timeout }) {
           const x = (value.left + value.right) / 2, y = (value.top + value.bottom) / 2;
           return value.top >= bounds.top && value.bottom <= bounds.bottom && metric.contains(document.elementFromPoint(x, y));
         });
-        return { height: bounds.height, visible_values: visible.length, navigation_in_header: chrome.contains(navigation) };
+        return {
+          height: bounds.height,
+          visible_values: visible.length,
+          navigation_present: Boolean(navigation),
+          navigation_in_header: navigation ? Boolean(chrome?.contains(navigation)) : null,
+        };
       });
-      if (compact.height > 110 || !compact.navigation_in_header || compact.visible_values < 1) throw new Error(`Compact footer hid all values: ${JSON.stringify(compact)}`);
+      if (
+        compact.height > 110 ||
+        compact.visible_values < 1 ||
+        (compact.navigation_present && !compact.navigation_in_header)
+      ) {
+        throw new Error(`Compact footer layout failed: ${JSON.stringify(compact)}`);
+      }
       compactLayouts.push({ theme: theme.mode, ...compact });
       await captureFooter(theme.mode, "compact");
       if (originalDividerY !== null) {

@@ -42,7 +42,7 @@ function makeMinimalKernel(): KernelApi {
   } as unknown as KernelApi;
 }
 
-describe("Task 9 — Explorer selection & 162-route catalog consolidation", () => {
+describe("Explorer selection and Inspector route catalog", () => {
   it("preserves visualizations-2d.draft and visualizations-2d.plot selection kinds without hijacking to mesh.cross-section.*", () => {
     const draftNode: ExplorerNode = {
       crossSectionDraftId: "draft",
@@ -228,15 +228,16 @@ describe("Task 9 — Explorer selection & 162-route catalog consolidation", () =
     expect(buildRuntimeDiagnosticTree([])[0]?.selectable).not.toBe(false);
   });
 
-  it("splits the 162 canonical routes across 4 disjoint domain registries and redirects legacy/U1..U14 aliases cleanly", () => {
+  it("splits the 163 canonical routes across 4 disjoint domain registries and redirects legacy/U1..U14 aliases cleanly", () => {
     expect(
       MAGNETIC_TEXTURE_ROUTES.length +
         MODEL_PHYSICS_ROUTES.length +
         MESH_ANTENNA_ROUTES.length +
         STUDY_RESULTS_START_ROUTES.length +
         1,
-    ).toBe(162);
-    expect(INSPECTOR_ROUTES).toHaveLength(162);
+    ).toBe(163);
+    expect(INSPECTOR_ROUTES).toHaveLength(163);
+    expect(resolveInspectorRoute("object.geometry.node")?.id).toBe("geometry-node");
 
     // Disjoint selectionKinds across all 4 domain registries
     const seen = new Set<string>();
