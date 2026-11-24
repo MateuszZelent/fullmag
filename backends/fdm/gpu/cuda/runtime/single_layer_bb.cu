@@ -85,19 +85,6 @@ __device__ __forceinline__ void write_vec(DeviceVectorField field, uint64_t idx,
     static_cast<Scalar *>(field.z)[idx] = static_cast<Scalar>(v.z);
 }
 
-template <typename Scalar>
-__device__ __forceinline__ double unit_norm_sq_tolerance();
-
-template <>
-__device__ __forceinline__ double unit_norm_sq_tolerance<double>() {
-    return 1e-10;
-}
-
-template <>
-__device__ __forceinline__ double unit_norm_sq_tolerance<float>() {
-    return 1e-5;
-}
-
 __device__ __forceinline__ bool is_max_metric(int k) {
     return k >= 7 && k <= 10;
 }
@@ -376,7 +363,6 @@ __global__ void evaluate_metrics_kernel(
         v[k] = 0.0;
     }
 
-    const double norm_tol = unit_norm_sq_tolerance<Scalar>();
     const uint64_t xy_stride = static_cast<uint64_t>(p.nx) * static_cast<uint64_t>(p.ny);
     const bool has_any_dmi =
         p.has_interfacial_dmi || p.has_rotated_interfacial_dmi || p.has_bulk_dmi;
@@ -391,9 +377,11 @@ __global__ void evaluate_metrics_kernel(
         const bool active = !p.active_mask || p.active_mask[idx] != 0;
         const Vec3 g = active ? scale3(tangent_proj(m, h), -1.0) : Vec3{0.0, 0.0, 0.0};
 
+        // Initial magnetization may be non-unit (e.g. UniformMagnetization((1.0, 0.1, 0.0))),
+        // matching vector_math::tangent_projection; trial_retract_kernel normalizes onto S^2.
         const double mm = dot3(m, m);
         if (!is_finite3(m) || !is_finite3(h) || !is_finite3(g) ||
-            (active ? fabs(mm - 1.0) > norm_tol : mm != 0.0)) {
+            (active ? (!isfinite(mm) || mm <= DBL_MIN) : mm != 0.0)) {
             v[21] += 1.0;
         }
 
