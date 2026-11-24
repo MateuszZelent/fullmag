@@ -190,6 +190,71 @@ void explicit_hybrid_publishes_device_and_host_masks() {
     check(receipt.fallback_count == 0, "explicit hybrid is not a runtime fallback");
 }
 
+// docs/physics/0997: the Krylov solve and the cuDSS direct solve publish
+// distinct linear-solve bits, and a plan never carries both.
+void krylov_and_direct_linear_solves_publish_distinct_receipts() {
+    const uint64_t demag = FEM_GPU_OPERATOR_EXCHANGE |
+        FEM_GPU_OPERATOR_DEMAG_RHS |
+        FEM_GPU_OPERATOR_DEMAG_SOLVE |
+        FEM_GPU_OPERATOR_DEMAG_RECOVERY |
+        FEM_GPU_OPERATOR_REDUCTIONS |
+        FEM_GPU_OPERATOR_PROJECTED_GRADIENT_BB;
+    uint64_t published[2] = {0, 0};
+    const uint64_t linear_solve[2] = {
+        FEM_GPU_OPERATOR_PRECONDITIONER,
+        FEM_GPU_OPERATOR_DIRECT_SOLVE,
+    };
+    for (int index = 0; index < 2; ++index) {
+        FemGpuExecutionReceiptRuntimeState state{};
+        const uint64_t required = demag | linear_solve[index];
+        gpu_execution_receipt_resolve_plan(
+            state, required, required, 0, 0, FemGpuExecutionClass::DeviceResident, 0,
+            FULLMAG_FEM_PRECISION_DOUBLE, FULLMAG_FEM_INTEGRATOR_HEUN);
+        gpu_execution_receipt_begin_attempt(state);
+        gpu_execution_receipt_note_device(state, required);
+        gpu_execution_receipt_commit_attempt(state);
+        const FemGpuExecutionSnapshot receipt = gpu_execution_receipt_snapshot(state);
+        check(receipt.accounting_valid && receipt.plan_resolved,
+              "each linear-solve realization must resolve and commit");
+        check(receipt.accepted_step_count == 1, "linear-solve attempt must be accepted");
+        published[index] = receipt.executed_device_operator_mask;
+    }
+    check(published[0] == 0x70f, "Krylov relaxation receipt must be 0x70f");
+    check(published[1] == 0x150f, "direct relaxation receipt must be 0x150f");
+    check((published[1] & FEM_GPU_OPERATOR_PRECONDITIONER) == 0,
+          "direct solve must not publish a preconditioner");
+    check((published[0] & FEM_GPU_OPERATOR_DIRECT_SOLVE) == 0,
+          "Krylov solve must not publish a direct factorization");
+    check(FEM_GPU_OPERATOR_DIRECT_SOLVE == FULLMAG_FEM_GPU_OPERATOR_DIRECT_SOLVE,
+          "internal direct-solve bit must match the public ABI");
+
+    FemGpuExecutionReceiptRuntimeState krylov_plan_direct_run{};
+    const uint64_t krylov_required = demag | FEM_GPU_OPERATOR_PRECONDITIONER;
+    gpu_execution_receipt_resolve_plan(
+        krylov_plan_direct_run, krylov_required, krylov_required, 0, 0,
+        FemGpuExecutionClass::DeviceResident, 0, FULLMAG_FEM_PRECISION_DOUBLE,
+        FULLMAG_FEM_INTEGRATOR_HEUN);
+    gpu_execution_receipt_begin_attempt(krylov_plan_direct_run);
+    gpu_execution_receipt_note_device(
+        krylov_plan_direct_run, demag | FEM_GPU_OPERATOR_DIRECT_SOLVE);
+    gpu_execution_receipt_commit_attempt(krylov_plan_direct_run);
+    check(!gpu_execution_receipt_snapshot(krylov_plan_direct_run).accounting_valid,
+          "a direct solve executed under a Krylov plan must fail closed");
+
+    for (const uint64_t required : {
+             demag | FEM_GPU_OPERATOR_PRECONDITIONER | FEM_GPU_OPERATOR_DIRECT_SOLVE,
+             (demag & ~FEM_GPU_OPERATOR_DEMAG_SOLVE) | FEM_GPU_OPERATOR_DIRECT_SOLVE,
+         }) {
+        FemGpuExecutionReceiptRuntimeState state{};
+        gpu_execution_receipt_resolve_plan(
+            state, required, required, 0, 0, FemGpuExecutionClass::DeviceResident, 0,
+            FULLMAG_FEM_PRECISION_DOUBLE, FULLMAG_FEM_INTEGRATOR_HEUN);
+        const FemGpuExecutionSnapshot receipt = gpu_execution_receipt_snapshot(state);
+        check(!receipt.plan_resolved && !receipt.accounting_valid,
+              "conflicting or orphan direct-solve bits must fail closed");
+    }
+}
+
 void rejected_attempt_does_not_publish_partial_masks() {
     FemGpuExecutionReceiptRuntimeState state{};
     const uint64_t required = FEM_GPU_OPERATOR_LLG_RHS |
@@ -755,6 +820,7 @@ int main() {
     committed_transfer_snapshot_is_scoped_to_the_current_attempt();
     late_outer_attempt_transfer_is_rejected_before_commit();
     explicit_hybrid_publishes_device_and_host_masks();
+    krylov_and_direct_linear_solves_publish_distinct_receipts();
     rejected_attempt_does_not_publish_partial_masks();
     initial_torque_observation_records_device_fields_without_a_step();
     failed_attempt_does_not_publish_partial_masks();

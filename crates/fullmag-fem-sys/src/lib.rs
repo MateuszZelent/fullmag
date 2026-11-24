@@ -57,6 +57,13 @@ pub const FULLMAG_FEM_GPU_OPERATOR_REDUCTIONS: u64 = 1 << 8;
 pub const FULLMAG_FEM_GPU_OPERATOR_PRECONDITIONER: u64 = 1 << 9;
 pub const FULLMAG_FEM_GPU_OPERATOR_PROJECTED_GRADIENT_BB: u64 = 1 << 10;
 pub const FULLMAG_FEM_GPU_OPERATOR_NONLINEAR_CG: u64 = 1 << 11;
+/// The linear solve applied a sparse direct factorization; no Krylov iteration
+/// and no preconditioner ran. Excludes `FULLMAG_FEM_GPU_OPERATOR_PRECONDITIONER`.
+pub const FULLMAG_FEM_GPU_OPERATOR_DIRECT_SOLVE: u64 = 1 << 12;
+/// `fullmag_fem_gpu_demag_linear_solver_v1` values.
+pub const FULLMAG_FEM_GPU_DEMAG_LINEAR_SOLVER_UNAVAILABLE: u32 = 0;
+pub const FULLMAG_FEM_GPU_DEMAG_LINEAR_SOLVER_HYPRE_KRYLOV: u32 = 1;
+pub const FULLMAG_FEM_GPU_DEMAG_LINEAR_SOLVER_CUDSS_DIRECT: u32 = 2;
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -3787,6 +3794,11 @@ extern "C" {
     pub fn fullmag_fem_backend_get_gpu_demag_amg_coarse_relax_type_v1(
         handle: *mut fullmag_fem_backend,
         out_relax_type: *mut i32,
+    ) -> i32;
+
+    pub fn fullmag_fem_backend_get_gpu_demag_linear_solver_v1(
+        handle: *mut fullmag_fem_backend,
+        out_linear_solver: *mut u32,
     ) -> i32;
 
     pub fn fullmag_fem_backend_get_gpu_state_info(

@@ -4337,12 +4337,21 @@ pub struct FemEigenNativeExecutionAttestation {
 }
 
 /// FEM demag solver provenance.
+///
+/// `linear_solver`, `preconditioner`, `rtol` and `max_iterations` are the
+/// requested policy; `resolved_linear_solver` is the realization that ran.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct FemPoissonDemagProvenance {
     pub linear_solver: String,
     pub preconditioner: String,
     pub rtol: f64,
     pub max_iterations: u32,
+    /// Native FEM GPU `device_hypre_poisson` only: `hypre_krylov` (the policy's
+    /// Krylov solver and preconditioner ran) or `cudss_direct` (factor-once
+    /// direct solve; no Krylov iteration and no preconditioner ran,
+    /// docs/physics/0997). Absent on every other lane.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resolved_linear_solver: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub actual_iterations: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]

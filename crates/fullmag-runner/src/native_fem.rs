@@ -4548,6 +4548,22 @@ impl NativeFemBackend {
         }
     }
 
+    /// Linear-solver realization of the initialized device Poisson workspace:
+    /// `hypre_krylov`, `cudss_direct`, or `None` when there is none.
+    pub(crate) fn gpu_demag_linear_solver(&self) -> Result<Option<&'static str>, RunError> {
+        let mut linear_solver = ffi::FULLMAG_FEM_GPU_DEMAG_LINEAR_SOLVER_UNAVAILABLE;
+        let rc = unsafe {
+            ffi::fullmag_fem_backend_get_gpu_demag_linear_solver_v1(
+                self.handle,
+                &mut linear_solver,
+            )
+        };
+        if rc != ffi::FULLMAG_FEM_OK {
+            return Err(self.last_error_or("FEM GPU demag linear-solver query failed"));
+        }
+        runtime_info::gpu_demag_linear_solver_name(linear_solver)
+    }
+
     pub(crate) fn gpu_state_info(&self) -> Result<NativeFemGpuStateInfo, RunError> {
         let mut info = ffi::fullmag_fem_gpu_state_info {
             allocated: 0,
@@ -9362,6 +9378,7 @@ mod tests {
                 uniaxial_anisotropy: None,
                 cubic_anisotropy: None,
                 interfacial_dmi: None,
+                rotated_interfacial_dmi: None,
                 bulk_dmi: None,
                 zhang_li_stt: if has_zhang_li_stt(plan) {
                     Some(fullmag_engine::ZhangLiSttConfig {

@@ -36,6 +36,9 @@ enum FemGpuOperatorMask : uint64_t {
     FEM_GPU_OPERATOR_PRECONDITIONER = UINT64_C(1) << 9,
     FEM_GPU_OPERATOR_PROJECTED_GRADIENT_BB = UINT64_C(1) << 10,
     FEM_GPU_OPERATOR_NONLINEAR_CG = UINT64_C(1) << 11,
+    // The linear solve applied a sparse direct factorization: no Krylov
+    // iteration and no preconditioner ran (docs/physics/0997).
+    FEM_GPU_OPERATOR_DIRECT_SOLVE = UINT64_C(1) << 12,
 };
 
 constexpr uint64_t FEM_GPU_OPERATOR_KNOWN_MASK =
@@ -50,7 +53,8 @@ constexpr uint64_t FEM_GPU_OPERATOR_KNOWN_MASK =
     FEM_GPU_OPERATOR_REDUCTIONS |
     FEM_GPU_OPERATOR_PRECONDITIONER |
     FEM_GPU_OPERATOR_PROJECTED_GRADIENT_BB |
-    FEM_GPU_OPERATOR_NONLINEAR_CG;
+    FEM_GPU_OPERATOR_NONLINEAR_CG |
+    FEM_GPU_OPERATOR_DIRECT_SOLVE;
 
 struct FemGpuExecutionSnapshot {
     bool accounting_valid = true;

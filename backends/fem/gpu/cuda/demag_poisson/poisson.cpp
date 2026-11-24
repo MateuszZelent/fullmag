@@ -107,10 +107,12 @@ bool gpu_demag_poisson_initialize(Context &ctx, std::string &error)
     }
 
     workspace->ready = true;
+    // Includes the cuDSS factor when the direct-solve override is active.
+    const uint64_t workspace_device_bytes = workspace->device_bytes;
     ctx.poisson_demag.gpu_workspace = workspace.release();
     ctx.poisson_demag.gpu_workspace_ready = true;
-    ctx.poisson_demag.gpu_workspace_device_bytes = device_bytes;
-    ctx.gpu_state.device.lifecycle.device_bytes += device_bytes;
+    ctx.poisson_demag.gpu_workspace_device_bytes = workspace_device_bytes;
+    ctx.gpu_state.device.lifecycle.device_bytes += workspace_device_bytes;
     return true;
 #else
     (void)ctx;
@@ -177,6 +179,26 @@ uint64_t gpu_demag_poisson_device_bytes(const Context &ctx)
 #else
     (void)ctx;
     return 0;
+#endif
+}
+
+GpuDemagPoissonLinearSolver gpu_demag_poisson_linear_solver(const Context &ctx)
+{
+#if FULLMAG_HAS_MFEM_STACK
+    if (!ctx.demag.enabled ||
+        ctx.poisson_demag.gpu_demag_mode != FULLMAG_FEM_GPU_DEMAG_DEVICE_HYPRE_POISSON) {
+        return GpuDemagPoissonLinearSolver::Unavailable;
+    }
+    const GpuDemagPoissonWorkspace *workspace = workspace_ptr(ctx);
+    if (workspace == nullptr || !workspace->ready) {
+        return GpuDemagPoissonLinearSolver::Unavailable;
+    }
+    return workspace->direct_solver != nullptr
+        ? GpuDemagPoissonLinearSolver::CudssDirect
+        : GpuDemagPoissonLinearSolver::HypreKrylov;
+#else
+    (void)ctx;
+    return GpuDemagPoissonLinearSolver::Unavailable;
 #endif
 }
 

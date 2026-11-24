@@ -12,6 +12,7 @@
 #include "context.hpp"
 #include "fem_common.hpp"
 #include "gpu/cuda/demag_fem_bem/fem_bem_dispatch.hpp"
+#include "gpu/cuda/demag_poisson/cudss_direct_solver.hpp"
 #include "gpu/cuda/demag_poisson/hypre_device_solver.hpp"
 #include "gpu/cuda/demag_poisson/hypre_stream_interop.hpp"
 #include "gpu/cuda/demag_poisson/operators.hpp"
@@ -304,7 +305,19 @@ bool compute_device_demag_for_device_stage_impl(
                 const auto host_api_start = timings.enabled
                     ? FemSteadyClock::now()
                     : FemSteadyClock::time_point{};
-                workspace->solver->Mult(*workspace->b_par, *workspace->x_par);
+                if (workspace->direct_solver != nullptr) {
+                    // Same HYPRE stream and fences as the Krylov solve below.
+                    if (!solve_demag_cudss_direct(
+                            *workspace->direct_solver,
+                            workspace->stream_interop.hypre_stream,
+                            gpu.demag_poisson.poisson_rhs,
+                            gpu.demag_poisson.poisson_solution,
+                            reason)) {
+                        return false;
+                    }
+                } else {
+                    workspace->solver->Mult(*workspace->b_par, *workspace->x_par);
+                }
                 if (timings.enabled) {
                     ctx.poisson_demag.step_hypre_host_api_wall_time_ns +=
                         elapsed_ns(host_api_start);

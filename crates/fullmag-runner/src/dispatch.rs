@@ -3757,6 +3757,7 @@ fn execute_native_fem(
         Some(&gpu_state_info),
         Some(&gpu_rk_plan_info),
     );
+    apply_native_fem_gpu_demag_linear_solver(&mut provenance, backend.gpu_demag_linear_solver()?);
     if execution_mode == ExecutionMode::Strict && execution_engine == "fem_native_gpu" {
         let build_info = native_fem::strict_gpu_runtime_build_info()?;
         provenance.mfem_version = Some(build_info.mfem_version);
@@ -3887,6 +3888,18 @@ fn execute_native_fem(
     )
 }
 
+/// Records the linear-solver realization that the native GPU Poisson demag
+/// workspace resolved (docs/physics/0997); `None` leaves the field absent.
+#[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
+pub(crate) fn apply_native_fem_gpu_demag_linear_solver(
+    provenance: &mut ExecutionProvenance,
+    resolved_linear_solver: Option<&str>,
+) {
+    if let Some(poisson) = provenance.fem_poisson_demag.as_mut() {
+        poisson.resolved_linear_solver = resolved_linear_solver.map(str::to_string);
+    }
+}
+
 #[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
 pub(crate) fn fem_poisson_demag_provenance(
     plan: &FemPlanIR,
@@ -3915,6 +3928,7 @@ pub(crate) fn fem_poisson_demag_provenance(
         preconditioner: policy.preconditioner,
         rtol: policy.rtol,
         max_iterations: policy.max_iterations,
+        resolved_linear_solver: None,
         actual_iterations: stats.map(|entry| entry.poisson_iterations),
         final_residual: stats.and_then(|entry| {
             entry
@@ -5373,6 +5387,7 @@ mod tests {
     fn gpu_device_info_for_log_test() -> native_fem::DeviceInfo {
         native_fem::DeviceInfo {
             name: "NVIDIA test GPU".to_string(),
+            is_gpu_enabled: true,
             compute_capability: "8.9".to_string(),
             driver_version: 13010,
             runtime_version: 12060,

@@ -1,0 +1,412 @@
+{
+  "document": {
+    "path": "docs/physics/0997-fem-gpu-poisson-direct-cudss.md",
+    "reviewed_revision": "96d6a49a7fb9be445a466ede823681d8da6cf414"
+  },
+  "backend_matrix": [
+    {
+      "solver": "FEM",
+      "device": "CPU",
+      "status": "unsupported",
+      "reason": "The proof of concept changes only the GPU Poisson owner device_hypre_poisson; FEM CPU keeps MFEM/hypre CG with its existing preconditioners."
+    },
+    {
+      "solver": "FEM",
+      "device": "GPU",
+      "status": "proof-of-concept / experimental opt-in / unqualified"
+    },
+    {
+      "solver": "FDM",
+      "device": "CPU",
+      "status": "not-applicable",
+      "reason": "FDM computes demag by FFT convolution; it has no Poisson system to factor."
+    },
+    {
+      "solver": "FDM",
+      "device": "GPU",
+      "status": "not-applicable",
+      "reason": "FDM computes demag by FFT convolution; it has no Poisson system to factor."
+    }
+  ],
+  "equations": [
+    {
+      "id": "eq-direct-system",
+      "symbols": [
+        "K",
+        "phi",
+        "b"
+      ],
+      "sources": [
+        "assembly",
+        "stage-apply"
+      ]
+    },
+    {
+      "id": "eq-direct-factorization",
+      "symbols": [
+        "K",
+        "P",
+        "L",
+        "y",
+        "b",
+        "phitilde"
+      ],
+      "sources": [
+        "cudss-factor",
+        "cudss-solve"
+      ]
+    },
+    {
+      "id": "eq-direct-residual",
+      "symbols": [
+        "r",
+        "b",
+        "K",
+        "phitilde",
+        "rho",
+        "tau"
+      ],
+      "sources": [
+        "residual"
+      ]
+    },
+    {
+      "id": "eq-direct-memory-budget",
+      "symbols": [
+        "Mmargin",
+        "M0",
+        "Mtotal",
+        "B",
+        "Mfree",
+        "Bcap",
+        "Mpeak"
+      ],
+      "sources": [
+        "cudss-factor",
+        "cudss-budget",
+        "cudss-fit"
+      ]
+    }
+  ],
+  "symbols": [
+    {
+      "id": "K",
+      "latex": "K",
+      "meaning": "Poisson system matrix: P1 stiffness plus Robin boundary mass, after essential-condition elimination",
+      "si_unit": "\\mathrm{m}"
+    },
+    {
+      "id": "phi",
+      "latex": "\\phi",
+      "meaning": "Exact vector of nodal scalar-potential coefficients",
+      "si_unit": "\\mathrm{A}"
+    },
+    {
+      "id": "phitilde",
+      "latex": "\\tilde{\\phi}",
+      "meaning": "Computed vector of nodal scalar-potential coefficients",
+      "si_unit": "\\mathrm{A}"
+    },
+    {
+      "id": "b",
+      "latex": "b",
+      "meaning": "Right-hand side vector built from the magnetization",
+      "si_unit": "\\mathrm{A\\,m}"
+    },
+    {
+      "id": "P",
+      "latex": "P",
+      "meaning": "Fill-reducing symmetric permutation chosen in the analysis phase",
+      "si_unit": "1"
+    },
+    {
+      "id": "L",
+      "latex": "L",
+      "meaning": "Lower-triangular Cholesky factor of the permuted matrix",
+      "si_unit": "\\mathrm{m^{1/2}}"
+    },
+    {
+      "id": "y",
+      "latex": "y",
+      "meaning": "Intermediate vector of the forward substitution",
+      "si_unit": "\\mathrm{A\\,m^{1/2}}"
+    },
+    {
+      "id": "r",
+      "latex": "r",
+      "meaning": "Algebraic residual of the computed solution",
+      "si_unit": "\\mathrm{A\\,m}"
+    },
+    {
+      "id": "rho",
+      "latex": "\\rho",
+      "meaning": "Relative Euclidean residual",
+      "si_unit": "1"
+    },
+    {
+      "id": "tau",
+      "latex": "\\tau_{\\mathrm{rel}}",
+      "meaning": "Relative residual tolerance from the solver policy",
+      "si_unit": "1"
+    },
+    {
+      "id": "Mfree",
+      "latex": "M_{\\mathrm{free}}",
+      "meaning": "Free device memory reported by `cudaMemGetInfo` after the analysis phase",
+      "si_unit": "\\mathrm{B}"
+    },
+    {
+      "id": "Mtotal",
+      "latex": "M_{\\mathrm{total}}",
+      "meaning": "Total device memory reported by `cudaMemGetInfo`",
+      "si_unit": "\\mathrm{B}"
+    },
+    {
+      "id": "M0",
+      "latex": "M_{0}",
+      "meaning": "Minimum safety margin, $536\\,870\\,912$ bytes (512 MiB)",
+      "si_unit": "\\mathrm{B}"
+    },
+    {
+      "id": "Mmargin",
+      "latex": "M_{\\mathrm{margin}}",
+      "meaning": "Safety margin kept free for the rest of the run, the display and allocator fragmentation",
+      "si_unit": "\\mathrm{B}"
+    },
+    {
+      "id": "Bcap",
+      "latex": "B_{\\mathrm{cap}}",
+      "meaning": "Optional diagnostic cap on the budget; $+\\infty$ when not set",
+      "si_unit": "\\mathrm{B}"
+    },
+    {
+      "id": "B",
+      "latex": "B",
+      "meaning": "Device budget for the cuDSS factorization and solve phases",
+      "si_unit": "\\mathrm{B}"
+    },
+    {
+      "id": "Mpeak",
+      "latex": "\\hat{M}_{\\mathrm{peak}}",
+      "meaning": "Device peak estimated by cuDSS after analysis (`CUDSS_DATA_MEMORY_ESTIMATES`, entry 1)",
+      "si_unit": "\\mathrm{B}"
+    }
+  ],
+  "sources": [
+    {
+      "id": "cudss-request",
+      "path": "backends/fem/gpu/cuda/demag_poisson/cudss_direct_solver.cpp",
+      "symbol": "demag_gpu_direct_solver_requested",
+      "responsibility": "Reads the opt-in override FULLMAG_FEM_DEMAG_GPU_DIRECT_SOLVER=cudss.",
+      "evidence_status": "proof_of_concept"
+    },
+    {
+      "id": "cudss-factor",
+      "path": "backends/fem/gpu/cuda/demag_poisson/cudss_direct_solver.cpp",
+      "symbol": "create_demag_cudss_direct_solver",
+      "responsibility": "Builds the sorted lower CSR, runs analysis, the memory preflight and factorization, rejects info != 0, measures device bytes.",
+      "evidence_status": "proof_of_concept"
+    },
+    {
+      "id": "cudss-solve",
+      "path": "backends/fem/gpu/cuda/demag_poisson/cudss_direct_solver.cpp",
+      "symbol": "solve_demag_cudss_direct",
+      "responsibility": "Runs the solve phase on the given stream with device-resident right-hand side and solution.",
+      "evidence_status": "proof_of_concept"
+    },
+    {
+      "id": "solver-setup",
+      "path": "backends/fem/gpu/cuda/demag_poisson/hypre_device_solver.cpp",
+      "symbol": "initialize_demag_poisson_hypre_device_solver",
+      "responsibility": "Selects the cuDSS realization at setup instead of the HYPRE Krylov solver and preconditioner.",
+      "evidence_status": "proof_of_concept"
+    },
+    {
+      "id": "stage-apply",
+      "path": "backends/fem/gpu/cuda/demag_poisson/stage_compute.cpp",
+      "symbol": "compute_device_demag_for_device_stage_impl",
+      "responsibility": "Assembles the right-hand side and applies the solve between the HYPRE stream fences.",
+      "evidence_status": "existing owner, extended"
+    },
+    {
+      "id": "residual",
+      "path": "backends/fem/gpu/cuda/demag_poisson/hypre_device_solver.cpp",
+      "symbol": "validate_demag_poisson_hypre_device_solve",
+      "responsibility": "Independent residual certification of every solve, now also for the direct solve.",
+      "evidence_status": "existing check"
+    },
+    {
+      "id": "assembly",
+      "path": "backends/fem/gpu/cuda/demag_poisson/operators.cpp",
+      "symbol": "build_p1_demag_operators",
+      "responsibility": "Builds the Poisson operators of the GPU owner.",
+      "evidence_status": "existing owner, unchanged"
+    },
+    {
+      "id": "policy-python",
+      "path": "packages/fullmag-py/src/fullmag/model/discretization.py",
+      "symbol": "class FemLinearSolverPolicy",
+      "responsibility": "Public policy, defaults, validation and serialization.",
+      "evidence_status": "unchanged"
+    },
+    {
+      "id": "policy-ir",
+      "path": "crates/fullmag-ir/src/mesh_hints.rs",
+      "symbol": "FemHintsIR",
+      "responsibility": "Optional FEM policy in canonical ProblemIR.",
+      "evidence_status": "unchanged"
+    },
+    {
+      "id": "plan-ir",
+      "path": "crates/fullmag-ir/src/plan.rs",
+      "symbol": "FemPlanIR",
+      "responsibility": "Resolved policy passed to native execution.",
+      "evidence_status": "unchanged"
+    },
+    {
+      "id": "cudss-budget",
+      "path": "backends/fem/gpu/cuda/demag_poisson/cudss_direct_solver.cpp",
+      "symbol": "resolve_demag_cudss_device_budget",
+      "responsibility": "Evaluates the device budget B of eq-direct-memory-budget from free and total device memory and the optional cap.",
+      "evidence_status": "contract_test"
+    },
+    {
+      "id": "cudss-fit",
+      "path": "backends/fem/gpu/cuda/demag_poisson/cudss_direct_solver.cpp",
+      "symbol": "check_demag_cudss_factor_fits",
+      "responsibility": "Compares the estimated device peak with the budget and writes the rejection message.",
+      "evidence_status": "contract_test"
+    },
+    {
+      "id": "linear-solver-report",
+      "path": "backends/fem/gpu/cuda/demag_poisson/poisson.cpp",
+      "symbol": "gpu_demag_poisson_linear_solver",
+      "responsibility": "Reports the linear-solve realization of the initialized device Poisson workspace.",
+      "evidence_status": "contract_test"
+    },
+    {
+      "id": "required-mask",
+      "path": "backends/fem/gpu/cuda/integrators/rk/rk_plan.cpp",
+      "symbol": "gpu_rk_required_operator_mask",
+      "responsibility": "Builds the required operator mask with the resolved linear-solve bit.",
+      "evidence_status": "contract_test"
+    },
+    {
+      "id": "receipt-plan-check",
+      "path": "backends/fem/gpu/cuda/runtime/execution_receipt.cpp",
+      "symbol": "plan_masks_are_valid",
+      "responsibility": "Rejects conflicting or orphan linear-solve bits in a receipt plan.",
+      "evidence_status": "contract_test"
+    },
+    {
+      "id": "abi-query",
+      "path": "backends/fem/src/api.cpp",
+      "symbol": "fullmag_fem_backend_get_gpu_demag_linear_solver_v1",
+      "responsibility": "C ABI query of the resolved linear-solve realization.",
+      "evidence_status": "contract_test"
+    },
+    {
+      "id": "abi-header",
+      "path": "native/include/fullmag_fem.h",
+      "symbol": "fullmag_fem_backend_get_gpu_demag_linear_solver_v1",
+      "responsibility": "Public declaration of the query, the DIRECT_SOLVE bit and the realization values.",
+      "evidence_status": "abi"
+    },
+    {
+      "id": "ffi-mirror",
+      "path": "crates/fullmag-fem-sys/src/lib.rs",
+      "symbol": "FULLMAG_FEM_GPU_OPERATOR_DIRECT_SOLVE",
+      "responsibility": "Rust mirror of the bit and the realization values.",
+      "evidence_status": "mirror_test"
+    },
+    {
+      "id": "rust-receipt",
+      "path": "crates/fullmag-runner/src/native_fem/runtime_info.rs",
+      "symbol": "linear_solve_operator_bits_are_consistent",
+      "responsibility": "Rust receipt parser rejects conflicting linear-solve bits.",
+      "evidence_status": "unit_test"
+    },
+    {
+      "id": "rust-provenance",
+      "path": "crates/fullmag-runner/src/dispatch.rs",
+      "symbol": "apply_native_fem_gpu_demag_linear_solver",
+      "responsibility": "Writes resolved_linear_solver into run provenance.",
+      "evidence_status": "runtime_evidence"
+    },
+    {
+      "id": "provenance-type",
+      "path": "crates/fullmag-runner/src/types.rs",
+      "symbol": "FemPoissonDemagProvenance",
+      "responsibility": "Requested policy and resolved realization in run provenance.",
+      "evidence_status": "unit_test"
+    }
+  ],
+  "public_api": {
+    "parameters": [
+      {
+        "python": "FemLinearSolverPolicy.solver",
+        "type": "str",
+        "default": "CG",
+        "si_unit": "1",
+        "validation": "CG or GMRES",
+        "meaning": "Outer iterative method of the requested intent",
+        "backend_support": "FEM CPU/GPU",
+        "problem_ir": "fem.demag_solver_policy.solver"
+      },
+      {
+        "python": "FemLinearSolverPolicy.preconditioner",
+        "type": "str",
+        "default": "AMG",
+        "si_unit": "1",
+        "validation": "AMG, JACOBI or NONE",
+        "meaning": "Preconditioner of the requested intent; unused under the cuDSS override",
+        "backend_support": "FEM CPU/GPU",
+        "problem_ir": "fem.demag_solver_policy.preconditioner"
+      },
+      {
+        "python": "FemLinearSolverPolicy.rtol",
+        "type": "float",
+        "default": "1e-8",
+        "si_unit": "1",
+        "validation": "positive finite value",
+        "meaning": "Relative residual tolerance that certifies every solve",
+        "backend_support": "FEM CPU/GPU",
+        "problem_ir": "fem.demag_solver_policy.rtol"
+      },
+      {
+        "python": "FemLinearSolverPolicy.atol",
+        "type": "float | None",
+        "default": "None",
+        "si_unit": "\\mathrm{A\\,m}",
+        "validation": "None or positive finite value",
+        "meaning": "Optional absolute residual tolerance",
+        "backend_support": "FEM CPU/GPU",
+        "problem_ir": "fem.demag_solver_policy.atol"
+      },
+      {
+        "python": "FemLinearSolverPolicy.max_iterations",
+        "type": "int",
+        "default": "500",
+        "si_unit": "1",
+        "validation": "at least 1",
+        "meaning": "Iteration limit; the direct solve reports one iteration",
+        "backend_support": "FEM CPU/GPU",
+        "problem_ir": "fem.demag_solver_policy.max_iterations"
+      },
+      {
+        "python": "FemLinearSolverPolicy.print_level",
+        "type": "int",
+        "default": "0",
+        "si_unit": "1",
+        "validation": "non-negative",
+        "meaning": "Linear-solver diagnostics level",
+        "backend_support": "FEM CPU/GPU",
+        "problem_ir": "fem.demag_solver_policy.print_level"
+      }
+    ]
+  },
+  "validation": {
+    "plan": "Same build, realization selected only by FULLMAG_FEM_DEMAG_GPU_DIRECT_SOLVER; default path bit-identical to the previous build; certified residual per solve; m_final agreement at the CG tolerance scale; interleaved step timing at 14 911, 49 176 and 89 732 nodes; device and host memory peaks. Review of PR #550: contract tests for both required operator masks, conflicting-bit rejection, the provenance field and the memory preflight (in-budget factor, 1-byte cap); strict 50-step PG-BB film relaxations with and without the override; the 4 082 076-row tetrahedral film with the override must stop after analysis with the budget error.",
+    "results": "docs/audits/2026-11-24-fem-gpu-cudss-direct-poc.md"
+  }
+}

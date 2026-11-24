@@ -1,6 +1,7 @@
 #include "context.hpp"
 #include "backend_handle.hpp"
 #include "gpu/cuda/demag_poisson/operators.hpp"
+#include "gpu/cuda/demag_poisson/poisson.hpp"
 #include "gpu/cuda/integrators/rk/rk.hpp"
 #include "gpu/cuda/integrators/rk/rk_step_preflight.hpp"
 #include "gpu/cuda/integrators/rk/rk_step_stats.hpp"
@@ -10,6 +11,7 @@
 #include <cstdio>
 #include <cstdint>
 #include <cstdlib>
+#include <memory>
 #include <string>
 
 namespace {
@@ -181,6 +183,98 @@ void planner_proves_strict_device_hypre_and_rejects_hybrid_host_unknown()
           "missing device-Hypre workspace must leave demag operators unresolved");
     check(!gpu_rk_plan_is_strict_device_resident(unknown_plan, reason),
           "strict execution must reject unresolved operators before a step");
+#endif
+}
+
+// docs/physics/0997: the required linear-solve bit follows the realization
+// the device Poisson workspace resolved, and the C ABI reports it.
+void planner_requires_the_resolved_linear_solve_operator()
+{
+#if FULLMAG_HAS_MFEM_STACK
+    const uint64_t demag_family =
+        FEM_GPU_OPERATOR_DEMAG_RHS |
+        FEM_GPU_OPERATOR_DEMAG_SOLVE |
+        FEM_GPU_OPERATOR_DEMAG_RECOVERY;
+    // The planner only reads whether a factor exists; this placeholder is never
+    // dereferenced, and its deleter does nothing.
+    static int factor_placeholder = 0;
+    uint64_t required_masks[2] = {0, 0};
+    for (const bool direct : {false, true}) {
+        fullmag_fem_backend backend{};
+        Context &ctx = backend.context;
+        make_exchange_context_ready(ctx, FULLMAG_FEM_INTEGRATOR_HEUN);
+        ctx.demag.enabled = true;
+        ctx.poisson_demag.gpu_demag_mode = FULLMAG_FEM_GPU_DEMAG_DEVICE_HYPRE_POISSON;
+        GpuDemagPoissonWorkspace workspace{};
+        workspace.ready = true;
+        if (direct) {
+            workspace.direct_solver = std::shared_ptr<GpuDemagCudssDirectSolver>(
+                reinterpret_cast<GpuDemagCudssDirectSolver *>(&factor_placeholder),
+                [](GpuDemagCudssDirectSolver *) {});
+        }
+        ctx.poisson_demag.gpu_workspace = &workspace;
+
+        const GpuDemagPoissonLinearSolver expected_solver = direct
+            ? GpuDemagPoissonLinearSolver::CudssDirect
+            : GpuDemagPoissonLinearSolver::HypreKrylov;
+        check(gpu_demag_poisson_linear_solver(ctx) == expected_solver,
+              "device Poisson workspace must report its linear-solve realization");
+        uint32_t abi_solver = 99;
+        check(fullmag_fem_backend_get_gpu_demag_linear_solver_v1(&backend, &abi_solver) ==
+                  FULLMAG_FEM_OK,
+              "linear-solver query must cross the ABI");
+        check(abi_solver == (direct ? FULLMAG_FEM_GPU_DEMAG_LINEAR_SOLVER_CUDSS_DIRECT
+                                    : FULLMAG_FEM_GPU_DEMAG_LINEAR_SOLVER_HYPRE_KRYLOV),
+              "public linear-solver value must match the workspace realization");
+
+        std::string reason;
+        const GpuRkPlan plan = gpu_rk_plan_device_resident(ctx, reason);
+        const uint64_t expected_bit =
+            direct ? FEM_GPU_OPERATOR_DIRECT_SOLVE : FEM_GPU_OPERATOR_PRECONDITIONER;
+        const uint64_t excluded_bit =
+            direct ? FEM_GPU_OPERATOR_PRECONDITIONER : FEM_GPU_OPERATOR_DIRECT_SOLVE;
+        check(plan.enabled, "ready device Poisson plan must be enabled");
+        check((plan.required_operator_mask & (demag_family | expected_bit)) ==
+                  (demag_family | expected_bit),
+              "plan must require the demag family and the resolved linear-solve bit");
+        check((plan.required_operator_mask & excluded_bit) == 0,
+              "plan must not require the other linear-solve realization");
+        check(plan.resolved_device_operator_mask == plan.required_operator_mask,
+              "resolved linear solve must resolve to device");
+        check(gpu_rk_plan_is_strict_device_resident(plan, reason),
+              "both linear-solve realizations must pass strict validation");
+
+        resolve_receipt_from_plan(
+            ctx.gpu_state.execution_receipt, plan, ctx.base_plan.integrator);
+        gpu_execution_receipt_begin_attempt(ctx.gpu_state.execution_receipt);
+        gpu_execution_receipt_note_device(
+            ctx.gpu_state.execution_receipt,
+            plan.required_operator_mask);
+        gpu_execution_receipt_commit_attempt(ctx.gpu_state.execution_receipt);
+        const auto receipt = gpu_execution_receipt_snapshot(ctx.gpu_state.execution_receipt);
+        check(receipt.accounting_valid && receipt.accepted_step_count == 1,
+              "resolved linear-solve receipt must commit");
+        check((receipt.executed_device_operator_mask & expected_bit) != 0 &&
+                  (receipt.executed_device_operator_mask & excluded_bit) == 0,
+              "receipt must publish only the linear solve that ran");
+        required_masks[direct ? 1 : 0] = receipt.required_operator_mask;
+        ctx.poisson_demag.gpu_workspace = nullptr;
+    }
+    check(required_masks[0] != required_masks[1],
+          "Krylov and direct solves must produce distinct receipts");
+
+    fullmag_fem_backend unavailable{};
+    make_exchange_context_ready(unavailable.context, FULLMAG_FEM_INTEGRATOR_HEUN);
+    unavailable.context.demag.enabled = true;
+    unavailable.context.poisson_demag.gpu_demag_mode = FULLMAG_FEM_GPU_DEMAG_HYBRID_CPU_POISSON;
+    uint32_t abi_solver = 99;
+    check(fullmag_fem_backend_get_gpu_demag_linear_solver_v1(&unavailable, &abi_solver) ==
+                  FULLMAG_FEM_OK &&
+              abi_solver == FULLMAG_FEM_GPU_DEMAG_LINEAR_SOLVER_UNAVAILABLE,
+          "hybrid CPU Poisson has no device linear-solve realization");
+    check(fullmag_fem_backend_get_gpu_demag_linear_solver_v1(&unavailable, nullptr) ==
+              FULLMAG_FEM_ERR_INVALID,
+          "linear-solver query must reject a null output");
 #endif
 }
 
@@ -388,6 +482,7 @@ int main()
     planner_covers_every_explicit_rk_integrator();
     planner_tracks_local_fields_and_direct_torques();
     planner_proves_strict_device_hypre_and_rejects_hybrid_host_unknown();
+    planner_requires_the_resolved_linear_solve_operator();
     final_reduction_owner_and_lifecycle_preserve_last_commit();
     strict_transfer_audit_rejects_compute_traffic_only();
     public_execution_request_rejects_invalid_values();

@@ -418,7 +418,31 @@ const FEM_GPU_KNOWN_OPERATOR_MASK: u64 = ffi::FULLMAG_FEM_GPU_OPERATOR_EXCHANGE
     | ffi::FULLMAG_FEM_GPU_OPERATOR_REDUCTIONS
     | ffi::FULLMAG_FEM_GPU_OPERATOR_PRECONDITIONER
     | ffi::FULLMAG_FEM_GPU_OPERATOR_PROJECTED_GRADIENT_BB
-    | ffi::FULLMAG_FEM_GPU_OPERATOR_NONLINEAR_CG;
+    | ffi::FULLMAG_FEM_GPU_OPERATOR_NONLINEAR_CG
+    | ffi::FULLMAG_FEM_GPU_OPERATOR_DIRECT_SOLVE;
+
+/// One linear-solve realization per demag solve (docs/physics/0997): a
+/// preconditioned Krylov solve or a direct factorization, never both, and a
+/// direct factorization only as the demag solve.
+fn linear_solve_operator_bits_are_consistent(required_operator_mask: u64) -> bool {
+    let krylov = required_operator_mask & ffi::FULLMAG_FEM_GPU_OPERATOR_PRECONDITIONER != 0;
+    let direct = required_operator_mask & ffi::FULLMAG_FEM_GPU_OPERATOR_DIRECT_SOLVE != 0;
+    let demag_solve = required_operator_mask & ffi::FULLMAG_FEM_GPU_OPERATOR_DEMAG_SOLVE != 0;
+    !(krylov && direct) && (!direct || demag_solve)
+}
+
+/// Provenance name of the native GPU Poisson linear-solver realization, or
+/// `None` when no device Poisson workspace is initialized.
+pub(crate) fn gpu_demag_linear_solver_name(value: u32) -> Result<Option<&'static str>, RunError> {
+    match value {
+        ffi::FULLMAG_FEM_GPU_DEMAG_LINEAR_SOLVER_UNAVAILABLE => Ok(None),
+        ffi::FULLMAG_FEM_GPU_DEMAG_LINEAR_SOLVER_HYPRE_KRYLOV => Ok(Some("hypre_krylov")),
+        ffi::FULLMAG_FEM_GPU_DEMAG_LINEAR_SOLVER_CUDSS_DIRECT => Ok(Some("cudss_direct")),
+        other => Err(RunError {
+            message: format!("FEM GPU demag linear-solver query returned unknown value {other}"),
+        }),
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct NativeFemGpuExecutionReceipt {
@@ -536,6 +560,9 @@ impl NativeFemGpuExecutionReceipt {
             | receipt.executed_unknown_operator_mask;
         if all_masks & !FEM_GPU_KNOWN_OPERATOR_MASK != 0 {
             return Err(receipt_error("unknown_operator_bits"));
+        }
+        if !linear_solve_operator_bits_are_consistent(receipt.required_operator_mask) {
+            return Err(receipt_error("conflicting_linear_solve_operator_bits"));
         }
         Ok(Self {
             execution_class,
@@ -867,6 +894,10 @@ pub(crate) fn stage_completion_is_representability_stationary(
 mod tests {
     use super::*;
 
+    /// Every known operator with the default Krylov linear solve.
+    const KRYLOV_RECEIPT_MASK: u64 =
+        FEM_GPU_KNOWN_OPERATOR_MASK & !ffi::FULLMAG_FEM_GPU_OPERATOR_DIRECT_SOLVE;
+
     fn execution_receipt_fixture() -> ffi::fullmag_fem_gpu_execution_receipt_v1 {
         ffi::fullmag_fem_gpu_execution_receipt_v1 {
             abi_version: ffi::FULLMAG_FEM_GPU_EXECUTION_RECEIPT_ABI_V1,
@@ -877,11 +908,11 @@ mod tests {
             precision: ffi::fullmag_fem_precision::FULLMAG_FEM_PRECISION_DOUBLE as u32,
             integrator: ffi::fullmag_fem_integrator::FULLMAG_FEM_INTEGRATOR_HEUN as u32,
             device_ordinal: 0,
-            required_operator_mask: FEM_GPU_KNOWN_OPERATOR_MASK,
-            resolved_device_operator_mask: FEM_GPU_KNOWN_OPERATOR_MASK,
+            required_operator_mask: KRYLOV_RECEIPT_MASK,
+            resolved_device_operator_mask: KRYLOV_RECEIPT_MASK,
             resolved_host_operator_mask: 0,
             resolved_unknown_operator_mask: 0,
-            executed_device_operator_mask: FEM_GPU_KNOWN_OPERATOR_MASK,
+            executed_device_operator_mask: KRYLOV_RECEIPT_MASK,
             executed_host_operator_mask: 0,
             executed_unknown_operator_mask: 0,
             fallback_count: 0,
@@ -967,10 +998,7 @@ mod tests {
         let receipt = parsed.into_provenance("strict_device");
         assert_eq!(receipt.resolved, "device_resident");
         assert_eq!(receipt.executed, "cuda_fem");
-        assert_eq!(
-            receipt.executed_device_operator_mask,
-            FEM_GPU_KNOWN_OPERATOR_MASK
-        );
+        assert_eq!(receipt.executed_device_operator_mask, KRYLOV_RECEIPT_MASK);
         assert!(
             receipt.accounting_valid,
             "the safe wrapper exposes accounting validity only after native query success"
@@ -983,9 +1011,9 @@ mod tests {
         raw.execution_class =
             ffi::fullmag_fem_gpu_execution_class_v1::FULLMAG_FEM_GPU_EXECUTION_HYBRID_CPU_POISSON
                 as u32;
-        raw.resolved_device_operator_mask = FEM_GPU_KNOWN_OPERATOR_MASK & !0x204;
+        raw.resolved_device_operator_mask = KRYLOV_RECEIPT_MASK & !0x204;
         raw.resolved_host_operator_mask = 0x204;
-        raw.executed_device_operator_mask = FEM_GPU_KNOWN_OPERATOR_MASK & !0x204;
+        raw.executed_device_operator_mask = KRYLOV_RECEIPT_MASK & !0x204;
         raw.executed_host_operator_mask = 0x204;
         raw.hot_loop_compute_h2d_bytes = 24;
         raw.hot_loop_compute_d2h_bytes = 24;
@@ -997,6 +1025,146 @@ mod tests {
         assert_eq!(receipt.executed, "cuda_fem_hybrid_cpu_poisson");
         assert_eq!(receipt.executed_host_operator_mask, 0x204);
         assert_eq!(receipt.hot_loop_compute_d2h_bytes, 24);
+    }
+
+    /// Strict PG-BB relaxation receipt with demag, as the native planner builds
+    /// it for one linear-solve realization.
+    fn strict_minimizer_receipt(linear_solve_bit: u64) -> ffi::fullmag_fem_gpu_execution_receipt_v1 {
+        let mask = ffi::FULLMAG_FEM_GPU_OPERATOR_EXCHANGE
+            | ffi::FULLMAG_FEM_GPU_OPERATOR_DEMAG_RHS
+            | ffi::FULLMAG_FEM_GPU_OPERATOR_DEMAG_SOLVE
+            | ffi::FULLMAG_FEM_GPU_OPERATOR_DEMAG_RECOVERY
+            | ffi::FULLMAG_FEM_GPU_OPERATOR_REDUCTIONS
+            | ffi::FULLMAG_FEM_GPU_OPERATOR_PROJECTED_GRADIENT_BB
+            | linear_solve_bit;
+        ffi::fullmag_fem_gpu_execution_receipt_v1 {
+            required_operator_mask: mask,
+            resolved_device_operator_mask: mask,
+            executed_device_operator_mask: mask,
+            ..execution_receipt_fixture()
+        }
+    }
+
+    #[test]
+    fn gpu_execution_receipt_distinguishes_krylov_and_direct_linear_solves() {
+        let krylov = NativeFemGpuExecutionReceipt::from_ffi(strict_minimizer_receipt(
+            ffi::FULLMAG_FEM_GPU_OPERATOR_PRECONDITIONER,
+        ))
+        .unwrap()
+        .into_minimizer_provenance("strict_device")
+        .unwrap();
+        let direct = NativeFemGpuExecutionReceipt::from_ffi(strict_minimizer_receipt(
+            ffi::FULLMAG_FEM_GPU_OPERATOR_DIRECT_SOLVE,
+        ))
+        .unwrap()
+        .into_minimizer_provenance("strict_device")
+        .unwrap();
+        // The masks of the measured film relaxations (docs/physics/0997).
+        assert_eq!(krylov.accounting.required_operator_mask, 0x70f);
+        assert_eq!(direct.accounting.required_operator_mask, 0x150f);
+        assert_eq!(
+            krylov.accounting.executed_device_operator_mask
+                & ffi::FULLMAG_FEM_GPU_OPERATOR_DIRECT_SOLVE,
+            0
+        );
+        assert_eq!(
+            direct.accounting.executed_device_operator_mask
+                & ffi::FULLMAG_FEM_GPU_OPERATOR_PRECONDITIONER,
+            0,
+            "no preconditioner ran under the direct solve"
+        );
+        assert!(krylov.validate_strict_device().is_ok());
+        assert!(direct.validate_strict_device().is_ok());
+    }
+
+    #[test]
+    fn gpu_execution_receipt_rejects_conflicting_linear_solve_bits() {
+        let both = NativeFemGpuExecutionReceipt::from_ffi(strict_minimizer_receipt(
+            ffi::FULLMAG_FEM_GPU_OPERATOR_PRECONDITIONER | ffi::FULLMAG_FEM_GPU_OPERATOR_DIRECT_SOLVE,
+        ));
+        assert!(both
+            .unwrap_err()
+            .message
+            .contains("conflicting_linear_solve_operator_bits"));
+
+        let mut orphan = strict_minimizer_receipt(ffi::FULLMAG_FEM_GPU_OPERATOR_DIRECT_SOLVE);
+        orphan.required_operator_mask &= !ffi::FULLMAG_FEM_GPU_OPERATOR_DEMAG_SOLVE;
+        assert!(NativeFemGpuExecutionReceipt::from_ffi(orphan).is_err());
+    }
+
+    #[test]
+    fn gpu_demag_linear_solver_maps_native_values() {
+        assert_eq!(
+            gpu_demag_linear_solver_name(ffi::FULLMAG_FEM_GPU_DEMAG_LINEAR_SOLVER_UNAVAILABLE)
+                .unwrap(),
+            None
+        );
+        assert_eq!(
+            gpu_demag_linear_solver_name(ffi::FULLMAG_FEM_GPU_DEMAG_LINEAR_SOLVER_HYPRE_KRYLOV)
+                .unwrap(),
+            Some("hypre_krylov")
+        );
+        assert_eq!(
+            gpu_demag_linear_solver_name(ffi::FULLMAG_FEM_GPU_DEMAG_LINEAR_SOLVER_CUDSS_DIRECT)
+                .unwrap(),
+            Some("cudss_direct")
+        );
+        assert!(gpu_demag_linear_solver_name(3).is_err());
+    }
+
+    /// The hand-written Rust mirror must match the public C header.
+    #[test]
+    fn gpu_operator_bits_and_linear_solver_values_mirror_the_c_header() {
+        let header = include_str!("../../../../native/include/fullmag_fem.h");
+        let mirrored: [(&str, u64); 13] = [
+            ("FULLMAG_FEM_GPU_OPERATOR_EXCHANGE", ffi::FULLMAG_FEM_GPU_OPERATOR_EXCHANGE),
+            ("FULLMAG_FEM_GPU_OPERATOR_DEMAG_RHS", ffi::FULLMAG_FEM_GPU_OPERATOR_DEMAG_RHS),
+            ("FULLMAG_FEM_GPU_OPERATOR_DEMAG_SOLVE", ffi::FULLMAG_FEM_GPU_OPERATOR_DEMAG_SOLVE),
+            ("FULLMAG_FEM_GPU_OPERATOR_DEMAG_RECOVERY", ffi::FULLMAG_FEM_GPU_OPERATOR_DEMAG_RECOVERY),
+            ("FULLMAG_FEM_GPU_OPERATOR_LOCAL_FIELDS", ffi::FULLMAG_FEM_GPU_OPERATOR_LOCAL_FIELDS),
+            ("FULLMAG_FEM_GPU_OPERATOR_DIRECT_TORQUES", ffi::FULLMAG_FEM_GPU_OPERATOR_DIRECT_TORQUES),
+            ("FULLMAG_FEM_GPU_OPERATOR_LLG_RHS", ffi::FULLMAG_FEM_GPU_OPERATOR_LLG_RHS),
+            ("FULLMAG_FEM_GPU_OPERATOR_RK_STEPPER", ffi::FULLMAG_FEM_GPU_OPERATOR_RK_STEPPER),
+            ("FULLMAG_FEM_GPU_OPERATOR_REDUCTIONS", ffi::FULLMAG_FEM_GPU_OPERATOR_REDUCTIONS),
+            ("FULLMAG_FEM_GPU_OPERATOR_PRECONDITIONER", ffi::FULLMAG_FEM_GPU_OPERATOR_PRECONDITIONER),
+            (
+                "FULLMAG_FEM_GPU_OPERATOR_PROJECTED_GRADIENT_BB",
+                ffi::FULLMAG_FEM_GPU_OPERATOR_PROJECTED_GRADIENT_BB,
+            ),
+            ("FULLMAG_FEM_GPU_OPERATOR_NONLINEAR_CG", ffi::FULLMAG_FEM_GPU_OPERATOR_NONLINEAR_CG),
+            ("FULLMAG_FEM_GPU_OPERATOR_DIRECT_SOLVE", ffi::FULLMAG_FEM_GPU_OPERATOR_DIRECT_SOLVE),
+        ];
+        let mut union = 0_u64;
+        for (name, value) in mirrored {
+            let shift = value.trailing_zeros();
+            assert_eq!(value, 1_u64 << shift, "{name} must be one bit");
+            let definition = format!("#define {name} (UINT64_C(1) << {shift})");
+            assert!(header.contains(&definition), "header must define {definition}");
+            union |= value;
+        }
+        assert_eq!(union, FEM_GPU_KNOWN_OPERATOR_MASK);
+        assert_eq!(
+            header.matches("#define FULLMAG_FEM_GPU_OPERATOR_").count(),
+            mirrored.len(),
+            "every public operator bit must be mirrored"
+        );
+        for (name, value) in [
+            (
+                "FULLMAG_FEM_GPU_DEMAG_LINEAR_SOLVER_UNAVAILABLE",
+                ffi::FULLMAG_FEM_GPU_DEMAG_LINEAR_SOLVER_UNAVAILABLE,
+            ),
+            (
+                "FULLMAG_FEM_GPU_DEMAG_LINEAR_SOLVER_HYPRE_KRYLOV",
+                ffi::FULLMAG_FEM_GPU_DEMAG_LINEAR_SOLVER_HYPRE_KRYLOV,
+            ),
+            (
+                "FULLMAG_FEM_GPU_DEMAG_LINEAR_SOLVER_CUDSS_DIRECT",
+                ffi::FULLMAG_FEM_GPU_DEMAG_LINEAR_SOLVER_CUDSS_DIRECT,
+            ),
+        ] {
+            let definition = format!("{name} = {value},");
+            assert!(header.contains(&definition), "header must define {definition}");
+        }
     }
 
     #[test]
