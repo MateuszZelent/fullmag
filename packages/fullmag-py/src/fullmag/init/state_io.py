@@ -10,6 +10,16 @@ from pathlib import Path
 from typing import Any, Literal, Sequence
 
 from .magnetization import SampledMagnetization
+from .zarr_layouts import (
+    LAYOUT_ROWS,
+    attrs_to_dict,
+    classify_zarr_state_layout,
+    find_zarr_state_dataset,
+    read_structured_zarr_state,
+    split_zarr_array_path,
+    zarr_node_kind,
+    zarr_quantity_hint,
+)
 
 MAGNETIZATION_STATE_FORMATS = ("json", "zarr", "h5", "ovf", "npz", "npy")
 FIELD_STATE_FORMATS = ("zarr", "h5", "ovf", "npz", "npy", "json")
@@ -59,6 +69,18 @@ def load_magnetization(
     dataset: str | None = None,
     sample: int = -1,
 ) -> SampledMagnetization:
+    """Load a 3-component magnetization state as cell/node-ordered vectors.
+
+    Formats: ``json``, ``zarr`` (directory or ``.zarr.zip``), ``h5``, ``ovf``,
+    ``npz`` and ``npy``; ``auto`` infers it from the path.  Zarr accepts the
+    row arrays written by fullmag ([N, 3], [T, N, 3] or flat), MuMax3 arrays
+    [t, z, y, x, 3] or [z, y, x, 3], and fullmag field series
+    ``fields/<q>.zarr`` [sample, component, cell]; ``path`` may be the store
+    root (``dataset=`` names the array, otherwise it is found) or the array
+    itself.  Grids are flattened x fastest, then y, then z, as OVF data and
+    the FDM solver order cells.  ``sample`` selects the time/sample frame; a
+    negative value selects the last frame.
+    """
     resolved = _resolve_state_path(path)
     normalized_format = _normalize_state_format(resolved, format)
 
@@ -146,6 +168,17 @@ def load_field_state(
     sample: int = -1,
     source_origin: Sequence[float] | None = None,
 ) -> FieldState:
+    """Load a field state with its quantity, target and source grid metadata.
+
+    Accepts the same formats and Zarr layouts as :func:`load_magnetization`,
+    plus 1-component (scalar) fields.  For OVF files and structured Zarr grids
+    (MuMax3 [t, z, y, x, c] with ``Nx Ny Nz`` / ``dx dy dz`` / ``Tx Ty Tz``
+    store attributes, or fullmag FDM field series) the result carries
+    ``grid_shape``, ``grid_spacing`` and ``grid_origin``.  A grid without a
+    recorded origin defaults to ``(0, 0, 0)`` m with ``origin_explicit=False``,
+    as an OVF header without ``xmin/ymin/zmin`` does; ``source_origin``
+    overrides the origin explicitly.
+    """
     resolved = _resolve_state_path(path)
     normalized_format = _normalize_field_state_format(resolved, format)
     explicit_origin = _extract_vec3(source_origin) if source_origin is not None else None
@@ -204,8 +237,13 @@ def load_field_state(
 
     grid_shape = _extract_grid_shape(metadata.get("grid_shape"))
     file_origin = _extract_vec3(metadata.get("grid_origin", metadata.get("origin")))
-    grid_origin = explicit_origin if explicit_origin is not None else file_origin
-    origin_explicit = grid_origin is not None
+    if explicit_origin is not None:
+        grid_origin, origin_explicit = explicit_origin, True
+    else:
+        # Structured Zarr grids without a recorded origin report the (0, 0, 0)
+        # default with origin_explicit=False, like parse_ovf_bytes.
+        grid_origin = file_origin
+        origin_explicit = file_origin is not None and bool(metadata.get("origin_explicit", True))
     grid_spacing = _extract_vec3(metadata.get("grid_spacing", metadata.get("spacing")))
     resolved_sample_index = None if sample < 0 else sample
     return FieldState(
@@ -386,6 +424,8 @@ def _normalize_state_format(path: Path, format: str) -> str:
         return "npz"
     if path.suffix.lower() == ".npy":
         return "npy"
+    if path.is_dir() and zarr_node_kind(path) is not None:
+        return "zarr"
     return "json"
 
 
@@ -419,6 +459,8 @@ def _normalize_field_state_format(path: Path, format: str) -> str:
         return "npy"
     if path.suffix.lower() == ".json":
         return "json"
+    if path.is_dir() and zarr_node_kind(path) is not None:
+        return "zarr"
     raise ValueError(
         "field state path must end with .zarr, .zarr.zip, .h5, .hdf5, .ovf, .omf, .npz, .npy, or .json"
     )
@@ -590,19 +632,14 @@ def _load_zarr_values(
     dataset: str | None,
     sample: int,
 ) -> tuple[np.ndarray, str]:
-    np = _require_numpy()
-    zarr, _, _ = _require_zarr()
-    store = _open_zarr_store(path, mode="r")
-    try:
-        root = zarr.open(store=store, mode="r")
-        dataset_path = dataset or _find_zarr_dataset(root)
-        if dataset_path is None:
-            raise ValueError(f"{path} does not contain a suitable magnetization dataset")
-        target = root[dataset_path] if hasattr(root, "__getitem__") else root
-        values = np.asarray(target, dtype=np.float64)
-    finally:
-        store.close()
-    return _select_state_sample(values, sample=sample), dataset_path
+    values, dataset_path, _ = _read_zarr_state(
+        path, dataset=dataset, sample=sample, vector_only=True
+    )
+    if values.ndim != 2 or values.shape[1] != 3:
+        raise ValueError(
+            f"Zarr magnetization requires 3 components (valuedim=3), got {values.shape[-1]} in {path}"
+        )
+    return values, dataset_path
 
 
 def _load_zarr_field_values(
@@ -611,21 +648,89 @@ def _load_zarr_field_values(
     dataset: str | None,
     sample: int,
 ) -> tuple[np.ndarray, str, dict[str, Any]]:
+    return _read_zarr_state(path, dataset=dataset, sample=sample, vector_only=False)
+
+
+def _read_zarr_state(
+    path: Path,
+    *,
+    dataset: str | None,
+    sample: int,
+    vector_only: bool,
+) -> tuple[np.ndarray, str, dict[str, Any]]:
+    """Read one Zarr state as ``[N, C]`` rows, the dataset name and metadata.
+
+    ``load_magnetization`` (``vector_only=True``) and ``load_field_state`` share
+    this reader, so both accept the same layouts.  Row arrays keep their
+    previous handling; structured grids go through ``zarr_layouts`` and add the
+    decoded ``grid_shape``, ``grid_spacing``, ``grid_origin`` and
+    ``origin_explicit`` to the metadata (store attributes merged with array
+    attributes, the array winning).
+    """
     np = _require_numpy()
     zarr, _, _ = _require_zarr()
-    store = _open_zarr_store(path, mode="r")
+    store_path, array_path = split_zarr_array_path(path)
+    if array_path is not None and dataset not in (None, ""):
+        raise ValueError(
+            f"{path} points directly at a Zarr array; omit dataset={dataset!r} "
+            "or pass the store root together with dataset="
+        )
+    store = _open_zarr_store(store_path, mode="r")
     try:
         root = zarr.open(store=store, mode="r")
-        dataset_path = dataset or _find_zarr_field_dataset(root)
-        if dataset_path is None:
-            raise ValueError(f"{path} does not contain a suitable field state dataset")
-        target = root[dataset_path] if dataset_path and hasattr(root, "__getitem__") else root
-        values = np.asarray(target, dtype=np.float64)
-        metadata = _attrs_to_metadata(getattr(root, "attrs", {}))
-        metadata.update(_attrs_to_metadata(getattr(target, "attrs", {})))
+        if array_path is not None:
+            dataset_path = array_path
+        elif dataset:
+            dataset_path = dataset
+        else:
+            found = find_zarr_state_dataset(root, path, vector_only=vector_only)
+            if found is None:
+                kind = "magnetization" if vector_only else "field state"
+                raise ValueError(f"{path} does not contain a suitable {kind} dataset")
+            dataset_path = found
+        if dataset_path and hasattr(root, "shape"):
+            raise ValueError(
+                f"{path} is a single Zarr array; omit dataset={dataset_path!r}"
+            )
+        target = root[dataset_path] if dataset_path else root
+        if not hasattr(target, "shape"):
+            raise ValueError(f"dataset '{dataset_path}' in {path} is a Zarr group, not an array")
+        store_attrs = _attrs_to_metadata(getattr(root, "attrs", {}))
+        array_attrs = _attrs_to_metadata(getattr(target, "attrs", {}))
+        metadata = {**store_attrs, **array_attrs}
+        shape = tuple(int(extent) for extent in target.shape)
+        if classify_zarr_state_layout(shape, array_attrs) == LAYOUT_ROWS:
+            raw = np.asarray(target, dtype=np.float64)
+            if vector_only:
+                values = _select_state_sample(raw, sample=sample)
+            else:
+                values = _select_field_sample(raw, sample=sample)
+        else:
+            decoded = read_structured_zarr_state(
+                target,
+                array_attrs=array_attrs,
+                store_attrs=store_attrs,
+                sample=sample,
+                label=dataset_path or path.name,
+            )
+            values = decoded.values
+            metadata.pop("origin", None)
+            metadata.pop("spacing", None)
+            metadata["grid_shape"] = decoded.grid_shape
+            metadata["grid_spacing"] = decoded.grid_spacing
+            metadata["grid_origin"] = decoded.grid_origin
+            metadata["origin_explicit"] = decoded.origin_explicit
+            if not metadata.get("quantity_id"):
+                quantity = zarr_quantity_hint(array_attrs) or _quantity_id_from_dataset(dataset_path)
+                if quantity == "unknown" and isinstance(array_attrs.get("name"), str):
+                    quantity = array_attrs["name"].strip() or quantity
+                metadata["quantity_id"] = quantity
+            if "units" not in metadata and isinstance(array_attrs.get("unit"), str):
+                if array_attrs["unit"].strip():
+                    metadata["units"] = array_attrs["unit"].strip()
     finally:
         store.close()
-    return _select_field_sample(values, sample=sample), dataset_path, metadata
+    return values, ("" if array_path is not None else dataset_path), metadata
 
 
 def _write_h5_state(path: Path, values: np.ndarray, *, dataset: str) -> None:
@@ -801,66 +906,8 @@ def _find_h5_field_dataset(handle: Any) -> str | None:
     return matches[0] if matches else None
 
 
-def _find_zarr_dataset(root: Any) -> str | None:
-    np = _require_numpy()
-    if hasattr(root, "shape") and _dataset_looks_like_state(np.asarray(root)):
-        return ""
-
-    for candidate in ("values", "m", "magnetization"):
-        try:
-            target = root[candidate]
-        except Exception:
-            continue
-        if _dataset_looks_like_state(np.asarray(target)):
-            return candidate
-
-    matches: list[str] = []
-
-    def visitor(name: str, obj: Any) -> None:
-        if hasattr(obj, "shape") and _dataset_looks_like_state(np.asarray(obj)):
-            matches.append(name)
-
-    if hasattr(root, "visititems"):
-        root.visititems(visitor)
-    return matches[0] if matches else None
-
-
-def _find_zarr_field_dataset(root: Any) -> str | None:
-    if hasattr(root, "shape"):
-        return ""
-
-    for candidate in ("fields/m", "fields/H_eff", "values", "m", "magnetization"):
-        try:
-            target = root[candidate]
-        except Exception:
-            continue
-        if hasattr(target, "shape"):
-            return candidate
-
-    matches: list[str] = []
-
-    def visitor(name: str, obj: Any) -> None:
-        if hasattr(obj, "shape"):
-            matches.append(name)
-
-    if hasattr(root, "visititems"):
-        root.visititems(visitor)
-    return matches[0] if matches else None
-
-
 def _attrs_to_metadata(attrs: Any) -> dict[str, Any]:
-    metadata: dict[str, Any] = {}
-    for key in attrs:
-        value = attrs[key]
-        if hasattr(value, "item"):
-            try:
-                value = value.item()
-            except Exception:
-                pass
-        if isinstance(value, bytes):
-            value = value.decode("utf-8")
-        metadata[str(key)] = value
-    return metadata
+    return attrs_to_dict(attrs)
 
 
 def _quantity_id_from_dataset(dataset: str) -> str:
