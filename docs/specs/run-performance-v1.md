@@ -7,8 +7,12 @@ współdzielą właściciela plików, bez podwójnego writera. Obsługuje ich re
 FDM CPU/GPU oraz FEM CPU/GPU. Szczegółowy `SolverProfile` pozostaje opt-in;
 rejestrator nie włącza jego dodatkowych synchronizacji, logów ani prób.
 
-W katalogu wyniku etapu powstaje `performance/steps.csv`, `resources.csv`
-i `summary.json` (`fullmag.run_performance.v1`). Są to diagnostyki przebiegu,
+W katalogu `performance/` powstają `resources.csv`, `live.v1.json` i
+`summary.json` (`fullmag.run_performance.v1`). Pełny ślad `steps.csv` wymaga
+`FULLMAG_RUN_PERFORMANCE_STEP_CSV=1` w środowisku procesu solvera przed startem.
+Rozmiar włączonego śladu rośnie z liczbą callbacków. Zegar, liczniki i agregaty
+działają w obu trybach. Podsumowanie zapisuje `artifacts.steps_csv_enabled`
+i ścieżkę śladu, gdy writer go otworzył. Są to diagnostyki przebiegu,
 nie dowód zbieżności, poprawności fizyki ani wznowienia. Prywatny accepted
 attempt zachowuje je także przy anulowaniu i błędzie. Identyfikację wykonania
 należy połączyć z sąsiednim `metadata.json` i receiptami próby; etykieta
@@ -53,8 +57,9 @@ python3 -B scripts/report_run_performance.py \
   --output-dir /absolute/report-directory
 ```
 
-Raport zawiera szybkość okna i całego przebiegu, pokrycie, zasoby, narzut
-callbacku, hashe surowych danych oraz PNG/PDF. Wykresy używają ograniczonych
+Raport zawiera szybkość całego przebiegu, pokrycie, zasoby, narzut
+callbacku, hashe użytych plików oraz PNG/PDF. Szybkość okna callbacków i ich
+wykresy są dostępne dla przebiegów ze śladem kroków. Wykresy używają ograniczonych
 koszyków czasu obejmujących cały przebieg. Opcjonalny `--baseline` daje
 porównanie opisowe; deklaracja przyspieszenia wymaga zgodności geometrii,
 materiałów, stanu, tolerancji, precyzji, publikacji i warunków hosta. Czas
