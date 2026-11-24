@@ -2787,9 +2787,12 @@ button.fm-inspector__commit-status--error {
 }
 
 .fm-inspector-select-content {
-  border-color: var(--fm-border-control);
-  border-radius: var(--fm-inspector-control-radius);
-  background: var(--fm-bg-overlay);
+  border-color: var(--fm-glass-line);
+  border-radius: var(--fm-radius-section);
+  background: var(--fm-glass-strong);
+  -webkit-backdrop-filter: var(--fm-glass-backdrop);
+  backdrop-filter: var(--fm-glass-backdrop);
+  box-shadow: var(--fm-elevation-md), inset 0 1px 0 var(--fm-glass-highlight);
   color: var(--fm-text-primary);
   font-family: var(--fm-font-ui);
   font-size: var(--fm-inspector-control-font-size);

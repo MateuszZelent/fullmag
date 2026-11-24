@@ -41,7 +41,7 @@ const PARAM_LABELS: Record<string, string> = {
 const LENGTH_PARAMETERS = new Set([
   "maximum_element_size", "minimum_element_size", "hmax", "hmin",
   "airbox_hmax", "airbox_hmin", "bulk_hmax", "bulk_hmin",
-  "adaptive_h_max", "adaptive_h_min",
+  "adaptive_h_max", "adaptive_h_min", "padding",
   "interface_maximum_element_size", "interface_hmax", "interface_thickness",
   "edge_maximum_element_size", "edge_hmax", "edge_thickness", "edge_transition_distance",
   "corner_maximum_element_size", "corner_hmax", "corner_extent", "corner_transition_distance",
@@ -53,6 +53,21 @@ function formatPolicyValue(path: string, value: string): string {
   const trimmed = value.trim();
   if (trimmed === "unset" || trimmed === "null" || trimmed === "MISSING" || !trimmed) return "unset";
   const parameter = path.split(".").at(-1);
+  if (trimmed.startsWith("[") && trimmed.endsWith("]")) {
+    try {
+      const parsed = JSON.parse(trimmed) as unknown;
+      if (Array.isArray(parsed) && parsed.every((entry) => typeof entry === "number" && Number.isFinite(entry))) {
+        const formatted = parsed.map((entry) =>
+          parameter && LENGTH_PARAMETERS.has(parameter)
+            ? formatLength(entry)
+            : Number(entry.toPrecision(4)).toString(),
+        );
+        return `[${formatted.join(", ")}]`;
+      }
+    } catch {
+      // Keep original string if not valid JSON numeric array.
+    }
+  }
   const num = Number(trimmed);
   if (Number.isFinite(num)) {
     if (parameter === "through_thickness_elements" && Number.isInteger(num) && num > 0) {

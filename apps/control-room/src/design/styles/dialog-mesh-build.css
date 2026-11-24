@@ -1,11 +1,23 @@
 .fm-mesh-build-confirm-dialog {
-  width: min(680px, calc(100vw - var(--fm-space-8)));
-  max-height: min(760px, calc(100vh - 64px));
-  padding-bottom: var(--fm-space-4);
+  width: min(720px, calc(100vw - var(--fm-space-8)));
+  max-height: min(760px, calc(100dvh - 48px));
 }
 
 .fm-mesh-build-confirm-dialog--compact {
-  width: min(540px, calc(100vw - var(--fm-space-8)));
+  width: min(560px, calc(100vw - var(--fm-space-8)));
+}
+
+.fm-mesh-build-confirm__footer {
+  justify-content: space-between;
+  align-items: center;
+  gap: var(--fm-space-3);
+}
+
+.fm-mesh-build-confirm__footer-group {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--fm-space-2);
 }
 
 .fm-mesh-build-confirm {
@@ -23,17 +35,22 @@
 .fm-mesh-build-confirm__section-title {
   margin: 0;
   color: var(--fm-text-primary);
-  font-size: var(--fm-font-size-sm);
+  font-size: var(--fm-font-size-xs);
   font-weight: 650;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
 }
 
 .fm-mesh-build-confirm__diff {
   display: grid;
   border-spacing: 0;
   min-width: 0;
+  max-height: 220px;
   overflow: auto;
+  overscroll-behavior: contain;
   border: 1px solid var(--fm-border-subtle);
-  border-radius: var(--fm-radius-md);
+  border-radius: var(--fm-radius-field);
+  background: var(--fm-section-bg);
 }
 
 .fm-mesh-build-confirm__diff thead,
@@ -72,6 +89,11 @@
 }
 
 .fm-mesh-build-confirm__diff-row--header {
+  position: sticky;
+  top: 0;
+  z-index: var(--fm-z-base);
+  background: color-mix(in oklab, var(--fm-raised-bg) 88%, var(--fm-glass-strong));
+  border-bottom: 1px solid var(--fm-border-subtle);
   color: var(--fm-text-muted);
   font-family: var(--fm-font-sans);
   font-weight: 650;
@@ -81,7 +103,7 @@
 .fm-mesh-build-confirm__diff-row[data-state="added"],
 .fm-mesh-build-confirm__diff-row[data-state="removed"],
 .fm-mesh-build-confirm__diff-row[data-state="realized-drift"] {
-  background: color-mix(in srgb, var(--fm-accent) 8%, transparent);
+  background: color-mix(in oklab, var(--fm-accent) 9%, transparent);
 }
 
 .fm-mesh-build-confirm__diff-row[data-state="unchanged"] {
@@ -98,14 +120,15 @@
 }
 
 .fm-mesh-build-confirm__banner {
-  padding: var(--fm-space-3);
+  padding: var(--fm-space-3) var(--fm-space-4);
   border: 1px solid var(--fm-border-subtle);
-  border-radius: var(--fm-radius-md);
+  border-radius: var(--fm-radius-field);
+  background: var(--fm-section-bg);
 }
 
 .fm-mesh-build-confirm__banner--error {
-  border-color: var(--fm-danger);
-  background: color-mix(in srgb, var(--fm-danger) 8%, transparent);
+  border-color: color-mix(in oklab, var(--fm-danger) 48%, var(--fm-border-subtle));
+  background: color-mix(in oklab, var(--fm-danger) 10%, var(--fm-section-bg));
 }
 
 .fm-mesh-build-confirm__empty {

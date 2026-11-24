@@ -874,41 +874,53 @@
 
 /* ===== PointsTableDialog ===== */
 
-.fm-points-table-dialog {
+.fm-points-table-dialog[open] {
   position: fixed;
   inset: 0;
   margin: auto;
   width: min(90vw, 760px);
-  max-height: min(85vh, 720px);
+  max-height: min(85dvh, 720px);
   display: flex;
   flex-direction: column;
-  border: 1px solid var(--fm-border-default);
-  border-radius: var(--fm-radius-lg);
-  background: var(--fm-bg-panel);
+  border: 1px solid var(--fm-glass-line);
+  border-radius: var(--fm-radius-panel);
+  background: var(--fm-glass-strong);
+  -webkit-backdrop-filter: var(--fm-glass-backdrop);
+  backdrop-filter: var(--fm-glass-backdrop);
   color: var(--fm-text-primary);
-  box-shadow: var(--fm-shadow-panel);
+  box-shadow: var(--fm-elevation-lg), inset 0 1px 0 var(--fm-glass-highlight);
   padding: 0;
-  overflow: hidden;
+  overflow: clip;
+  overscroll-behavior: contain;
+}
+
+.fm-points-table-dialog:modal {
+  overscroll-behavior: contain;
 }
 
 .fm-points-table-dialog::backdrop {
-  background: var(--fm-scrim);
-  backdrop-filter: blur(4px);
+  background: color-mix(in oklab, var(--fm-bg-app) 58%, transparent);
+  -webkit-backdrop-filter: blur(8px) saturate(1.15);
+  backdrop-filter: blur(8px) saturate(1.15);
+  overflow: hidden;
+  overscroll-behavior: contain;
 }
 
 .fm-points-table-dialog__header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: var(--fm-space-3) var(--fm-space-4);
+  padding: var(--fm-space-4) var(--fm-space-5);
   border-bottom: 1px solid var(--fm-border-subtle);
+  background: var(--fm-section-bg);
   flex-shrink: 0;
 }
 
 .fm-points-table-dialog__title {
   margin: 0;
-  font-size: var(--fm-font-size-base);
-  font-weight: 600;
+  font-size: var(--fm-font-size-lg);
+  font-weight: 650;
+  letter-spacing: -0.015em;
   color: var(--fm-text-primary);
 }
 
@@ -916,19 +928,23 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 28px;
-  height: 28px;
-  border: none;
-  border-radius: var(--fm-radius-sm);
+  width: var(--fm-control-height-regular);
+  height: var(--fm-control-height-regular);
+  border: 1px solid transparent;
+  border-radius: var(--fm-radius-field);
   background: transparent;
   color: var(--fm-text-muted);
   cursor: pointer;
   font-size: var(--fm-font-size-sm);
-  transition: background 0.1s ease, color 0.1s ease;
+  transition:
+    background-color var(--fm-duration-micro) var(--fm-ease-out-soft),
+    border-color var(--fm-duration-micro) var(--fm-ease-out-soft),
+    color var(--fm-duration-micro) var(--fm-ease-out-soft);
 }
 
 .fm-points-table-dialog__close:hover {
-  background: var(--fm-surface-hover);
+  border-color: var(--fm-border-subtle);
+  background: color-mix(in oklab, var(--fm-bg-hover) 82%, transparent);
   color: var(--fm-text-primary);
 }
 
@@ -1071,24 +1087,31 @@
 .fm-points-table-dialog__footer {
   display: flex;
   justify-content: flex-end;
-  padding: var(--fm-space-3) var(--fm-space-4);
+  padding: var(--fm-space-3) var(--fm-space-5);
   border-top: 1px solid var(--fm-border-subtle);
+  background: color-mix(in oklab, var(--fm-field-bg) 42%, transparent);
   flex-shrink: 0;
 }
 
 .fm-points-table-dialog__close-btn {
-  padding: var(--fm-space-2) var(--fm-space-4);
-  border: 1px solid var(--fm-border-default);
-  border-radius: var(--fm-radius-sm);
-  background: var(--fm-bg-surface);
+  min-height: var(--fm-control-height-regular);
+  padding: 0 var(--fm-space-3);
+  border: 1px solid color-mix(in oklab, var(--fm-border-control) 52%, var(--fm-glass-line));
+  border-radius: var(--fm-radius-field);
+  background: color-mix(in oklab, var(--fm-raised-bg) 82%, transparent);
   color: var(--fm-text-primary);
+  box-shadow: inset 0 1px 0 var(--fm-glass-highlight), var(--fm-shadow-sm);
   font-size: var(--fm-font-size-sm);
+  font-weight: var(--fm-font-weight-medium);
   cursor: pointer;
-  transition: background 0.1s ease;
+  transition:
+    background-color var(--fm-duration-micro) var(--fm-ease-out-soft),
+    border-color var(--fm-duration-micro) var(--fm-ease-out-soft);
 }
 
 .fm-points-table-dialog__close-btn:hover {
-  background: var(--fm-surface-hover);
+  border-color: var(--fm-border-strong);
+  background: var(--fm-bg-hover);
 }
 
 /* Utility class — hides visually but accessible to screen readers */

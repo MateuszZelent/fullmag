@@ -1,4 +1,13 @@
-import { Activity, BarChart3, Box, Database, ListChecks, type LucideIcon } from "lucide-react";
+import {
+  Activity,
+  AlertOctagon,
+  BarChart3,
+  Box,
+  Compass,
+  Database,
+  ListChecks,
+  type LucideIcon,
+} from "lucide-react";
 
 import type { ExplorerTabId } from "./explorerTypes";
 
@@ -9,4 +18,6 @@ export const EXPLORER_TABS: ReadonlyArray<{ id: ExplorerTabId; label: string; ic
   { id: "results", label: "Results", icon: BarChart3 },
   { id: "jobs", label: "Jobs", icon: ListChecks },
   { id: "diagnostics", label: "Diagnostics", icon: Activity },
+  { id: "helper", label: "Helper", icon: Compass },
+  { id: "errors", label: "Errors", icon: AlertOctagon },
 ];

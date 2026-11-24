@@ -31,7 +31,9 @@ export type ExplorerTabId =
   | "resources"
   | "results"
   | "jobs"
-  | "diagnostics";
+  | "diagnostics"
+  | "helper"
+  | "errors";
 
 export type ExplorerNodeKind =
   | "session.root"

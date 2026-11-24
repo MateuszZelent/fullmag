@@ -1,31 +1,38 @@
 .fm-context-menu-content {
-  min-width: 180px;
-  border: 1px solid var(--fm-border-default);
-  border-radius: var(--fm-radius-md);
-  background: var(--fm-bg-overlay);
-  box-shadow: var(--fm-shadow-panel);
+  min-width: 196px;
+  overflow: clip;
+  border: 1px solid var(--fm-glass-line);
+  border-radius: var(--fm-radius-section);
+  background: var(--fm-glass-strong);
+  -webkit-backdrop-filter: var(--fm-glass-backdrop);
+  backdrop-filter: var(--fm-glass-backdrop);
+  box-shadow: var(--fm-elevation-md), inset 0 1px 0 var(--fm-glass-highlight);
   color: var(--fm-text-primary);
-  padding: var(--fm-space-1);
+  padding: var(--fm-space-1-5);
   z-index: var(--fm-z-overlay);
+  animation: fm-popover-in var(--fm-duration-fast) var(--fm-ease-out-soft);
 }
 
 .fm-context-menu-item {
   position: relative;
   display: flex;
-  min-height: var(--fm-control-height-compact);
+  min-height: var(--fm-control-height-regular);
   align-items: center;
   gap: var(--fm-space-2);
-  border-radius: var(--fm-radius-sm);
+  border-radius: var(--fm-radius-field);
   color: var(--fm-text-secondary);
-  cursor: default;
+  cursor: pointer;
   font-size: var(--fm-font-size-sm);
   outline: none;
   padding: 0 var(--fm-space-2);
+  transition:
+    background-color var(--fm-duration-micro) var(--fm-ease-out-soft),
+    color var(--fm-duration-micro) var(--fm-ease-out-soft);
   user-select: none;
 }
 
 .fm-context-menu-item[data-highlighted] {
-  background: var(--fm-bg-selected);
+  background: color-mix(in oklab, var(--fm-bg-selected) 85%, transparent);
   color: var(--fm-text-primary);
 }
 

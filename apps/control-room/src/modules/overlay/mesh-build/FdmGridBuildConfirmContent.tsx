@@ -13,6 +13,7 @@ export interface FdmGridBuildConfirmContentProps {
   gridMemoryMB?: number | null;
   gridShape?: [number, number, number] | null;
   gridSpacing?: [number, number, number] | null;
+  hideFooter?: boolean;
   membershipRevision?: number | null;
   mode?: "pre-build" | "submitting" | "waiting" | "post-build" | "error";
   objectsCount: number;
@@ -24,6 +25,66 @@ export interface FdmGridBuildConfirmContentProps {
   sceneRevision?: number | null;
   stale?: boolean;
   totalCells?: number | null;
+}
+
+export function FdmGridBuildConfirmFooter({
+  mode,
+  onApplyBuild,
+  onCancel,
+  onOpenMeshOverview,
+  ready = true,
+}: {
+  mode?: "pre-build" | "submitting" | "waiting" | "post-build" | "error";
+  onApplyBuild: () => void;
+  onCancel: () => void;
+  onOpenMeshOverview?: () => void;
+  ready?: boolean;
+}) {
+  const phase = mode ?? "pre-build";
+  const buildButtonLabel =
+    phase === "submitting"
+      ? "Rebuilding grid…"
+      : "Build Grid & Materialize Masks";
+
+  return (
+    <>
+      <Button size="sm" type="button" variant="ghost" onClick={onCancel}>
+        {phase === "pre-build" ? "Cancel" : "Close"}
+      </Button>
+      <div className="fm-mesh-build-confirm__footer-group">
+        {onOpenMeshOverview ? (
+          <Button
+            size="sm"
+            type="button"
+            variant="secondary"
+            onClick={onOpenMeshOverview}
+          >
+            Mesh Overview
+          </Button>
+        ) : null}
+        {phase !== "pre-build" && phase !== "submitting" ? null : (
+          <Button
+            disabled={phase === "submitting" || !ready}
+            size="sm"
+            type="button"
+            variant="primary"
+            onClick={onApplyBuild}
+          >
+            {phase === "submitting" ? (
+              <Loader2
+                aria-hidden="true"
+                className="animate-spin"
+                size={13}
+              />
+            ) : (
+              <Grid3X3 aria-hidden="true" size={13} />
+            )}
+            <span>{buildButtonLabel}</span>
+          </Button>
+        )}
+      </div>
+    </>
+  );
 }
 
 function resolveLengthUnit(values: readonly number[]): {
@@ -83,6 +144,7 @@ export function FdmGridBuildConfirmContent({
   gridMemoryMB,
   gridShape,
   gridSpacing,
+  hideFooter = false,
   membershipRevision,
   mode,
   objectsCount,
@@ -96,10 +158,6 @@ export function FdmGridBuildConfirmContent({
   totalCells,
 }: FdmGridBuildConfirmContentProps) {
   const phase = mode ?? "pre-build";
-  const buildButtonLabel =
-    phase === "submitting"
-      ? "Rebuilding grid…"
-      : "Build Grid & Materialize Masks";
 
   const kpis = [
     { label: "Grid", value: formatShape(gridShape) },
@@ -128,9 +186,9 @@ export function FdmGridBuildConfirmContent({
         {kpis.map((kpi) => (
           <div
             key={kpi.label}
-            className="flex min-w-0 flex-col gap-1 rounded-md border border-[var(--fm-border-subtle)] bg-[var(--fm-bg-panel)] px-3 py-2.5"
+            className="flex min-w-0 flex-col gap-1 rounded-[var(--fm-radius-field)] border border-[var(--fm-border-subtle)] bg-[var(--fm-section-bg)] px-3 py-2.5"
           >
-            <span className="truncate text-[var(--fm-font-size-xs)] font-medium uppercase tracking-wider text-[var(--fm-text-muted)]">
+            <span className="truncate text-[var(--fm-font-size-2xs)] font-semibold uppercase tracking-wider text-[var(--fm-text-muted)]">
               {kpi.label}
             </span>
             <span className="truncate font-mono text-sm font-semibold tabular-nums text-[var(--fm-text-primary)]">
@@ -203,9 +261,9 @@ export function FdmGridBuildConfirmContent({
       {/* Aligned Specification List */}
       <section
         aria-label="Source scene geometry"
-        className="overflow-hidden rounded-md border border-[var(--fm-border-subtle)] bg-[var(--fm-bg-panel)]"
+        className="overflow-hidden rounded-[var(--fm-radius-field)] border border-[var(--fm-border-subtle)] bg-[var(--fm-section-bg)]"
       >
-        <div className="border-b border-[var(--fm-border-subtle)] bg-[var(--fm-bg-elevated)] px-3.5 py-2">
+        <div className="border-b border-[var(--fm-border-subtle)] bg-[color-mix(in_oklab,var(--fm-raised-bg)_58%,transparent)] px-3.5 py-2">
           <h3 className="m-0 text-xs font-semibold text-[var(--fm-text-primary)]">
             FDM Structured Grid &amp; Mask Refresh
           </h3>
@@ -254,44 +312,18 @@ export function FdmGridBuildConfirmContent({
         {sceneRevision != null ? `Revision ${sceneRevision}` : "Scene baseline"}
       </p>
 
-      {/* Polished Footer Actions */}
-      <div className="mt-1 flex flex-wrap items-center justify-between gap-2 border-t border-[var(--fm-border-subtle)] pt-3.5">
-        <Button size="sm" type="button" variant="ghost" onClick={onCancel}>
-          {phase === "pre-build" ? "Cancel" : "Close"}
-        </Button>
-        <div className="flex flex-wrap items-center gap-2">
-          {onOpenMeshOverview ? (
-            <Button
-              size="sm"
-              type="button"
-              variant="secondary"
-              onClick={onOpenMeshOverview}
-            >
-              Mesh Overview
-            </Button>
-          ) : null}
-          {phase !== "pre-build" && phase !== "submitting" ? null : (
-            <Button
-              disabled={phase === "submitting" || !ready}
-              size="sm"
-              type="button"
-              variant="primary"
-              onClick={onApplyBuild}
-            >
-              {phase === "submitting" ? (
-                <Loader2
-                  aria-hidden="true"
-                  className="animate-spin"
-                  size={13}
-                />
-              ) : (
-                <Grid3X3 aria-hidden="true" size={13} />
-              )}
-              <span>{buildButtonLabel}</span>
-            </Button>
-          )}
+      {/* Inline footer fallback when rendered standalone outside DialogFooter */}
+      {!hideFooter ? (
+        <div className="mt-1 flex flex-wrap items-center justify-between gap-2 border-t border-[var(--fm-border-subtle)] pt-3.5">
+          <FdmGridBuildConfirmFooter
+            mode={mode}
+            ready={ready}
+            onApplyBuild={onApplyBuild}
+            onCancel={onCancel}
+            onOpenMeshOverview={onOpenMeshOverview}
+          />
         </div>
-      </div>
+      ) : null}
     </div>
   );
 }

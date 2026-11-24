@@ -566,9 +566,9 @@
   flex-direction: column;
   gap: var(--fm-space-2);
   padding: var(--fm-space-3);
-  border-radius: var(--fm-radius-md);
+  border-radius: var(--fm-radius-section);
   border: 1px solid var(--fm-border-subtle);
-  background: var(--fm-bg-panel);
+  background: var(--fm-section-bg);
   color: var(--fm-text-primary);
 }
 
@@ -635,14 +635,14 @@
   justify-content: space-between;
   gap: var(--fm-space-2);
   padding: var(--fm-space-2) var(--fm-space-3);
-  border-radius: var(--fm-radius-sm);
+  border-radius: var(--fm-radius-field);
   border: 1px solid var(--fm-border-subtle);
-  background: var(--fm-bg-panel-raised);
+  background: color-mix(in oklab, var(--fm-raised-bg) 72%, transparent);
 }
 
 .fm-helper-guide__card[data-check-state="blocked"],
 .fm-helper-guide__card[data-check-state="incomplete"] {
-  border-color: color-mix(in srgb, var(--fm-warning) 35%, var(--fm-border-subtle));
+  border-color: color-mix(in oklab, var(--fm-warning) 40%, var(--fm-border-subtle));
 }
 
 .fm-helper-guide__card-copy {

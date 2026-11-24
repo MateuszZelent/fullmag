@@ -26,10 +26,10 @@
   gap: var(--fm-space-2);
   align-items: center;
   min-width: 0;
-  padding: var(--fm-space-2);
+  padding: var(--fm-space-2) var(--fm-space-3);
   border: 1px solid var(--fm-border-subtle);
-  border-radius: var(--fm-radius-md);
-  background: var(--fm-bg-panel);
+  border-radius: var(--fm-radius-field);
+  background: var(--fm-section-bg);
   color: var(--fm-text-primary);
   font-size: var(--fm-font-size-sm);
 }
