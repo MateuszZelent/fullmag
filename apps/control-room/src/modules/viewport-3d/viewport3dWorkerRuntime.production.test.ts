@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { buildViewport3DVectorGlyphsOffMainThread, disposeVectorGlyphBuildWorker } from "./layers/vectorGlyphBuildScheduler";
+import { buildViewport3DVectorGlyphs } from "./layers/vectorGlyphBuildModel";
 import { buildViewport3DFdmCuboidOffMainThread, disposeViewport3DFdmCuboidBuildWorker } from "./layers/fdmCuboidBuildScheduler";
 import { buildViewport3DRegionOverlaysOffMainThread, disposeViewport3DRegionOverlayBuildWorker } from "./region-overlays/viewport3dRegionOverlayBuildScheduler";
 import { buildVertexScalarColorsOffMainThread, disposeViewport3DColorTransformWorker } from "./viewport3dColorTransformScheduler";
@@ -39,6 +40,39 @@ describe("viewport 3D production worker disposers", () => {
     const results = await Promise.all(pending);
     expect(results.every((error) => error instanceof Error && error.name === "AbortError")).toBe(true);
     expect(PendingWorker.instances.every((worker) => worker.terminate.mock.calls.length === 1 && Array.from(worker.listeners.values()).every((listeners) => listeners.size === 0))).toBe(true);
+  });
+
+  it("terminates glyph workers and their idle timer when the later renderer owner releases", async () => {
+    vi.stubGlobal("Worker", PendingWorker);
+    const viewport = acquireViewport3DWorkerRuntime();
+    const renderer = acquireViewport3DWorkerRuntime();
+    viewport.release();
+    expect(getViewport3DWorkerRuntimeSnapshot()).toMatchObject({ activeLeases: 1, disposed: false });
+
+    const request = {
+      colorMode: "x",
+      headRadiusRatio: 0.2,
+      segments: new Float32Array([0, 0, 0, 1, 0, 0, 1]),
+      shaftRadiusRatio: 0.1,
+    };
+    const builds = ["first", "second"].map((buildKey) =>
+      buildViewport3DVectorGlyphsOffMainThread(request, { buildKey }));
+    expect(PendingWorker.instances).toHaveLength(2);
+    for (const worker of PendingWorker.instances) {
+      const [{ id }] = worker.postMessage.mock.calls[0]!;
+      const event = new MessageEvent("message", {
+        data: { data: buildViewport3DVectorGlyphs(request), id, ok: true },
+      });
+      for (const listener of worker.listeners.get("message") ?? []) listener(event);
+    }
+    await Promise.all(builds);
+
+    expect(getViewport3DWorkerRuntimeSnapshot()).toMatchObject({ jobs: 0, timers: 1, workers: 2 });
+    renderer.release();
+    expect(getViewport3DWorkerRuntimeSnapshot()).toEqual({
+      activeLeases: 0, disposed: true, jobs: 0, timers: 0, workers: 0,
+    });
+    for (const worker of PendingWorker.instances) expect(worker.terminate).toHaveBeenCalledOnce();
   });
 
   it("publishes live worker and job counts after a lane starts and clears them on final lease release", async () => {

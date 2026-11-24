@@ -1950,6 +1950,14 @@ describe("notifyMeshTopologyRendered", () => {
 });
 
 describe("Viewport3DModule scene wiring", () => {
+  it("keeps worker ownership in both the DOM viewport and the separate renderer", () => {
+    const viewportSource = readFileSync(new URL("./Viewport3DModule.tsx", import.meta.url), "utf8");
+    const sceneSource = readFileSync(new URL("./layers/Viewport3DScene.tsx", import.meta.url), "utf8");
+
+    expect(viewportSource).toContain("useViewport3DWorkerRuntime(reportWorkerRuntimeCounts)");
+    expect(sceneSource).toContain("useViewport3DWorkerRuntime();");
+  });
+
   it("publishes target-specific FDM Airbox render evidence", () => {
     const source = readFileSync(
       new URL("./Viewport3DModule.tsx", import.meta.url),
