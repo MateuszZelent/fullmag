@@ -133,9 +133,9 @@ print(periodicity.to_ir())
 
 | Python parameter | Type | Default | SI unit | Validation | Meaning | Backend | IR destination |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| FdmPbc.axes | tuple[bool, bool, bool] | required | 1 | Three Cartesian flags with one lateral periodic axis for this kernel | Periodic axes | FDM CPU/GPU | fdm_plan.periodicity.axes |
-| FdmPbc.demag | str | open | 1 | truncated_images selects this kernel for a supported mesh | Dipolar boundary policy | FDM CPU/GPU | fdm_plan.periodicity.demag |
-| FdmPbc.image_counts | tuple[int, int, int] or None | None | 1 | Three nonnegative counts for truncated_images or None | Replicas per side by axis | FDM CPU/GPU | fdm_plan.periodicity.image_counts |
+| FdmPbc.axes | tuple[bool, bool, bool] | required | 1 | Three Cartesian flags with one lateral periodic axis for this kernel | Periodic axes | FDM CPU/GPU | backend_policy.pbc.axes |
+| FdmPbc.demag | str | open | 1 | truncated_images selects this kernel for a supported mesh | Dipolar boundary policy | FDM CPU/GPU | backend_policy.pbc.demag |
+| FdmPbc.image_counts | tuple[int, int, int] or None | None | 1 | Three nonnegative counts for truncated_images or None | Replicas per side by axis | FDM CPU/GPU | backend_policy.pbc.image_counts |
 
 (single-layer-dipolar-round-trip-and-failure-semantics)=
 ### Round-trip and failure semantics

@@ -3890,6 +3890,7 @@ mod tests {
             (["op:1", "op:1"], "GEOMETRY_CSG_OPERAND_ID_DUPLICATE"),
         ] {
             let scene = scene_with_object(SceneGeometry {
+                geometry_name: None,
                 source_asset: None,
                 geometry_kind: "Union".to_string(),
                 geometry_params: json!({
@@ -3913,6 +3914,7 @@ mod tests {
     #[test]
     fn legacy_raw_geometry_operand_arrays_remain_supported() {
         let scene = scene_with_object(SceneGeometry {
+            geometry_name: None,
             source_asset: None,
             geometry_kind: "Union".to_string(),
             geometry_params: json!({ "operands": [

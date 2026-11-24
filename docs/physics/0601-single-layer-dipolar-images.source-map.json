@@ -191,7 +191,7 @@
         "validation": "Three Cartesian flags with one lateral periodic axis for this kernel",
         "meaning": "Periodic axes",
         "backend_support": "FDM CPU/GPU",
-        "problem_ir": "fdm_plan.periodicity.axes"
+        "problem_ir": "backend_policy.pbc.axes"
       },
       {
         "python": "FdmPbc.demag",
@@ -201,7 +201,7 @@
         "validation": "truncated_images selects this kernel for a supported mesh",
         "meaning": "Dipolar boundary policy",
         "backend_support": "FDM CPU/GPU",
-        "problem_ir": "fdm_plan.periodicity.demag"
+        "problem_ir": "backend_policy.pbc.demag"
       },
       {
         "python": "FdmPbc.image_counts",
@@ -211,7 +211,7 @@
         "validation": "Three nonnegative counts for truncated_images or None",
         "meaning": "Replicas per side by axis",
         "backend_support": "FDM CPU/GPU",
-        "problem_ir": "fdm_plan.periodicity.image_counts"
+        "problem_ir": "backend_policy.pbc.image_counts"
       }
     ]
   }
