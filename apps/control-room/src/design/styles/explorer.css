@@ -826,12 +826,12 @@
 
 .fm-explorer-errors__summary {
   display: grid;
+  flex: 0 0 auto;
   grid-template-columns: minmax(0, 1fr);
   gap: var(--fm-space-2);
   min-width: 0;
   max-width: 100%;
-  overflow: hidden;
-  padding: var(--fm-space-3);
+  padding: var(--fm-space-2);
   border: 1px solid var(--fm-glass-line);
   border-radius: var(--fm-radius-section);
   background: var(--fm-section-bg);
@@ -863,6 +863,8 @@
 
 .fm-explorer-errors__filters {
   display: grid;
+  flex: 0 0 auto;
+  grid-template-columns: minmax(0, 1fr);
   gap: var(--fm-space-1-5);
   min-width: 0;
 }
@@ -916,7 +918,16 @@
 }
 
 .fm-explorer-errors__search {
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
   margin: 0;
+  box-sizing: border-box;
+}
+
+.fm-explorer-errors__search input {
+  width: 100%;
+  min-width: 0;
 }
 
 .fm-explorer-errors__list {
