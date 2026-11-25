@@ -1,0 +1,346 @@
+{
+  "document": {
+    "path": "docs/physics/0953-fullwave-fit-surface-gap-port.md"
+  },
+  "backend_matrix": [
+    {
+      "solver": "FDM",
+      "device": "CPU",
+      "status": "not-applicable",
+      "reason": "The full-wave FIT surface boundary is a standalone CPU double EM reference. Consumes sampled H in a separate micromagnetic step."
+    },
+    {
+      "solver": "FDM",
+      "device": "GPU",
+      "status": "not-applicable",
+      "reason": "The full-wave FIT surface boundary is a standalone CPU double EM reference. No GPU FIT sheet-port operator is qualified."
+    },
+    {
+      "solver": "FEM",
+      "device": "CPU",
+      "status": "not-applicable",
+      "reason": "The full-wave FIT surface boundary is a standalone CPU double EM reference. The independent H(curl) comparison uses Palace."
+    },
+    {
+      "solver": "FEM",
+      "device": "GPU",
+      "status": "not-applicable",
+      "reason": "The full-wave FIT surface boundary is a standalone CPU double EM reference. No GPU FEM sheet-port operator is qualified."
+    }
+  ],
+  "equations": [
+    {
+      "id": "eq-fit-gap-maxwell",
+      "symbols": [
+        "E",
+        "H",
+        "i",
+        "omega",
+        "sigma",
+        "epsilon",
+        "mu",
+        "curl"
+      ],
+      "sources": [
+        "volume",
+        "operator"
+      ]
+    },
+    {
+      "id": "eq-fit-gap-boundary",
+      "symbols": [
+        "n",
+        "H",
+        "Ys",
+        "Et",
+        "Einc",
+        "d"
+      ],
+      "sources": [
+        "assembly",
+        "tem"
+      ]
+    },
+    {
+      "id": "eq-fit-gap-normalization",
+      "symbols": [
+        "Rs",
+        "N",
+        "R",
+        "width",
+        "ell",
+        "Ys",
+        "Einc",
+        "Pinc",
+        "i",
+        "phi"
+      ],
+      "sources": [
+        "assembly",
+        "fixture",
+        "tem"
+      ]
+    },
+    {
+      "id": "eq-fit-gap-weak",
+      "symbols": [
+        "L",
+        "F",
+        "P",
+        "i",
+        "omega",
+        "Gamma",
+        "vt",
+        "Ys",
+        "Et",
+        "Einc",
+        "d",
+        "dS"
+      ],
+      "sources": [
+        "assembly",
+        "operator",
+        "tem"
+      ]
+    },
+    {
+      "id": "eq-fit-gap-discrete",
+      "symbols": [
+        "M",
+        "Ys",
+        "Dy",
+        "Dz",
+        "b",
+        "Einc",
+        "dy"
+      ],
+      "sources": [
+        "assembly",
+        "fixture"
+      ]
+    }
+  ],
+  "symbols": [
+    {
+      "id": "E",
+      "latex": "E",
+      "meaning": "Electric field phasor",
+      "si_unit": "\\mathrm{V\\,m^{-1}}"
+    },
+    {
+      "id": "H",
+      "latex": "H",
+      "meaning": "Magnetic field phasor",
+      "si_unit": "\\mathrm{A\\,m^{-1}}"
+    },
+    {
+      "id": "i",
+      "latex": "i",
+      "meaning": "Imaginary unit",
+      "si_unit": "1"
+    },
+    {
+      "id": "omega",
+      "latex": "\\omega",
+      "meaning": "Angular frequency",
+      "si_unit": "\\mathrm{rad\\,s^{-1}}"
+    },
+    {
+      "id": "sigma",
+      "latex": "\\sigma",
+      "meaning": "Conductivity",
+      "si_unit": "\\mathrm{S\\,m^{-1}}"
+    },
+    {
+      "id": "epsilon",
+      "latex": "\\varepsilon",
+      "meaning": "Permittivity",
+      "si_unit": "\\mathrm{F\\,m^{-1}}"
+    },
+    {
+      "id": "mu",
+      "latex": "\\mu",
+      "meaning": "Permeability",
+      "si_unit": "\\mathrm{H\\,m^{-1}}"
+    },
+    {
+      "id": "curl",
+      "latex": "\\nabla\\times",
+      "meaning": "Spatial curl operator",
+      "si_unit": "\\mathrm{m^{-1}}"
+    },
+    {
+      "id": "n",
+      "latex": "n",
+      "meaning": "Outward unit normal",
+      "si_unit": "1"
+    },
+    {
+      "id": "Et",
+      "latex": "E_t",
+      "meaning": "Tangential electric trace",
+      "si_unit": "\\mathrm{V\\,m^{-1}}"
+    },
+    {
+      "id": "Einc",
+      "latex": "E_{\\rm inc}",
+      "meaning": "Incident electric field amplitude on a patch",
+      "si_unit": "\\mathrm{V\\,m^{-1}}"
+    },
+    {
+      "id": "d",
+      "latex": "d",
+      "meaning": "Unit drive direction",
+      "si_unit": "1"
+    },
+    {
+      "id": "dy",
+      "latex": "d_y",
+      "meaning": "Signed component of the drive along the y axis",
+      "si_unit": "1"
+    },
+    {
+      "id": "N",
+      "latex": "N",
+      "meaning": "Number of equal-resistance branches in one port",
+      "si_unit": "1"
+    },
+    {
+      "id": "R",
+      "latex": "R",
+      "meaning": "Total port resistance",
+      "si_unit": "\\Omega"
+    },
+    {
+      "id": "Rs",
+      "latex": "R_s",
+      "meaning": "Sheet resistance",
+      "si_unit": "\\Omega"
+    },
+    {
+      "id": "Ys",
+      "latex": "Y_s",
+      "meaning": "Sheet admittance",
+      "si_unit": "\\mathrm{S}"
+    },
+    {
+      "id": "ell",
+      "latex": "\\ell",
+      "meaning": "Whole-patch length along the drive",
+      "si_unit": "\\mathrm{m}"
+    },
+    {
+      "id": "width",
+      "latex": "w",
+      "meaning": "Whole-patch width transverse to the drive",
+      "si_unit": "\\mathrm{m}"
+    },
+    {
+      "id": "Pinc",
+      "latex": "P_{\\rm inc}",
+      "meaning": "Total incident time-average power",
+      "si_unit": "\\mathrm{W}"
+    },
+    {
+      "id": "phi",
+      "latex": "\\phi",
+      "meaning": "Incident phase",
+      "si_unit": "\\mathrm{rad}"
+    },
+    {
+      "id": "Gamma",
+      "latex": "\\Gamma",
+      "meaning": "Boundary patch",
+      "si_unit": "\\mathrm{m^2}"
+    },
+    {
+      "id": "dS",
+      "latex": "dS",
+      "meaning": "Differential surface area",
+      "si_unit": "\\mathrm{m^2}"
+    },
+    {
+      "id": "vt",
+      "latex": "v_t^*",
+      "meaning": "Conjugated tangential trace of the electric test field",
+      "si_unit": "\\mathrm{V\\,m^{-1}}"
+    },
+    {
+      "id": "L",
+      "latex": "L_\\Gamma",
+      "meaning": "Surface contribution on the left of the weak equation",
+      "si_unit": "\\mathrm{W\\,s^{-1}}"
+    },
+    {
+      "id": "F",
+      "latex": "F_\\Gamma",
+      "meaning": "Surface contribution on the right of the weak equation",
+      "si_unit": "\\mathrm{W\\,s^{-1}}"
+    },
+    {
+      "id": "P",
+      "latex": "P_\\Gamma",
+      "meaning": "Absorbed time-average power on a patch",
+      "si_unit": "\\mathrm{W}"
+    },
+    {
+      "id": "Dy",
+      "latex": "\\Delta y",
+      "meaning": "Face cell length along y",
+      "si_unit": "\\mathrm{m}"
+    },
+    {
+      "id": "Dz",
+      "latex": "\\Delta z",
+      "meaning": "Face cell length along z",
+      "si_unit": "\\mathrm{m}"
+    },
+    {
+      "id": "M",
+      "latex": "M_{y}",
+      "meaning": "Conductance block for two y-parallel edge integrals",
+      "si_unit": "\\mathrm{S}"
+    },
+    {
+      "id": "b",
+      "latex": "b_y",
+      "meaning": "Incident vector entry before multiplication by angular frequency",
+      "si_unit": "\\mathrm{A}"
+    }
+  ],
+  "sources": [
+    {
+      "id": "assembly",
+      "path": "scripts/rf_fit_surface_gap_port.py",
+      "symbol": "assemble_gap_ports",
+      "responsibility": "Stamp the analytic conductance and signed incident surface vector."
+    },
+    {
+      "id": "operator",
+      "path": "scripts/rf_fit_surface_gap_port.py",
+      "symbol": "solve_gap_ports",
+      "responsibility": "Solve the volume and boundary system and report power terms."
+    },
+    {
+      "id": "volume",
+      "path": "scripts/rf_fit_reference.py",
+      "symbol": "assemble",
+      "responsibility": "Build the orthogonal volume topology and material weights."
+    },
+    {
+      "id": "fixture",
+      "path": "scripts/test_rf_fit_surface_gap_port.py",
+      "symbol": "test_nonuniform_rectangles_conserve_resistance_power_and_polarity",
+      "responsibility": "Check admittance, direction, and the resistance and power normalizations."
+    },
+    {
+      "id": "tem",
+      "path": "scripts/test_rf_fit_surface_gap_port.py",
+      "symbol": "test_tem_guide_recovers_known_voltage_phase_and_load_power",
+      "responsibility": "Check phase, distribution and absorbed power for matched and mismatched loads."
+    }
+  ],
+  "public_api": {
+    "parameters": []
+  }
+}
