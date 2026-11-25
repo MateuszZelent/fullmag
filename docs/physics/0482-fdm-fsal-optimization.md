@@ -259,8 +259,14 @@ runtime, a faktyczne wykonanie musi być widoczne w receipt/proweniencji.
 - Plan single-grid, którego pełny setup przekracza użyteczną pamięć urządzenia
   po zachowaniu rezerwy, kończy się
   `fdm_gpu_workspace_oom_preflight` z wymaganym agregatem, dostępnym budżetem,
-  pamięcią wolną i całkowitą oraz rezerwą bezpieczeństwa. Ten błąd występuje
-  przed pierwszą alokacją backendu i utworzeniem planu cuFFT.
+  pamięcią wolną i całkowitą oraz rezerwą bezpieczeństwa. Tablice solvera
+  są alokowane po przejściu kontroli. Jeżeli mieszczą się same tablice,
+  backend przygotowuje rzeczywisty plan cuFFT z wyłączoną automatyczną
+  alokacją, dolicza zwrócony przez plan bufor roboczy i ponownie odczytuje
+  wolną pamięć. Dzięki temu uwzględnia też narzut metadanych rezydującego
+  planu. Ten sam uchwyt jest używany przy wykonaniu. Odmowa po utworzeniu
+  planu zwalnia jego uchwyt. Wymiary FFT, jądro demagnetyzacji, precyzja
+  i integrator pozostają zgodne z pierwotnym planem.
 - Plan multilayer `create_v2` kończy się tym samym typowanym błędem z polem
   `required_aggregate_multilayer_workspace_bytes`, zanim zostanie
   opublikowany jakikolwiek stan setupu. Kernel payload przy wyłączonym demag,
