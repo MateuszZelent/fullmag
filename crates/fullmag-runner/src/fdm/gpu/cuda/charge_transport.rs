@@ -1624,6 +1624,7 @@ pub(crate) fn execute_public_gpu_charge_only(
     })
 }
 
+#[cfg(any(feature = "cuda", test))]
 fn resolve_charge_linear_solver_realization(override_value: Option<&str>) -> &'static str {
     match override_value {
         Some(raw)
