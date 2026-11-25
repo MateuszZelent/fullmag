@@ -12,7 +12,7 @@ Audyt dokumentuje porównanie A/B przed i po wdrożeniu trzech niezależnych akc
 
 1. **Demagnetyzacja jednowarstwowa R2C/C2R i D2Z/Z2D cuFFT (`e375444a90`):** zastąpienie transformat zespolonych `Z2Z`/`C2C` transformatami rzeczywistymi `D2Z`/`Z2D` (FP64) i `R2C`/`C2R` (FP32) na półwidmie hermetycznym (`fft_nx/2 + 1`), z współdzielonym obszarem roboczym cuFFT (`max(work_fwd, work_inv)`) oraz zaktualizowaną konwersją jądra Newella i preflightem przestrzeni roboczej GPU.
 2. **Rezydentna na GPU relaksacja PG-BB i naprawa poświadczenia `strict` (`687a988dc9`, `0335be0d32`, `4944bc95a9`):** przeniesienie pętli minimalizatora bezpośredniego Projected-Gradient Barzilai–Borwein (`single_layer_bb.cu`) całkowicie na GPU z redukcjami na urządzeniu, eliminacją pełnowektorowych transferów H2D/D2H w gorącej pętli, akceptacją skończonych nieunormowanych stanów początkowych w kroku 0 oraz pełnym poświadczeniem bitu operatora demagnetyzacji/relaksacji w trybie `strict`.
-3. **Transport ładunku M1 na GPU — wieloblokowy kooperatywny AMG-PCG oraz opcjonalny cuDSS (`e51a579430`, `7f225ff903`):** rozbudowa hierarchii urządzenia do 6–7 poziomów z wieloblokowym kooperatywnym AMG-PCG oraz opcjonalny bezpośredni solver Cholesky cuDSS (`FULLMAG_FDM_CHARGE_DIRECT_SOLVER=cudss`) z symetrycznym pinowaniem rzędu 1 w komórce środkowej i iteracyjnym doprecyzowaniem na GPU dla warunku zerowej średniej (`zero_mean`).
+3. **Transport ładunku M1 na GPU — wieloblokowy kooperatywny AMG-PCG oraz opcjonalny cuDSS (`e51a579430`, `7f225ff903`):** rozbudowa hierarchii urządzenia do 6–7 poziomów z wieloblokowym kooperatywnym AMG-PCG oraz opcjonalny bezpośredni solver Cholesky cuDSS (`FULLMAG_FDM_CHARGE_GPU_DIRECT_SOLVER=cudss`) z symetrycznym pinowaniem rzędu 1 w komórce środkowej i iteracyjnym doprecyzowaniem na GPU dla warunku zerowej średniej (`zero_mean`).
 
 ## 2. Bench 1: Relaksacja PG-BB (`300x300x5 nm` i `256x256x2`)
 
@@ -88,7 +88,7 @@ Wszystkie 13 przypadków macierzy ABI (`U`, `M`, `I`, `F`, `Z` — w tym `bounda
 | `U_128x64x8` | 65 536 | `749.09 -> 129.07` | **5.80x** | `492.86 -> 65.87` | **7.48x** | `57/1 -> 30/0` | `2 -> 7` | `7.14e-14` | `1.12e-12` | `8.77e-15` | `1.997e-14` | `1.096e-12` | `24.01 -> 19.32` (**-19.5%**) |
 | `M_128x64x8` | 65 536 | `599.45 -> 121.17` | **4.95x** | `436.47 -> 77.67` | **5.62x** | `57/1 -> 29/1` | `2 -> 7` | `1.75e-13` | `1.71e-12` | `1.34e-14` | `4.316e-14` | `1.770e-12` | `24.01 -> 19.32` (**-19.5%**) |
 
-### 4.2. Bench 3b — Opcjonalny bezpośredni solver Cholesky cuDSS (`FULLMAG_FDM_CHARGE_DIRECT_SOLVER=cudss`)
+### 4.2. Bench 3b — Opcjonalny bezpośredni solver Cholesky cuDSS (`FULLMAG_FDM_CHARGE_GPU_DIRECT_SOLVER=cudss`)
 
 | Przypadek | Komórki | Zimny B -> A (ms) | Przysp. zimny | Ciepły med. B -> A (ms) | Przysp. ciepły | Iteracje | `phys_res` | `elec_bal` | `comp_bal` | `rel max \|dV\|` | `rel max \|dJ_c\|` | Peak MB B -> A |
 |---|---:|---|---:|---|---:|---:|---:|---:|---:|---:|---:|---|
@@ -117,4 +117,4 @@ Wszystkie pomiary zostały wykonane wyłącznie wewnątrz izolowanego kontenera 
 
 - Bench 1 (`120x120x2` `extended`/`strict`): `FILM_ENGINE=fdm FILM_MODE=strict FILM_TOLT=1e-7 /opt/fullmag/package/bin/fullmag-bin run scripts/benchmarks/relax_film_compare_case.py`
 - Bench 2 (LLG `s50`/`s500`/`s2000`): dedykowany skrypt scenariusza stałego `dt` (`Heun`/`RK4`, `FP64`/`FP32`, cienka warstwa / 3D / `pbcxy` / cylinder) uruchamiany przez `fullmag-bin run`
-- Bench 3 (M1 Charge): publiczny przykład `fullmag-bin run examples/fdm_gpu_charge_public.py`, scenariusz `64x32x8` oraz bezpośrednie wywołania C ABI `fullmag_fdm_charge_*` przeciwko `/opt/fullmag/package/lib/libfullmag_fdm.so` (domyślny AMG i `FULLMAG_FDM_CHARGE_DIRECT_SOLVER=cudss`)
+- Bench 3 (M1 Charge): publiczny przykład `fullmag-bin run examples/fdm_gpu_charge_public.py`, scenariusz `64x32x8` oraz bezpośrednie wywołania C ABI `fullmag_fdm_gpu_transport_*` (m.in. `fullmag_fdm_gpu_transport_solve_charge_v1`) przeciwko `/opt/fullmag/package/lib/libfullmag_fdm.so` (domyślny AMG i `FULLMAG_FDM_CHARGE_GPU_DIRECT_SOLVER=cudss`)
