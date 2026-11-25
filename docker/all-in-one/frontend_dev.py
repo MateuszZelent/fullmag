@@ -2301,7 +2301,15 @@ def _dependency_tree_ready(inputs: DevelopmentInputs) -> bool:
     except FileNotFoundError:
         return False
     _next_binary(inputs)
-    return True
+    virtual_store = inputs.workspace_root / "node_modules" / ".pnpm"
+    if virtual_store.is_symlink():
+        _fail("pnpm virtual store must be a state-owned directory")
+    try:
+        installed = _bounded_bytes(virtual_store / "lock.yaml", "installed pnpm lockfile")
+    except FileNotFoundError:
+        return False
+    expected = _bounded_bytes(inputs.workspace_root / "pnpm-lock.yaml", "workspace pnpm lockfile")
+    return installed == expected
 
 
 def _attach_frontend_handle(error: Exception, handle: FrontendHandle) -> None:
@@ -2706,8 +2714,8 @@ def start(stopping_event: Any) -> FrontendHandle:
             needs_install = True
             _write_lifecycle_log(
                 "dependency_install_reconcile",
-                status="missing",
-                reason="state-owned dependency tree is absent",
+                status="reinstall-required",
+                reason="state-owned dependency tree is missing or differs from the frozen lockfile",
                 log_path=LOG_PATH,
             )
         if needs_install:

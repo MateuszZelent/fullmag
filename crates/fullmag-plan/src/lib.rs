@@ -17,6 +17,9 @@ mod antenna_composition;
 mod antenna_current_source;
 mod antenna_field_solve;
 mod antenna_field_only;
+mod antenna_retained_current;
+mod antenna_retained_preparation;
+mod antenna_retained_direct;
 mod antenna_projection;
 mod antenna_validity;
 mod antenna_zeeman;
@@ -55,7 +58,10 @@ pub mod boundary_geometry;
 
 pub use antenna_composition::{bind_antenna_field_solve, bind_antenna_field_solve_v03};
 pub use antenna_field_only::plan_antenna_field_only_carrier;
-pub use antenna_current_source::{materialize_antenna_external_lead_current_input, materialize_antenna_closed_loop_current_input};
+pub use antenna_retained_current::plan_retained_current_field_inspection;
+pub use antenna_retained_preparation::plan_retained_preparation_field_inspection;
+pub use antenna_retained_direct::plan_retained_direct_field_inspection;
+pub use antenna_current_source::{materialize_antenna_external_lead_current_input, materialize_antenna_closed_loop_current_input, antenna_closed_loop_authored_input_preimage, validate_retained_current_authored_source, validate_retained_preparation_authored_source};
 pub use antenna_field_solve::{
     plan_antenna_external_lead_inspection, plan_antenna_field_solve_execution,
     AntennaFieldSolveExecutionPlan,
@@ -442,4 +448,4 @@ pub fn plan_antenna_field_solve(
 #[cfg(test)]
 mod tests;
 
-pub use study_lowering::{validate_closed_loop_operation, STUDY_EXECUTION_PLAN_SCHEMA_V4};
+pub use study_lowering::{validate_closed_loop_operation, validate_retained_current_field_operation, validate_retained_direct_field_operation, validate_retained_preparation_field_operation, STUDY_EXECUTION_PLAN_SCHEMA_V4};

@@ -21,6 +21,7 @@ mod diagnostics;
 mod feature_flags;
 mod formatting;
 mod interactive_runtime_host;
+mod ledger_relocation;
 mod live_publisher_diagnostics;
 mod live_workspace;
 mod modal_cuda_trace;
@@ -36,6 +37,7 @@ mod container_recovery_capabilities;
 mod runtime_supervisor;
 mod saved_fem_snapshot_gate;
 mod accepted_inspection_cold_load;
+mod export_antenna_source_preparation;
 mod scratch_runtime;
 mod script_inspect;
 mod script_launch;
@@ -103,6 +105,14 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
+        Command::Runtime(RuntimeCommand::LedgerRelocationInspect { ledger_root, host_id, hold_fence }) => {
+            ledger_relocation::inspect(&ledger_root, &host_id, hold_fence)?;
+        }
+        Command::Runtime(RuntimeCommand::LedgerRelocationPreview {
+            ledger_root, host_id, expected_inspection, expected_inspection_sha256,
+        }) => {
+            ledger_relocation::preview(&ledger_root, &host_id, &expected_inspection, &expected_inspection_sha256)?;
+        }
         Command::Runtime(RuntimeCommand::ServiceEnsure { config }) => {
             let owner = runtime_service_client::ensure(&config)?;
             println!(
@@ -280,6 +290,24 @@ fn main() -> Result<()> {
             println!(
                 "{}",
                 serde_json::to_string_pretty(&runtime_service_client::recover_container_empty(
+                    &config,
+                    &request,
+                    &request_sha256,
+                    &attestation,
+                    &attestation_sha256,
+                )?)?
+            );
+        }
+        Command::Runtime(RuntimeCommand::ServicePreviewContainerRecovery {
+            config,
+            request,
+            request_sha256,
+            attestation,
+            attestation_sha256,
+        }) => {
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&runtime_service_client::preview_container_recovery(
                     &config,
                     &request,
                     &request_sha256,
@@ -474,6 +502,9 @@ fn main() -> Result<()> {
         Command::RunScriptAccepted { script, project, execution_profile, resources, idempotency_key, api_url, submit_only, prepare_only } => {
             let result=accepted_script_run::submit_script(&script,&project,&execution_profile,&resources,&idempotency_key,api_url.as_deref(),submit_only,prepare_only)?;
             println!("{}",serde_json::to_string_pretty(&result)?);
+        }
+        Command::ExportAntennaSourcePreparation { store, source, output } => {
+            export_antenna_source_preparation::export(&store, &source, &output)?;
         }
         Command::PrepareRunJson {
             path,
@@ -1081,6 +1112,7 @@ fn is_script_mode(raw_args: &[OsString]) -> bool {
         "reference-exchange-demo",
         "validate-json",
         "plan-json",
+        "export-antenna-source-preparation",
         "run-json",
         "prepare-run-json",
         "run-script-accepted",

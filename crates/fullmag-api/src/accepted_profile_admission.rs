@@ -84,20 +84,20 @@ pub(crate) fn validate_study_profile(
     let mut operation_only = None;
     for step in study.steps.iter().filter(|step| step.enabled) {
         count += 1;
-        let operation = matches!(&step.kind, StudyStepKind::ClosedLoopInspection { .. });
+        let operation = matches!(&step.kind, StudyStepKind::ClosedLoopInspection { .. } | StudyStepKind::RetainedCurrentFieldInspection { .. });
         if operation_only.is_some_and(|previous| previous != operation) {
             bail!("solver_profile cannot mix operation inspection with FEM step profiling");
         }
         operation_only = Some(operation);
         match &step.kind {
-            StudyStepKind::ClosedLoopInspection { .. } if trace.is_none() => {}
+            StudyStepKind::ClosedLoopInspection { .. } | StudyStepKind::RetainedCurrentFieldInspection { .. } if trace.is_none() => {}
             StudyStepKind::Primitive { stage_kind: StudyPrimitiveStageKind::Run | StudyPrimitiveStageKind::Relax } => {
                 let problem = catalog.entries().iter().find(|entry| entry.step_id() == step.step_id)
                     .context("profiled FEM step has no exact catalog entry")?.problem();
                 validate_fem_profile_problem(problem)?;
                 if trace.is_some() { cuda_trace::validate_problem(problem)?; }
             }
-            _ => bail!("solver_profile supports only closed-loop inspection and strict native FEM Run/Relax"),
+            _ => bail!("solver_profile supports only closed-loop/retained-current inspection and strict native FEM Run/Relax"),
         }
     }
     if count == 0 {
@@ -182,6 +182,7 @@ pub(crate) fn validate_resolved_study_profile(
         let operation = matches!(
             &step.kind,
             fullmag_authoring::StudyStepKind::ClosedLoopInspection { .. }
+                | fullmag_authoring::StudyStepKind::RetainedCurrentFieldInspection { .. }
         );
         if operation_only.is_some_and(|previous| previous != operation) {
             bail!("solver_profile cannot mix operation inspection with FEM step profiling");
@@ -223,13 +224,22 @@ pub(crate) fn validate_resolved_study_profile(
                     bail!("profiled operation has no exact resolved field-only carrier");
                 }
             }
+            fullmag_authoring::StudyStepKind::RetainedCurrentFieldInspection {
+                stage_id, port_mode_id, ..
+            } if trace.is_none() => {
+                if !matches!(&plan.backend_plan, fullmag_ir::BackendPlanIR::AntennaRetainedCurrentFieldInspection(carrier)
+                    if &carrier.stage.id == stage_id && carrier.stage.port_mode_ids.as_slice() == [port_mode_id.clone()])
+                {
+                    bail!("profiled retained-current operation has no exact resolved field-only carrier");
+                }
+            }
             fullmag_authoring::StudyStepKind::Primitive {
                 stage_kind: fullmag_authoring::StudyPrimitiveStageKind::Run | fullmag_authoring::StudyPrimitiveStageKind::Relax,
             } => {
                 validate_fem_profile_plan(problem, plan)?;
                 if trace.is_some() { cuda_trace::validate_plan(problem, plan)?; }
             }
-            _ => bail!("solver_profile supports only closed-loop inspection and strict native FEM Run/Relax"),
+            _ => bail!("solver_profile supports only closed-loop/retained-current inspection and strict native FEM Run/Relax"),
         }
     }
     if count == 0 {

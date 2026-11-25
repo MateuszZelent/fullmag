@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { SIMULATION_PREPARATION_PATH } from "../api/apiPaths";
+import { MODEL_READINESS_PATH, SIMULATION_PREPARATION_PATH } from "../api/apiPaths";
 import { SESSION_STATUS_RESOURCE_KEY } from "../resources/useSessionStatus";
 
 import {
@@ -164,5 +164,44 @@ describe("Live preparation materialization", () => {
     expect(outcome).toMatchObject({ kind: "rejected" });
     expect(fixture.scene).not.toHaveBeenCalled();
     expect(fixture.materializePreparation).not.toHaveBeenCalled();
+  });
+});
+
+
+describe("Backend-owned source mesh preparation", () => {
+  function context(readiness: Record<string, unknown>, sceneRevision: unknown = 17) {
+    return {
+      resourceData: {
+        [SESSION_STATUS_RESOURCE_KEY]: {
+          capabilities: { explicit_topology: true },
+          domain: { discretization: "fem" },
+          resources: { scene_revision: sceneRevision },
+        },
+        [MODEL_READINESS_PATH]: readiness,
+      },
+    } as never;
+  }
+  const ready = {scene_revision: 17, ready_to_run: true, preparation_owns_mesh: true};
+
+  it("uses explicit fresh backend ownership instead of requiring a magnetic mesh", () => {
+    expect(requiresSharedDomainMeshForLivePreparation(context(ready))).toBe(false);
+  });
+
+  it("accepts the existing retained resource envelope", () => {
+    expect(requiresSharedDomainMeshForLivePreparation(context({data: ready}))).toBe(false);
+  });
+
+  it.each([
+    ["legacy response", {scene_revision: 17, ready_to_run: true}],
+    ["blocked model", {...ready, ready_to_run: false}],
+    ["stale scene", {...ready, scene_revision: 16}],
+    ["explicit mesh requirement", {...ready, preparation_owns_mesh: false}],
+    ["invalid ownership", {...ready, preparation_owns_mesh: "true"}],
+  ])("preserves the FEM mesh guard for %s", (_name, value) => {
+    expect(requiresSharedDomainMeshForLivePreparation(context(value))).toBe(true);
+  });
+
+  it("refuses missing scene revision even with ownership", () => {
+    expect(requiresSharedDomainMeshForLivePreparation(context(ready, null))).toBe(true);
   });
 });

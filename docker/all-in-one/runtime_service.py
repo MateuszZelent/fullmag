@@ -75,6 +75,7 @@ PROCESS_RECEIPT_RELATIVE = Path("runtime-service/process-tree.json")
 FEM_MESH_CACHE_ROOT = Path("/build/cache/fem-mesh")
 CUDA_CACHE_ROOT = Path("/build/cache/cuda-compute")
 MAX_JSON_BYTES = 256 * 1024
+MAX_RUNTIME_PROVENANCE_BYTES = 8 * 1024 * 1024
 MAX_HTTP_BYTES = 4 * 1024 * 1024
 # The native control probe is bounded at three seconds.  Keep the Python
 # request budget above that limit so Windows-folder I/O cannot turn a healthy
@@ -137,6 +138,9 @@ CONTAINER_RECOVERY_AUTHORIZATION_SCHEMAS = frozenset({CONTAINER_RECOVERY_AUTHORI
 CONTAINER_RECOVERY_REQUEST_SCHEMA = "runtime_service_container_recovery_request.v1"
 CONTAINER_RECOVERY_TERMINAL_REQUEST_SCHEMA = "runtime_service_container_recovery_request.v3"
 CONTAINER_RECOVERY_HELD_MANUAL_REQUEST_SCHEMA = "runtime_service_container_recovery_request.v4"
+CONTAINER_RECOVERY_ATTEMPT_HISTORY_REQUEST_SCHEMA = "runtime_service_container_recovery_request.v5"
+CONTAINER_RECOVERY_PENDING_INBOX_REQUEST_SCHEMA = "runtime_service_container_recovery_request.v6"
+CONTAINER_RECOVERY_ABSENT_INBOX_REQUEST_SCHEMA = "runtime_service_container_recovery_request.v7"
 CONTAINER_RECOVERY_CAPABILITIES_SCHEMA = "runtime_service_container_recovery_capabilities.v1"
 CONTAINER_RECOVERY_ATTESTATION_SCHEMA = "docker_namespace_teardown_attestation.v1"
 CONTAINER_RECOVERY_ABSENCE_ATTESTATION_SCHEMA = "docker_namespace_absence_attestation.v1"
@@ -1600,7 +1604,7 @@ def accepted_reattach_api_input(paths: RuntimePaths, *, preflight=None):
     _accepted_reattach_preflight_shape(environment, request, preflight)
     if environment.get("FULLMAG_RUNTIME_PROVENANCE") != str(ACCEPTED_REATTACH_PROVENANCE):
         _fail("accepted-run reattach requires fixed Docker runtime provenance")
-    provenance = _read_json(ACCEPTED_REATTACH_PROVENANCE, "accepted-run build provenance")
+    provenance = _read_json(ACCEPTED_REATTACH_PROVENANCE, "accepted-run build provenance", MAX_RUNTIME_PROVENANCE_BYTES)
     commit, snapshot = provenance.get("commit"), provenance.get("source_snapshot_sha256")
     if (provenance.get("schema") != "fullmag.docker-all-image.v1"
             or provenance.get("state") != "succeeded"
@@ -3799,7 +3803,149 @@ def _container_recovery_owner_digest(paths: RuntimePaths) -> tuple[dict[str, Any
     return owner, raw, _sha256_bytes(raw)
 
 
+def _container_recovery_attempt_histories(histories: Any, terminal_pins: list) -> None:
+    # Mirror the host request contract and native retained_attempt_histories
+    # pin validation. The native mutator still proves the actual store bytes,
+    # failed checkpoints, retry decisions and released reservations.
+    if not isinstance(histories, list) or not 1 <= len(histories) <= 128:
+        _fail("v5 requires a nonempty bounded retained-attempt history list")
+    terminal_ids = {pin["run_id"] for pin in terminal_pins}
+    runs: set[str] = set()
+    total = 0
+    for history in histories:
+        if not isinstance(history, dict) or set(history) != {
+            "run_id", "run_evidence_sha256", "attempts"
+        }:
+            _fail("invalid retained-attempt history pin")
+        run_id = _recovery_store_id(history.get("run_id"), "history run id")
+        if run_id not in terminal_ids or run_id in runs:
+            _fail("history run must be a unique retained terminal run")
+        runs.add(run_id)
+        digest = _container_recovery_hex(history.get("run_evidence_sha256"), "run evidence digest")
+        if digest == "0" * 64:
+            _fail("run evidence digest cannot be an all-zero placeholder")
+        attempts = history.get("attempts")
+        if not isinstance(attempts, list) or not attempts:
+            _fail("retained-attempt history requires nonempty attempts")
+        claims = set()
+        epochs = set()
+        for claim in attempts:
+            total += 1
+            if total > 128 or not isinstance(claim, dict) or set(claim) != {
+                "task_id", "attempt_id", "ownership_epoch", "resource_id"
+            }:
+                _fail("historical claim inventory is invalid or exceeds 128")
+            for key in ("task_id", "attempt_id", "resource_id"):
+                value = _container_recovery_text(
+                    claim.get(key), "historical " + key, 255 if key == "resource_id" else 128
+                )
+                _recovery_store_id(value, "historical " + key)
+            epoch = claim.get("ownership_epoch")
+            if type(epoch) is not int or not 0 < epoch <= (1 << 64) - 1:
+                _fail("historical claim ownership epoch must be a positive u64")
+            identity = (claim["task_id"], claim["attempt_id"])
+            epoch_identity = (claim["task_id"], epoch)
+            if identity in claims or epoch_identity in epochs:
+                _fail("duplicate historical attempt or task epoch")
+            claims.add(identity)
+            epochs.add(epoch_identity)
+
+
+def _container_recovery_pending_inboxes(pins: Any, terminal_pins: list) -> None:
+    if not isinstance(pins, list) or not 1 <= len(pins) <= 128:
+        _fail("v6 requires 1..128 explicit pending inbox pins")
+    terminal_ids = {pin["run_id"] for pin in terminal_pins}
+    claims, epochs = set(), set()
+    for pin in pins:
+        if not isinstance(pin, dict):
+            _fail("pending inbox pin must be an object")
+        fields = {"run_id", "task_id", "attempt_id", "resource_id", "ownership_epoch",
+                  "inbox_sha256", "kind"}
+        if pin.get("kind") == "cancelled_before_spawn":
+            fields.add("release_proof_sha256")
+        elif pin.get("kind") != "failed_final_heartbeat":
+            _fail("pending inbox kind is unsupported")
+        if set(pin) != fields:
+            _fail("pending inbox pin has unexpected or missing fields")
+        for key in ("run_id", "task_id", "attempt_id", "resource_id"):
+            _recovery_store_id(pin.get(key), "pending inbox " + key)
+        if pin["run_id"] not in terminal_ids:
+            _fail("pending inbox must belong to a retained terminal run")
+        epoch = pin.get("ownership_epoch")
+        if type(epoch) is not int or not 0 < epoch <= (1 << 64) - 1:
+            _fail("pending inbox ownership epoch must be a positive u64")
+        claim = tuple(pin[key] for key in ("run_id", "task_id", "attempt_id", "resource_id", "ownership_epoch"))
+        task_epoch = (pin["run_id"], pin["task_id"], epoch)
+        if claim in claims or task_epoch in epochs:
+            _fail("duplicate pending inbox claim or task epoch")
+        claims.add(claim)
+        epochs.add(task_epoch)
+        for key in ("inbox_sha256", "release_proof_sha256"):
+            if key in pin and _container_recovery_hex(pin[key], key) == "0" * 64:
+                _fail("pending inbox digests cannot be all-zero placeholders")
+
+
+def _container_recovery_absent_inboxes(pins, request):
+    if not isinstance(pins, list) or not 1 <= len(pins) <= 128:
+        _fail("v7 requires 1..128 retained absent inbox pins")
+    excluded = {p["run_id"] for p in request["retained_pending_inboxes"] + request["retained_attempt_histories"]}
+    terminals = {p["run_id"] for p in request["retained_terminal_runs"]}
+    attempts, epochs = set(), set()
+    for pin in pins:
+        fields = {"run_id", "task_id", "attempt_id", "resource_id", "ownership_epoch", "inbox_absence", "release_proof_sha256"}
+        if not isinstance(pin, Mapping) or set(pin) != fields or pin.get("inbox_absence") != "directory_absent":
+            _fail("absent inbox pin has an invalid shape or absence kind")
+        for key in ("run_id", "task_id", "attempt_id", "resource_id"):
+            value = pin[key]
+            if (not isinstance(value, str) or not 1 <= len(value) <= 200
+                    or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", value) or value.endswith(".")
+                    or value.split(".")[0].upper() in {"CON", "PRN", "AUX", "NUL", *["COM"+str(i) for i in range(1,10)], *["LPT"+str(i) for i in range(1,10)]}):
+                _fail("unsafe absent inbox identity")
+        if pin["run_id"] not in terminals or pin["run_id"] in excluded:
+            _fail("absent inbox run is not an exclusive retained terminal run")
+        epoch = pin["ownership_epoch"]
+        if type(epoch) is not int or not 0 < epoch <= (1 << 64) - 1:
+            _fail("absent inbox ownership epoch is invalid")
+        digest = pin["release_proof_sha256"]
+        if not isinstance(digest, str) or not re.fullmatch(r"[0-9a-f]{64}", digest) or digest == "0"*64:
+            _fail("absent inbox release digest is invalid")
+        attempt = (pin["run_id"], pin["task_id"], pin["attempt_id"])
+        task_epoch = (pin["run_id"], pin["task_id"], epoch)
+        if attempt in attempts or task_epoch in epochs:
+            _fail("duplicate absent inbox attempt or task epoch")
+        attempts.add(attempt)
+        epochs.add(task_epoch)
+
+
 def _container_recovery_expected_outcome(request: Mapping[str, Any]) -> str:
+    if request.get("schema_version") == CONTAINER_RECOVERY_ABSENT_INBOX_REQUEST_SCHEMA:
+        paired = {key: value for key, value in request.items() if key != "retained_absent_inboxes"}
+        paired["schema_version"] = CONTAINER_RECOVERY_PENDING_INBOX_REQUEST_SCHEMA
+        _container_recovery_expected_outcome(paired)
+        _container_recovery_absent_inboxes(request.get("retained_absent_inboxes"), request)
+        return "retained_absent_inboxes_recovered"
+    if "retained_absent_inboxes" in request:
+        _fail("absent inbox pins require v7 recovery")
+    if request.get("schema_version") == CONTAINER_RECOVERY_PENDING_INBOX_REQUEST_SCHEMA:
+        paired = {key: value for key, value in request.items() if key != "retained_pending_inboxes"}
+        paired["schema_version"] = CONTAINER_RECOVERY_ATTEMPT_HISTORY_REQUEST_SCHEMA
+        _container_recovery_expected_outcome(paired)
+        _container_recovery_pending_inboxes(
+            request.get("retained_pending_inboxes"), request["retained_terminal_runs"]
+        )
+        return "retained_pending_inboxes_recovered"
+    if "retained_pending_inboxes" in request:
+        _fail("pending inbox pins require container recovery v6")
+    if request.get("schema_version") == CONTAINER_RECOVERY_ATTEMPT_HISTORY_REQUEST_SCHEMA:
+        paired = {key: value for key, value in request.items() if key != "retained_attempt_histories"}
+        paired["schema_version"] = CONTAINER_RECOVERY_HELD_MANUAL_REQUEST_SCHEMA
+        _container_recovery_expected_outcome(paired)
+        _container_recovery_attempt_histories(
+            request.get("retained_attempt_histories"), request["retained_terminal_runs"]
+        )
+        return "retained_attempt_history_recovered"
+    if "retained_attempt_histories" in request:
+        _fail("retained-attempt history pins require container recovery v5")
     if request.get("schema_version") == CONTAINER_RECOVERY_HELD_MANUAL_REQUEST_SCHEMA:
         if "retained_cancelled_runs" in request:
             _fail("v4 container recovery cannot carry cancelled-run pins")
@@ -3968,11 +4114,14 @@ def _validate_container_recovery_attestation_document(
              or not isinstance(request.get("retained_cancelled_runs"), list))
             and (request.get("schema_version") != CONTAINER_RECOVERY_TERMINAL_REQUEST_SCHEMA
                  or not isinstance(request.get("retained_terminal_runs"), list))
-            and (request.get("schema_version") != CONTAINER_RECOVERY_HELD_MANUAL_REQUEST_SCHEMA
+            and (request.get("schema_version") not in {CONTAINER_RECOVERY_HELD_MANUAL_REQUEST_SCHEMA,
+                                                     CONTAINER_RECOVERY_ATTEMPT_HISTORY_REQUEST_SCHEMA,
+                                                     CONTAINER_RECOVERY_PENDING_INBOX_REQUEST_SCHEMA,
+        CONTAINER_RECOVERY_ABSENT_INBOX_REQUEST_SCHEMA, CONTAINER_RECOVERY_ABSENT_INBOX_REQUEST_SCHEMA}
                  or not isinstance(request.get("retained_terminal_runs"), list)
                  or not isinstance(request.get("retained_held_manual_runs"), list))
         ):
-            _fail("container namespace absence proof requires a retained-run v2, v3 or v4 request")
+            _fail("container namespace absence proof requires a retained-run v2, v3, v4, v5 or v6 request")
         if set(attestation) != {
             "schema_version",
             "request_sha256",
@@ -4947,13 +5096,13 @@ def _publish_container_capability_proof(paths: RuntimePaths, context, proof) -> 
 
 
 def _probe_container_recovery_capabilities(paths: RuntimePaths, context, *, cli, timeout):
-    """Pure native introspection precedes every first v3/v4 native mutation.
+    """Pure native introspection precedes every first v3/v4/v5/v6 native mutation.
 
     This gate qualifies the newly built executable inside the backend. It is
     deliberately not evidence about the earlier host container-removal step.
     """
     binary_sha = _container_recovery_binary_sha(paths, cli)
-    provenance_raw = _read_stable_container_recovery_file(paths.provenance, "native package provenance", MAX_JSON_BYTES)
+    provenance_raw = _read_stable_container_recovery_file(paths.provenance, "native package provenance", MAX_RUNTIME_PROVENANCE_BYTES)
     try:
         provenance = json.loads(provenance_raw, object_pairs_hook=_reject_duplicate_keys)
     except (ValueError, UnicodeDecodeError) as error:
@@ -4969,7 +5118,7 @@ def _probe_container_recovery_capabilities(paths: RuntimePaths, context, *, cli,
         _fail("native container recovery capabilities are unavailable; no mutator was invoked: " + str(error))
     if _container_recovery_binary_sha(paths, cli) != binary_sha:
         _fail("native container recovery binary changed during capability probe")
-    if _read_stable_container_recovery_file(paths.provenance, "native package provenance", MAX_JSON_BYTES) != provenance_raw:
+    if _read_stable_container_recovery_file(paths.provenance, "native package provenance", MAX_RUNTIME_PROVENANCE_BYTES) != provenance_raw:
         _fail("native package provenance changed during capability probe")
     if not isinstance(capability, dict) or set(capability) != {"schema_version", "supported_recovery_schemas", "build_identity"} or capability.get("schema_version") != CONTAINER_RECOVERY_CAPABILITIES_SCHEMA:
         _fail("native container recovery capability document has an unsupported schema")
@@ -5135,6 +5284,9 @@ def recover_container_namespace(
     if request.get("schema_version") in {
         CONTAINER_RECOVERY_TERMINAL_REQUEST_SCHEMA,
         CONTAINER_RECOVERY_HELD_MANUAL_REQUEST_SCHEMA,
+        CONTAINER_RECOVERY_ATTEMPT_HISTORY_REQUEST_SCHEMA,
+        CONTAINER_RECOVERY_PENDING_INBOX_REQUEST_SCHEMA,
+        CONTAINER_RECOVERY_ABSENT_INBOX_REQUEST_SCHEMA,
     }:
         capability = _probe_container_recovery_capabilities(paths, context, cli=cli, timeout=timeout)
     result = _run_container_recovery_cli(
@@ -5215,7 +5367,7 @@ def _single_header(headers: list[tuple[str, str]], name: str) -> str:
 
 
 def _source_identity(paths: RuntimePaths) -> tuple[str, str]:
-    provenance = _read_json(paths.provenance, "runtime image provenance")
+    provenance = _read_json(paths.provenance, "runtime image provenance", MAX_RUNTIME_PROVENANCE_BYTES)
     commit = provenance.get("commit")
     native = provenance.get("native_source_identity")
     snapshot = native.get("source_snapshot_sha256") if isinstance(native, dict) else None
@@ -6139,7 +6291,7 @@ def terminal_observation_api_input(paths, *, terminal_preflight=None, accepted_p
             _fail("terminal observation launch is already owned")
         if environment.get("FULLMAG_RUNTIME_PROVENANCE") != str(ACCEPTED_REATTACH_PROVENANCE):
             _fail("terminal observation requires fixed Docker runtime provenance")
-        provenance = _read_json(ACCEPTED_REATTACH_PROVENANCE, "terminal target provenance")
+        provenance = _read_json(ACCEPTED_REATTACH_PROVENANCE, "terminal target provenance", MAX_RUNTIME_PROVENANCE_BYTES)
         commit, snapshot, image = (provenance.get(key) for key in
                                   ("commit", "source_snapshot_sha256", "image_id"))
         if (provenance.get("schema") != "fullmag.docker-all-image.v1"

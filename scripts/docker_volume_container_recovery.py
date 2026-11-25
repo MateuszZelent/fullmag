@@ -52,6 +52,10 @@ HELD_MANUAL_REQUEST_SCHEMA = "runtime_service_container_recovery_request.v4"
 ATTEMPT_HISTORY_REQUEST_SCHEMA = "runtime_service_container_recovery_request.v5"
 ABRUPT_PROOF_ATTEMPT_HISTORY_SCHEMA = "fullmag.docker-abrupt-stop-proof.v3"
 ABRUPT_PROOF_BOOTSTRAP_SCHEMA = "fullmag.docker-abrupt-stop-proof.v4"
+PENDING_INBOX_REQUEST_SCHEMA = "runtime_service_container_recovery_request.v6"
+ABRUPT_PROOF_PENDING_INBOX_SCHEMA = "fullmag.docker-abrupt-stop-proof.v4"
+ABSENT_INBOX_REQUEST_SCHEMA = "runtime_service_container_recovery_request.v7"
+ABRUPT_PROOF_ABSENT_INBOX_SCHEMA = "fullmag.docker-abrupt-stop-proof.v5"
 AUTHORIZATION_SCHEMA = "fullmag.docker-container-recovery-authorization.v1"
 REQUEST_SCHEMA = "runtime_service_container_recovery_request.v1"
 RETAINED_REQUEST_SCHEMA = "runtime_service_container_recovery_request.v2"
@@ -404,8 +408,93 @@ def _validate_attempt_histories(histories, terminal_pins):
     return histories
 
 
+def _validate_pending_inboxes(pins, terminal_pins):
+    if not isinstance(pins, list) or not 1 <= len(pins) <= 128:
+        _fail("v6 requires 1..128 retained pending inbox pins")
+    terminals = {pin["run_id"] for pin in terminal_pins}
+    claims, epochs = set(), set()
+    for pin in pins:
+        base = {"run_id", "task_id", "attempt_id", "resource_id", "ownership_epoch", "inbox_sha256", "kind"}
+        if not isinstance(pin, Mapping):
+            _fail("invalid pending inbox pin")
+        kind = pin.get("kind")
+        if kind not in {"failed_final_heartbeat", "cancelled_before_spawn"}:
+            _fail("unsupported pending inbox kind")
+        fields = base | ({"release_proof_sha256"} if kind == "cancelled_before_spawn" else set())
+        if set(pin) != fields:
+            _fail("pending inbox pin has an invalid shape")
+        for key in ("run_id", "task_id", "attempt_id", "resource_id"):
+            value = _require_text(pin.get(key), key, 200)
+            if (not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", value) or value.endswith(".")
+                    or value.split(".")[0].upper() in {"CON", "PRN", "AUX", "NUL", *["COM"+str(i) for i in range(1,10)], *["LPT"+str(i) for i in range(1,10)]}):
+                _fail("unsafe pending inbox identity")
+        if pin["run_id"] not in terminals:
+            _fail("pending inbox run is not retained terminal")
+        epoch = pin["ownership_epoch"]
+        if type(epoch) is not int or not 0 < epoch <= (1 << 64) - 1:
+            _fail("pending inbox ownership epoch is invalid")
+        for key in fields & {"inbox_sha256", "release_proof_sha256"}:
+            _require_sha(pin[key], key)
+            if pin[key] == "0" * 64:
+                _fail("pending inbox digest must be nonzero")
+        claim = tuple(pin[key] for key in ("run_id", "task_id", "attempt_id", "resource_id", "ownership_epoch"))
+        epoch_key = (pin["run_id"], pin["task_id"], epoch)
+        if claim in claims or epoch_key in epochs:
+            _fail("duplicate pending inbox claim or task epoch")
+        claims.add(claim)
+        epochs.add(epoch_key)
+
+
+def _validate_absent_inboxes(pins, request):
+    if not isinstance(pins, list) or not 1 <= len(pins) <= 128:
+        _fail("v7 requires 1..128 retained absent inbox pins")
+    excluded = {p["run_id"] for p in request["retained_pending_inboxes"] + request["retained_attempt_histories"]}
+    terminals = {p["run_id"] for p in request["retained_terminal_runs"]}
+    attempts, epochs = set(), set()
+    for pin in pins:
+        fields = {"run_id", "task_id", "attempt_id", "resource_id", "ownership_epoch", "inbox_absence", "release_proof_sha256"}
+        if not isinstance(pin, Mapping) or set(pin) != fields or pin.get("inbox_absence") != "directory_absent":
+            _fail("absent inbox pin has an invalid shape or absence kind")
+        for key in ("run_id", "task_id", "attempt_id", "resource_id"):
+            value = pin[key]
+            if (not isinstance(value, str) or not 1 <= len(value) <= 200
+                    or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", value) or value.endswith(".")
+                    or value.split(".")[0].upper() in {"CON", "PRN", "AUX", "NUL", *["COM"+str(i) for i in range(1,10)], *["LPT"+str(i) for i in range(1,10)]}):
+                _fail("unsafe absent inbox identity")
+        if pin["run_id"] not in terminals or pin["run_id"] in excluded:
+            _fail("absent inbox run is not an exclusive retained terminal run")
+        epoch = pin["ownership_epoch"]
+        if type(epoch) is not int or not 0 < epoch <= (1 << 64) - 1:
+            _fail("absent inbox ownership epoch is invalid")
+        digest = pin["release_proof_sha256"]
+        if not isinstance(digest, str) or not re.fullmatch(r"[0-9a-f]{64}", digest) or digest == "0"*64:
+            _fail("absent inbox release digest is invalid")
+        attempt = (pin["run_id"], pin["task_id"], pin["attempt_id"])
+        task_epoch = (pin["run_id"], pin["task_id"], epoch)
+        if attempt in attempts or task_epoch in epochs:
+            _fail("duplicate absent inbox attempt or task epoch")
+        attempts.add(attempt)
+        epochs.add(task_epoch)
+
+
 def expected_recovery_outcome(request: Mapping[str, object]) -> str:
     """Bind receipt semantics to the explicit request version, never its outcome alone."""
+    if request.get("schema_version") == ABSENT_INBOX_REQUEST_SCHEMA:
+        paired = {key: value for key, value in request.items() if key != "retained_absent_inboxes"}
+        paired["schema_version"] = PENDING_INBOX_REQUEST_SCHEMA
+        expected_recovery_outcome(paired)
+        _validate_absent_inboxes(request.get("retained_absent_inboxes"), request)
+        return "retained_absent_inboxes_recovered"
+    if "retained_absent_inboxes" in request:
+        _fail("absent inbox pins require v7 recovery")
+    if request.get("schema_version") == PENDING_INBOX_REQUEST_SCHEMA:
+        paired = {key: value for key, value in request.items() if key != "retained_pending_inboxes"}
+        paired["schema_version"] = ATTEMPT_HISTORY_REQUEST_SCHEMA
+        expected_recovery_outcome(paired)
+        _validate_pending_inboxes(request.get("retained_pending_inboxes"), request["retained_terminal_runs"])
+        return "retained_pending_inboxes_recovered"
+    if "retained_pending_inboxes" in request:
+        _fail("pending inbox pins require v6 recovery")
     if request.get("schema_version") == ATTEMPT_HISTORY_REQUEST_SCHEMA:
         paired = {key: value for key, value in request.items() if key != "retained_attempt_histories"}
         paired["schema_version"] = HELD_MANUAL_REQUEST_SCHEMA
@@ -555,12 +644,12 @@ def validate_attestation(
                 and isinstance(request.get("retained_terminal_runs"), list)
             )
             and not (
-                request.get("schema_version") in {HELD_MANUAL_REQUEST_SCHEMA, ATTEMPT_HISTORY_REQUEST_SCHEMA}
+                request.get("schema_version") in {HELD_MANUAL_REQUEST_SCHEMA, ATTEMPT_HISTORY_REQUEST_SCHEMA, PENDING_INBOX_REQUEST_SCHEMA, ABSENT_INBOX_REQUEST_SCHEMA}
                 and isinstance(request.get("retained_terminal_runs"), list)
                 and isinstance(request.get("retained_held_manual_runs"), list)
             )
         ):
-            _fail("Docker namespace absence proof requires a retained-run v2/v3/v4/v5 request")
+            _fail("Docker namespace absence proof requires a retained-run v2/v3/v4/v5/v6 request")
         if set(attestation) != {
             "schema_version", "request_sha256", "docker_engine_id_sha256",
             "containers", "device_release", "manifest_sha256", "result",
@@ -899,6 +988,8 @@ def _build_request(
     retained_terminal_runs: Sequence[Mapping[str, object]] | None = None,
     retained_held_manual_runs: Sequence[Mapping[str, object]] | None = None,
     retained_attempt_histories: Sequence[Mapping[str, object]] | None = None,
+    retained_pending_inboxes: Sequence[Mapping[str, object]] | None = None,
+    retained_absent_inboxes: Sequence[Mapping[str, object]] | None = None,
 ) -> dict[str, object]:
     device = _require_mapping(device_release, "device release")
     _require_text(device.get("resource_id"), "device release resource_id", 255)
@@ -910,7 +1001,7 @@ def _build_request(
     if retained_held_manual_runs is not None and retained_cancelled_runs is not None:
         _fail("v4 recovery cannot mix held-manual and cancelled run pins")
     request = {
-        "schema_version": ATTEMPT_HISTORY_REQUEST_SCHEMA if retained_attempt_histories is not None else (HELD_MANUAL_REQUEST_SCHEMA if retained_held_manual_runs is not None else (TERMINAL_REQUEST_SCHEMA if retained_terminal_runs is not None else (RETAINED_REQUEST_SCHEMA if retained_cancelled_runs is not None else REQUEST_SCHEMA))),
+        "schema_version": ABSENT_INBOX_REQUEST_SCHEMA if retained_absent_inboxes is not None else PENDING_INBOX_REQUEST_SCHEMA if retained_pending_inboxes is not None else ATTEMPT_HISTORY_REQUEST_SCHEMA if retained_attempt_histories is not None else (HELD_MANUAL_REQUEST_SCHEMA if retained_held_manual_runs is not None else (TERMINAL_REQUEST_SCHEMA if retained_terminal_runs is not None else (RETAINED_REQUEST_SCHEMA if retained_cancelled_runs is not None else REQUEST_SCHEMA))),
         "request_id": authorization["request_id"],
         "config_sha256": config_sha256,
         "owner_sha256": owner_sha256,
@@ -927,6 +1018,9 @@ def _build_request(
         "device_release_mapping_sha256": device["mapping_sha256"],
         **({"device_release_gpu_uuid": device["gpu_uuid"]} if "gpu_uuid" in device else {}),
         "containers": [dict(item) for item in containers],
+        **({"retained_absent_inboxes": [dict(item) for item in retained_absent_inboxes]} if retained_absent_inboxes is not None else {}),
+        **({"retained_pending_inboxes": [dict(item) for item in retained_pending_inboxes]}
+           if retained_pending_inboxes is not None else {}),
         **({"retained_attempt_histories": [dict(item) for item in retained_attempt_histories]}
            if retained_attempt_histories is not None else {}),
         **({"retained_terminal_runs": [dict(item) for item in retained_terminal_runs]}
@@ -1067,6 +1161,10 @@ def _ledger_and_store_snapshot(
     retained_terminal_runs: Sequence[Mapping[str, object]] | None = None,
     retained_held_manual_runs: Sequence[Mapping[str, object]] | None = None,
     retained_attempt_histories: Sequence[Mapping[str, object]] | None = None,
+    retained_pending_inboxes: Sequence[Mapping[str, object]] | None = None,
+    retained_absent_inboxes: Sequence[Mapping[str, object]] | None = None,
+    missing_owner_reconciliation=None,
+    offline_control_observer=None,
 ) -> dict[str, object]:
     """Read the exact accepted store and shared ledger through an isolated helper."""
 
@@ -1076,6 +1174,12 @@ def _ledger_and_store_snapshot(
         _fail("v4 held-manual pins require terminal pins and cannot mix cancelled pins")
     if retained_terminal_runs is not None and retained_cancelled_runs is not None:
         _fail("cannot mix terminal and cancelled-only retained run pins")
+    v7_mode = retained_absent_inboxes is not None
+    if v7_mode and retained_pending_inboxes is None:
+        _fail("v7 requires retained pending inbox pins")
+    v6_mode = retained_pending_inboxes is not None
+    if v6_mode and retained_attempt_histories is None:
+        _fail("v6 requires retained attempt histories")
     v5_mode = retained_attempt_histories is not None
     if v5_mode and retained_held_manual_runs is None:
         _fail("v5 history requires both retained terminal and held-manual arrays")
@@ -1085,7 +1189,9 @@ def _ledger_and_store_snapshot(
     held_pins = [dict(pin) for pin in retained_held_manual_runs] if v4_mode else None
     if v4_mode:
         expected_recovery_outcome({
-            "schema_version": ATTEMPT_HISTORY_REQUEST_SCHEMA if v5_mode else HELD_MANUAL_REQUEST_SCHEMA,
+            "schema_version": ABSENT_INBOX_REQUEST_SCHEMA if v7_mode else PENDING_INBOX_REQUEST_SCHEMA if v6_mode else ATTEMPT_HISTORY_REQUEST_SCHEMA if v5_mode else HELD_MANUAL_REQUEST_SCHEMA,
+            **({"retained_absent_inboxes": list(retained_absent_inboxes)} if v7_mode else {}),
+            **({"retained_pending_inboxes": list(retained_pending_inboxes)} if v6_mode else {}),
             **({"retained_attempt_histories": list(retained_attempt_histories)} if v5_mode else {}),
             "retained_terminal_runs": retained_pins,
             "retained_held_manual_runs": held_pins,
@@ -1115,6 +1221,17 @@ def _ledger_and_store_snapshot(
         if not state_source.startswith("/") or ".." in PurePosixPath(state_source).parts:
             _fail("canonical state mount is not an absolute host path")
     ledger_mount, ledger_descriptor = _ledger_snapshot_mount(control, backend, compose)
+    shared_ledger_lock = False
+    if offline_control_observer is not None:
+        if missing_owner_reconciliation is not None:
+            _fail("offline and missing-owner snapshot authorities cannot be combined")
+        from docker_volume_offline_reconcile import _authenticate_snapshot_observer
+        _authenticate_snapshot_observer(control, offline_control_observer)
+        shared_ledger_lock = True
+    if missing_owner_reconciliation is not None:
+        from docker_volume_missing_owner_failure import authenticated_control_helpers
+        authenticated = authenticated_control_helpers(control, missing_owner_reconciliation)
+        shared_ledger_lock = bool(authenticated)
     script = r'''import fcntl, hashlib, json, os, pathlib, stat, time
 MAX_ENTRIES=8192
 MAX_STORE_FILES=32768
@@ -1255,7 +1372,7 @@ try:
     deadline=time.monotonic()+5
     while True:
         try:
-            fcntl.flock(fd, fcntl.LOCK_EX|fcntl.LOCK_NB)
+            fcntl.flock(fd, (fcntl.LOCK_SH if observation.get('authenticated_shared_ledger') is True else fcntl.LOCK_EX)|fcntl.LOCK_NB)
             break
         except BlockingIOError as error:
             if time.monotonic()>=deadline: raise RuntimeError('host ledger writer lock remained busy within the observation budget') from error
@@ -1785,7 +1902,40 @@ if observation.get('terminal_mode') or v4:
     for ref in sorted(referenced):
         total+=hash_cas_object(store/'objects/sha256'/ref,ref,cas_budget-total)
 
-print(json.dumps({'schema':'fullmag.container-recovery-storage-proof.v1','store_root_sha256':hashlib.sha256(b'/state/runs/docker-all/session-store').hexdigest(),'ledger_root_sha256':hashlib.sha256(b'/host-ledger/ledger').hexdigest(),'ledger_snapshot_sha256':ledger_digest,'store_file_count':count,'run_directories':sorted(run_dirs),'run_records':run_records,**({'retained_attempt_histories':history_pins} if v5 else {}),**({'host_ledger_volume_probe':volume_proof} if volume_proof is not None else {})},sort_keys=True))
+# This binds the discovery pins; native recovery validates command/ACK semantics
+# and the ledger proof again under its transaction lock before mutation.
+pending_pins=observation.get('retained_pending_inboxes')
+if pending_pins is not None:
+    if not v5: raise RuntimeError('pending inbox pins require v6 history context')
+    for pending_pin in pending_pins:
+        inbox_root=runs/pending_pin['run_id']/'worker_inbox'
+        if inbox_root.is_symlink() or not inbox_root.is_dir():
+            raise RuntimeError('v6 worker inbox directory is unavailable')
+        matches=[]
+        for inbox_path in inbox_root.iterdir():
+            raw=regular(inbox_path,'v6 worker inbox')
+            record=json.loads(raw)
+            payload=record.get('payload',{})
+            claim=payload.get('claim',{})
+            if all(claim.get(key)==pending_pin[key] for key in ('run_id','task_id','attempt_id','ownership_epoch')):
+                matches.append(raw)
+        if len(matches)!=1 or hashlib.sha256(matches[0]).hexdigest()!=pending_pin['inbox_sha256']:
+            raise RuntimeError('v6 inbox raw bytes/identity differ from pin')
+        if pending_pin['kind']=='cancelled_before_spawn':
+            proof_raw=regular(ledger/'proofs'/(pending_pin['release_proof_sha256']+'.json'),'v6 no-spawn proof')
+            if hashlib.sha256(proof_raw).hexdigest()!=pending_pin['release_proof_sha256']:
+                raise RuntimeError('v6 no-spawn proof bytes differ from pin')
+
+absent_pins=observation.get('retained_absent_inboxes')
+if absent_pins is not None:
+    if pending_pins is None: raise SystemExit('absent inbox pins require v6 inventory')
+    for pin in absent_pins:
+        inbox=store/'runs'/pin['run_id']/'worker_inbox'
+        if os.path.lexists(str(inbox)): raise SystemExit('absent inbox directory exists')
+        proof=ledger/'proofs'/(pin['release_proof_sha256']+'.json')
+        proof_raw=regular(proof,'v7 no-spawn proof')
+        if hashlib.sha256(proof_raw).hexdigest()!=pin['release_proof_sha256']: raise RuntimeError('absent inbox release proof digest differs')
+print(json.dumps({'schema':'fullmag.container-recovery-storage-proof.v1','store_root_sha256':hashlib.sha256(b'/state/runs/docker-all/session-store').hexdigest(),'ledger_root_sha256':hashlib.sha256(b'/host-ledger/ledger').hexdigest(),'ledger_snapshot_sha256':ledger_digest,'store_file_count':count,'run_directories':sorted(run_dirs),'run_records':run_records,**({'retained_attempt_histories':history_pins} if v5 else {}),**({'retained_pending_inboxes':pending_pins} if pending_pins is not None else {}),**({'retained_absent_inboxes':absent_pins} if absent_pins is not None else {}),**({'host_ledger_volume_probe':volume_proof} if volume_proof is not None else {})},sort_keys=True))
 '''
     if ledger_descriptor is not None:
         import docker_host_ledger as ledger
@@ -1829,8 +1979,10 @@ print(json.dumps({'schema':'fullmag.container-recovery-storage-proof.v1','store_
         "retained_terminal_runs": [dict(pin) for pin in retained_terminal_runs] if retained_terminal_runs is not None else None,
         "retained_held_manual_runs": held_pins,
         "v4_mode": v4_mode,
-        "v5_mode": v5_mode,
+        "authenticated_shared_ledger": shared_ledger_lock, "v5_mode": v5_mode,
         "retained_attempt_histories": list(retained_attempt_histories) if v5_mode else None,
+        "retained_pending_inboxes": list(retained_pending_inboxes) if v6_mode else None,
+        "retained_absent_inboxes": list(retained_absent_inboxes) if v7_mode else None,
     }).decode("utf-8"))
     result = bounded_capture(args, data=b"", timeout=90)
     if result.returncode:
@@ -1850,6 +2002,10 @@ print(json.dumps({'schema':'fullmag.container-recovery-storage-proof.v1','store_
         _fail("accepted store/ledger proof run records differ from retained pins")
     if v5_mode and value.get("retained_attempt_histories") != list(retained_attempt_histories):
         _fail("accepted-store history evidence differs from v5 pins")
+    if v7_mode and value.get("retained_absent_inboxes") != list(retained_absent_inboxes):
+        _fail("storage proof absent inbox pins differ")
+    if v6_mode and value.get("retained_pending_inboxes") != list(retained_pending_inboxes):
+        _fail("accepted-store pending inbox evidence differs from v6 pins")
     return dict(value)
 
 
@@ -1860,13 +2016,13 @@ def _is_abrupt(authorization: Mapping[str, object]) -> bool:
 def _assert_request_matches_abrupt_retained_pins(
     request: Mapping[str, object], proof: Mapping[str, object]
 ) -> None:
-    if (proof.get("schema") == ABRUPT_PROOF_BOOTSTRAP_SCHEMA
-            and request.get("schema_version") != TERMINAL_REQUEST_SCHEMA):
+    bootstrap_proof = proof.get("schema") == ABRUPT_PROOF_BOOTSTRAP_SCHEMA and "bootstrap_stop" in proof
+    if bootstrap_proof and request.get("schema_version") != TERMINAL_REQUEST_SCHEMA:
         _fail("bootstrap stop proof requires native terminal recovery v3")
     if request.get("retained_terminal_runs") != proof.get("retained_terminal_runs"):
         _fail("prepared request terminal pins differ from abrupt proof")
-    if proof.get("schema") in {ABRUPT_PROOF_HELD_MANUAL_SCHEMA, ABRUPT_PROOF_ATTEMPT_HISTORY_SCHEMA}:
-        expected_schema = ATTEMPT_HISTORY_REQUEST_SCHEMA if proof.get("schema") == ABRUPT_PROOF_ATTEMPT_HISTORY_SCHEMA else HELD_MANUAL_REQUEST_SCHEMA
+    if not bootstrap_proof and proof.get("schema") in {ABRUPT_PROOF_HELD_MANUAL_SCHEMA, ABRUPT_PROOF_ATTEMPT_HISTORY_SCHEMA, ABRUPT_PROOF_PENDING_INBOX_SCHEMA, ABRUPT_PROOF_ABSENT_INBOX_SCHEMA}:
+        expected_schema = ABSENT_INBOX_REQUEST_SCHEMA if proof.get("schema") == ABRUPT_PROOF_ABSENT_INBOX_SCHEMA else PENDING_INBOX_REQUEST_SCHEMA if proof.get("schema") == ABRUPT_PROOF_PENDING_INBOX_SCHEMA else ATTEMPT_HISTORY_REQUEST_SCHEMA if proof.get("schema") == ABRUPT_PROOF_ATTEMPT_HISTORY_SCHEMA else HELD_MANUAL_REQUEST_SCHEMA
         if request.get("schema_version") != expected_schema:
             _fail("abrupt proof requires its matching retained recovery request version")
         if request.get("retained_held_manual_runs") != proof.get("retained_held_manual_runs"):
@@ -1875,8 +2031,15 @@ def _assert_request_matches_abrupt_retained_pins(
         _fail("held-manual pins have no matching v4 abrupt proof")
     if request.get("retained_attempt_histories") != proof.get("retained_attempt_histories"):
         _fail("prepared request attempt-history pins differ from abrupt proof")
-    if "retained_attempt_histories" in request and proof.get("schema") != ABRUPT_PROOF_ATTEMPT_HISTORY_SCHEMA:
+    if "retained_attempt_histories" in request and proof.get("schema") not in {ABRUPT_PROOF_ATTEMPT_HISTORY_SCHEMA, ABRUPT_PROOF_PENDING_INBOX_SCHEMA, ABRUPT_PROOF_ABSENT_INBOX_SCHEMA}:
         _fail("attempt-history pins have no matching v5 abrupt proof")
+
+    if request.get("retained_absent_inboxes") != proof.get("retained_absent_inboxes") or ("retained_absent_inboxes" in request and proof.get("schema") != ABRUPT_PROOF_ABSENT_INBOX_SCHEMA):
+        _fail("absent inbox request/proof pins differ")
+    if request.get("retained_pending_inboxes") != proof.get("retained_pending_inboxes"):
+        _fail("prepared request pending inbox pins differ from abrupt proof")
+    if "retained_pending_inboxes" in request and proof.get("schema") not in {ABRUPT_PROOF_PENDING_INBOX_SCHEMA, ABRUPT_PROOF_ABSENT_INBOX_SCHEMA}:
+        _fail("pending inbox pins have no matching v6 abrupt proof")
 
 
 def _abrupt_pins(value: Mapping[str, object]) -> dict[str, object]:
@@ -2079,11 +2242,14 @@ def _prove_foreign_windows_bind(control, backend, item, source, compose, *, prep
 
 
 def _assert_no_foreign_storage_consumers(control, backend, frontend, compose=None, *,
-                                         prove_foreign_disjoint=None, prepared_reference=None):
+                                         prove_foreign_disjoint=None, prepared_reference=None,
+                                         failure_reconciliation_helpers=None, missing_owner_reconciliation=None):
     """Fence every Docker consumer, including stopped containers able to restart."""
     if prepared_reference is not None and prove_foreign_disjoint is not None:
         _fail("prepared recovery requires the managed physical proof")
     reference = {"prepared_reference": prepared_reference} if prepared_reference is not None else {}
+    if failure_reconciliation_helpers is not None and missing_owner_reconciliation is not None:
+        _fail("live-owner and missing-owner reconciliation cannot be combined")
     protected = set()
     for container in (backend, frontend):
         for mount in container.get("Mounts", []):
@@ -2107,6 +2273,12 @@ def _assert_no_foreign_storage_consumers(control, backend, frontend, compose=Non
             _fail("active recovery operation has no authenticated control helper")
         helper_id = authenticate(operation)
         own.add(_require_container(helper_id, "authenticated operation helper ID"))
+    if failure_reconciliation_helpers is not None:
+        from docker_volume_recovery_failure_reconcile import authenticated_control_helpers
+        own.update(authenticated_control_helpers(control, failure_reconciliation_helpers))
+    if missing_owner_reconciliation is not None:
+        from docker_volume_missing_owner_failure import authenticated_control_helpers
+        own.update(authenticated_control_helpers(control, missing_owner_reconciliation))
     records = _read_foreign_docker_consumers(own)
 
     def qualify(item):
@@ -2240,7 +2412,10 @@ def _assert_no_foreign_storage_consumers(control, backend, frontend, compose=Non
 def prepare_abrupt_stop_proof(
     control, authorization_pins, compose, *,
     retained_terminal_runs=None, retained_held_manual_runs=None, retained_attempt_histories=None,
-    bootstrap_stop_reference=None, historical_namespace_reference=None
+    bootstrap_stop_reference=None, historical_namespace_reference=None,
+    retained_pending_inboxes=None,
+    retained_absent_inboxes=None,
+    failure_reconciliation_helpers=None, missing_owner_reconciliation=None
 ):
     """Observe without writes. Publish the returned immutable JSON in a control operation.
 
@@ -2248,6 +2423,8 @@ def prepare_abrupt_stop_proof(
     abrupt_stop_proof and abrupt_stop_proof_sha256. This function never creates a
     stop journal, modifies OWNER/process-tree, removes containers, or runs Solve.
     """
+    if failure_reconciliation_helpers is not None and missing_owner_reconciliation is not None:
+        _fail("live-owner and missing-owner reconciliation cannot be combined")
     pins = _abrupt_pins(authorization_pins)
     bootstrap = None
     if bootstrap_stop_reference is not None:
@@ -2268,11 +2445,15 @@ def prepare_abrupt_stop_proof(
         if retained_terminal_runs is None:
             _fail("v4 abrupt proof requires the paired terminal pin array")
         expected_recovery_outcome({
-            "schema_version": ATTEMPT_HISTORY_REQUEST_SCHEMA if retained_attempt_histories is not None else HELD_MANUAL_REQUEST_SCHEMA,
+            "schema_version": ABSENT_INBOX_REQUEST_SCHEMA if retained_absent_inboxes is not None else PENDING_INBOX_REQUEST_SCHEMA if retained_pending_inboxes is not None else ATTEMPT_HISTORY_REQUEST_SCHEMA if retained_attempt_histories is not None else HELD_MANUAL_REQUEST_SCHEMA,
+            **({"retained_absent_inboxes": retained_absent_inboxes} if retained_absent_inboxes is not None else {}),
+            **({"retained_pending_inboxes": retained_pending_inboxes} if retained_pending_inboxes is not None else {}),
             **({"retained_attempt_histories": retained_attempt_histories} if retained_attempt_histories is not None else {}),
             "retained_terminal_runs": retained_terminal_runs,
             "retained_held_manual_runs": retained_held_manual_runs,
         })
+    if retained_pending_inboxes is not None and retained_attempt_histories is None:
+        _fail("v6 abrupt proof requires attempt histories")
     if retained_attempt_histories is not None and retained_held_manual_runs is None:
         _fail("v5 abrupt history proof requires the paired held-manual pin array")
     if pins["compose_project"] != control.project or compose.get("name") != control.project:
@@ -2305,14 +2486,18 @@ def prepare_abrupt_stop_proof(
         validated = validate(bootstrap, pins, raw_records, backend, control=control)
         if frontend.get("State", {}).get("StartedAt") != validated["frontend_started_at"]:
             _fail("bootstrap recovery frontend incarnation differs from failed resume")
-    _assert_no_foreign_storage_consumers(control, backend, frontend, compose)
+    _assert_no_foreign_storage_consumers(control, backend, frontend, compose,
+        failure_reconciliation_helpers=failure_reconciliation_helpers,
+        missing_owner_reconciliation=missing_owner_reconciliation)
     storage_proof = _ledger_and_store_snapshot(control, backend, compose=compose,
                                               retained_terminal_runs=retained_terminal_runs,
                                               retained_held_manual_runs=retained_held_manual_runs,
-                                              retained_attempt_histories=retained_attempt_histories)
+                                              retained_attempt_histories=retained_attempt_histories,
+                                              retained_pending_inboxes=retained_pending_inboxes, retained_absent_inboxes=retained_absent_inboxes,
+                                              missing_owner_reconciliation=missing_owner_reconciliation)
     if _docker_engine_sha() != engine_sha:
         _fail("Docker engine changed during abrupt proof preparation")
-    proof = {"schema": ABRUPT_PROOF_ATTEMPT_HISTORY_SCHEMA if retained_attempt_histories is not None else (ABRUPT_PROOF_HELD_MANUAL_SCHEMA if retained_held_manual_runs is not None else ABRUPT_PROOF_SCHEMA),
+    proof = {"schema": ABRUPT_PROOF_ABSENT_INBOX_SCHEMA if retained_absent_inboxes is not None else ABRUPT_PROOF_PENDING_INBOX_SCHEMA if retained_pending_inboxes is not None else ABRUPT_PROOF_ATTEMPT_HISTORY_SCHEMA if retained_attempt_histories is not None else (ABRUPT_PROOF_HELD_MANUAL_SCHEMA if retained_held_manual_runs is not None else ABRUPT_PROOF_SCHEMA),
              "authorization_pins": pins,
              "docker_engine_id_sha256": engine_sha, "raw_records": raw_records,
              "containers": {"backend": _stable_container_observation(backend),
@@ -2326,6 +2511,10 @@ def prepare_abrupt_stop_proof(
         proof["retained_held_manual_runs"] = copy.deepcopy(retained_held_manual_runs)
     if retained_attempt_histories is not None:
         proof["retained_attempt_histories"] = copy.deepcopy(retained_attempt_histories)
+    if retained_absent_inboxes is not None:
+        proof["retained_absent_inboxes"] = copy.deepcopy(retained_absent_inboxes)
+    if retained_pending_inboxes is not None:
+        proof["retained_pending_inboxes"] = copy.deepcopy(retained_pending_inboxes)
     return proof
 
 
@@ -2341,11 +2530,18 @@ def validate_abrupt_stop_proof(proof, authorization, *, control=None, compose=No
     held_fields = legacy_fields | {"retained_held_manual_runs"}
     history_fields = held_fields | {"retained_attempt_histories"}
     bootstrap_fields = legacy_fields | {"bootstrap_stop"}
-    if ((proof_schema == ABRUPT_PROOF_SCHEMA and set(proof) != legacy_fields)
-            or (proof_schema == ABRUPT_PROOF_HELD_MANUAL_SCHEMA and set(proof) != held_fields)
-            or (proof_schema == ABRUPT_PROOF_ATTEMPT_HISTORY_SCHEMA and set(proof) != history_fields)
-            or (proof_schema == ABRUPT_PROOF_BOOTSTRAP_SCHEMA and set(proof) != bootstrap_fields)
-            or proof_schema not in {ABRUPT_PROOF_SCHEMA, ABRUPT_PROOF_HELD_MANUAL_SCHEMA, ABRUPT_PROOF_ATTEMPT_HISTORY_SCHEMA, ABRUPT_PROOF_BOOTSTRAP_SCHEMA}):
+    pending_fields = history_fields | {"retained_pending_inboxes"}
+    absent_fields = pending_fields | {"retained_absent_inboxes"}
+    # Two retained v4 layouts exist. Their exact, mutually exclusive fields identify the variant.
+    bootstrap_proof = proof_schema == ABRUPT_PROOF_BOOTSTRAP_SCHEMA and set(proof) == bootstrap_fields
+    layouts = {
+        ABRUPT_PROOF_SCHEMA: legacy_fields,
+        ABRUPT_PROOF_HELD_MANUAL_SCHEMA: held_fields,
+        ABRUPT_PROOF_ATTEMPT_HISTORY_SCHEMA: history_fields,
+        ABRUPT_PROOF_PENDING_INBOX_SCHEMA: pending_fields,
+        ABRUPT_PROOF_ABSENT_INBOX_SCHEMA: absent_fields,
+    }
+    if not bootstrap_proof and set(proof) != layouts.get(proof_schema):
         _fail("abrupt stop proof does not match its frozen schema")
     if proof["authorization_pins"] != _abrupt_authorization_pins(authorization):
         _fail("abrupt proof operator pins differ")
@@ -2353,17 +2549,21 @@ def validate_abrupt_stop_proof(proof, authorization, *, control=None, compose=No
     terminal_pins = proof["retained_terminal_runs"]
     held_pins = proof.get("retained_held_manual_runs")
     history_pins = proof.get("retained_attempt_histories")
-    if proof_schema == ABRUPT_PROOF_BOOTSTRAP_SCHEMA:
+    if bootstrap_proof:
         expected_recovery_outcome({"schema_version": TERMINAL_REQUEST_SCHEMA, "retained_terminal_runs": terminal_pins})
         storage = _require_mapping(proof.get("storage_proof"), "bootstrap storage proof")
         if storage.get("run_records") != sorted(terminal_pins, key=lambda item: item["run_id"]):
             _fail("bootstrap storage proof does not cover its terminal pin inventory")
-    if proof_schema in {ABRUPT_PROOF_HELD_MANUAL_SCHEMA, ABRUPT_PROOF_ATTEMPT_HISTORY_SCHEMA}:
+    pending_pins = proof.get("retained_pending_inboxes")
+    absent_pins = proof.get("retained_absent_inboxes")
+    if not bootstrap_proof and proof_schema in {ABRUPT_PROOF_HELD_MANUAL_SCHEMA, ABRUPT_PROOF_ATTEMPT_HISTORY_SCHEMA, ABRUPT_PROOF_PENDING_INBOX_SCHEMA, ABRUPT_PROOF_ABSENT_INBOX_SCHEMA}:
         if terminal_pins is None or held_pins is None:
             _fail("v2 abrupt proof must carry both v4 retained pin arrays")
         expected_recovery_outcome({
-            "schema_version": ATTEMPT_HISTORY_REQUEST_SCHEMA if proof_schema == ABRUPT_PROOF_ATTEMPT_HISTORY_SCHEMA else HELD_MANUAL_REQUEST_SCHEMA,
-            **({"retained_attempt_histories": history_pins} if proof_schema == ABRUPT_PROOF_ATTEMPT_HISTORY_SCHEMA else {}),
+            "schema_version": ABSENT_INBOX_REQUEST_SCHEMA if proof_schema == ABRUPT_PROOF_ABSENT_INBOX_SCHEMA else PENDING_INBOX_REQUEST_SCHEMA if proof_schema == ABRUPT_PROOF_PENDING_INBOX_SCHEMA else ATTEMPT_HISTORY_REQUEST_SCHEMA if proof_schema == ABRUPT_PROOF_ATTEMPT_HISTORY_SCHEMA else HELD_MANUAL_REQUEST_SCHEMA,
+            **({"retained_attempt_histories": history_pins} if proof_schema in {ABRUPT_PROOF_ATTEMPT_HISTORY_SCHEMA, ABRUPT_PROOF_PENDING_INBOX_SCHEMA, ABRUPT_PROOF_ABSENT_INBOX_SCHEMA} else {}),
+            **({"retained_pending_inboxes": pending_pins} if proof_schema in {ABRUPT_PROOF_PENDING_INBOX_SCHEMA, ABRUPT_PROOF_ABSENT_INBOX_SCHEMA} else {}),
+            **({"retained_absent_inboxes": absent_pins} if proof_schema == ABRUPT_PROOF_ABSENT_INBOX_SCHEMA else {}),
             "retained_terminal_runs": terminal_pins,
             "retained_held_manual_runs": held_pins,
         })
@@ -2374,6 +2574,10 @@ def validate_abrupt_stop_proof(proof, authorization, *, control=None, compose=No
         )
         if history_pins is not None and storage.get("retained_attempt_histories") != history_pins:
             _fail("v5 abrupt storage proof does not match historical evidence pins")
+        if absent_pins is not None and storage.get("retained_absent_inboxes") != absent_pins:
+            _fail("storage absent inbox pins differ")
+        if pending_pins is not None and storage.get("retained_pending_inboxes") != pending_pins:
+            _fail("v6 abrupt storage proof does not match pending inbox pins")
         if storage.get("run_records") != expected_records:
             _fail("v4 abrupt storage proof does not cover both retained pin arrays")
     elif terminal_pins is not None:
@@ -2444,6 +2648,7 @@ def validate_abrupt_stop_proof(proof, authorization, *, control=None, compose=No
             retained_terminal_runs=terminal_pins,
             retained_held_manual_runs=held_pins,
             retained_attempt_histories=history_pins,
+            retained_pending_inboxes=pending_pins, retained_absent_inboxes=absent_pins,
         )
         if observed != proof["storage_proof"]:
             _fail("abrupt store/ledger snapshot changed")
@@ -2941,7 +3146,7 @@ def _validate_process_receipt_owner(
 
 
 def _validate_proof_process_owner(process, owner, proof, authorization, *, control=None):
-    if proof.get("schema") != ABRUPT_PROOF_BOOTSTRAP_SCHEMA:
+    if proof.get("schema") != ABRUPT_PROOF_BOOTSTRAP_SCHEMA or "bootstrap_stop" not in proof:
         _validate_process_receipt_owner(process, owner)
         return
     if not _is_abrupt(authorization):
@@ -3099,6 +3304,8 @@ def _revalidate_recovery_boundary(
     terminal_pins = journal.get("retained_terminal_runs") if _is_abrupt(authorization) else None
     held_pins = journal.get("retained_held_manual_runs") if _is_abrupt(authorization) else None
     history_pins = journal.get("retained_attempt_histories") if _is_abrupt(authorization) else None
+    pending_pins = journal.get("retained_pending_inboxes") if _is_abrupt(authorization) else None
+    absent_pins = journal.get("retained_absent_inboxes") if _is_abrupt(authorization) else None
     if _is_abrupt(authorization):
         validate_abrupt_stop_proof(journal, authorization, control=control, compose=current_compose, transition=current_transition)
     storage_proof = _ledger_and_store_snapshot(
@@ -3106,6 +3313,7 @@ def _revalidate_recovery_boundary(
         retained_terminal_runs=terminal_pins,
         retained_held_manual_runs=held_pins,
         retained_attempt_histories=history_pins,
+        retained_pending_inboxes=pending_pins, retained_absent_inboxes=absent_pins,
     )
     for key in (set(storage_proof) | set(expected_storage)):
         if storage_proof.get(key) != expected_storage.get(key):
@@ -3285,13 +3493,16 @@ def recover(args: argparse.Namespace) -> None:
     from docker_dev import _compose_identity, _select_source, _resolve_gpu_access, _verify_docker_gpu_access
     from docker_volume_dev import (
         _operator_probe_record_from_retained,
+        _pin_private_group_storage,
         _validate_recovery_metadata,
         start,
     )
     authorization_reference = getattr(args, "recovery_authorization", None)
     if not isinstance(authorization_reference, str):
         _fail(f"{AUTHORIZATION_ENV} is required")
-    authorization_reference = _relative_control_path(authorization_reference.removeprefix(CONTROL_ROOT + "/"))
+    if authorization_reference.startswith(CONTROL_ROOT + "/"):
+        authorization_reference = authorization_reference[len(CONTROL_ROOT) + 1:]
+    authorization_reference = _relative_control_path(authorization_reference)
     repo = Path(args.repo_root).resolve(strict=True)
     selected, layout = _select_source(repo, args.source_root)
     identity = _compose_identity(layout)
@@ -3390,6 +3601,8 @@ def recover(args: argparse.Namespace) -> None:
     terminal_pins = journal.get("retained_terminal_runs") if _is_abrupt(authorization) else None
     held_pins = journal.get("retained_held_manual_runs") if _is_abrupt(authorization) else None
     history_pins = journal.get("retained_attempt_histories") if _is_abrupt(authorization) else None
+    pending_pins = journal.get("retained_pending_inboxes") if _is_abrupt(authorization) else None
+    absent_pins = journal.get("retained_absent_inboxes") if _is_abrupt(authorization) else None
     if _is_abrupt(authorization):
         validate_abrupt_stop_proof(journal, authorization, control=control, compose=compose, transition=transition)
     storage_proof = _ledger_and_store_snapshot(
@@ -3397,6 +3610,7 @@ def recover(args: argparse.Namespace) -> None:
         retained_terminal_runs=terminal_pins,
         retained_held_manual_runs=held_pins,
         retained_attempt_histories=history_pins,
+        retained_pending_inboxes=pending_pins, retained_absent_inboxes=absent_pins,
     )
     manifest = transition["manifest"] if transition is not None else _manifest(
         authorization, engine_sha, backend, frontend, pins, device_release, device_mapping
@@ -3436,7 +3650,15 @@ def recover(args: argparse.Namespace) -> None:
             "old_image_id": authorization["old_image_id"],
         },
     }
+    fresh_generation = control.read("group-ledger-generation.json", optional=True)
+    if fresh_generation is not None:
+        from docker_volume_fresh_runtime import pinned_group_archive
+        pinned_group_archive(control, fresh_generation)
+        control.image = _require_image(images["dev"]["image_id"], "fresh recovery helper image")
     with control.operation("development", operation_inputs) as operation:
+        _pin_private_group_storage(
+            control, operation, new_render=False, previous=terminal
+        )
         # Recovery keeps the ledger of the stopped backend; its storage proof
         # was taken from that ledger. A later normal start may switch it.
         import docker_group_ledger as group_ledger
@@ -3517,6 +3739,7 @@ def recover(args: argparse.Namespace) -> None:
                 retained_terminal_runs=terminal_pins,
                 retained_held_manual_runs=held_pins,
                 retained_attempt_histories=history_pins,
+                retained_pending_inboxes=pending_pins, retained_absent_inboxes=absent_pins,
             )
             request_raw = _canonical(request)
             request_sha = _sha256(request_raw)
@@ -3608,7 +3831,9 @@ def recover(args: argparse.Namespace) -> None:
         # separate restart fence, proven above by exact-ID absence; it must not
         # fabricate a new exit time or claim that a foreign GPU user stopped.
         attestation_observations = []
-        for pin, container in zip(pins, (backend, frontend), strict=True):
+        if len(pins) != 2:
+            _fail("Recovery attestation requires exactly two container pins")
+        for pin, container in zip(pins, (backend, frontend)):
             attestation_observations.append({
                 "container_id": pin["container_id"],
                 "image_id": pin["image_id"],

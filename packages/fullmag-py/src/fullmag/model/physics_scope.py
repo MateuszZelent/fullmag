@@ -218,7 +218,7 @@ def build_physics_graph(problem: Any) -> PhysicsGraph:
         {
             "schema_version": "physics_object.v1",
             "object_id": getattr(problem, "auxiliary_geometry_object_ids", {}).get(name, name),
-            "name": name,
+            "name": getattr(problem, "auxiliary_geometry_names", {}).get(name, name),
             "type": role,
             "geometry_id": name,
             "material_assignment_ids": [],

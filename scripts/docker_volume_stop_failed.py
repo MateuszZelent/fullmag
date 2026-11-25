@@ -5,6 +5,8 @@ historical failed owner, the explicit pre-marker activation-parent failure,
 and failure after READY with a ready identity pin. None of these observations
 releases resources or rewrites owner state.
 """
+from __future__ import annotations
+
 import argparse
 import hashlib
 import inspect
@@ -32,7 +34,8 @@ API_START_FAILURE_ERROR_PREFIX = "API binding did not become ready:"
 
 
 def _validate_native_failed_owner(
-    owner: object, *, allowed_child_statuses: frozenset[str] | None = None
+    owner: object, *, allowed_child_statuses: frozenset[str] | None = None,
+    allow_drained: bool = False,
 ) -> dict[str, object]:
     """Validate the terminal native owner shape at the operator boundary."""
 
@@ -43,8 +46,11 @@ def _validate_native_failed_owner(
         raise BuildControlError("native failed owner is not an object")
     if owner.get("schema_version") != "runtime_service_owner.v1":
         raise BuildControlError("native failed owner schema differs")
-    if owner.get("protocol") != "stdin-v1" or owner.get("state") != "failed":
-        raise BuildControlError("native owner is not the expected failed owner")
+    drained = allow_drained and owner.get("state") == "drained"
+    if owner.get("protocol") != "stdin-v1" or (owner.get("state") != "failed" and not drained):
+        raise BuildControlError("native owner is not the expected terminal owner")
+    if drained:
+        allowed_child_statuses = frozenset({"exited_success"})
     if owner.get("target_id") != "docker-all":
         raise BuildControlError("native failed owner targets another service")
     for field in ("owner_token", "process_start_token", "host", "control_address", "acquired_at", "heartbeat_at"):
@@ -218,6 +224,7 @@ def _validate_native_failure_probe(
             frozenset({"exited_success", "exited_failure"})
             if api_start_failure else None
         ),
+        allow_drained=api_start_failure,
     )
     if type(probe.get("active_lease_count")) is not int or probe.get("active_lease_count") != 0:
         raise BuildControlError("native failure still has an active durable resource lease")
@@ -453,8 +460,9 @@ api_pid_exists=bool(type(api_pid) is int and api_pid > 0 and os.path.exists('/pr
 owner_path=runtime_service.runtime_services_root(paths)/'OWNER.json'
 owner_raw=read_regular(owner_path,'failed runtime service owner')
 owner=read_json(owner_path,'failed runtime service owner')
-if owner.get('schema_version')!='runtime_service_owner.v1' or owner.get('protocol')!='stdin-v1' or owner.get('state')!='failed' or owner.get('target_id')!='docker-all':
-    raise RuntimeError('runtime service OWNER.json is not the expected failed owner')
+drained_api_start=api_start_failure and owner.get('state')=='drained'
+if owner.get('schema_version')!='runtime_service_owner.v1' or owner.get('protocol')!='stdin-v1' or (owner.get('state')!='failed' and not drained_api_start) or owner.get('target_id')!='docker-all':
+    raise RuntimeError('runtime service OWNER.json is not the expected terminal owner')
 children=owner.get('children')
 if not isinstance(children,list) or len(children)!=2:
     raise RuntimeError('failed runtime service owner does not have exactly two children')
@@ -513,7 +521,9 @@ def validate_after_ready_failed_owner(owner):
         raise RuntimeError('after-ready failed owner child roles are incomplete')
     runtime_service._owner_fingerprint(owner)
 
-if after_ready or api_start_failure:
+if drained_api_start:
+    runtime_service._validate_terminal_owner(owner,state='drained',name='historical drained runtime service owner')
+elif after_ready or api_start_failure:
     validate_after_ready_failed_owner(owner)
 else:
     runtime_service._validate_terminal_owner(owner,state='failed',name='failed runtime service owner')
@@ -522,7 +532,7 @@ for child in children:
     if not isinstance(child,dict):
         raise RuntimeError('failed runtime service owner child is invalid')
     role=child.get('role'); pid=child.get('pid'); status=child.get('status')
-    allowed_statuses={'exited_success','exited_failure'} if after_ready or api_start_failure else {'exited_success'}
+    allowed_statuses={'exited_success','exited_failure'} if (after_ready or api_start_failure) and not drained_api_start else {'exited_success'}
     if role not in {'compute','preparation'} or role in roles or type(pid) is not int or pid <= 0 or pid in pids or status not in allowed_statuses:
         raise RuntimeError('failed runtime service owner child identity/status is invalid')
     roles.add(role); pids.add(pid)
@@ -1528,6 +1538,7 @@ def main():
     parser.add_argument('--terminal-only', action='store_true', help='Require all accepted tasks terminal; pin control/lease records without reading result payloads')
     parser.add_argument('--stop-frontend', action='store_true',
                         help='After authenticated Linux OOM drain, stop this exact group frontend')
+    parser.add_argument('--preservation-profile', choices=('v1', 'retained-scientific-preservation.v2'), default='v1')
     args=parser.parse_args()
     prepared_options = (args.activation_attempt, args.prepared_target, args.prepared_target_sha256,
                         args.apply, args.expected_plan_sha256, args.continue_intent_sha256)
@@ -1559,6 +1570,8 @@ def main():
     if actual.get('State', {}).get('OOMKilled') is True:
         if args.terminal_only:
             raise BuildControlError('Terminal-only stop requires the pinned Linux supervision failure')
+        if args.preservation_profile != 'v1':
+            raise BuildControlError('scientific preservation v2 requires the exact Linux supervision/no-spawn route')
         env = dict(item.split('=', 1) for item in actual.get('Config', {}).get('Env', []) if '=' in item)
         if env.get('FULLMAG_SESSION_STORAGE_PROFILE') != 'linux-native-v1':
             raise BuildControlError('OOM stop is supported only for the pinned Linux DEV session profile')
@@ -1593,6 +1606,8 @@ print(json.dumps({'sha256':hashlib.sha256(raw).hexdigest(),'receipt':document,'a
         return
     if args.terminal_only:
         raise BuildControlError('Terminal-only stop requires the pinned Linux supervision failure')
+    if args.preservation_profile != 'v1':
+        raise BuildControlError('scientific preservation v2 requires the exact Linux supervision/no-spawn route')
     log_result = docker_capture('logs','--since',actual['State']['StartedAt'],'--tail','100',args.container_id)
     logs = (log_result.stdout + log_result.stderr).decode('utf-8','replace')
     if 'Startup or runtime failed; admission closed:' not in logs:

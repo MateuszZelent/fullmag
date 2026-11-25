@@ -8,6 +8,7 @@ import {
 import {
   useCallback,
   useMemo,
+  useState,
   type ReactNode,
 } from "react";
 import type { JsonObject, SceneResource } from "@/kernel/api/apiTypes";
@@ -21,7 +22,7 @@ import { useGeometryRealizationResource } from "@/kernel/resources/useGeometryRe
 import { useSessionResourceIdentity } from "@/kernel/resources/useSessionStatus";
 import { Button } from "@/shared/ui/Button";
 import type { InspectorPanelProps } from "../../../inspectorTypes";
-import type { InspectorNotice, InspectorSpec } from "../../../template";
+import { inspectorValuesEqual, type InspectorNotice, type InspectorSpec } from "../../../template";
 import { SpecInspectorHost } from "../../../panels/mesh-details/SpecInspectorHost";
 import {
   asNumber,
@@ -32,11 +33,13 @@ import {
   GeometryDiagnosticsView,
   type JsonRecord,
 } from "../../../panels/antenna/AntennaCoreHelpers";
+import { committedAntennaGeometryScene } from "../../../panels/antenna/AntennaGeometryAcknowledgement";
 import { resolveAntennaPlacement } from "../../../panels/antenna/AntennaPlacementModel";
 import {
+  antennaCircuitFields,
   buildMicrostripCircuitPatch,
-  MICROSTRIP_LOOP_FIELDS,
   microstripCircuitDraft,
+  microstripCircuitSourceKey,
   type MicrostripCircuitDraft,
 } from "../../../panels/antenna/MicrostripGeometryEditorModel";
 import {
@@ -55,6 +58,15 @@ import {
   ANTENNA_GEOMETRY_LAYOUT_SECTIONS,
 } from "./antennaGeometrySections";
 
+function antennaGeometrySource(scene: SceneResource | null, objectId: string): string {
+  const object = scene?.objects?.find((candidate) => candidate.id === objectId);
+  const geometry = asRecord(object?.geometry) as JsonObject | null;
+  return JSON.stringify([
+    object?.transform,
+    geometry && microstripCircuitSourceKey(geometry, scene, objectId),
+  ]);
+}
+
 export function AntennaGeometryInspectorSpecPanel({
   selection,
 }: InspectorPanelProps): ReactNode {
@@ -68,7 +80,11 @@ export function AntennaGeometryInspectorSpecPanel({
     enabled: Boolean(objectId),
   });
 
-  const sceneRec = useMemo(() => asRecord(scene.data), [scene.data]);
+  const currentScene = sessionScopeKey === scene.sessionScopeKey ? scene.data : null;
+  const sceneId = currentScene?.scene?.id;
+  const draftKey = JSON.stringify([sessionScopeKey, sceneId, objectId]);
+  const [editSource, setEditSource] = useState<{ key: string; source: string } | null>(null);
+  const sceneRec = useMemo(() => asRecord(currentScene), [currentScene]);
   const objects = useMemo(
     () =>
       Array.isArray(sceneRec?.objects)
@@ -79,6 +95,11 @@ export function AntennaGeometryInspectorSpecPanel({
   const antennaObj = useMemo(
     () => objects.find((o) => asString(o.id) === objectId) ?? null,
     [objectId, objects],
+  );
+
+  const source = useMemo(
+    () => antennaGeometrySource(currentScene, objectId),
+    [currentScene, objectId],
   );
 
   const magneticTargets = useMemo(() => {
@@ -149,13 +170,16 @@ export function AntennaGeometryInspectorSpecPanel({
           })
         : [...base.waypoints];
 
-    const circuit =
-      geom?.geometry_kind === "MicrostripAntennaLayout"
-        ? microstripCircuitDraft(geom as JsonObject, scene.data ?? null, objectId)
-        : null;
+    const isCpw = geom?.geometry_kind === "CPWAntennaLayout";
+    const circuitGeometry = geom && (isCpw || geom.geometry_kind === "MicrostripAntennaLayout")
+      ? geom as JsonObject
+      : null;
+    const circuit = circuitGeometry
+      ? microstripCircuitDraft(circuitGeometry, currentScene, objectId)
+      : null;
     const loopParameters: Record<string, string> = { ...DEFAULT_LOOP_PARAMETERS };
-    if (circuit) {
-      for (const field of MICROSTRIP_LOOP_FIELDS) {
+    if (circuit && circuitGeometry) {
+      for (const field of antennaCircuitFields(circuitGeometry)) {
         const val = circuit.parameters[field.key];
         if (val && val.trim().length > 0) {
           loopParameters[field.key] = val;
@@ -214,8 +238,9 @@ export function AntennaGeometryInspectorSpecPanel({
         base.signalWidthM,
       sourceCutNormal:
         circuit?.sourceCutNormal === "negative_axis" ? "negative_axis" : "positive_axis",
-      sourceCutOffsetM:
-        asNumber(circuit?.sourceCutOffsetM) ?? -(thicknessM + returnOffsetM) / 2,
+      sourceCutOffsetM: asNumber(circuit?.sourceCutOffsetM) ?? (isCpw
+        ? (-Number(loopParameters.inlet_connection_length_m) + Number(loopParameters.inlet_crossbar_length_m)) / 2
+        : -(thicknessM + returnOffsetM) / 2),
       standoffGapM: Math.max(1e-9, Math.abs(zTrans) - thicknessM * 0.2),
       standoffSide: zTrans >= 0 ? "above" : "below",
       stations:
@@ -238,13 +263,13 @@ export function AntennaGeometryInspectorSpecPanel({
       topology,
       waypoints,
     };
-  }, [antennaObj, magneticTargets, objectId, scene.data]);
+  }, [antennaObj, currentScene, magneticTargets, objectId]);
 
   const computePlacementPreview = useCallback(
     (draft: AntennaGeometryAndPlacementDraft) => {
       const targetId = draft.placementTargetId;
       if (
-        !scene.data ||
+        !currentScene ||
         !realization.data ||
         !targetId ||
         targetId === SCENE_ORIGIN_TARGET_VALUE
@@ -254,8 +279,8 @@ export function AntennaGeometryInspectorSpecPanel({
       try {
         const draftGeom = buildAntennaTopologyGeometryPayload(draft);
         const sceneForPlacement: SceneResource = {
-          ...scene.data,
-          objects: (scene.data.objects ?? []).map((obj) => {
+          ...currentScene,
+          objects: (currentScene.objects ?? []).map((obj) => {
             if (obj.id === objectId) {
               return { ...obj, geometry: draftGeom };
             }
@@ -277,7 +302,7 @@ export function AntennaGeometryInspectorSpecPanel({
         return null;
       }
     },
-    [objectId, realization.data, scene.data],
+    [currentScene, objectId, realization.data],
   );
 
   const committedTranslationText = useMemo(() => {
@@ -298,6 +323,12 @@ export function AntennaGeometryInspectorSpecPanel({
   }, [geometryDiagnostics.data, objectId]);
 
   const antennaName = asString(antennaObj?.name) ?? selection.label ?? objectId;
+
+  const needsRebase = useCallback(
+    (draft: AntennaGeometryAndPlacementDraft) =>
+      editSource?.key === draftKey && editSource.source !== source && !inspectorValuesEqual(draft, baseline),
+    [baseline, draftKey, editSource, source],
+  );
 
   const spec = useMemo<InspectorSpec<AntennaGeometryAndPlacementDraft>>(
     () => ({
@@ -349,7 +380,19 @@ export function AntennaGeometryInspectorSpecPanel({
       ],
       notices: (d) => {
         const notices: InspectorNotice<AntennaGeometryAndPlacementDraft>[] = [];
-        if (baseline.closedLoopEnabled && !d.closedLoopEnabled) {
+        if (needsRebase(d)) {
+          notices.push({
+            id: "conductor-rebase-required",
+            title: "Conductor geometry changed on the server",
+            text: "Review the current scene and rebase your draft before applying.",
+            tone: "warn",
+            quickFix: {
+              label: "Rebase draft",
+              onApply: () => setEditSource({ key: draftKey, source }),
+            },
+          });
+        }
+        if (baseline.closedLoopEnabled && (!d.closedLoopEnabled || baseline.topology !== d.topology)) {
           notices.push({
             id: "reopen-loop-warn",
             text: "Reopening a committed closed loop requires explicit terminal-source migration on the charge transport.",
@@ -498,18 +541,30 @@ export function AntennaGeometryInspectorSpecPanel({
       commitBar: {
         cleanMessage: () => "Conductor layout & 3D placement are synchronized",
         mode: "staged",
-        onApply: async (draft) => {
-          const baseRev =
-            asNumber(sceneRec?.revision) ?? asNumber(sceneRec?.scene_revision) ?? 0;
+        lockReason: (draft) => {
+          if (!sessionScopeKey || !sceneId || scene.status !== "ready" || !antennaObj) {
+            return "Wait for the current antenna scene before applying.";
+          }
+          if (antennaObj.locked === true) return "Unlock the antenna before editing its geometry.";
+          if (needsRebase(draft)) return "Rebase the conductor draft against the current scene.";
+          if (baseline.closedLoopEnabled && (!draft.closedLoopEnabled || baseline.topology !== draft.topology)) {
+            return "Migrate the committed closed-loop source before reopening it or changing topology.";
+          }
+          return null;
+        },
+        onRevert: () => setEditSource(null),
+        onApply: async (draft, previous) => {
+          const baseRev = currentScene?.revision;
+          if (!currentScene || !sessionScopeKey || typeof baseRev !== "number" || !Number.isSafeInteger(baseRev) || baseRev < 0) {
+            return false;
+          }
           const builtGeometry = buildAntennaTopologyGeometryPayload(draft);
           const existingGeom = asRecord(antennaObj?.geometry);
           const existingParams = asRecord(existingGeom?.geometry_params) ?? {};
           const sameKind = existingGeom?.geometry_kind === builtGeometry.geometry_kind;
 
           const mergedParams: JsonObject = {
-            ...(sameKind && Array.isArray(existingParams.conductors)
-              ? { conductors: existingParams.conductors as JsonObject[] }
-              : {}),
+            ...(sameKind ? existingParams as JsonObject : {}),
             ...(asRecord(builtGeometry.geometry_params) as JsonObject),
           };
           const mergedGeometry: JsonObject = {
@@ -543,6 +598,9 @@ export function AntennaGeometryInspectorSpecPanel({
             ? resolvedPlacement.translation[2]
             : fallbackZ;
 
+          const placementChanged = (
+            ["placementTargetId", "standoffSide", "standoffGapM", "lateralOffsetXM", "lateralOffsetYM", "inPlaneAngleDeg"] as const
+          ).some((key) => draft[key] !== previous[key]);
           const buildPatchedTransform = (obj: JsonRecord): JsonObject => {
             const existingTransform = asRecord(obj.transform) ?? {};
             const nextTransform: JsonObject = {
@@ -567,9 +625,15 @@ export function AntennaGeometryInspectorSpecPanel({
             return nextTransform;
           };
 
-          let mergePatch: JsonObject;
+          const positionedObjects = objects.map((obj) =>
+            asString(obj.id) === objectId && placementChanged
+              ? { ...obj, transform: buildPatchedTransform(obj) }
+              : obj,
+          );
+          let circuitPatch: JsonObject | undefined;
+          let submittedGeometry = mergedGeometry;
 
-          if (draft.topology === "straight_microstrip" && draft.closedLoopEnabled) {
+          if (draft.closedLoopEnabled) {
             const circuitDraft: MicrostripCircuitDraft = {
               enabled: true,
               parameters: { ...draft.loopParameters },
@@ -579,83 +643,64 @@ export function AntennaGeometryInspectorSpecPanel({
             };
 
             if (
-              scene.data &&
-              hasFullMicrostripCircuitPrerequisites(
-                scene.data,
-                objectId,
-                mergedGeometry,
-              )
+              mergedGeometry.geometry_kind === "CPWAntennaLayout" ||
+              hasFullMicrostripCircuitPrerequisites(currentScene, objectId, mergedGeometry)
             ) {
-              const sceneWithUpdatedTransform: SceneResource = {
-                ...scene.data,
-                objects: (scene.data.objects ?? []).map((obj) =>
-                  obj.id === objectId
-                    ? {
-                        ...obj,
-                        transform: buildPatchedTransform(
-                          obj as unknown as JsonRecord,
-                        ),
-                      }
-                    : obj,
-                ),
-              };
-              mergePatch = buildMicrostripCircuitPatch(
-                sceneWithUpdatedTransform,
+              circuitPatch = buildMicrostripCircuitPatch(
+                { ...currentScene, objects: positionedObjects as unknown as SceneResource["objects"] },
                 objectId,
                 mergedGeometry,
                 circuitDraft,
               );
-            } else {
-              const loopObj: JsonObject = { enabled: true };
-              for (const field of MICROSTRIP_LOOP_FIELDS) {
+            } else if (mergedGeometry.geometry_kind === "MicrostripAntennaLayout") {
+              const loop: JsonObject = { enabled: true };
+              for (const field of antennaCircuitFields(mergedGeometry)) {
                 const raw = draft.loopParameters[field.key] ?? "";
-                loopObj[field.key] = field.numeric ? Number(raw) : raw.trim();
+                loop[field.key] = field.numeric ? Number(raw) : raw.trim();
               }
-              const geomWithLoop: JsonObject = {
+              submittedGeometry = {
                 ...mergedGeometry,
-                geometry_params: {
-                  ...mergedParams,
-                  loop: loopObj,
-                },
+                geometry_params: { ...mergedParams, loop },
               };
-              mergePatch = {
-                objects: objects.map((obj) =>
-                  asString(obj.id) === objectId
-                    ? {
-                        ...obj,
-                        geometry: geomWithLoop,
-                        transform: buildPatchedTransform(obj),
-                      }
-                    : obj,
-                ) as unknown as JsonObject[],
-              };
+            } else {
+              throw new Error("Choose a straight microstrip or coplanar layout for a closed return.");
             }
-          } else {
-            mergePatch = {
-              objects: objects.map((obj) =>
-                asString(obj.id) === objectId
-                  ? {
-                      ...obj,
-                      geometry: mergedGeometry,
-                      transform: buildPatchedTransform(obj),
-                    }
-                  : obj,
-              ) as unknown as JsonObject[],
-            };
           }
+          const mergePatch = circuitPatch ?? {
+            objects: positionedObjects.map((obj) =>
+              asString(obj.id) === objectId ? { ...obj, geometry: submittedGeometry } : obj,
+            ) as unknown as JsonObject[],
+          };
 
-          await executeAntennaMergePatchTransaction({
-            kernel,
-            label: `Edit antenna geometry ${objectId}`,
-            mutationKind: "geometry",
-            request: {
-              base_revision: baseRev,
-              kind: "merge_patch",
-              merge_patch: mergePatch,
-            },
-            scene: scene.data,
-            sessionScopeKey,
-          });
+          try {
+            const response = await executeAntennaMergePatchTransaction({
+              kernel,
+              label: `Edit antenna geometry ${objectId}`,
+              mutationKind: "geometry",
+              request: {
+                base_revision: baseRev,
+                kind: "merge_patch",
+                merge_patch: mergePatch,
+              },
+              scene: currentScene,
+              sessionScopeKey,
+              resolveCommittedScene: (response) =>
+                committedAntennaGeometryScene(
+                  response,
+                  currentScene,
+                  objectId,
+                  submittedGeometry,
+                  circuitPatch,
+                  positionedObjects.find((obj) => asString(obj.id) === objectId)?.transform,
+                ),
+            });
+            if (!response.committed_scene) return false;
+            const committedSource = antennaGeometrySource(response.committed_scene, objectId);
+            setEditSource((edit) => edit?.key === draftKey ? { key: draftKey, source: committedSource } : edit);
+          } catch (error) {
+            scene.refetch();
+            throw error;
+          }
           return true;
         },
       },
@@ -665,21 +710,36 @@ export function AntennaGeometryInspectorSpecPanel({
       antennaObj,
       baseline.closedLoopEnabled,
       baseline.inPlaneAngleDeg,
+      baseline.topology,
       committedTranslationText,
       computePlacementPreview,
+      currentScene,
+      draftKey,
       geometryDiagnostics.data,
       geometryDiagnostics.status,
       kernel,
       magneticTargets,
+      needsRebase,
       objectDiagnostics,
       objectId,
       objects,
       realization,
       scene,
-      sceneRec,
+      sceneId,
       sessionScopeKey,
+      source,
     ],
   );
 
-  return <SpecInspectorHost baseline={baseline} selection={selection} spec={spec} />;
+  return (
+    <SpecInspectorHost
+      key={draftKey}
+      baseline={baseline}
+      selection={selection}
+      spec={spec}
+      onAfterFieldChange={(_key, _value, { draft }) => {
+        if (inspectorValuesEqual(draft, baseline)) setEditSource({ key: draftKey, source });
+      }}
+    />
+  );
 }

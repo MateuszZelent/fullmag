@@ -4288,6 +4288,13 @@ fn mesh_build_provenance(snapshot: &SessionStateResponse) -> MeshBuildProvenance
     // Field-only preparation owns a source mesh; independent sampling objects
     // intentionally do not belong to that mesh. Invalid prepared ownership must
     // not fall back to the all-visible-objects heuristic.
+    if [snapshot.mesh_workspace.as_ref(), snapshot.metadata.as_ref()].into_iter().flatten().any(|document|
+        document.pointer("/execution_plan/backend_plan/kind").and_then(Value::as_str)
+            == Some("antenna_retained_current_field_inspection")) {
+        // Retained H sampling is not a newly prepared current-source mesh.
+        // Its dedicated accepted preparation binding must supply provenance.
+        return MeshBuildProvenance::default();
+    }
     let field_only_publication = [snapshot.mesh_workspace.as_ref(), snapshot.metadata.as_ref()]
         .into_iter().flatten().any(|document|
             document.pointer("/execution_plan/backend_plan/kind").and_then(Value::as_str)

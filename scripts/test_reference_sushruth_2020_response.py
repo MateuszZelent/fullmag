@@ -93,7 +93,7 @@ class SushruthResponseReferenceTests(unittest.TestCase):
         rows = []
         for antenna in ("S", "GS", "GSG"):
             for alpha in (.01, .03, .07, .1):
-                frequencies = [7.5e9, 9e9, 12e9]
+                frequencies = [7.5e9, 7.605e9, 7.8e9, 9e9, 12e9]
                 grids = [inductive_response(frequencies, antenna=antenna, alpha=alpha,
                                             intervals=count, max_kl=cutoff)
                          for count, cutoff in ((8192, 80), (16384, 80),

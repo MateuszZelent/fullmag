@@ -35,6 +35,7 @@ pub mod relaxation;
 pub mod runtime;
 pub mod runtime_service;
 pub mod saved_field_geometry;
+pub mod saved_planar;
 pub mod scalars;
 pub mod stage_results;
 #[allow(dead_code)]

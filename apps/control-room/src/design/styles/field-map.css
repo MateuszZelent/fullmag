@@ -167,6 +167,32 @@
   white-space: nowrap;
 }
 
+.fm-field-map__toolbar--saved {
+  gap: var(--fm-space-2);
+  padding-block: var(--fm-space-2);
+}
+
+.fm-field-map__toolbar--saved .fm-field-map__saved-select {
+  width: auto;
+  min-width: 5rem;
+}
+
+.fm-field-map__saved-position {
+  display: flex;
+  align-items: center;
+  gap: var(--fm-space-2);
+}
+
+.fm-field-map__saved-position input {
+  width: 8rem;
+}
+
+.fm-field-map__toolbar--saved .fm-field-map__section-caption {
+  flex-basis: 100%;
+  margin: 0;
+  white-space: normal;
+}
+
 .fm-planar-statusbar__plane {
   color: var(--fm-text-primary);
   font-weight: 600;

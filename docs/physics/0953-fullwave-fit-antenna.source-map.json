@@ -1,0 +1,220 @@
+{
+  "document": {
+    "path": "docs/physics/0953-fullwave-fit-antenna.md"
+  },
+  "backend_matrix": [
+    {
+      "solver": "FDM",
+      "device": "CPU",
+      "status": "not-applicable",
+      "reason": "The standalone FIT reference is an EM CPU calculation outside the native micromagnetic FEM and FDM lanes."
+    },
+    {
+      "solver": "FDM",
+      "device": "GPU",
+      "status": "not-applicable",
+      "reason": "The standalone FIT reference is an EM CPU calculation outside the native micromagnetic FEM and FDM lanes."
+    },
+    {
+      "solver": "FEM",
+      "device": "CPU",
+      "status": "not-applicable",
+      "reason": "The standalone FIT reference is an EM CPU calculation outside the native micromagnetic FEM and FDM lanes."
+    },
+    {
+      "solver": "FEM",
+      "device": "GPU",
+      "status": "not-applicable",
+      "reason": "The standalone FIT reference is an EM CPU calculation outside the native micromagnetic FEM and FDM lanes."
+    }
+  ],
+  "equations": [
+    {
+      "id": "eq-fit-maxwell",
+      "symbols": [
+        "C",
+        "e",
+        "i",
+        "w",
+        "b",
+        "h",
+        "j",
+        "d",
+        "G",
+        "S"
+      ],
+      "sources": [
+        "topology",
+        "operator",
+        "sampling"
+      ]
+    },
+    {
+      "id": "eq-fit-metrics",
+      "symbols": [
+        "d",
+        "j",
+        "h",
+        "Me",
+        "Ms",
+        "Mn",
+        "e",
+        "b"
+      ],
+      "sources": [
+        "metric",
+        "operator"
+      ]
+    },
+    {
+      "id": "eq-fit-wave-operator",
+      "symbols": [
+        "C",
+        "Mn",
+        "i",
+        "w",
+        "Ms",
+        "Me",
+        "e"
+      ],
+      "sources": [
+        "operator",
+        "port-check",
+        "cavity-check"
+      ]
+    }
+  ],
+  "symbols": [
+    {
+      "id": "e",
+      "latex": "e",
+      "meaning": "Primal edge voltage",
+      "si_unit": "\\mathrm{V}"
+    },
+    {
+      "id": "b",
+      "latex": "b",
+      "meaning": "Primal face magnetic flux",
+      "si_unit": "\\mathrm{Wb}"
+    },
+    {
+      "id": "d",
+      "latex": "d",
+      "meaning": "Dual-face electric displacement integral",
+      "si_unit": "\\mathrm{C}"
+    },
+    {
+      "id": "j",
+      "latex": "j",
+      "meaning": "Dual-face electric current integral",
+      "si_unit": "\\mathrm{A}"
+    },
+    {
+      "id": "h",
+      "latex": "h",
+      "meaning": "Dual-edge magnetic circulation",
+      "si_unit": "\\mathrm{A}"
+    },
+    {
+      "id": "w",
+      "latex": "\\omega",
+      "meaning": "Angular frequency",
+      "si_unit": "\\mathrm{rad\\,s^{-1}}"
+    },
+    {
+      "id": "i",
+      "latex": "i",
+      "meaning": "Imaginary unit",
+      "si_unit": "1"
+    },
+    {
+      "id": "G",
+      "latex": "G",
+      "meaning": "Node-to-edge incidence matrix",
+      "si_unit": "1"
+    },
+    {
+      "id": "C",
+      "latex": "C",
+      "meaning": "Edge-to-face incidence matrix",
+      "si_unit": "1"
+    },
+    {
+      "id": "S",
+      "latex": "S",
+      "meaning": "Face-to-cell incidence matrix",
+      "si_unit": "1"
+    },
+    {
+      "id": "Me",
+      "latex": "M_\\varepsilon",
+      "meaning": "Permittivity metric",
+      "si_unit": "\\mathrm{F}"
+    },
+    {
+      "id": "Ms",
+      "latex": "M_\\sigma",
+      "meaning": "Conductivity metric",
+      "si_unit": "\\mathrm{S}"
+    },
+    {
+      "id": "Mn",
+      "latex": "M_\\nu",
+      "meaning": "Reluctivity metric",
+      "si_unit": "\\mathrm{H^{-1}}"
+    }
+  ],
+  "sources": [
+    {
+      "id": "topology",
+      "path": "scripts/rf_fit_reference.py",
+      "symbol": "_topology",
+      "responsibility": "Build the oriented primal incidences."
+    },
+    {
+      "id": "metric",
+      "path": "scripts/rf_fit_reference.py",
+      "symbol": "_material_weights",
+      "responsibility": "Apply the dual-volume permittivity, conductivity and reluctivity measures."
+    },
+    {
+      "id": "assemble",
+      "path": "scripts/rf_fit_reference.py",
+      "symbol": "assemble",
+      "responsibility": "Validate the orthogonal grid, material values and harmonic frequency."
+    },
+    {
+      "id": "operator",
+      "path": "scripts/rf_fit_reference.py",
+      "symbol": "solve_ece",
+      "responsibility": "Solve the frequency-domain cotree system with the CPW circuit boundary."
+    },
+    {
+      "id": "sampling",
+      "path": "scripts/rf_fit_reference.py",
+      "symbol": "sample",
+      "responsibility": "Recover electric and magnetic components from the edge and face integrals."
+    },
+    {
+      "id": "port-check",
+      "path": "scripts/test_rf_fit_reference.py",
+      "symbol": "test_driven_ece_current_balance_and_local_passive_load",
+      "responsibility": "Check the driven circuit, terminal currents and power balance."
+    },
+    {
+      "id": "cavity-check",
+      "path": "scripts/test_rf_fit_reference.py",
+      "symbol": "test_tangential_pec_cavity_discrete_eigenmode",
+      "responsibility": "Check the operator against a discrete cavity eigenmode."
+    },
+    {
+      "id": "provenance",
+      "path": "scripts/run_rf_fit_cpw.py",
+      "symbol": "solve",
+      "responsibility": "Record the solved benchmark and configuration with the field readout."
+    }
+  ],
+  "public_api": {
+    "parameters": []
+  }
+}

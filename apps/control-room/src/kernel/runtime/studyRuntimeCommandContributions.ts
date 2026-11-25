@@ -2513,7 +2513,10 @@ function runtimeCommand(
       ) {
         const preparation = await materializeCurrentLivePreparation(context, {
           expectedSceneRevision: numericRevision(status?.resources.scene_revision),
-          requireCurrentSharedDomainMesh: true,
+          requireCurrentSharedDomainMesh:
+            kind === "solve"
+              ? requiresSharedDomainMeshForLivePreparation(context)
+              : true,
         });
         if (preparation.kind === "rejected") return preparation.result;
       }

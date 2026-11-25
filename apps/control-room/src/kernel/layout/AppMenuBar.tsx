@@ -1,5 +1,7 @@
 "use client";
 
+import { useSavedRunSelection } from "../saved-results/useSavedRun";
+
 import { isProjectWorkspaceCommand } from "../commands/projectWorkspaceCommandPolicy";
 
 import { ArrowLeft, House, Menu, Search } from "lucide-react";
@@ -631,10 +633,11 @@ function appMenuDialogReducer(
 }
 
 export function AppMenuBar() {
+  const savedRun = useSavedRunSelection();
   const sessions = useSessionCollection();
   const identity = useSessionResourceIdentity();
   const [newProblem, setNewProblemOpen] = useNewProblemRequest();
-  const hasActiveSession = sessions.state === "ready" && Boolean(identity);
+  const hasActiveSession = !savedRun && sessions.state === "ready" && Boolean(identity);
 
   return (
     <>

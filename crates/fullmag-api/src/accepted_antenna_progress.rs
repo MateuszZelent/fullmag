@@ -68,6 +68,26 @@ pub(super) fn with_progress<T>(
         source_cells: input.conductivity_spm_per_element.len() as u64,
         elapsed_seconds: 0.0,
     };
+    with_initial_progress(attempt, step, initial, execute)
+}
+
+fn retained_initial(source_cells: u64, total_targets: u64) -> Progress {
+    Progress { phase: Phase::EvaluatingField, completed_targets: 0,
+        total_targets, source_cells, elapsed_seconds: 0.0 }
+}
+
+/// Uses counts from the authenticated retained parent and the new accepted sampling carrier.
+pub(super) fn with_retained_current_progress<T>(
+    attempt: &Path, step: &AcceptedWorkerStep, source_cells: u64, total_targets: u64,
+    execute: impl FnOnce(&AntennaOperationProgressObserver<'_>) -> T,
+) -> T {
+    with_initial_progress(attempt, step, retained_initial(source_cells, total_targets), execute)
+}
+
+fn with_initial_progress<T>(
+    attempt: &Path, step: &AcceptedWorkerStep, initial: Progress,
+    execute: impl FnOnce(&AntennaOperationProgressObserver<'_>) -> T,
+) -> T {
     let latest = Mutex::new(initial);
     let stopped = AtomicBool::new(false);
     thread::scope(|scope| {
@@ -144,6 +164,21 @@ mod tests {
         Progress { phase, completed_targets: completed, total_targets: 20,
             source_cells: 1856, elapsed_seconds: 10.0 }
     }
+    #[test]
+    fn retained_current_progress_starts_at_field_evaluation_with_exact_counts() {
+        let initial = retained_initial(14_304, 247);
+        assert!(valid(&initial));
+        assert_eq!(initial.phase, Phase::EvaluatingField);
+        assert_eq!(initial.source_cells, 14_304);
+        assert_eq!(initial.total_targets, 247);
+        assert_eq!(initial.completed_targets, 0);
+        let evaluated = Progress { completed_targets: 1, elapsed_seconds: 1.0, ..initial };
+        assert!(follows(&initial, &evaluated));
+        for phase in [Phase::PreparingSource, Phase::SolvingPotential, Phase::ReconstructingCurrent] {
+            assert!(!follows(&initial, &Progress { phase, ..initial }));
+        }
+    }
+
     #[test]
     fn progress_rejects_invalid_counts_clock_phase_and_regressions() {
         let previous = progress(Phase::EvaluatingField, 4);

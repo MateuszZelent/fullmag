@@ -25,7 +25,8 @@ pub(crate) fn build_quantities(
         .and_then(|value| value.get("kind"))
         .and_then(Value::as_str)
         .is_some_and(|kind| matches!(
-            kind, "antenna_external_lead_inspection" | "antenna_field_only"
+            kind, "antenna_external_lead_inspection" | "antenna_field_only" | "antenna_retained_current_field_inspection"
+                | "antenna_retained_direct_field_inspection" | "antenna_retained_preparation_field_inspection"
         ))
     {
         // V/J/H belong to the owner-bound inspection publisher, not to the
@@ -131,7 +132,7 @@ fn scalar_metric_is_active(plan: Option<&ExecutionPlanIR>, metric_key: &str) -> 
         return metric_key != "e_rotated_dmi";
     };
     match &plan.backend_plan {
-        BackendPlanIR::AntennaFieldOnly(_) => false,
+        BackendPlanIR::AntennaRetainedCurrentFieldInspection(_) | BackendPlanIR::AntennaRetainedDirectFieldInspection(_) | BackendPlanIR::AntennaRetainedPreparationFieldInspection(_) | BackendPlanIR::AntennaFieldOnly(_) => false,
         BackendPlanIR::AntennaExternalLeadInspection(_) => false,
         BackendPlanIR::Fdm(plan) => match metric_key {
             "e_ex" => plan.enable_exchange,
@@ -269,7 +270,8 @@ fn plan_is_rotated_dmi_only(plan: &ExecutionPlanIR) -> bool {
                 && plan.interfacial_dmi.is_none()
                 && plan.bulk_dmi.is_none()
         }
-        BackendPlanIR::AntennaFieldOnly(_)
+        BackendPlanIR::AntennaRetainedCurrentFieldInspection(_) | BackendPlanIR::AntennaRetainedDirectFieldInspection(_) | BackendPlanIR::AntennaRetainedPreparationFieldInspection(_)
+        | BackendPlanIR::AntennaFieldOnly(_)
         | BackendPlanIR::FemEigen(_)
         | BackendPlanIR::FemFrequencyResponse(_)
         | BackendPlanIR::AntennaExternalLeadInspection(_) => false,
@@ -291,7 +293,8 @@ pub(crate) fn extract_fem_mesh_from_metadata(metadata: &SharedJson) -> Option<Fe
         BackendPlanIR::Fem(fem) => Some(FemMeshPayload::from(fem)),
         BackendPlanIR::FemEigen(fem) => Some(FemMeshPayload::from(fem)),
         BackendPlanIR::FemFrequencyResponse(fem) => Some(FemMeshPayload::from(fem)),
-        BackendPlanIR::Fdm(_)
+        BackendPlanIR::AntennaRetainedCurrentFieldInspection(_) | BackendPlanIR::AntennaRetainedDirectFieldInspection(_) | BackendPlanIR::AntennaRetainedPreparationFieldInspection(_)
+        | BackendPlanIR::Fdm(_)
         | BackendPlanIR::FdmMultilayer(_)
         | BackendPlanIR::AntennaExternalLeadInspection(_) => None,
     }
@@ -532,6 +535,20 @@ mod tests {
             "node",
         );
         assert!(quantities.is_empty());
+    }
+
+    #[test]
+    fn retained_dtq_v2_quantity_catalog_only_raw_h() {
+        // Raw H is owned by the inspection provider, never the magnetic catalog.
+        for kind in ["antenna_retained_current_field_inspection",
+            "antenna_retained_direct_field_inspection", "antenna_retained_preparation_field_inspection"] {
+            let metadata = SharedJson::from(serde_json::json!({
+                "execution_plan": { "backend_plan": { "kind": kind } },
+                "capabilities": { "preview_quantities": ["m", "H_eff", "V_electric", "J_charge"] }
+            }));
+            assert!(build_quantities(&LatestFields::default(), &CachedPreviewFields::default(),
+                None, Some(&completed_run_manifest()), Some(&metadata), &[], "node").is_empty(), "{kind}");
+        }
     }
 
     #[test]

@@ -443,6 +443,15 @@ pub struct ScriptExecutionStage {
 
 #[derive(Debug, Clone)]
 pub enum ResolvedScriptStageAction {
+    AntennaRetainedDirectInspection {
+        plan: fullmag_ir::AntennaRetainedDirectFieldPlanV2,
+    },
+    AntennaRetainedPreparationInspection {
+        plan: fullmag_ir::AntennaRetainedPreparationFieldPlanIR,
+    },
+    AntennaRetainedCurrentInspection {
+        plan: fullmag_ir::AntennaRetainedCurrentFieldPlanIR,
+    },
     AntennaClosedLoopInspection {
         input: fullmag_ir::ResolvedAntennaClosedLoopCurrentInputIR,
         requested_execution: fullmag_ir::RequestedTransportExecutionIR,
@@ -528,6 +537,7 @@ pub enum ResolvedScriptStageAction {
 #[serde(rename_all = "snake_case")]
 pub enum StageTransitionKind {
     ContinueInPlace,
+    AntennaRetainedCurrentInspection,
     AntennaClosedLoopInspection,
     AntennaExternalLeadInspection,
     AntennaFieldSolve,
@@ -545,6 +555,7 @@ pub enum StageTransitionKind {
 #[serde(rename_all = "snake_case")]
 pub enum StageTransitionReason {
     SameRuntimeContext,
+    AntennaRetainedCurrentInspection,
     AntennaClosedLoopInspection,
     AntennaExternalLeadInspection,
     AntennaFieldSolve,
@@ -626,6 +637,7 @@ impl StageTransitionMetadata {
         }
         match self.kind {
             StageTransitionKind::ContinueInPlace => "continues",
+            StageTransitionKind::AntennaRetainedCurrentInspection => "retained-current field inspection",
             StageTransitionKind::AntennaClosedLoopInspection => "closed-loop inspection computed",
             StageTransitionKind::AntennaExternalLeadInspection => "antenna inspection computed",
             StageTransitionKind::AntennaFieldSolve => "field basis solved",

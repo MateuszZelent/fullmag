@@ -109,6 +109,26 @@ try {
   await wait(() => window.__antennaCpwViewport.read().mounted && window.__antennaCpwViewport.read().meshes.some(mesh => mesh.parts?.length === 4));
   assert.equal((await read()).geometries, closed.geometries); assert.equal((await read()).contextLost, false);
   checks.push("closed microstrip layer releases and restores tracked geometry without WebGL context loss");
+  await page.getByRole("button", { name: "Toggle closed GSG", exact: true }).click();
+  await wait(() => window.__antennaCpwViewport.read().meshes.some(mesh => mesh.parts?.length === 5));
+  const gsg = await read(), gsgMesh = gsg.meshes.find(mesh => mesh.id === "cpw-preview-source");
+  assert.equal(await page.locator("canvas").isVisible(), true);
+  assert.equal(gsg.contextLost, false); assert.ok(gsg.width > 0 && gsg.height > 0);
+  assert.equal(gsgMesh.vertices, 136); assert.equal(gsgMesh.indices, 684);
+  assert.deepEqual(gsgMesh.parts.map(part => part.id), ["signal-custom", "ground-left-custom", "ground-right-custom", "inlet-gsg", "outlet-gsg"]);
+  assert.equal(gsgMesh.color, gsg.expectedGold);
+  close(gsgMesh.max[1] - gsgMesh.min[1], Math.fround(0.9e-6) - Math.fround(-0.9e-6));
+  const gsgPixels = await page.evaluate(() => window.__antennaCpwViewport.pixels());
+  assert.ok(gsgPixels.gold > 200, "Full GSG must remain visibly rendered");
+  await shot("gsg-closed-circuit");
+  await page.waitForTimeout(600); assert.equal((await read()).frames, gsg.frames, "GSG redraws while idle");
+  await page.getByRole("button", { name: "Toggle layer", exact: true }).click();
+  await wait(() => !window.__antennaCpwViewport.read().mounted && window.__antennaCpwViewport.read().geometries === 0);
+  assert.equal((await read()).contextLost, false);
+  await page.getByRole("button", { name: "Toggle layer", exact: true }).click();
+  await wait(() => window.__antennaCpwViewport.read().mounted && window.__antennaCpwViewport.read().meshes.some(mesh => mesh.parts?.length === 5));
+  assert.equal((await read()).geometries, gsg.geometries); assert.equal((await read()).contextLost, false);
+  evidence.push({ gsg, gsgPixels }); checks.push("closed GSG: five physical parts, full bounds, gold pixels, nonzero WebGL, idle and release/remount");
   assert.deepEqual(errors, []);
 } catch (error) {
   failure = { message: error.message, stack: error.stack };

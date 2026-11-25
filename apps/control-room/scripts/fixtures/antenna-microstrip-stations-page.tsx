@@ -8,8 +8,11 @@ import type { AuthoringTransactionRequest, JsonObject, SceneResource } from "@/k
 import { RequestDiagnosticsController } from "@/kernel/api/RequestDiagnosticsController";
 import { EventBus } from "@/kernel/events/EventBus";
 import type { KernelEventMap } from "@/kernel/events/eventTypes";
-import { KernelContext } from "@/kernel/KernelContext";
+import { KernelContext, useKernel } from "@/kernel/KernelContext";
 import { DiagnosticRecorderController } from "@/kernel/performance/diagnostic-recorder/DiagnosticRecorderController";
+import { AuthoringHistoryController } from "@/kernel/authoring/AuthoringHistoryController";
+import { createInspectorEditSessionStore, InspectorEditSessionProvider } from "@/modules/inspector/InspectorEditSession";
+import { InspectorDirtySelectionGuard } from "@/modules/inspector/InspectorDirtySelectionGuard";
 import { GEOMETRY_LIFECYCLE_COMMANDS } from "@/kernel/authoring/geometryLifecycleCommandContributions";
 import type { CommandResult } from "@/kernel/commands/commandTypes";
 import { CommandRegistry } from "@/kernel/commands/CommandRegistry";
@@ -42,8 +45,10 @@ interface FixtureControl {
   selectComposition(objectId: string): void;
   studyNodeRef(stageId: string): unknown;
   readSelection(): Selection;
+  clearSelection(): void;
+  clearHistory(): void;
   subscribeSelection(listener: () => void): () => void;
-  read(): { calls: Call[]; pendingWrites: number; pendingSceneReads: number; renderCommits: number; revision: number; scene: SceneResource; unexpected: string[]; invalidations: { resourceKey: string; revision: unknown }[] };
+  read(): { calls: Call[]; pendingWrites: number; pendingSceneReads: number; renderCommits: number; historyRecords: number; editSession: { dirty: boolean; applying: boolean; valid: boolean; reason: string | null } | null; revision: number; scene: SceneResource; unexpected: string[]; invalidations: { resourceKey: string; revision: unknown }[] };
   corruptNextCircuitAck(): void;
   releaseWrite(): void;
   refreshUnrelated(): void;
@@ -178,7 +183,15 @@ function makeFixture() {
   commands.attach(bus);
   commands.attachSessionScopeSource({ getScopeKey: () => expectedScope, subscribe: () => () => {} });
   commands.register(addAntennaFieldSolveStudyCommand);
-  const kernel = { api, bus, resources, diagnostics, diagnosticRecorder, selection, commands } as unknown as KernelApi;
+  const editSessions = createInspectorEditSessionStore();
+  const history = typeof window !== "undefined" && new URL(window.location.href).searchParams.has("history")
+    ? new AuthoringHistoryController(api, resources) : undefined;
+  let historyRecords = 0;
+  if (history) {
+    const record = history.record.bind(history);
+    history.record = (entry) => { record(entry); historyRecords += 1; };
+  }
+  const kernel = { api, bus, resources, diagnostics, diagnosticRecorder, selection, commands, authoringHistory: history } as unknown as KernelApi;
   const control: FixtureControl = {
     selectGeometry: (objectId) => {
       if (!state.scene.objects?.some(object => object.id === objectId)) throw new Error("Unknown fixture object");
@@ -200,13 +213,15 @@ function makeFixture() {
       return node ? selectionRefFromNode(node) : null;
     },
     readSelection: () => selection.get(),
+    clearSelection: () => selection.clear("explorer"),
+    clearHistory: () => { history?.clear(); historyRecords = 0; },
     subscribeSelection: listener => selection.subscribe(listener),
     createAntenna: async (layout) => {
       const command = GEOMETRY_LIFECYCLE_COMMANDS.find((entry) => entry.id === `geometry.add-${layout}-antenna`);
       if (!command) throw new Error("Production antenna command is absent");
       return command.run({ source: "ribbon", api, resources, selection, sessionScopeKey: expectedScope, isCurrentSessionScope: () => true });
     },
-    read: () => ({ calls: structuredClone(calls), pendingWrites: pendingWrites.length, pendingSceneReads: pendingSceneReads.length, renderCommits: state.renderCommits, revision: Number(state.scene.revision), scene: structuredClone(state.scene), unexpected: [...unexpected], invalidations: [...invalidations] }),
+    read: () => ({ calls: structuredClone(calls), pendingWrites: pendingWrites.length, pendingSceneReads: pendingSceneReads.length, renderCommits: state.renderCommits, historyRecords, editSession: (() => { const form = editSessions.getCurrentSession(); return form ? { dirty: form.dirty, applying: form.applying, valid: form.valid, reason: form.applyBlockReason ?? form.lockReason ?? null } : null; })(), revision: Number(state.scene.revision), scene: structuredClone(state.scene), unexpected: [...unexpected], invalidations: [...invalidations] }),
     corruptNextCircuitAck: () => { corruptCircuitAck = true; },
     releaseWrite: () => {
       const release = pendingWrites.shift();
@@ -245,21 +260,21 @@ function makeFixture() {
       resources.invalidate(SESSION_STATUS_RESOURCE_KEY, revision);
     },
   };
-  return { kernel, control, onRender: () => { state.renderCommits += 1; } };
+  return { kernel, control, editSessions, onRender: () => { state.renderCommits += 1; } };
 }
 
 function EditorHarness({ control }: { control: FixtureControl }) {
   const selected = useSyncExternalStore(control.subscribeSelection, control.readSelection, () => EMPTY_SELECTION);
   const resource = useSceneResource();
+  const { selection } = useKernel();
   const [foreignScope, setForeignScope] = useState(false);
   const created = resource.data?.objects?.findLast((object) => object.id !== OBJECT_ID && object.role === "antenna");
   const routedInspector = new URL(window.location.href).searchParams.has("inspector");
   const studyMode = new URL(window.location.href).searchParams.has("study");
   const ownerId = selected.ref?.type === "scene-object" ? selected.ref.objectId : null;
   const solves = resource.data?.antenna_field_solve_stages?.filter(stage => stage.source_object_id === ownerId) ?? [];
-  const Panel = selected.kind?.startsWith("object.antenna") ? resolveInspectorRoute(selected.kind)?.component : undefined;
   return <div data-testid="antenna-stations-editor" data-resource-status={resource.status} data-scene-revision={resource.data?.revision}>
-    {routedInspector && Panel ? <Panel selection={selected} /> : <MicrostripGeometryEditor objectId={OBJECT_ID} scene={resource.data} status={resource.status} refetch={resource.refetch} />}
+    {routedInspector ? <InspectorDirtySelectionGuard controller={selection} selection={selected}>{guarded => { const RoutedPanel = guarded.kind?.startsWith("object.antenna") ? resolveInspectorRoute(guarded.kind)?.component : null; return RoutedPanel ? <RoutedPanel selection={guarded} /> : <p>No selection</p>; }}</InspectorDirtySelectionGuard> : <MicrostripGeometryEditor objectId={OBJECT_ID} scene={resource.data} sceneScopeKey={resource.sessionScopeKey} status={resource.status} refetch={resource.refetch} />}
     {studyMode ? <label><input type="checkbox" aria-label="Use previous-session scene scope" checked={foreignScope} onChange={event => setForeignScope(event.currentTarget.checked)} />Use previous-session scene scope</label> : null}
     {studyMode && ownerId && solves.length === 1 ? <AntennaStudyStageComposer objectId={ownerId} stageId={solves[0].id} scene={resource.data} sceneScopeKey={foreignScope ? "previous-session-scope" : resource.sessionScopeKey} status={resource.status} /> : null}
     {created ? <div data-testid="antenna-created-details" data-object-id={created.id} style={{ width: 320, maxWidth: "100%" }}>
@@ -278,7 +293,7 @@ export default function AntennaMicrostripStationsFixturePage() {
     {mounted ? <KernelContext.Provider value={fixture.kernel}>
       <label>Persistent unrelated control <input data-testid="antenna-stations-unrelated" defaultValue="stable unrelated draft" /></label>
       <div data-testid="antenna-stations-scroll" style={{ height: 480, overflow: "auto", padding: 16, border: "1px solid var(--fm-border-subtle)" }}>
-        <Profiler id="antenna-stations" onRender={fixture.onRender}><EditorHarness control={fixture.control} /></Profiler>
+        <InspectorEditSessionProvider store={fixture.editSessions}><Profiler id="antenna-stations" onRender={fixture.onRender}><EditorHarness control={fixture.control} /></Profiler></InspectorEditSessionProvider>
       </div>
     </KernelContext.Provider> : <p role="status">Loading fixture harness…</p>}
   </main>;

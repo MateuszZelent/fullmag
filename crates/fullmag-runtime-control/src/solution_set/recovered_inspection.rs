@@ -27,6 +27,9 @@ pub fn publish_recovered_inspection_solution(
     }
     let step = accepted.study.steps.iter().find(|step| step.step_id == step_id)
         .context("publication recovery step absent")?;
+    if matches!(step.kind, StudyStepKind::RetainedCurrentFieldInspection { .. }) {
+        bail!("retained-current H-only recovery requires its own parent-bound publication contract; closed-loop recovery is forbidden");
+    }
     if !step.enabled || !matches!(&step.kind, StudyStepKind::ClosedLoopInspection { .. })
         || step.outputs.len() != 1 || step.outputs[0].port_id != "inspection"
         || step.outputs[0].data_kind != StudyPortDataKind::Artifact

@@ -445,7 +445,8 @@ def _fem_mesh_cache_dir() -> Path | None:
         path = Path(cache_root).expanduser() / "fem_mesh_assets"
     else:
         path = Path.cwd() / ".fullmag" / "local" / "cache" / "fem_meshes"
-    path.mkdir(parents=True, exist_ok=True)
+    if not path.is_dir():
+        path.mkdir(parents=True, exist_ok=True)
     return path
 
 
@@ -905,6 +906,7 @@ def build_geometry_assets_for_request(
     ] | None = None,
     _realized_object_mesh_sink: dict[str, object] | None = None,
     _coincident_closures: Mapping[str, object] | None = None,
+    _frozen_source_meshes: Mapping[str, dict] | None = None,
 ) -> dict[str, Any] | None:
     if discretization is None:
         if any(isinstance(entry, Mapping) and entry.get("source") is not None
@@ -953,6 +955,8 @@ def build_geometry_assets_for_request(
         body_material_fields=body_material_fields,
         fdm_only=fdm_only,
     )
+    if _frozen_source_meshes:
+        asset_cache_key += json.dumps(_frozen_source_meshes, sort_keys=True, allow_nan=False)
     if _coincident_closures:
         from fullmag.runtime.transport_identity import tagged_json_digest
         asset_cache_key += tagged_json_digest({name: closure.to_ir() for name, closure in _coincident_closures.items()})
@@ -973,9 +977,9 @@ def build_geometry_assets_for_request(
         object_region_markers_value = mesh_workflow.get("domain_object_region_markers")
         if isinstance(source_value, str) and source_value.strip():
             explicit_domain_mesh_source = source_value
-            if not isinstance(region_markers_value, list) or not region_markers_value:
+            if not isinstance(region_markers_value, list):
                 raise ValueError(
-                    "explicit shared-domain mesh assets require a non-empty domain_region_markers payload"
+                    "explicit shared-domain mesh assets require a domain_region_markers list"
                 )
             explicit_domain_region_markers = []
             for entry in region_markers_value:
@@ -1078,8 +1082,15 @@ def build_geometry_assets_for_request(
             explicit_domain_mesh_source is not None or study_universe is not None
         )
 
-        if not has_shared_domain_mesh_asset or explicit_object_sources:
+        if not has_shared_domain_mesh_asset or explicit_object_sources or _frozen_source_meshes:
             for geometry in geometries:
+                frozen = (_frozen_source_meshes or {}).get(geometry.geometry_name)
+                if frozen is not None:
+                    if geometry.geometry_name in explicit_object_sources:
+                        raise ValueError("source preparation conflicts with an explicit owner mesh source")
+                    assets["fem_mesh_assets"].append({"geometry_name": geometry.geometry_name,
+                        "mesh_source": None, "mesh": copy.deepcopy(frozen)})
+                    continue
                 explicit_source = explicit_object_sources.get(geometry.geometry_name)
                 if explicit_source is not None:
                     if discretization.fem.order != 1:
@@ -1258,6 +1269,9 @@ def build_geometry_assets_for_request(
                     raise ValueError(
                         "explicit shared-domain object-region markers do not match the persisted artifact"
                     )
+                if not explicit_domain_region_markers:
+                    if not artifact.mesh.n_elements or artifact.object_region_markers or any(int(marker) != 0 for marker in artifact.mesh.element_markers):
+                        raise ValueError("empty domain region maps require an actual all-air observation mesh")
                 persisted_domain_asset = {
                     "mesh_source": explicit_domain_mesh_source,
                     "mesh": artifact.mesh.to_ir(artifact.mesh_name),
@@ -1268,6 +1282,8 @@ def build_geometry_assets_for_request(
                     persisted_domain_asset["build_report"] = artifact.build_report
                 assets["fem_domain_mesh_asset"] = persisted_domain_asset
             else:
+                if not explicit_domain_region_markers:
+                    raise ValueError("empty domain region maps require an inline audited all-air observation mesh")
                 assets["fem_domain_mesh_asset"] = {
                     "mesh_source": explicit_domain_mesh_source,
                     "mesh": None,
@@ -2750,6 +2766,7 @@ class Problem:
     runtime_metadata: dict[str, object] = field(default_factory=dict)
     auxiliary_geometries: Sequence[object] = ()
     auxiliary_geometry_roles: Mapping[str, str] = field(default_factory=dict)
+    auxiliary_geometry_names: Mapping[str, str] = field(default_factory=dict)
     auxiliary_geometry_object_ids: Mapping[str, str] = field(default_factory=dict)
     current_modules: Sequence[CurrentModule] = ()
     field_drives: Sequence[RegionalFieldDrive] = ()
@@ -2842,6 +2859,20 @@ class Problem:
                 + ", ".join(unknown_ids)
             )
         object.__setattr__(self, "auxiliary_geometry_object_ids", auxiliary_object_ids)
+        geometry_keys = [geometry.geometry_name for geometry in (
+            *(magnet.geometry for magnet in self.magnets), *self.auxiliary_geometries
+        )]
+        if len(geometry_keys) != len(set(geometry_keys)):
+            raise ValueError("duplicate geometry keys in Problem")
+        labels = dict(self.auxiliary_geometry_names)
+        if set(labels) - auxiliary_names:
+            raise ValueError("auxiliary_geometry_names references unknown geometry")
+        for label in labels.values():
+            require_non_empty(label, "auxiliary_geometry_names.label")
+        object.__setattr__(self, "auxiliary_geometry_names", labels)
+        self._validate_explicit_domain_marker_intent()
+        from fullmag.runtime.domain_mesh_source import accept_domain_mesh_source
+        accept_domain_mesh_source(self)
         field_only = isinstance(self.study, FieldOnly)
         if not self.magnets and not (field_only or isinstance(self.study, AntennaFieldSolve)):
             raise ValueError("Problem requires at least one magnet")
@@ -3166,6 +3197,21 @@ class Problem:
         self._validate_geometry_consistency()
         self._validate_region_consistency()
 
+    def _validate_explicit_domain_marker_intent(self) -> None:
+        workflow = self.runtime_metadata.get("mesh_workflow")
+        if not isinstance(workflow, dict) or not workflow.get("domain_mesh_source"):
+            return
+        markers = workflow.get("domain_region_markers")
+        if not isinstance(markers, list):
+            raise ValueError("explicit domain mesh requires a domain_region_markers list")
+        if not markers:
+            if (not isinstance(self.study, (FieldOnly, AntennaFieldSolve)) or self.magnets or self.energy
+                    or self.field_drives or self.solved_antenna_drives or self.spin_torque is not None
+                    or self.spin_torques or self.spin_transports or self.magnetization_constraints):
+                raise ValueError("empty domain region maps are only valid for nonmagnetic FieldOnly/AntennaFieldSolve observation")
+            if workflow.get("domain_object_region_markers"):
+                raise ValueError("an all-air observation domain cannot contain object-region markers")
+
     def to_ir(
         self,
         *,
@@ -3182,6 +3228,9 @@ class Problem:
           _copy_cached_geometry_assets: bool = True,
           _accepted_preparation: dict[str, object] | None = None,
     ) -> dict[str, object]:
+        self._validate_explicit_domain_marker_intent()
+        from fullmag.runtime.domain_mesh_source import accept_domain_mesh_source
+        accept_domain_mesh_source(self)
         runtime = self.runtime.resolved(
             backend=requested_backend,
             mode=execution_mode,
@@ -3315,6 +3364,18 @@ class Problem:
             editable_scopes=builder_manifest.get("editable_scopes", []),
             study_pipeline=effective_study_pipeline,
         )
+        from fullmag.runtime.antenna_source_preparation import resolve_source_preparations
+        source_preparations = resolve_source_preparations(self, source_root=source_root,
+            mesh_workflow=mesh_workflow, runtime=runtime, discretization=discretization)
+        geometry_mesh_workflow = mesh_workflow
+        if source_preparations and mesh_workflow and mesh_workflow.get("domain_mesh_source"):
+            # Resolve the independently authored observation input against the
+            # same captured script root; the process cwd is not input authority.
+            geometry_mesh_workflow = copy.deepcopy(mesh_workflow)
+            target_source = Path(mesh_workflow["domain_mesh_source"]).expanduser()
+            if not target_source.is_absolute():
+                target_source = Path(source_root or Path.cwd()) / target_source
+            geometry_mesh_workflow["domain_mesh_source"] = str(target_source)
         geometry_assets = None
         if include_geometry_assets:
             per_object_recipes = {
@@ -3361,13 +3422,14 @@ class Problem:
                 discretization=discretization,
                 source_root=source_root,
                 study_universe=study_universe,
-                mesh_workflow=mesh_workflow,
+                mesh_workflow=geometry_mesh_workflow,
                 per_object_recipes=per_object_recipes,
                 object_regions=object_region_mesh_specs,
                 geometry_object_ids=self._geometry_object_ids(),
                 body_material_fields=body_material_fields,
                 asset_cache=effective_asset_cache,
                 _copy_cached_assets=_copy_cached_geometry_assets,
+                _frozen_source_meshes={name: item["document"]["source_mesh"] for name, item in source_preparations.items()},
             )
         magnets_ir = [magnet.to_ir() for magnet in self.magnets]
         fdm_hints = discretization.fdm if discretization is not None else None
@@ -3399,7 +3461,7 @@ class Problem:
             {
                 "schema_version": "physics_object.v1",
                 "object_id": self.auxiliary_geometry_object_ids.get(name, name),
-                "name": name,
+                "name": self.auxiliary_geometry_names.get(name, name),
                 "type": role,
                 "geometry_id": name,
                 "material_assignment_ids": [],
@@ -3448,7 +3510,7 @@ class Problem:
             ),
             "antenna_port_modes": [mode.to_ir() for mode in self.antenna_port_modes],
             "antenna_field_solve_stages": [
-                stage.to_ir() for stage in self.antenna_field_solve_stages
+                stage.to_ir(source_root=source_root) for stage in self.antenna_field_solve_stages
             ],
             "antenna_target_projections": [
                 projection.to_ir() for projection in self.antenna_target_projections
@@ -3503,6 +3565,9 @@ class Problem:
         }
         if physics_objects:
             result["physics_objects"] = physics_objects
+        if source_preparations:
+            from fullmag.runtime.antenna_source_preparation import materialize_source_preparations
+            materialize_source_preparations(self, result, source_preparations)
         if include_geometry_assets:
             from fullmag.runtime.antenna_coincident_materialization import materialize_antenna_coincident_loops
 

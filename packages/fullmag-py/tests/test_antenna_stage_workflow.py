@@ -914,6 +914,8 @@ def test_antenna_solve_is_exported_as_one_pipeline_node() -> None:
     assert node["payload"]["kind"] == "antenna_field_solve"
     assert node["payload"] == {
         "kind": "antenna_field_solve",
+        "interactive_session_requested": False,
+        "wait_for_solve": False,
         "entrypoint_kind": "flat_antenna_field_solve",
         "stage_id": "solve_antenna_1",
         "port_mode_ids": ["port_1"],

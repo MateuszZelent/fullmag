@@ -21,6 +21,8 @@ class FiniteGsgReferenceTests(unittest.TestCase):
                 except (ValueError, TypeError): pass
         for key, expected in (
             ("conductor_width_m", gsg.WIDTH_M), ("metal_thickness_m", gsg.THICKNESS_M),
+            ("magnetic_thickness_m", gsg.MAGNETIC_THICKNESS_M),
+            ("cap_thickness_m", gsg.CAP_THICKNESS_M),
             ("gap_m", gsg.GAP_M), ("insulator_thickness_m", gsg.SPACING_M),
             ("source_length_m", gsg.DEVICE_LENGTH_M), ("lead_length_m", gsg.LEAD_LENGTH_M),
             ("conductivity_s_per_m", gsg.CONDUCTIVITY_SPM), ("signal_current_a", gsg.SIGNAL_CURRENT_A),

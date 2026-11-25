@@ -1407,6 +1407,26 @@ pub fn build_v2_router() -> Router<Arc<AppState>> {
             get(handlers::persistence::solutions::get_saved_field_geometry_support),
         )
         .route(
+            "/v2/persistence/projects/:project_id/runs/:run_id/solution-sets/:solution_set_id/revisions/:revision/members/:member_id/artifacts/:artifact_id/saved-planar/meta",
+            get(handlers::persistence::solutions::get_saved_planar_meta),
+        )
+        .route(
+            "/v2/persistence/projects/:project_id/runs/:run_id/solution-sets/:solution_set_id/revisions/:revision/members/:member_id/artifacts/:artifact_id/saved-planar/scalar",
+            get(handlers::persistence::solutions::get_saved_planar_scalar),
+        )
+        .route(
+            "/v2/persistence/projects/:project_id/runs/:run_id/solution-sets/:solution_set_id/revisions/:revision/members/:member_id/artifacts/:artifact_id/saved-planar/vectors",
+            get(handlers::persistence::solutions::get_saved_planar_vectors),
+        )
+        .route(
+            "/v2/persistence/projects/:project_id/runs/:run_id/solution-sets/:solution_set_id/revisions/:revision/members/:member_id/artifacts/:artifact_id/saved-planar/occupancy",
+            get(handlers::persistence::solutions::get_saved_planar_occupancy),
+        )
+        .route(
+            "/v2/persistence/projects/:project_id/runs/:run_id/solution-sets/:solution_set_id/revisions/:revision/members/:member_id/artifacts/:artifact_id/saved-planar/probe",
+            get(handlers::persistence::solutions::get_saved_planar_probe),
+        )
+        .route(
             "/v2/persistence/projects/:project_id/runs/:run_id/materialization",
             post(handlers::persistence::projects::materialize_run),
         )

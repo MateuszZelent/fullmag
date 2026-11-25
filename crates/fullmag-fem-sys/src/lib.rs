@@ -7255,6 +7255,7 @@ const _: () = {
 extern "C" {
     pub fn fullmag_fem_solve_prepared_closed_loop_rt0_v2(request: *const fullmag_fem_prepared_closed_loop_request_v2, result: *mut fullmag_fem_steady_transport_rt0_result_v1, charge: *mut fullmag_fem_steady_transport_rt0_charge_snapshot_result_v1, source: *mut fullmag_fem_prepared_closed_loop_source_snapshot_result_v2) -> i32;
     pub fn fullmag_fem_solve_prepared_closed_loop_rt0_oersted_v2(request: *const fullmag_fem_prepared_closed_loop_oersted_request_v2, result: *mut fullmag_fem_steady_transport_rt0_oersted_result_v1, charge: *mut fullmag_fem_steady_transport_rt0_charge_snapshot_result_v1, quadrature: *mut fullmag_fem_direct_oersted_snapshot_result_v1, source: *mut fullmag_fem_prepared_closed_loop_source_snapshot_result_v2) -> i32;
+    pub fn fullmag_fem_solve_prepared_closed_loop_rt0_oersted_observed_v1(request: *const fullmag_fem_prepared_closed_loop_oersted_request_v2, result: *mut fullmag_fem_steady_transport_rt0_oersted_result_v1, charge: *mut fullmag_fem_steady_transport_rt0_charge_snapshot_result_v1, quadrature: *mut fullmag_fem_direct_oersted_snapshot_result_v1, source: *mut fullmag_fem_prepared_closed_loop_source_snapshot_result_v2, observer: *const fullmag_fem_antenna_operation_observer_v1) -> i32;
 }
 
 pub const FULLMAG_FEM_SURFACE_RT0_ABI_VERSION: u32 = 1;
@@ -7398,6 +7399,134 @@ extern "C" {
         charge: *mut fullmag_fem_steady_transport_rt0_charge_snapshot_result_v1,
         source: *mut fullmag_fem_prepared_closed_loop_source_snapshot_result_v2,
         profile: *mut fullmag_fem_surface_rt0_profile_result_v1,
+        observer: *const fullmag_fem_antenna_operation_observer_v1,
+    ) -> i32;
+}
+
+// Additive H-only kernel input. Durable source authentication remains above FFI.
+pub const FULLMAG_FEM_FROZEN_RT0_SURFACE_ABI_VERSION: u32 = 1;
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct fullmag_fem_frozen_rt0_element_v1 {
+    pub vertices_m: [f64; 12],
+    pub signed_coefficients_a: [f64; 4],
+}
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct fullmag_fem_frozen_rt0_surface_request_v1 {
+    pub abi_version: u32,
+    pub reserved_flags: u32,
+    pub struct_size: u64,
+    pub execution_lane: fullmag_fem_steady_transport_execution_lane,
+    pub reserved: u32,
+    pub source: *const fullmag_fem_frozen_rt0_element_v1,
+    pub source_count: u64,
+    pub target_points_xyz: *const f64,
+    pub target_points_xyz_len: u64,
+    pub source_view_identity_digest: *const c_char,
+    pub accepted_source_state_digest: *const c_char,
+    pub options: fullmag_fem_surface_rt0_options_v1,
+}
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct fullmag_fem_frozen_rt0_surface_result_v1 {
+    pub abi_version: u32,
+    pub reserved_flags: u32,
+    pub struct_size: u64,
+    pub h_xyz_apm: *mut f64,
+    pub h_xyz_apm_capacity: u64,
+    pub h_xyz_apm_len: u64,
+    pub evidence_json: *mut u8,
+    pub evidence_json_capacity: u64,
+    pub evidence_json_len: u64,
+    pub error_message: [c_char; 256],
+}
+#[cfg(target_pointer_width = "64")]
+const _: () = {
+    assert!(std::mem::size_of::<fullmag_fem_frozen_rt0_element_v1>() == 128);
+    assert!(std::mem::size_of::<fullmag_fem_frozen_rt0_surface_request_v1>() == 440);
+    assert!(std::mem::offset_of!(fullmag_fem_frozen_rt0_surface_request_v1, source) == 24);
+    assert!(std::mem::offset_of!(fullmag_fem_frozen_rt0_surface_request_v1, target_points_xyz) == 40);
+    assert!(std::mem::offset_of!(fullmag_fem_frozen_rt0_surface_request_v1, source_view_identity_digest) == 56);
+    assert!(std::mem::offset_of!(fullmag_fem_frozen_rt0_surface_request_v1, accepted_source_state_digest) == 64);
+    assert!(std::mem::offset_of!(fullmag_fem_frozen_rt0_surface_request_v1, options) == 72);
+    assert!(std::mem::size_of::<fullmag_fem_frozen_rt0_surface_result_v1>() == 320);
+    assert!(std::mem::offset_of!(fullmag_fem_frozen_rt0_surface_result_v1, evidence_json) == 40);
+    assert!(std::mem::offset_of!(fullmag_fem_frozen_rt0_surface_result_v1, error_message) == 64);
+};
+extern "C" {
+    pub fn fullmag_fem_evaluate_frozen_rt0_surface_observed_v1(
+        request: *const fullmag_fem_frozen_rt0_surface_request_v1,
+        result: *mut fullmag_fem_frozen_rt0_surface_result_v1,
+        profile: *mut fullmag_fem_surface_rt0_profile_result_v1,
+        observer: *const fullmag_fem_antenna_operation_observer_v1,
+    ) -> i32;
+}
+
+pub const FULLMAG_FEM_FROZEN_RT0_DIRECT_ABI_VERSION: u32 = 1;
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct fullmag_fem_frozen_rt0_direct_request_v1 {
+    pub abi_version: u32,
+    pub reserved_flags: u32,
+    pub struct_size: u64,
+    pub execution_lane: fullmag_fem_steady_transport_execution_lane,
+    pub reserved: u32,
+    pub source: *const fullmag_fem_frozen_rt0_element_v1,
+    pub source_count: u64,
+    pub target_points_xyz: *const f64,
+    pub target_points_xyz_len: u64,
+    pub base_quadrature_order: i32,
+    pub maximum_subdivision_depth: i32,
+    pub absolute_tolerance_apm: f64,
+    pub relative_tolerance: f64,
+    pub maximum_source_target_pairs: u64,
+}
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct fullmag_fem_frozen_rt0_direct_result_v1 {
+    pub abi_version: u32,
+    pub reserved_flags: u32,
+    pub struct_size: u64,
+    pub target_records: *mut fullmag_fem_direct_oersted_target_record_v1,
+    pub target_records_capacity: u64,
+    pub target_records_len: u64,
+    pub source_target_pairs: u64,
+    pub refined_pairs: u64,
+    pub unconverged_pair_count: u64,
+    pub maximum_pair_error_apm: f64,
+    pub kernel_evaluations: u64,
+    pub ledger_leaf_visits: u64,
+    pub base_quadrature_order: i32,
+    pub maximum_subdivision_depth: i32,
+    pub absolute_tolerance_apm: f64,
+    pub relative_tolerance: f64,
+    pub relative_scale_floor_apm: f64,
+    pub maximum_source_target_pairs: u64,
+    pub maximum_final_leaves_per_target: u64,
+    pub maximum_kernel_evaluations: u64,
+    pub maximum_ledger_leaf_visits: u64,
+    pub error_message: [c_char; 256],
+}
+#[cfg(target_pointer_width = "64")]
+const _: () = {
+    assert!(std::mem::size_of::<fullmag_fem_frozen_rt0_direct_request_v1>() == 88);
+    assert!(std::mem::align_of::<fullmag_fem_frozen_rt0_direct_request_v1>() == 8);
+    assert!(std::mem::offset_of!(fullmag_fem_frozen_rt0_direct_request_v1, source) == 24);
+    assert!(std::mem::offset_of!(fullmag_fem_frozen_rt0_direct_request_v1, target_points_xyz) == 40);
+    assert!(std::mem::offset_of!(fullmag_fem_frozen_rt0_direct_request_v1, base_quadrature_order) == 56);
+    assert!(std::mem::offset_of!(fullmag_fem_frozen_rt0_direct_request_v1, maximum_source_target_pairs) == 80);
+    assert!(std::mem::size_of::<fullmag_fem_frozen_rt0_direct_result_v1>() == 408);
+    assert!(std::mem::align_of::<fullmag_fem_frozen_rt0_direct_result_v1>() == 8);
+    assert!(std::mem::offset_of!(fullmag_fem_frozen_rt0_direct_result_v1, target_records) == 16);
+    assert!(std::mem::offset_of!(fullmag_fem_frozen_rt0_direct_result_v1, source_target_pairs) == 40);
+    assert!(std::mem::offset_of!(fullmag_fem_frozen_rt0_direct_result_v1, base_quadrature_order) == 88);
+    assert!(std::mem::offset_of!(fullmag_fem_frozen_rt0_direct_result_v1, error_message) == 152);
+};
+extern "C" {
+    pub fn fullmag_fem_evaluate_frozen_rt0_direct_observed_v1(
+        request: *const fullmag_fem_frozen_rt0_direct_request_v1,
+        result: *mut fullmag_fem_frozen_rt0_direct_result_v1,
         observer: *const fullmag_fem_antenna_operation_observer_v1,
     ) -> i32;
 }

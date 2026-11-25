@@ -8,7 +8,7 @@ import numpy as np
 
 from fullmag.model.current_transport import CurrentTransport
 from fullmag.model.discretization import DiscretizationHints, PerObjectMeshRecipe
-from fullmag.model.geometry import MicrostripAntennaLayout
+from fullmag.model.geometry import CPWAntennaLayout, MicrostripAntennaLayout
 from fullmag.runtime.transport_identity import tagged_json_digest
 
 
@@ -50,8 +50,10 @@ def _exact_identity_preimage(value, *, field=None):
 
 def _material_binding(transport, geometry, mesh, owner):
     assignments = transport.materials
-    parts = (geometry.signal_part_id, geometry.return_part_id,
-             geometry.inlet_connection_part_id, geometry.outlet_connection_part_id)
+    parts = (*geometry.conductor_part_ids, geometry.inlet_connection_part_id,
+             geometry.outlet_connection_part_id)
+    if len(geometry.conductor_part_ids) not in (2, 3) or len(set(parts)) != len(parts):
+        raise ValueError("coincident materials require distinct microstrip or GSG parts")
     if not assignments or len(assignments) > 2**32:
         raise ValueError("coincident source requires bounded owning charge.materials")
     if any(assignment.region.object_id != owner for assignment in assignments):
@@ -69,11 +71,11 @@ def _material_binding(transport, geometry, mesh, owner):
                 raise ValueError("material assignment must bind each exact part once")
             indices[part] = index
         if set(indices) != set(parts):
-            raise ValueError("coincident material assignments do not cover all four parts")
+            raise ValueError("coincident material assignments do not cover every conductor and connection part")
     if not np.array_equal(mesh.cell_global_ordinals, np.arange(mesh.n_elements)):
         raise ValueError("coincident source requires exact ordered cell ordinals")
-    expected = (geometry.conductivity_s_per_m, geometry.conductivity_s_per_m,
-                geometry.inlet_connection_conductivity_s_per_m, geometry.outlet_connection_conductivity_s_per_m)
+    expected = (geometry.conductivity_s_per_m,) * len(geometry.conductor_part_ids) + (
+        geometry.inlet_connection_conductivity_s_per_m, geometry.outlet_connection_conductivity_s_per_m)
     sigma = np.full(mesh.n_elements, np.nan)
     records = []
     for marker, (part, authored_sigma) in enumerate(zip(parts, expected), 1):
@@ -99,7 +101,10 @@ def _material_binding(transport, geometry, mesh, owner):
 
 def materialize_antenna_coincident_loops(problem, ir, *, geometries, discretization, mesh_workflow,
                                         runtime_device_override=None):
+    frozen_transports = {stage.current_transport_id for stage in problem.antenna_field_solve_stages
+                         if stage.retained_source_preparation is not None}
     transports = [module for module in problem.current_modules if isinstance(module, CurrentTransport)
+                  and module.name not in frozen_transports
                   and module.structured_current_closure is not None
                   and module.structured_current_closure.schema_version == "structured_current_closure.v2"]
     if not transports:
@@ -134,8 +139,8 @@ def materialize_antenna_coincident_loops(problem, ir, *, geometries, discretizat
             raise ValueError("one geometry cannot bind multiple coincident source preparations")
         seen_owners.add(owner)
         geometry = geometry_by_owner.get(owner)
-        if not isinstance(geometry, MicrostripAntennaLayout) or not geometry.closed_loop:
-            raise ValueError("coincident source must bind an explicit closed microstrip geometry")
+        if not isinstance(geometry, (MicrostripAntennaLayout, CPWAntennaLayout)) or not geometry.closed_loop:
+            raise ValueError("coincident source must bind an explicit closed microstrip or GSG geometry")
         ports = [port for port in problem.antenna_port_modes
                  if port.source_object_id == owner and port.current_transport_id == transport.name]
         if len(ports) != 1:
@@ -144,8 +149,8 @@ def materialize_antenna_coincident_loops(problem, ir, *, geometries, discretizat
         if (ports[0].schema_version != "antenna_port_mode.v3" or ports[0].normalization is None
                 or ports[0].normalization.source_cut_ref != closure.source_cuts[0].source_cut_id):
             raise ValueError("coincident source requires explicit port v3 normalization bound to its sourcecut")
-        independent_workflow = {key: value for key, value in (mesh_workflow or {}).items()
-            if key not in {"domain_mesh_source", "domain_region_markers", "domain_object_region_markers"}}
+        independent_workflow = copy.deepcopy({key: value for key, value in (mesh_workflow or {}).items()
+            if key not in {"domain_mesh_source", "domain_region_markers", "domain_object_region_markers"}})
         raw_meshes = {}
         recipes = {magnet.geometry.geometry_name: magnet.mesh for magnet in problem.magnets
                    if magnet.geometry.geometry_name == geometry.geometry_name and isinstance(magnet.mesh, PerObjectMeshRecipe)}
@@ -182,13 +187,19 @@ def materialize_antenna_coincident_loops(problem, ir, *, geometries, discretizat
         payload["boundaries"] = []
         replacements[transport.name] = payload
         object_assets = [asset for asset in object_assets if asset["geometry_name"] != geometry.geometry_name]
+        mesh_ir = prepared.mesh.to_ir(geometry.geometry_name)
+        mesh_statistics = mesh_ir.pop("mesh_statistics", None)
         object_assets.append({"geometry_name": geometry.geometry_name, "mesh_source": None,
-                             "mesh": prepared.mesh.to_ir(geometry.geometry_name)})
+                             "mesh": mesh_ir})
         receipt = dict(prepared.receipt, input_digest=digest, mesh_revision=mesh_digest,
             geometry_digest=tagged_json_digest(geometry.to_ir()), materials_digest=materials_digest,
             source_cut_digest=tagged_json_digest(_exact_identity_preimage(closure_body)),
             authored_intent=closure.to_ir(), terminal_observation_count=len(observations),
             prepared_mesh_workflow=copy.deepcopy(independent_workflow),
+            prepared_mesh_statistics=mesh_statistics,
+            prepared_size_field_realization={
+                "status": "recorded" if raw.size_field_realization is not None else "not_recorded",
+                "report": copy.deepcopy(raw.size_field_realization)},
             prepared_per_object_recipes={name: recipe.to_ir() for name, recipe in recipes.items()})
         receipts.append({"current_transport_id": transport.name, "object_id": owner,
                          "geometry_id": geometry.geometry_name, "preparation": receipt})

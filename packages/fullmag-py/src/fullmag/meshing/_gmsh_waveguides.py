@@ -212,6 +212,33 @@ def add_antenna_layout_parts_to_occ(
                     gmsh.model.occ.affineTransform([(3, tag)], matrix)
                 part_tags.append((3, tag))
             result[part_id] = part_tags
+    if isinstance(geometry, CPWAntennaLayout) and geometry.closed_loop:
+        for part_id, segments in geometry.connection_solids().items():
+            part_tags = []
+            for index, segment in enumerate(segments):
+                sections = [segment["from"]["vertices"], segment["to"]["vertices"]]
+                if part_id == geometry.inlet_connection_part_id and index == 0 and source_cut_offset_m is not None:
+                    lower = -geometry.inlet_connection_length_m + geometry.inlet_crossbar_length_m
+                    if not lower < source_cut_offset_m < 0.0:
+                        raise ValueError("GSG source cut must lie strictly inside the central inlet neck")
+                    fraction = (source_cut_offset_m - lower) / -lower
+                    middle = tuple(tuple(a + fraction * (b - a) for a, b in zip(first, last))
+                                   for first, last in zip(sections[0], sections[1]))
+                    sections.insert(1, middle)
+                for first, last in zip(sections, sections[1:]):
+                    wires = []
+                    for vertices in (first, last):
+                        points = [gmsh.model.occ.addPoint(*(float(v) * scale for v in vertex))
+                                  for vertex in vertices]
+                        lines = [gmsh.model.occ.addLine(points[i], points[(i + 1) % 4])
+                                 for i in range(4)]
+                        wires.append(gmsh.model.occ.addWire(lines))
+                    part_tags.extend((int(dim), int(tag)) for dim, tag in gmsh.model.occ.addThruSections(
+                        wires, makeSolid=True, makeRuled=True))
+            if not part_tags:
+                raise ValueError("GSG connection has no OCC solid")
+            result[part_id] = part_tags
+    if geometry.closed_loop:
         solids = [tag for tags in result.values() for tag in tags]
         _, maps = gmsh.model.occ.fragment([solids[0]], solids[1:])
         owners = {}
@@ -365,8 +392,8 @@ def add_antenna_layout_terminal_physical_groups(
     one terminal face.  Overlapping part ownership or missing terminal caps is
     rejected before mesh generation.
     """
-    if isinstance(geometry, MicrostripAntennaLayout) and geometry.closed_loop:
-        parts = (geometry.signal_part_id, geometry.return_part_id,
+    if geometry.closed_loop:
+        parts = (*geometry.conductor_part_ids,
                  geometry.inlet_connection_part_id, geometry.outlet_connection_part_id)
         for marker, part_id in enumerate(parts, 1):
             gmsh.model.addPhysicalGroup(3, [tag for dim, tag in part_tags_by_id[part_id]], tag=marker)

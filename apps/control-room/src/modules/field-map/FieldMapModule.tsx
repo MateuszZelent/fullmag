@@ -2,6 +2,9 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
+import { SavedFieldMap } from "./SavedFieldMap";
+import { useSavedFieldPresentation } from "@/kernel/visualization/useObjectVisualization";
+
 import { useKernel } from "@/kernel/KernelContext";
 import { decodeFieldVector } from "@/kernel/api/codecs";
 import { normalizeTensorProjection } from "@/kernel/api/tensorFieldProjection";
@@ -1035,6 +1038,11 @@ function useFieldMapModuleController() {
 }
 
 export default function FieldMapModule() {
+  const saved = useSavedFieldPresentation();
+  return saved.projectMatches && saved.presentation ? <SavedFieldMap /> : <LiveFieldMapModule />;
+}
+
+function LiveFieldMapModule() {
   const captureRootRef = useRef<HTMLElement | null>(null);
   const {
     active,

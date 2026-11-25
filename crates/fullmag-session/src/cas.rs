@@ -305,72 +305,10 @@ impl CasStore {
         length: u64,
         max_range_bytes: u64,
     ) -> Result<Option<VerifiedCasRange>> {
-        if length == 0 || max_range_bytes == 0 || length > max_range_bytes {
-            anyhow::bail!(
-                "CAS range length {length} is outside the positive {max_range_bytes}-byte budget"
-            );
-        }
-        let range_end = offset
-            .checked_add(length)
-            .context("CAS range offset and length overflow")?;
+        validate_range_request(offset, length, max_range_bytes)?;
         let path = self.object_path(hash)?;
-        if !path.exists() {
-            return Ok(None);
-        }
-        let file = fs::File::open(&path).with_context(|| format!("opening CAS object {hash}"))?;
-        let metadata = file
-            .metadata()
-            .with_context(|| format!("reading metadata for CAS object {hash}"))?;
-        if !metadata.is_file() {
-            anyhow::bail!("CAS object {hash} is not a regular file");
-        }
-        let object_length = metadata.len();
-        if range_end > object_length {
-            anyhow::bail!(
-                "CAS range {offset}..{range_end} exceeds object {hash} length {object_length}"
-            );
-        }
-        let range_capacity = usize::try_from(length).context("CAS range length exceeds usize")?;
-        let mut bytes = Vec::with_capacity(range_capacity);
-        let mut reader = BufReader::new(file);
-        let mut hasher = Sha256::new();
-        let mut buffer = [0_u8; 64 * 1024];
-        let mut position = 0_u64;
-        loop {
-            let count = reader
-                .read(&mut buffer)
-                .with_context(|| format!("streaming CAS object {hash}"))?;
-            if count == 0 {
-                break;
-            }
-            hasher.update(&buffer[..count]);
-            let buffer_end = position
-                .checked_add(count as u64)
-                .context("CAS object length overflow")?;
-            let overlap_start = position.max(offset);
-            let overlap_end = buffer_end.min(range_end);
-            if overlap_start < overlap_end {
-                let start = usize::try_from(overlap_start - position)
-                    .context("CAS range start exceeds usize")?;
-                let end = usize::try_from(overlap_end - position)
-                    .context("CAS range end exceeds usize")?;
-                bytes.extend_from_slice(&buffer[start..end]);
-            }
-            position = buffer_end;
-        }
-        let actual = hex_encode(&hasher.finalize());
-        if actual != hash {
-            anyhow::bail!("CAS integrity error: expected {hash}, got {actual}");
-        }
-        if position != object_length || bytes.len() != range_capacity {
-            anyhow::bail!(
-                "CAS object {hash} changed length while reading or did not cover the requested range"
-            );
-        }
-        Ok(Some(VerifiedCasRange {
-            bytes,
-            object_length,
-        }))
+        if !path.exists() { return Ok(None); }
+        verified_file_range(&path, hash, offset, length, max_range_bytes).map(Some)
     }
 
     /// Check whether an object exists without reading it.
@@ -524,6 +462,76 @@ fn hex_encode(bytes: &[u8]) -> String {
         let _ = write!(s, "{b:02x}");
     }
     s
+}
+
+/// Hash and select from the same opened file; archive views reuse the CAS streaming implementation.
+/// Callers supply a checked, non-link path within their existing storage boundary.
+pub(crate) fn verified_file_range(
+    path: &Path, hash: &str, offset: u64, length: u64, max_range_bytes: u64,
+) -> Result<VerifiedCasRange> {
+    validate_hash(hash)?;
+    let range_end = validate_range_request(offset, length, max_range_bytes)?;
+        let file = fs::File::open(&path).with_context(|| format!("opening CAS object {hash}"))?;
+        let metadata = file
+            .metadata()
+            .with_context(|| format!("reading metadata for CAS object {hash}"))?;
+        if !metadata.is_file() {
+            anyhow::bail!("CAS object {hash} is not a regular file");
+        }
+        let object_length = metadata.len();
+        if range_end > object_length {
+            anyhow::bail!(
+                "CAS range {offset}..{range_end} exceeds object {hash} length {object_length}"
+            );
+        }
+        let range_capacity = usize::try_from(length).context("CAS range length exceeds usize")?;
+        let mut bytes = Vec::with_capacity(range_capacity);
+        let mut reader = BufReader::new(file);
+        let mut hasher = Sha256::new();
+        let mut buffer = [0_u8; 64 * 1024];
+        let mut position = 0_u64;
+        loop {
+            let count = reader
+                .read(&mut buffer)
+                .with_context(|| format!("streaming CAS object {hash}"))?;
+            if count == 0 {
+                break;
+            }
+            hasher.update(&buffer[..count]);
+            let buffer_end = position
+                .checked_add(count as u64)
+                .context("CAS object length overflow")?;
+            let overlap_start = position.max(offset);
+            let overlap_end = buffer_end.min(range_end);
+            if overlap_start < overlap_end {
+                let start = usize::try_from(overlap_start - position)
+                    .context("CAS range start exceeds usize")?;
+                let end = usize::try_from(overlap_end - position)
+                    .context("CAS range end exceeds usize")?;
+                bytes.extend_from_slice(&buffer[start..end]);
+            }
+            position = buffer_end;
+        }
+        let actual = hex_encode(&hasher.finalize());
+        if actual != hash {
+            anyhow::bail!("CAS integrity error: expected {hash}, got {actual}");
+        }
+        if position != object_length || bytes.len() != range_capacity {
+            anyhow::bail!(
+                "CAS object {hash} changed length while reading or did not cover the requested range"
+            );
+        }
+        Ok(VerifiedCasRange {
+            bytes,
+            object_length,
+        })
+}
+
+fn validate_range_request(offset: u64, length: u64, maximum: u64) -> Result<u64> {
+    if length == 0 || maximum == 0 || length > maximum {
+        anyhow::bail!("CAS range length {length} is outside the positive {maximum}-byte budget");
+    }
+    offset.checked_add(length).context("CAS range offset and length overflow")
 }
 
 #[cfg(test)]

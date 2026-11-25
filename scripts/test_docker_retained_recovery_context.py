@@ -25,6 +25,10 @@ class RetainedRecoveryContextTests(unittest.TestCase):
             **{key: '/opt/fullmag/control/recovery/' + key + '.json'
                for key in ('native_request_path', 'attestation_path', 'manifest_path')},
         }
+        self.documents = {stem: recovery._canonical({"document": stem})
+                          for stem in ("native_request", "attestation", "manifest")}
+        for stem, payload in self.documents.items():
+            self.auth[stem + "_sha256"] = hashlib.sha256(payload).hexdigest()
         self.raw = recovery._canonical(self.auth)
         digest = hashlib.sha256(self.raw).hexdigest()
         self.env = {
@@ -51,6 +55,9 @@ class RetainedRecoveryContextTests(unittest.TestCase):
         def control_bytes(_control, relative, *, optional=False):
             if relative.endswith('/receipt.json'):
                 return None
+            for stem, payload in self.documents.items():
+                if relative.endswith('/' + stem + '_path.json'):
+                    return payload
             return self.raw
 
         with patch.object(recovery, '_control_bytes', side_effect=control_bytes):
@@ -58,8 +65,40 @@ class RetainedRecoveryContextTests(unittest.TestCase):
 
     def test_keeps_exact_capability_and_original_request(self):
         result = self.run_context()
+        self.assertIsInstance(result, dev.RetainedContainerRecoveryContext)
         self.assertEqual(result, {'recovery_environment': self.env, 'recovery_metadata': self.metadata})
         self.control.write.assert_not_called()
+
+    def test_changed_or_missing_bound_documents_are_rejected(self):
+        for stem in self.documents:
+            original = self.documents[stem]
+            for payload in (None, original + b" "):
+                with self.subTest(document=stem, payload=payload):
+                    self.documents[stem] = payload
+                    with self.assertRaisesRegex(dev.BuildControlError, 'document digest differs'):
+                        self.run_context()
+            self.documents[stem] = original
+
+    def test_service_restarts_and_changed_backend_exit_are_rejected(self):
+        from copy import deepcopy
+        before = {"Id": "backend", "Image": "image", "State": {
+            "Running": False, "Status": "exited", "Pid": 0, "StartedAt": "start",
+            "FinishedAt": "end", "ExitCode": 2, "OOMKilled": False}}
+        dev._validate_retained_recovery_service(before, deepcopy(before), "backend")
+        for field, value in (("StartedAt", "restarted"), ("FinishedAt", "later"),
+                             ("Running", True), ("ExitCode", 0), ("Pid", 20)):
+            with self.subTest(field=field):
+                observed = deepcopy(before)
+                observed["State"][field] = value
+                with self.assertRaises(dev.BuildControlError):
+                    dev._validate_retained_recovery_service(before, observed, "backend")
+        frontend = deepcopy(before)
+        frontend["State"]["Running"] = True
+        dev._validate_retained_recovery_service(frontend, before, "frontend")
+        restarted = deepcopy(before)
+        restarted["State"]["StartedAt"] = "restarted"
+        with self.assertRaises(dev.BuildControlError):
+            dev._validate_retained_recovery_service(frontend, restarted, "frontend")
 
     def test_ordinary_recreation_does_not_acquire_recovery(self):
         self.previous.pop('container_recovery')

@@ -75,6 +75,27 @@ pub fn compile_accepted_closed_loop_pipeline(
             validate_physical_state_predecessor(previous_physical, &execution.stage.ir)?;
         }
         let (kind,until_seconds,mut inputs,initial_state_overlay,outputs)=match &execution.stage.action {
+            Some(ResolvedScriptStageAction::AntennaRetainedDirectInspection{plan})=>{
+                let port_mode_id=plan.stage.port_mode_ids.first().context("retained-preparation port missing")?;
+                let output_id=&plan.stage.outputs.first().context("retained-preparation output missing")?.id;
+                let operation=fullmag_plan::validate_retained_direct_field_operation(&execution.stage.ir,&plan.stage.id,port_mode_id,output_id)?;
+                if operation!=*plan {bail!("compiled retained-preparation action differs from canonical operation planning");}
+                (StudyStepKind::RetainedCurrentFieldInspection{stage_id:plan.stage.id.clone(),port_mode_id:port_mode_id.clone(),output_id:output_id.clone()},None,vec![],None,vec![StudyOutputPort{port_id:"inspection".into(),data_kind:StudyPortDataKind::Artifact}])
+            },
+            Some(ResolvedScriptStageAction::AntennaRetainedPreparationInspection{plan})=>{
+                let port_mode_id=plan.stage.port_mode_ids.first().context("retained-preparation port missing")?;
+                let output_id=&plan.stage.outputs.first().context("retained-preparation output missing")?.id;
+                let operation=fullmag_plan::validate_retained_preparation_field_operation(&execution.stage.ir,&plan.stage.id,port_mode_id,output_id)?;
+                if operation!=*plan {bail!("compiled retained-preparation action differs from canonical operation planning");}
+                (StudyStepKind::RetainedCurrentFieldInspection{stage_id:plan.stage.id.clone(),port_mode_id:port_mode_id.clone(),output_id:output_id.clone()},None,vec![],None,vec![StudyOutputPort{port_id:"inspection".into(),data_kind:StudyPortDataKind::Artifact}])
+            },
+            Some(ResolvedScriptStageAction::AntennaRetainedCurrentInspection{plan})=>{
+                let port_mode_id=plan.stage.port_mode_ids.first().context("retained-current port missing")?;
+                let output_id=&plan.stage.outputs.first().context("retained-current output missing")?.id;
+                let operation=fullmag_plan::validate_retained_current_field_operation(&execution.stage.ir,&plan.stage.id,port_mode_id,output_id)?;
+                if operation!=*plan {bail!("compiled retained-current action differs from canonical operation planning");}
+                (StudyStepKind::RetainedCurrentFieldInspection{stage_id:plan.stage.id.clone(),port_mode_id:port_mode_id.clone(),output_id:output_id.clone()},None,vec![],None,vec![StudyOutputPort{port_id:"inspection".into(),data_kind:StudyPortDataKind::Artifact}])
+            },
             Some(ResolvedScriptStageAction::AntennaClosedLoopInspection{input,requested_execution,output_id})=>{
                 let operation=fullmag_plan::validate_closed_loop_operation(&execution.stage.ir,&input.stage.id,&input.port.id,output_id)?;
                 let fullmag_plan::AntennaFieldSolveExecutionPlan::ClosedLoopInspection{input:replanned,requested_execution:request,output_id:selected}=operation else {bail!("compiled action is not a closed-loop inspection");};
@@ -436,6 +457,10 @@ pub fn validate_accepted_script_pipeline_source(study:&StudyPlan,catalog:&StudyP
         {
             bail!("pipeline input configuration cannot own an accepted worker task");
         }
+        if expected.effectively_enabled && matches!(crate::script_pipeline_compilation::authored_node(&authored.nodes,&expected.authored_step_id),
+            Some(crate::script_stage_contract::StudyPipelineNode::Primitive{stage_kind,..}) if stage_kind=="antenna_field_solve") && ids.len()!=1 {
+            bail!("enabled antenna primitive must own exactly one captured execution");
+        }
         all_execution_ids.extend(ids.iter().cloned());
     }
     if all_execution_ids!=executions.iter().map(|execution|execution["execution_id"].clone()).collect::<Vec<_>>() { bail!("execution inventory is not a total ordered bijection"); }
@@ -470,6 +495,27 @@ pub fn validate_accepted_script_pipeline_source(study:&StudyPlan,catalog:&StudyP
             Some(crate::script_stage_contract::StudyPipelineNode::Primitive{stage_kind,..}) if matches!(stage_kind.as_str(),"relax"|"run"));
         if authored_physical && !matches!(&step.kind,StudyStepKind::Primitive{..}) {bail!("authored physical node cannot become a closed-loop or other operation");}
         match &step.kind {
+            StudyStepKind::RetainedCurrentFieldInspection{stage_id,port_mode_id,output_id}=>{
+                if step.until_seconds.is_some() || !step.inputs.is_empty() || step.outputs!=vec![StudyOutputPort{port_id:"inspection".into(),data_kind:StudyPortDataKind::Artifact}]
+                    || !step.enabled || step.acceptance!=StudyAcceptancePolicy::Any || step.acquisition!=StudyAcquisitionPolicy::Exclusive || step.legacy_payload.is_some() {
+                    bail!("retained-current source requires an enabled static Artifact operation with Any/Exclusive and no legacy payload");
+                }
+                let authored_node=crate::script_pipeline_compilation::authored_node(&authored.nodes,execution["authored_step_id"].as_str().context("retained-current source ID missing")?)
+                    .context("retained-current authored node missing")?;
+                let crate::script_stage_contract::StudyPipelineNode::Primitive{stage_kind,payload,..}=authored_node else {
+                    bail!("retained-current operation requires its authored antenna primitive; no H-only macro expansion is supported");
+                };
+                if stage_kind!="antenna_field_solve" {bail!("retained-current operation must retain its authored antenna action");}
+                let (authored_stage,authored_port)=crate::script_stage_materialization::parse_antenna_solve_selection(payload)?;
+                if &authored_stage!=stage_id || &authored_port!=port_mode_id {bail!("retained-current source selectors differ from its authored antenna action");}
+                if entry.problem().antenna_field_solve_stages.iter().any(|stage| stage.id==*stage_id && stage.oersted_realization==fullmag_ir::AntennaOerstedRealizationIR::DirectTetraQuadrature) {
+                    fullmag_plan::validate_retained_direct_field_operation(entry.problem(),stage_id,port_mode_id,output_id)?;
+                } else if entry.problem().antenna_field_solve_stages.iter().any(|stage| stage.id==*stage_id && stage.retained_source_preparation.is_some()) {
+                    fullmag_plan::validate_retained_preparation_field_operation(entry.problem(),stage_id,port_mode_id,output_id)?;
+                } else {
+                    fullmag_plan::validate_retained_current_field_operation(entry.problem(),stage_id,port_mode_id,output_id)?;
+                }
+            },
             StudyStepKind::ClosedLoopInspection{stage_id,port_mode_id,output_id}=>{
                 if step.until_seconds.is_some() || !step.inputs.is_empty() || step.outputs!=vec![StudyOutputPort{port_id:"inspection".into(),data_kind:StudyPortDataKind::Artifact}] {bail!("closed-loop source cannot carry physical state ports or a horizon");}
                 fullmag_plan::validate_closed_loop_operation(entry.problem(),stage_id,port_mode_id,output_id)?;
@@ -1216,5 +1262,444 @@ mod tests {
     fn capture_refuses_oversized_payload_and_unknown_contract_fields() {
         let mut invalid=capture();invalid["records"][0]["byte_count"]=json!(8*1024*1024+1);assert!(validate_capture_shape(&invalid).is_err());
         let mut invalid=capture();invalid["unrecognized"]=json!(true);assert!(validate_capture_shape(&invalid).is_err());
+    }
+
+    fn retained_config() -> ScriptExecutionConfig {
+        // Shape/planning fixture only; no durable parent is authenticated here.
+        let mut wire:Value=serde_json::from_str(include_str!("../../../tests/fixtures/runtime/antenna-standalone-pipeline.json")).unwrap();
+        wire["ir"]["geometry_assets"]["fem_mesh_assets"].as_array_mut().unwrap().retain(|asset|asset["geometry_name"]=="probe");
+        let stage=&mut wire["ir"]["antenna_field_solve_stages"][0];
+        stage["retained_current_source"]=json!({"kind":"published_inspection","project_id":"project-source","run_id":"run-source",
+            "task_id":"task-source","attempt_id":"attempt-source","ownership_epoch":"1","artifact_id":"artifact-source","object_ref":"a".repeat(64)});
+        stage["oersted_realization"]=json!("analytic_rt0_surface");
+        stage["surface_field_policy"]=json!({
+            "policy_version":fullmag_ir::ANTENNA_SURFACE_FIELD_POLICY_VERSION,
+            "limits":{"total":vec![1_000_000_u64;14],"per_target":vec![100_000_u64;14],
+                "maximum_raw_integer_bits":8192,"maximum_reduced_fraction_bits":8192,
+                "maximum_lifetime_peak_rss_bytes":268435456,"guard_interval_events":128,
+                "maximum_total_seconds":600.0,"maximum_target_seconds":120.0},
+            "tolerances":{"absolute_field_apm":1e-9,"relative_field":1e-5,"cancellation_floor_apm":1e-6,
+                "scalar_relative_80":1e-45,"scalar_relative_120":1e-55,"angle_relative_80":1e-45,"angle_relative_120":1e-55,
+                "binary_scalar_epsilon_factor":16.0,"binary_roundoff_epsilon_factor":64.0,
+                "binary_cancellation_limit":1e8,"highprecision_cancellation_limit":1e40}});
+        serde_json::from_value(wire).unwrap()
+    }
+
+    fn compile_retained() -> AcceptedScriptPipeline {
+        let config=retained_config();
+        let mut profile=physical_profile();
+        profile.profile_id="retained".into();
+        profile.defaults.backend=fullmag_ir::FieldPatch::Value(fullmag_ir::BackendTarget::Fem);
+        compile_accepted_closed_loop_pipeline(config,"retained-study".into(),0,
+            StudyExecutionProfileReference{profile_id:profile.profile_id.clone(),version:profile.version.clone()},vec![],capture(),
+            |_,_|Ok(profile.clone()),fullmag_ir::configure_project_autosave_policy).unwrap()
+    }
+
+    #[test]
+    fn retained_materialization_uses_a_static_action_without_magnetic_transfer() {
+        let compiled=crate::materialize_script_pipeline_with_output_policy_bounded(
+            retained_config(),fullmag_ir::configure_project_autosave_policy,16).unwrap();
+        assert_eq!(compiled.executions.len(),2);
+        assert!(compiled.executions[1].stage.incoming_transition.is_some());
+        for execution in &compiled.executions {
+            let Some(ResolvedScriptStageAction::AntennaRetainedCurrentInspection{plan})=&execution.stage.action else {panic!("retained current must not enter fresh transport")};
+            assert_eq!(plan.stage.id,"inspect_antenna");
+            assert_eq!(plan.field_sampling.positions_xyz_m.len(),4);
+            if let Some(transition)=&execution.stage.incoming_transition {
+                assert_eq!(transition.kind,crate::script_stage_contract::StageTransitionKind::AntennaRetainedCurrentInspection);
+                assert_eq!(transition.reason,crate::script_stage_contract::StageTransitionReason::AntennaRetainedCurrentInspection);
+                assert!(transition.transfer_operator.is_none());
+                assert!(!transition.legacy_state_transition_label().contains("computed"));
+            }
+            assert!(execution.stage.ir.magnets.is_empty());
+        }
+    }
+
+    #[test]
+    fn retained_compiler_preserves_completion_order_without_state_ports() {
+        let compiled=compile_retained();
+        assert_eq!(compiled.study.steps.len(),2);
+        assert!(compiled.study.steps[0].completion_dependencies.is_empty());
+        assert_eq!(compiled.study.steps[1].completion_dependencies,vec![compiled.study.steps[0].step_id.clone()]);
+        for step in &compiled.study.steps {
+            assert!(matches!(&step.kind,StudyStepKind::RetainedCurrentFieldInspection{stage_id,port_mode_id,output_id}
+                if stage_id=="inspect_antenna" && port_mode_id=="port" && output_id=="inspection"));
+            assert!(step.inputs.is_empty());assert!(step.until_seconds.is_none());
+            assert_eq!(step.outputs,vec![StudyOutputPort{port_id:"inspection".into(),data_kind:StudyPortDataKind::Artifact}]);
+        }
+        let lowered=fullmag_plan::lower_study_plan_with_catalog(&compiled.study,&compiled.catalog).unwrap();
+        for step in &lowered.steps {assert!(matches!(&step.execution_plan.as_ref().unwrap().backend_plan,
+            fullmag_ir::BackendPlanIR::AntennaRetainedCurrentFieldInspection(_)));}
+        validate_accepted_script_pipeline_source(&compiled.study,&compiled.catalog,&compiled.source_bytes).unwrap();
+    }
+
+    fn retained_preparation_config() -> ScriptExecutionConfig {
+        // Public producer shape fixture; only runtime can authenticate the historical parent.
+        let mut config=retained_config();
+        let original:Value=serde_json::from_str(include_str!("../../../tests/fixtures/runtime/antenna-standalone-pipeline.json")).unwrap();
+        let mut wire=serde_json::to_value(&config.ir).unwrap();
+        wire["geometry_assets"]=original["ir"]["geometry_assets"].clone();
+        let mut mesh:fullmag_ir::MeshIR=serde_json::from_value(wire["geometry_assets"]["fem_mesh_assets"][0]["mesh"].clone()).unwrap();
+        for (index,marker) in mesh.element_markers.iter_mut().enumerate() {*marker=(index%4+1) as u32;}
+        wire["geometry_assets"]["fem_mesh_assets"][0]["mesh"]=serde_json::to_value(&mesh).unwrap();
+        wire["geometry_assets"]["fem_mesh_assets"][0].as_object_mut().unwrap().remove("mesh_source");
+        let task=format!("task-{}",crate::study_artifact_content_sha256(b"run-source\0source-step"));
+        let reference=json!({"asset_id":format!("script-file-{}","a".repeat(64)),"content_sha256":"b".repeat(64)});
+        let pin=|c:char|format!("sha256:{}",c.to_string().repeat(64));
+        let observations=["signal","return"].iter().flat_map(|part|["in","out"].map(move |end|
+            json!({"id":format!("{part}-{end}"),"part_id":part,"selector":if end=="in" {"local_u_min"} else {"local_u_max"},
+                "faces":[{"face_vertex_ids":[1,2,3],"part_cell_ordinal":0,"bridge_cell_ordinal":1}],"normal_convention":"outward_from_part"}))).collect::<Vec<_>>();
+        let parts=["signal","return","inlet","outlet"].iter().enumerate().map(|(index,id)|
+            json!({"part_id":id,"element_ordinals":(index..mesh.cell_count()).step_by(4).map(|n|n as u64).collect::<Vec<_>>(),"material_assignment_index":0})).collect::<Vec<_>>();
+        wire["current_modules"][0]["gauge"]=json!("zero_mean");
+        wire["current_modules"][0]["conservative_current_source"]=json!({"kind":"retained_preparation_asset",
+            "schema_version":"retained_preparation_asset_source.v1","object_id":"antenna","geometry_id":"antenna","preparation_asset":reference,
+            "historical_prepared_source":{"schema_version":"conservative_current_source.v2","revision":pin('1'),"object_id":"antenna","geometry_id":"antenna",
+                "mesh_digest":mesh.mixed_topology_fingerprint_v3().unwrap(),"authored_input_digest":pin('1'),"materials_digest":pin('2'),
+                "stable_vertex_ids":(1..=mesh.nodes.len() as u64).collect::<Vec<_>>(),"material_parts":parts,"terminal_observations":observations,
+                "closure":{"kind":"closed_geometry","operator_version":"fem_closed_current_geometry.v2","revision":pin('1'),"digest":pin('1'),
+                    "source_cuts":[{"id":"cut","translation_m":[0.,0.,0.],"potential_drop_v":1.,"face_pairs":[{"minus_face_vertex_ids":[1,2,3],"plus_face_vertex_ids":[4,5,6]}]}]}},
+            "historical_preparation":{"receipt_schema_version":"task_preparation_receipt.v1","run_id":"run-source","step_id":"source-step","task_id":task,
+                "preparation_id":format!("prep-{task}"),"input_fingerprint":"c".repeat(64),"plan_fingerprint":pin('3'),"payload_sha256":"d".repeat(64),"receipt_sha256":"e".repeat(64)},
+            "authored_closure":{"kind":"closed_geometry","schema_version":"structured_current_closure.v2","closure_id":"loop","source_cuts":[{
+                "source_cut_id":"cut","circuit_id":"loop","region":{"object_id":"antenna","region_id":"inlet"},
+                "plane":{"coordinate_frame":"object","axis":"x","offset_m":0.,"normal":"positive_axis"},
+                "drive":{"kind":"impressed_potential_jump","schema_version":"impressed_potential_jump.v1","drive_id":"drive","potential_jump_V":1.}}]}});
+        wire["antenna_port_modes"][0]["schema_version"]=json!("antenna_port_mode.v3");
+        wire["antenna_port_modes"][0]["normalization"]=json!({"kind":"source_cut_rt0","source_cut_ref":"cut","orientation":"minus_outward"});
+        wire["antenna_field_solve_stages"][0]["retained_current_source"]["task_id"]=json!(task);
+        wire["antenna_field_solve_stages"][0]["retained_source_preparation"]=reference;
+        config.ir=serde_json::from_value(wire).unwrap();
+        config
+    }
+
+    fn retained_preparation_execution(config:&ScriptExecutionConfig)->Result<fullmag_ir::MaterializedExecutionRequestIR> {
+        let mut profile=physical_profile();profile.profile_id="retained-preparation".into();
+        profile.defaults.backend=fullmag_ir::FieldPatch::Value(fullmag_ir::BackendTarget::Fem);
+        let precision=serde_json::to_value(config.ir.backend_policy.execution_precision)?;
+        let mode=serde_json::to_value(config.ir.validation_profile.execution_mode)?;
+        let requested=crate::RequestedExecution {backend:"auto".into(),device:"auto".into(),
+            precision:precision.as_str().context("execution precision must serialize as a string")?.into(),
+            mode:mode.as_str().context("execution mode must serialize as a string")?.into(),minimum_resources:None}
+            .for_problem(&config.ir)?;
+        // Match the accepted producer: the profile supplies defaults, the Script layer carries intent.
+        let migration=crate::migrate_legacy_live_execution(&config.ir,&requested,
+            fullmag_ir::ExecutionOriginKindIR::Script,"script.accepted.authored_execution")
+            .map_err(anyhow::Error::msg)?;
+        crate::materialize_execution_request(Some(profile),vec![migration.layer]).map_err(anyhow::Error::msg)
+    }
+
+    fn compile_retained_preparation(config:ScriptExecutionConfig)->Result<AcceptedScriptPipeline> {
+        let execution=retained_preparation_execution(&config)?;
+        let profile=execution.profile.context("retained-preparation profile is missing")?;
+        compile_accepted_closed_loop_pipeline(config,"retained-preparation-study".into(),0,
+            StudyExecutionProfileReference{profile_id:profile.profile_id.clone(),version:profile.version.clone()},execution.layers,capture(),
+            |_,_|Ok(profile.clone()),fullmag_ir::configure_project_autosave_policy)
+    }
+
+    fn retained_dtq_config() -> ScriptExecutionConfig {
+        let mut config = retained_preparation_config();
+        let stage = &mut config.ir.antenna_field_solve_stages[0];
+        stage.oersted_realization = fullmag_ir::AntennaOerstedRealizationIR::DirectTetraQuadrature;
+        stage.surface_field_policy = None;
+        config
+    }
+
+    #[test]
+    fn public_retained_dtq_materializes_compiles_and_replays_v2() {
+        let config = retained_dtq_config();
+        let materialized = crate::materialize_script_pipeline_with_output_policy_bounded(
+            config.clone(), fullmag_ir::configure_project_autosave_policy, 16).unwrap();
+        for execution in &materialized.executions {
+            let Some(ResolvedScriptStageAction::AntennaRetainedDirectInspection { plan }) = &execution.stage.action
+                else { panic!("DTQ must retain its dedicated typed action"); };
+            assert_eq!(plan.stage.retained_source_preparation.as_ref(), Some(&plan.preparation_asset));
+        }
+        let compiled = compile_retained_preparation(config).unwrap();
+        for entry in compiled.catalog.entries() {
+            let execution:fullmag_ir::MaterializedExecutionRequestIR=serde_json::from_value(
+                entry.problem().problem_meta.runtime_metadata["execution_materialization"].clone()).unwrap();
+            assert_eq!(execution.requested.backend,fullmag_ir::BackendTarget::Fem);
+            assert_eq!(execution.requested.device,fullmag_ir::ExecutionDevice::Cpu);
+            assert_eq!(execution.requested.precision,fullmag_ir::ExecutionPrecision::Double);
+            assert_eq!(execution.requested.mode,fullmag_ir::ExecutionMode::Strict);
+            assert_eq!(execution.origins["device"].kind,fullmag_ir::ExecutionOriginKindIR::Script);
+            assert_eq!(entry.problem().problem_meta.runtime_metadata["runtime_selection"]["device"],"cpu");
+        }
+        let lowered = fullmag_plan::lower_study_plan_with_catalog(&compiled.study, &compiled.catalog).unwrap();
+        #[derive(serde::Deserialize)]
+        #[serde(tag = "kind", rename_all = "snake_case")]
+        enum SurfaceWorkerBackend {
+            AntennaRetainedPreparationFieldInspection(fullmag_ir::AntennaRetainedPreparationFieldPlanIR),
+        }
+        for step in &lowered.steps {
+            assert!(step.until_seconds.is_none());
+            assert!(step.inputs.is_empty());
+            assert_eq!(step.outputs, vec![StudyOutputPort { port_id: "inspection".into(), data_kind: StudyPortDataKind::Artifact }]);
+            let backend = &step.execution_plan.as_ref().unwrap().backend_plan;
+            let old = serde_json::from_value::<SurfaceWorkerBackend>(serde_json::to_value(backend).unwrap());
+            if let Ok(SurfaceWorkerBackend::AntennaRetainedPreparationFieldInspection(surface)) = &old {
+                panic!("old surface worker unexpectedly accepted {}", surface.schema_version);
+            }
+            assert!(old.is_err());
+            let fullmag_ir::BackendPlanIR::AntennaRetainedDirectFieldInspection(plan) = backend else { panic!() };
+            let replay: fullmag_ir::AntennaRetainedDirectFieldPlanV2 = serde_json::from_slice(&serde_json::to_vec(plan).unwrap()).unwrap();
+            assert_eq!(&replay, plan);
+            assert!(serde_json::from_value::<fullmag_ir::AntennaRetainedPreparationFieldPlanIR>(serde_json::to_value(plan).unwrap()).is_err());
+            assert!(serde_json::from_value::<fullmag_ir::AntennaRetainedCurrentFieldPlanIR>(serde_json::to_value(plan).unwrap()).is_err());
+        }
+        validate_accepted_script_pipeline_source(&compiled.study, &compiled.catalog, &compiled.source_bytes).unwrap();
+    }
+
+    #[test]
+    fn retained_dtq_rejects_cross_family_receipt_and_mutated_asset() {
+        use fullmag_antenna_artifacts::retained_current::*;
+        let compiled = compile_retained_preparation(retained_dtq_config()).unwrap();
+        let lowered = fullmag_plan::lower_study_plan_with_catalog(&compiled.study, &compiled.catalog).unwrap();
+        let step = &lowered.steps[0];
+        let problem = compiled.catalog.entries().iter().find(|entry| entry.step_id() == step.step_id).unwrap().problem();
+        let fullmag_ir::BackendPlanIR::AntennaRetainedDirectFieldInspection(operation) = &step.execution_plan.as_ref().unwrap().backend_plan else { panic!() };
+        let fullmag_ir::AntennaRetainedCurrentSourceIR::PublishedInspection { project_id, run_id, task_id, attempt_id, ownership_epoch, artifact_id, object_ref } = operation.stage.retained_current_source.as_ref().unwrap();
+        let fullmag_ir::CurrentModuleIR::CurrentTransport { definition: Some(definition), .. } = &problem.current_modules[0] else { panic!() };
+        let Some(fullmag_ir::ConservativeCurrentSourceIR::RetainedPreparationAsset(source)) = &definition.conservative_current_source else { panic!() };
+        let pins = source.historical_preparation.clone();
+        // Structural receipt fixture only: durable readers must still authenticate all parent bytes.
+        let parent = RetainedCurrentParent {
+            owner: ParentInspectionOwner { project_id: project_id.clone(), run_id: run_id.clone(),
+                study_step_id: pins.step_id.clone(), native_stage_id: "historical-source".into(), task_id: task_id.clone(),
+                attempt_id: attempt_id.clone(), ownership_epoch: ownership_epoch.clone(), artifact_id: artifact_id.clone(),
+                package: CasObjectRef { object_ref: object_ref.clone(), byte_count: 4096 },
+                package_codec_id: PARENT_CODEC_ID.into(), package_codec_version: PARENT_CODEC_VERSION.into(),
+                manifest_schema: PARENT_MANIFEST_SCHEMA.into(), output_manifest_artifact_id: "source-manifest".into(),
+                output_manifest: CasObjectRef { object_ref: "b".repeat(64), byte_count: 1024 } },
+            source: ParentCurrentDigests { prepared_execution_digest: format!("sha256:{}", "1".repeat(64)),
+                accepted_charge_field_digest: format!("sha256:{}", "2".repeat(64)), accepted_source_state_digest: format!("sha256:{}", "3".repeat(64)),
+                view_identity_digest: format!("sha256:{}", "4".repeat(64)), current_balance_certificate_digest: format!("sha256:{}", "5".repeat(64)) },
+            evidence_capsule: CasObjectRef { object_ref: "c".repeat(64), byte_count: 2048 },
+        };
+        let mut specification = crate::RunSpecification::new(
+            crate::ProjectSnapshot { project_id: crate::ProjectId::parse(project_id.clone()).unwrap(), definition_revision: 1, definition_sha256: "d".repeat(64) },
+            crate::StudyReference { study_id: crate::StudyId::parse(compiled.study.study_id.clone()).unwrap(),
+                plan_version: fullmag_authoring::STUDY_PLAN_SCHEMA_VERSION_V4.into(), plan_sha256: "e".repeat(64) },
+            "f".repeat(64), json!({}), crate::RequestedExecution { backend: "fem".into(), device: "cpu".into(),
+                precision: "double".into(), mode: "strict".into(), minimum_resources: Some(crate::RequestedResourceBudget {
+                    cpu_millis:1000,memory_bytes:1,gpu_memory_bytes:0,storage_bytes:1 }) });
+        specification.immutable_assets.push(crate::ImmutableAssetReference { asset_id: operation.preparation_asset.asset_id.clone(),
+            content_sha256: operation.preparation_asset.content_sha256.clone() });
+        specification.validate().unwrap();
+        specification.requested_execution.validate_problem_resources(problem).unwrap();
+        assert_eq!(specification.schema_version,crate::RUN_SPEC_SCHEMA);
+        assert_eq!(specification.requested_execution.minimum_resources.as_ref().unwrap().gpu_memory_bytes,0);
+        let mut incomplete=specification.clone();incomplete.requested_execution.minimum_resources=None;
+        let error=incomplete.validate().unwrap_err().to_string();
+        assert!(error.contains("run_spec.v2 requires requested_execution.minimum_resources"),"{error}");
+        let error=crate::RetainedAssetFieldPreparationReceipt::ready(
+            &incomplete,"task-dtq-child",step,problem,parent.clone(),pins.clone()).err().expect("incomplete v2 must refuse readiness");
+        assert!(format!("{error:#}").contains("run_spec.v2 requires requested_execution.minimum_resources"),"{error:#}");
+        let receipt = crate::RetainedAssetFieldPreparationReceipt::ready(&specification, "task-dtq-child", step, problem, parent.clone(), pins.clone()).unwrap();
+        receipt.validate_for(&specification, "task-dtq-child", step, problem, &parent, &pins).unwrap();
+        assert_eq!(receipt.schema_version, crate::RETAINED_ASSET_FIELD_PREPARATION_SCHEMA);
+        let binding = receipt.binding().unwrap();
+        assert_eq!(binding.schema_version, crate::RETAINED_ASSET_FIELD_PREPARATION_BINDING_SCHEMA);
+        let mut surface = problem.clone();
+        surface.antenna_field_solve_stages[0].oersted_realization = fullmag_ir::AntennaOerstedRealizationIR::AnalyticRt0Surface;
+        surface.antenna_field_solve_stages[0].surface_field_policy = retained_preparation_config().ir.antenna_field_solve_stages[0].surface_field_policy.clone();
+        let mut surface_step = step.clone(); surface_step.execution_plan = Some(fullmag_plan::plan(&surface).unwrap());
+        assert!(receipt.validate_for(&specification, "task-dtq-child", &surface_step, &surface, &parent, &pins).is_err());
+        for mutation in ["asset", "parent", "source", "operation"] {
+            let mut changed = receipt.clone();
+            match mutation {
+                "asset" => changed.plan.preparation_asset.content_sha256 = "0".repeat(64),
+                "parent" => changed.plan.parent.owner.attempt_id = "other-attempt".into(),
+                "source" => changed.plan.source_preparation.receipt_sha256 = "0".repeat(64),
+                "operation" => changed.plan.operation_fingerprint = format!("sha256:{}", "0".repeat(64)),
+                _ => unreachable!(),
+            }
+            changed.plan_fingerprint = crate::preparation::fingerprint_json(&changed.plan).unwrap();
+            changed.validate().unwrap();
+            assert_ne!(changed.binding().unwrap(), binding);
+            assert!(changed.validate_for(&specification, "task-dtq-child", step, problem, &parent, &pins).is_err(), "rehash {mutation}");
+        }
+        for mutation in ["asset", "parent", "source", "physics", "missing_asset"] {
+            let mut altered_problem = problem.clone(); let mut altered_specification = specification.clone();
+            let mut altered_parent = parent.clone(); let mut altered_pins = pins.clone();
+            match mutation {
+                "asset" => altered_specification.immutable_assets[0].content_sha256 = "0".repeat(64),
+                "parent" => altered_parent.owner.attempt_id = "other-attempt".into(),
+                "source" => altered_pins.receipt_sha256 = "0".repeat(64),
+                "physics" => { let fullmag_ir::CurrentModuleIR::CurrentTransport { definition: Some(definition), .. } = &mut altered_problem.current_modules[0] else { panic!() }; definition.materials[0].material.sigma_spm *= 2.0; },
+                "missing_asset" => altered_specification.immutable_assets.clear(),
+                _ => unreachable!(),
+            }
+            assert!(receipt.validate_for(&altered_specification, "task-dtq-child", step, &altered_problem, &altered_parent, &altered_pins).is_err(), "{mutation}");
+        }
+    }
+
+    #[test]
+    fn source_preparation_timeout_does_not_submit_or_retry() {
+        // Inject failure at the canonical bounded helper boundary; never launch Python or a solver.
+        let root = tempfile::tempdir().unwrap();
+        let script = root.path().join("source.py"); std::fs::write(&script, b"pass").unwrap();
+        let fullmag = root.path().join("fullmag"); std::fs::create_dir(&fullmag).unwrap();
+        let mut phases = Vec::new();
+        let result = crate::script_source_capture::capture_authored_script(&script, &fullmag,
+            &crate::script_source_capture::CaptureOptions::default(), |args, _, _| {
+                let phase = &args[args.iter().position(|arg| arg == "--phase").unwrap() + 1]; phases.push(phase.clone());
+                if phase == "export" { anyhow::bail!("python_helper_timeout: source preparation deadline"); }
+                let inventory = json!({"capture": {"schema_version":"fullmag.script-source-capture.v1", "entry_relative_path":"source/source.py",
+                    "records":[{"relative_path":"source/source.py", "asset_id":format!("script-file-{}", crate::study_artifact_content_sha256(b"source/source.py")),
+                        "sha256":crate::study_artifact_content_sha256(b"pass"), "byte_count":4, "role":"source", "absolute_path":script}],
+                    "runtime":{}, "inventory_sha256":"a".repeat(64)}});
+                #[cfg(unix)] let status = { use std::os::unix::process::ExitStatusExt; std::process::ExitStatus::from_raw(0) };
+                #[cfg(windows)] let status = { use std::os::windows::process::ExitStatusExt; std::process::ExitStatus::from_raw(0) };
+                Ok(std::process::Output { status, stdout: serde_json::to_vec(&inventory).unwrap(), stderr: vec![] })
+            });
+        let mut accepted_source_available = false;
+        let result = result.map(|source| { accepted_source_available = true; source });
+        assert!(format!("{:#}", result.err().unwrap()).contains("python_helper_timeout"));
+        assert_eq!(phases, ["inventory", "export"]);
+        assert!(!accepted_source_available);
+        assert_eq!(std::fs::read_dir(root.path()).unwrap().count(), 2);
+    }
+
+    #[test]
+    fn retained_dtq_never_resolves_fresh_transport() {
+        for case in ["asset", "locator", "surface", "gpu", "single", "auto"] {
+            let mut config = retained_dtq_config();
+            match case {
+                "asset" => config.ir.antenna_field_solve_stages[0].retained_source_preparation = None,
+                "locator" => config.ir.antenna_field_solve_stages[0].retained_current_source = None,
+                "surface" => config.ir.antenna_field_solve_stages[0].surface_field_policy = retained_preparation_config().ir.antenna_field_solve_stages[0].surface_field_policy.clone(),
+                "gpu" | "auto" => { config.ir.problem_meta.runtime_metadata.insert("runtime_selection".into(), json!({"device":case})); },
+                "single" => {
+                    config.ir.backend_policy.execution_precision = fullmag_ir::ExecutionPrecision::Single;
+                    config.ir.problem_meta.runtime_metadata.get_mut("runtime_selection").unwrap()["execution_precision"]=json!("single");
+                },
+                _ => unreachable!(),
+            }
+            if matches!(case,"gpu"|"single"|"auto") {
+                let execution=retained_preparation_execution(&config).unwrap();
+                let device=match case {
+                    "gpu"=>fullmag_ir::ExecutionDevice::Gpu,
+                    "auto"=>fullmag_ir::ExecutionDevice::Auto,
+                    _=>fullmag_ir::ExecutionDevice::Cpu,
+                };
+                let precision=if case=="single" {fullmag_ir::ExecutionPrecision::Single} else {fullmag_ir::ExecutionPrecision::Double};
+                assert_eq!(execution.requested.backend,fullmag_ir::BackendTarget::Fem,"{case}");
+                assert_eq!(execution.requested.device,device,"{case}");
+                assert_eq!(execution.requested.precision,precision,"{case}");
+                assert_eq!(execution.requested.mode,fullmag_ir::ExecutionMode::Strict,"{case}");
+                for field in ["device","precision"] {
+                    assert_eq!(execution.origins[field].kind,fullmag_ir::ExecutionOriginKindIR::Script,"{case}: {field}");
+                }
+                let bound=crate::bind_materialized_execution(&config.ir,&execution).unwrap();
+                assert_eq!(bound.problem_meta.runtime_metadata["runtime_selection"]["device"],serde_json::to_value(device).unwrap(),"{case}");
+                assert_eq!(bound.backend_policy.execution_precision,precision,"{case}");
+            }
+            let error=compile_retained_preparation(config).err().expect(case);
+            if matches!(case,"gpu"|"single"|"auto") {
+                assert!(format!("{error:#}").contains("retained DTQ requires explicit FEM CPU strict double without fallback"),"{case}: {error:#}");
+            }
+        }
+    }
+
+    #[test]
+    fn preparation_asset_public_producer_compiles_and_cold_validates_its_own_family() {
+        let config=retained_preparation_config();
+        let materialized=crate::materialize_script_pipeline_with_output_policy_bounded(
+            config.clone(),fullmag_ir::configure_project_autosave_policy,16).unwrap();
+        assert_eq!(materialized.executions.len(),2);
+        for execution in &materialized.executions {
+            let Some(ResolvedScriptStageAction::AntennaRetainedPreparationInspection{plan})=&execution.stage.action else {panic!("preparation asset must not enter old or fresh transport planning")};
+            assert_eq!(plan.preparation_asset,plan.stage.retained_source_preparation.clone().unwrap());
+            if let Some(transition)=&execution.stage.incoming_transition {
+                assert_eq!(transition.kind,crate::script_stage_contract::StageTransitionKind::AntennaRetainedCurrentInspection);
+                assert!(transition.transfer_operator.is_none());
+            }
+        }
+        let compiled=compile_retained_preparation(config).unwrap();
+        assert_eq!(compiled.study.steps[1].completion_dependencies,vec![compiled.study.steps[0].step_id.clone()]);
+        for step in &compiled.study.steps {
+            assert!(matches!(step.kind,StudyStepKind::RetainedCurrentFieldInspection{..}));
+            assert!(step.inputs.is_empty());assert!(step.until_seconds.is_none());
+            assert_eq!(step.outputs,vec![StudyOutputPort{port_id:"inspection".into(),data_kind:StudyPortDataKind::Artifact}]);
+        }
+        let lowered=fullmag_plan::lower_study_plan_with_catalog(&compiled.study,&compiled.catalog).unwrap();
+        for step in &lowered.steps {assert!(matches!(&step.execution_plan.as_ref().unwrap().backend_plan,
+            fullmag_ir::BackendPlanIR::AntennaRetainedPreparationFieldInspection(_)));}
+        validate_accepted_script_pipeline_source(&compiled.study,&compiled.catalog,&compiled.source_bytes).unwrap();
+    }
+
+    #[test]
+    fn preparation_asset_explicit_public_snapshots_preserve_the_new_family() {
+        let mut config=retained_preparation_config();
+        for id in ["first-inspection","repeat-inspection"] {
+            let mut ir=config.ir.clone();ir.problem_meta.runtime_metadata.insert("active_stage_id".into(),json!(id));
+            config.stages.push(crate::script_stage_contract::ScriptExecutionStage {ir,default_until_seconds:None,
+                entrypoint_kind:"flat_antenna_field_solve".into(),action:Some(crate::script_stage_contract::ScriptExecutionStageAction::AntennaFieldSolve {
+                    stage_id:"inspect_antenna".into(),port_mode_id:Some("port".into()),port_mode_ids:vec![]})});
+        }
+        let compiled=compile_retained_preparation(config).unwrap();
+        let lowered=fullmag_plan::lower_study_plan_with_catalog(&compiled.study,&compiled.catalog).unwrap();
+        assert_eq!(lowered.steps.len(),2);
+        assert!(lowered.steps.iter().all(|step|matches!(&step.execution_plan.as_ref().unwrap().backend_plan,
+            fullmag_ir::BackendPlanIR::AntennaRetainedPreparationFieldInspection(_))));
+    }
+
+    #[test]
+    fn public_producer_refuses_mixed_preparation_families_and_missing_frozen_mesh() {
+        for case in ["missing_stage_asset","old_source","mismatched_asset","missing_mesh"] {
+            let mut config=retained_preparation_config();
+            match case {
+                "missing_stage_asset"=>config.ir.antenna_field_solve_stages[0].retained_source_preparation=None,
+                "old_source"=>config.ir.current_modules=retained_config().ir.current_modules,
+                "mismatched_asset"=>config.ir.antenna_field_solve_stages[0].retained_source_preparation.as_mut().unwrap().content_sha256="0".repeat(64),
+                "missing_mesh"=>config.ir.geometry_assets.as_mut().unwrap().fem_mesh_assets[0].mesh=None,
+                _=>unreachable!(),
+            }
+            assert!(compile_retained_preparation(config).is_err(),"{case}");
+        }
+    }
+
+    #[test]
+    fn cold_retained_source_refuses_changed_authored_kind_or_selectors() {
+        let compiled=compile_retained();
+        for (key,value) in [("stage_kind",json!("export")),("stage_id",json!("other")),("port_mode_id",json!("other"))] {
+            let mut source:Value=serde_json::from_slice(&compiled.source_bytes).unwrap();
+            let node=&mut source["authored_pipeline"]["nodes"][0]["children"][0];
+            if key=="stage_kind" {node[key]=value;} else {node["payload"][key]=value;}
+            source["authored_pipeline_sha256"]=json!(fullmag_ir::canonical_ir_json_sha256(&source["authored_pipeline"]).unwrap());
+            assert!(validate_accepted_script_pipeline_source(&compiled.study,&compiled.catalog,&serde_json::to_vec(&source).unwrap()).is_err(),"{key}");
+        }
+    }
+
+    #[test]
+    fn cold_retained_source_refuses_unsupported_macro_ownership() {
+        let compiled=compile_retained();
+        let mut source:Value=serde_json::from_slice(&compiled.source_bytes).unwrap();
+        let node=source["authored_pipeline"]["nodes"][0]["children"][0].as_object_mut().unwrap();
+        let id=node["id"].as_str().unwrap().to_owned();
+        node.insert("node_kind".into(),json!("macro"));
+        node.remove("stage_kind");node.remove("payload");
+        node.insert("macro_kind".into(),json!("relax_run"));node.insert("config".into(),json!({}));
+        for binding in source["nodes"].as_array_mut().unwrap() {
+            if binding["authored_step_id"]==id {binding["kind"]=json!("macro");}
+        }
+        source["authored_pipeline_sha256"]=json!(fullmag_ir::canonical_ir_json_sha256(&source["authored_pipeline"]).unwrap());
+        let error=validate_accepted_script_pipeline_source(&compiled.study,&compiled.catalog,&serde_json::to_vec(&source).unwrap()).unwrap_err();
+        assert!(error.to_string().contains("authored antenna primitive"),"{error:#}");
+    }
+
+    #[test]
+    fn cold_retained_source_cannot_drop_an_enabled_antenna_execution() {
+        let compiled=compile_retained();let mut study=compiled.study.clone();
+        study.steps.remove(0);study.steps[0].completion_dependencies.clear();
+        let remaining=study.steps[0].step_id.clone();
+        let entries=compiled.catalog.entries().iter().filter(|entry|entry.step_id()==remaining).cloned().collect();
+        let catalog=StudyProblemCatalog::from_entries(&study,entries).unwrap();
+        let mut source:Value=serde_json::from_slice(&compiled.source_bytes).unwrap();
+        source["nodes"][1]["execution_ids"]=json!([]);source["executions"].as_array_mut().unwrap().remove(0);
+        let error=validate_accepted_script_pipeline_source(&study,&catalog,&serde_json::to_vec(&source).unwrap()).unwrap_err();
+        assert!(error.to_string().contains("enabled antenna primitive must own exactly one"));
     }
 }

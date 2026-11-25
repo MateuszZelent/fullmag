@@ -2707,7 +2707,9 @@ impl FemStageExecutionContext {
             }
             fullmag_ir::BackendPlanIR::Fdm(_)
             | fullmag_ir::BackendPlanIR::FdmMultilayer(_)
-            | fullmag_ir::BackendPlanIR::AntennaExternalLeadInspection(_) => {
+            | fullmag_ir::BackendPlanIR::AntennaExternalLeadInspection(_)
+            | fullmag_ir::BackendPlanIR::AntennaRetainedCurrentFieldInspection(_)
+            | fullmag_ir::BackendPlanIR::AntennaRetainedDirectFieldInspection(_) | fullmag_ir::BackendPlanIR::AntennaRetainedPreparationFieldInspection(_) => {
                 return None;
             }
         };
@@ -2995,7 +2997,9 @@ impl StageFemMeshAsset {
             }
             fullmag_ir::BackendPlanIR::Fdm(_)
             | fullmag_ir::BackendPlanIR::FdmMultilayer(_)
-            | fullmag_ir::BackendPlanIR::AntennaExternalLeadInspection(_) => None,
+            | fullmag_ir::BackendPlanIR::AntennaExternalLeadInspection(_)
+            | fullmag_ir::BackendPlanIR::AntennaRetainedCurrentFieldInspection(_)
+            | fullmag_ir::BackendPlanIR::AntennaRetainedDirectFieldInspection(_) | fullmag_ir::BackendPlanIR::AntennaRetainedPreparationFieldInspection(_) => None,
         }
     }
 

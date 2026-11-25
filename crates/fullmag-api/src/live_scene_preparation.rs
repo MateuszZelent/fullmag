@@ -51,7 +51,7 @@ pub(crate) struct LiveScenePreparationReadModel {
     pub requested_execution: RequestedExecution,
     pub execution_plan: fullmag_ir::ExecutionPlanIR,
     #[serde(skip)]
-    pub global_sampling_mesh: Option<fullmag_runner::FemMeshPayload>,
+    pub antenna_sampling_mesh: Option<fullmag_runner::FemMeshPayload>,
 }
 
 /// State identity used to keep accepted preparation work off the session
@@ -335,6 +335,18 @@ impl ValidatedAcceptedPreparationSource {
                     return Err(ApiError::conflict("accepted inspection source run mismatch"));
                 }
             }
+            AcceptedPreparationReceipt::RetainedCurrent(receipt) => {
+                receipt.validate().map_err(|error| ApiError::conflict(error.to_string()))?;
+                if source.run_id.as_str() != current_run_id {
+                    return Err(ApiError::conflict("accepted retained-current source run mismatch"));
+                }
+            }
+            AcceptedPreparationReceipt::RetainedAssetField(receipt) => {
+                receipt.validate().map_err(|error| ApiError::conflict(error.to_string()))?;
+                if source.run_id.as_str() != current_run_id {
+                    return Err(ApiError::conflict("accepted retained preparation source run mismatch"));
+                }
+            }
         }
         let receipt_payload = receipt.payload().map_err(|error| {
             ApiError::internal(format!("accepted preparation receipt serialization failed: {error}"))
@@ -363,6 +375,18 @@ impl ValidatedAcceptedPreparationSource {
                 receipt.validate().map_err(|error| ApiError::conflict(error.to_string()))?;
                 if source.run_id.as_str() != current_run_id {
                     return Err(ApiError::conflict("accepted inspection source run mismatch"));
+                }
+            }
+            AcceptedPreparationReceipt::RetainedCurrent(receipt) => {
+                receipt.validate().map_err(|error| ApiError::conflict(error.to_string()))?;
+                if source.run_id.as_str() != current_run_id {
+                    return Err(ApiError::conflict("accepted retained-current source run mismatch"));
+                }
+            }
+            AcceptedPreparationReceipt::RetainedAssetField(receipt) => {
+                receipt.validate().map_err(|error| ApiError::conflict(error.to_string()))?;
+                if source.run_id.as_str() != current_run_id {
+                    return Err(ApiError::conflict("accepted retained preparation source run mismatch"));
                 }
             }
         }
@@ -547,7 +571,9 @@ fn prepared_fem_mesh(
         fullmag_ir::BackendPlanIR::AntennaFieldOnly(plan) => Some(
             fullmag_runner::StageFemMeshAsset::build_from_antenna_field_only_plan(plan).payload,
         ),
-        fullmag_ir::BackendPlanIR::Fdm(_)
+        fullmag_ir::BackendPlanIR::AntennaRetainedCurrentFieldInspection(_)
+        | fullmag_ir::BackendPlanIR::AntennaRetainedDirectFieldInspection(_) | fullmag_ir::BackendPlanIR::AntennaRetainedPreparationFieldInspection(_)
+        | fullmag_ir::BackendPlanIR::Fdm(_)
         | fullmag_ir::BackendPlanIR::FdmMultilayer(_)
         | fullmag_ir::BackendPlanIR::AntennaExternalLeadInspection(_) => None,
     }
@@ -588,6 +614,8 @@ fn prepared_domain_publication(
     if matches!(
         &read_model.execution_plan.backend_plan,
         fullmag_ir::BackendPlanIR::AntennaFieldOnly(_)
+            | fullmag_ir::BackendPlanIR::AntennaRetainedCurrentFieldInspection(_)
+        | fullmag_ir::BackendPlanIR::AntennaRetainedDirectFieldInspection(_) | fullmag_ir::BackendPlanIR::AntennaRetainedPreparationFieldInspection(_)
     ) {
         metadata.remove("artifact_layout");
         metadata.remove("live_preview");
@@ -603,11 +631,22 @@ fn prepared_domain_publication(
     ) {
         metadata.remove("magnetic_state_present");
     }
-    let fem_mesh = if let fullmag_ir::BackendPlanIR::AntennaFieldOnly(plan) = &read_model.execution_plan.backend_plan {
+    let retained_sampling = match &read_model.execution_plan.backend_plan {
+        fullmag_ir::BackendPlanIR::AntennaRetainedCurrentFieldInspection(plan) => Some(&plan.field_sampling),
+        fullmag_ir::BackendPlanIR::AntennaRetainedDirectFieldInspection(plan) => Some(&plan.field_sampling),
+        fullmag_ir::BackendPlanIR::AntennaRetainedPreparationFieldInspection(plan) => Some(&plan.field_sampling),
+        _ => None,
+    };
+    let fem_mesh = if let Some(sampling) = retained_sampling {
+        let mesh = read_model.antenna_sampling_mesh.clone().ok_or_else(|| ApiError::conflict_with_code(
+            "accepted_preparation_sampling_mesh_missing", "retained H-only requires its actual pinned sampling mesh"))?;
+        metadata.insert("antenna_domain_publication".into(), antenna_domain::global_publication_binding(sampling, &mesh));
+        Some(mesh)
+    } else if let fullmag_ir::BackendPlanIR::AntennaFieldOnly(plan) = &read_model.execution_plan.backend_plan {
         if matches!(plan.field_sampling.domain, fullmag_ir::FieldTargetIR::Global {}) {
-            let mesh = read_model.global_sampling_mesh.clone().ok_or_else(|| ApiError::conflict_with_code(
+            let mesh = read_model.antenna_sampling_mesh.clone().ok_or_else(|| ApiError::conflict_with_code(
                 "accepted_preparation_sampling_mesh_missing", "Global sampling requires its pinned domain mesh"))?;
-            metadata.insert("antenna_domain_publication".into(), antenna_domain::global_publication_binding(plan, &mesh));
+            metadata.insert("antenna_domain_publication".into(), antenna_domain::global_publication_binding(&plan.field_sampling, &mesh));
             Some(mesh)
         } else {
             metadata.remove("antenna_domain_publication");
@@ -623,7 +662,9 @@ fn prepared_domain_publication(
     // already validated typed plan.
     if matches!(
         &read_model.execution_plan.backend_plan,
-        fullmag_ir::BackendPlanIR::AntennaFieldOnly(_)
+        fullmag_ir::BackendPlanIR::AntennaRetainedCurrentFieldInspection(_)
+        | fullmag_ir::BackendPlanIR::AntennaRetainedDirectFieldInspection(_) | fullmag_ir::BackendPlanIR::AntennaRetainedPreparationFieldInspection(_)
+            | fullmag_ir::BackendPlanIR::AntennaFieldOnly(_)
             | fullmag_ir::BackendPlanIR::Fem(_)
             | fullmag_ir::BackendPlanIR::FemEigen(_)
             | fullmag_ir::BackendPlanIR::FemFrequencyResponse(_)
@@ -2575,12 +2616,12 @@ async fn publish_accepted_task_preparation_with_mode(
         };
         let entry = accepted.catalog.entries().iter().find(|entry| entry.step_id() == step_id_for_worker)
             .ok_or_else(|| ApiError::conflict("accepted preparation has no pinned ProblemIR"))?;
-        let global_sampling_mesh = antenna_domain::pinned_global_mesh(entry.problem(), &execution_plan)?;
+        let antenna_sampling_mesh = antenna_domain::pinned_sampling_mesh(entry.problem(), &execution_plan)?;
         Ok::<_, ApiError>((
             receipt,
             execution_plan,
             specification.requested_execution,
-            global_sampling_mesh,
+            antenna_sampling_mesh,
             accepted_initial_state,
             verified_output_identity,
         ))
@@ -2592,7 +2633,7 @@ async fn publish_accepted_task_preparation_with_mode(
         receipt,
         execution_plan,
         requested_execution,
-        global_sampling_mesh,
+        antenna_sampling_mesh,
         accepted_initial_state,
         verified_output_identity,
     ) = materialized;
@@ -2619,7 +2660,7 @@ async fn publish_accepted_task_preparation_with_mode(
         plan_fingerprint: plan_fingerprint.clone(),
         requested_execution,
         execution_plan,
-        global_sampling_mesh,
+        antenna_sampling_mesh,
     };
 
     let now = u64::try_from(crate::session::unix_time_millis_now()).unwrap_or(u64::MAX);
@@ -3058,6 +3099,8 @@ async fn persist_live_preparation_receipt_for_context_under_transition_with_sour
     match &receipt {
         AcceptedPreparationReceipt::Solver(receipt) => receipt.validate(),
         AcceptedPreparationReceipt::ClosedLoop(receipt) => receipt.validate(),
+        AcceptedPreparationReceipt::RetainedCurrent(receipt) => receipt.validate(),
+        AcceptedPreparationReceipt::RetainedAssetField(receipt) => receipt.validate(),
     }
     .map_err(|error| ApiError::bad_request(error.to_string()))?;
     let preparation_id_differs = current_preparation_id
@@ -3087,6 +3130,20 @@ async fn persist_live_preparation_receipt_for_context_under_transition_with_sour
                         "accepted inspection store could not be opened: {error}"
                     )))?;
                 validate_closed_loop_against_accepted_store(&store, &current_run_id, receipt)?;
+            }
+            AcceptedPreparationReceipt::RetainedCurrent(receipt) => {
+                let root = state.submit_store_root.as_ref().ok_or_else(|| ApiError::conflict(
+                    "retained-current preparation requires its configured accepted store"))?;
+                let store = fullmag_session::SessionStore::open_existing(root)
+                    .map_err(|error| ApiError::conflict(error.to_string()))?;
+                validate_retained_current_against_accepted_store(&store, &current_run_id, receipt)?;
+            }
+            AcceptedPreparationReceipt::RetainedAssetField(receipt) => {
+                let root = state.submit_store_root.as_ref().ok_or_else(|| ApiError::conflict(
+                    "retained preparation requires its configured accepted store"))?;
+                let store = fullmag_session::SessionStore::open_existing(root)
+                    .map_err(|error| ApiError::conflict(error.to_string()))?;
+                validate_retained_asset_against_accepted_store(&store, &current_run_id, receipt)?;
             }
         }
         }
@@ -3266,6 +3323,8 @@ fn live_preparation_accepted_source(
     match receipt {
         AcceptedPreparationReceipt::Solver(receipt) => receipt.accepted_run_source.as_ref(),
         AcceptedPreparationReceipt::ClosedLoop(receipt) => Some(&receipt.plan.source),
+        AcceptedPreparationReceipt::RetainedCurrent(receipt) => Some(&receipt.plan.source),
+        AcceptedPreparationReceipt::RetainedAssetField(receipt) => Some(&receipt.plan.source),
     }
 }
 
@@ -3278,6 +3337,16 @@ fn validated_live_preparation_payload(payload: &Value) -> Option<AcceptedPrepara
         let receipt: ClosedLoopPreparationReceipt = serde_json::from_value(payload.clone()).ok()?;
         receipt.validate().ok()?;
         Some(AcceptedPreparationReceipt::ClosedLoop(receipt))
+    } else if payload.get("schema_version").and_then(Value::as_str)
+        == Some(fullmag_application::RETAINED_CURRENT_PREPARATION_SCHEMA) {
+        let receipt: fullmag_application::RetainedCurrentPreparationReceipt = serde_json::from_value(payload.clone()).ok()?;
+        receipt.validate().ok()?;
+        Some(AcceptedPreparationReceipt::RetainedCurrent(receipt))
+    } else if payload.get("schema_version").and_then(Value::as_str)
+        == Some(fullmag_application::RETAINED_ASSET_FIELD_PREPARATION_SCHEMA) {
+        let receipt: fullmag_application::RetainedAssetFieldPreparationReceipt = serde_json::from_value(payload.clone()).ok()?;
+        receipt.validate().ok()?;
+        Some(AcceptedPreparationReceipt::RetainedAssetField(receipt))
     } else {
         let receipt: PreparationReceipt = serde_json::from_value(payload.clone()).ok()?;
         receipt.validate().ok()?;
@@ -3328,6 +3397,63 @@ fn validate_closed_loop_against_accepted_store(
     let verified_payload = verified.payload()
         .map_err(|error| ApiError::internal(format!("inspection readiness encoding failed: {error}")))?;
     validate_accepted_receipt_payload_identity(&expected_payload, &verified_payload)
+}
+
+/// Validate immutable stored H-only readiness for presentation, never source
+/// admission. The preparer/worker separately re-read the durable parent evidence.
+fn validate_retained_current_against_accepted_store(
+    store: &fullmag_session::SessionStore, current_run_id: &str,
+    receipt: &fullmag_application::RetainedCurrentPreparationReceipt,
+) -> Result<(), ApiError> {
+    let source = &receipt.plan.source;
+    if source.run_id.as_str() != current_run_id {
+        return Err(ApiError::conflict("retained-current readiness belongs to another live run"));
+    }
+    let intent = store.read_run_intent(current_run_id)
+        .map_err(|error| ApiError::conflict(error.to_string()))?
+        .ok_or_else(|| ApiError::conflict("retained-current readiness has no durable RunIntent"))?;
+    let specification: fullmag_application::RunSpecification = serde_json::from_value(intent.specification)
+        .map_err(|error| ApiError::conflict(error.to_string()))?;
+    let accepted = fullmag_runtime_control::load_accepted_study_snapshot(store, &source.run_id, &specification.snapshot.project_id)
+        .map_err(|error| ApiError::conflict(format!("retained-current accepted snapshot is invalid: {error:#}")))?;
+    let task_id = fullmag_session::task_id_for_study_step(current_run_id, &source.step_id)
+        .map_err(|error| ApiError::conflict(error.to_string()))?;
+    let verified = accepted.read_task_preparation(store, &task_id)
+        .map_err(|error| ApiError::conflict(format!("retained-current stored readiness is invalid: {error:#}")))?;
+    if !matches!(&verified, AcceptedPreparationReceipt::RetainedCurrent(_)) {
+        return Err(ApiError::conflict("retained-current readiness cannot reuse solver or closed-loop preparation"));
+    }
+    let expected = serde_json::to_value(receipt).map_err(|error| ApiError::internal(error.to_string()))?;
+    let actual = verified.payload().map_err(|error| ApiError::internal(error.to_string()))?;
+    validate_accepted_receipt_payload_identity(&expected, &actual)
+}
+
+/// New frozen-source readiness stays distinct from the legacy H-only receipt.
+fn validate_retained_asset_against_accepted_store(
+    store: &fullmag_session::SessionStore, current_run_id: &str,
+    receipt: &fullmag_application::RetainedAssetFieldPreparationReceipt,
+) -> Result<(), ApiError> {
+    let source = &receipt.plan.source;
+    if source.run_id.as_str() != current_run_id {
+        return Err(ApiError::conflict("retained preparation readiness belongs to another live run"));
+    }
+    let intent = store.read_run_intent(current_run_id)
+        .map_err(|error| ApiError::conflict(error.to_string()))?
+        .ok_or_else(|| ApiError::conflict("retained preparation readiness has no durable RunIntent"))?;
+    let specification: fullmag_application::RunSpecification = serde_json::from_value(intent.specification)
+        .map_err(|error| ApiError::conflict(error.to_string()))?;
+    let accepted = fullmag_runtime_control::load_accepted_study_snapshot(store, &source.run_id, &specification.snapshot.project_id)
+        .map_err(|error| ApiError::conflict(format!("retained preparation accepted snapshot is invalid: {error:#}")))?;
+    let task_id = fullmag_session::task_id_for_study_step(current_run_id, &source.step_id)
+        .map_err(|error| ApiError::conflict(error.to_string()))?;
+    let verified = accepted.read_task_preparation(store, &task_id)
+        .map_err(|error| ApiError::conflict(format!("retained preparation stored readiness is invalid: {error:#}")))?;
+    if !matches!(&verified, AcceptedPreparationReceipt::RetainedAssetField(_)) {
+        return Err(ApiError::conflict("retained preparation readiness cannot reuse another receipt family"));
+    }
+    let expected = serde_json::to_value(receipt).map_err(|error| ApiError::internal(error.to_string()))?;
+    let actual = verified.payload().map_err(|error| ApiError::internal(error.to_string()))?;
+    validate_accepted_receipt_payload_identity(&expected, &actual)
 }
 
 /// Accepted-run provenance is allowed on the live sync boundary only when it
@@ -3514,6 +3640,12 @@ fn prove_stale_accepted_replacement(
     };
     if let AcceptedPreparationReceipt::ClosedLoop(receipt) = &application {
         validate_closed_loop_against_accepted_store(accepted_store, &previous.run_id, receipt)?;
+    }
+    if let AcceptedPreparationReceipt::RetainedCurrent(receipt) = &application {
+        validate_retained_current_against_accepted_store(accepted_store, &previous.run_id, receipt)?;
+    }
+    if let AcceptedPreparationReceipt::RetainedAssetField(receipt) = &application {
+        validate_retained_asset_against_accepted_store(accepted_store, &previous.run_id, receipt)?;
     }
     let source = live_preparation_accepted_source(&application);
     let anchor_store = if source.is_some() {
@@ -3831,7 +3963,7 @@ pub(crate) async fn materialize_live_scene_preparation_model_with_fem_evidence(
             scene_revision: input.scene_revision,
             plan_fingerprint: receipt.plan_fingerprint.clone(),
             requested_execution: input.requested_execution,
-            global_sampling_mesh: antenna_domain::pinned_global_mesh(&problem, &execution_plan)?,
+            antenna_sampling_mesh: antenna_domain::pinned_sampling_mesh(&problem, &execution_plan)?,
             execution_plan,
         };
         validate_live_read_model_binding(
@@ -4730,7 +4862,7 @@ mod tests {
         }
         LiveScenePreparationReadModel {
             schema_version: LIVE_SCENE_PREPARATION_READ_MODEL_SCHEMA,
-            global_sampling_mesh: None,
+            antenna_sampling_mesh: None,
             preparation_id: "prep-domain".into(),
             scene_revision: 7,
             plan_fingerprint: digest('a'),
@@ -5061,8 +5193,8 @@ mod tests {
     #[test]
     fn global_preparation_preserves_sampling_order_and_independent_source() {
         let (problem, mut model) = global_field_only_fixture();
-        model.global_sampling_mesh =
-            antenna_domain::pinned_global_mesh(&problem, &model.execution_plan).unwrap();
+        model.antenna_sampling_mesh =
+            antenna_domain::pinned_sampling_mesh(&problem, &model.execution_plan).unwrap();
         let request = serde_json::from_value(serde_json::json!({"session_id":"global"})).unwrap();
         let snapshot = crate::session::default_current_live_state(&request);
         let (metadata, mesh) = prepared_domain_publication(&snapshot, &model).unwrap();
@@ -5098,7 +5230,7 @@ mod tests {
         assert!(
             serde_json::to_value(&model)
                 .unwrap()
-                .get("global_sampling_mesh")
+                .get("antenna_sampling_mesh")
                 .is_none()
         );
     }
@@ -5149,7 +5281,7 @@ mod tests {
             "sha256:{:x}",
             Sha256::digest(serde_json::to_vec(mesh).unwrap())
         );
-        let payload = antenna_domain::pinned_global_mesh(&problem, &model.execution_plan)
+        let payload = antenna_domain::pinned_sampling_mesh(&problem, &model.execution_plan)
             .unwrap()
             .unwrap();
         assert_eq!(payload.mesh_parts[0].role, "conductor");
@@ -5164,8 +5296,8 @@ mod tests {
     #[test]
     fn global_source_scope_retains_cut_and_rejects_stale_binding() {
         let (problem, mut model) = global_field_only_fixture();
-        model.global_sampling_mesh =
-            antenna_domain::pinned_global_mesh(&problem, &model.execution_plan).unwrap();
+        model.antenna_sampling_mesh =
+            antenna_domain::pinned_sampling_mesh(&problem, &model.execution_plan).unwrap();
         let request = serde_json::from_value(json!({"session_id":"global-source"})).unwrap();
         let mut snapshot = crate::session::default_current_live_state(&request);
         let (metadata, mesh) = prepared_domain_publication(&snapshot, &model).unwrap();
@@ -5235,7 +5367,7 @@ mod tests {
             .as_mut()
             .unwrap()
             .nodes[0][0] += 1e-12;
-        assert!(antenna_domain::pinned_global_mesh(&problem, &model.execution_plan).is_err());
+        assert!(antenna_domain::pinned_sampling_mesh(&problem, &model.execution_plan).is_err());
         problem
             .geometry_assets
             .as_mut()
@@ -5244,7 +5376,7 @@ mod tests {
             .as_mut()
             .unwrap()
             .mesh = None;
-        assert!(antenna_domain::pinned_global_mesh(&problem, &model.execution_plan).is_err());
+        assert!(antenna_domain::pinned_sampling_mesh(&problem, &model.execution_plan).is_err());
         let request =
             serde_json::from_value(serde_json::json!({"session_id":"global-missing"})).unwrap();
         let snapshot = crate::session::default_current_live_state(&request);
@@ -6071,7 +6203,7 @@ mod tests {
             plan_fingerprint: receipt.plan_fingerprint.clone(),
             requested_execution: run.requested_execution.clone(),
             execution_plan,
-            global_sampling_mesh: None,
+            antenna_sampling_mesh: None,
         };
         let (metadata, fem_mesh) = prepared_domain_publication(&snapshot, &read_model).unwrap();
         let mut publication: CurrentLiveSnapshotRequest = serde_json::from_value(json!({
@@ -6482,7 +6614,7 @@ mod tests {
             plan_fingerprint: receipt.plan_fingerprint.clone(),
             requested_execution: run.requested_execution.clone(),
             execution_plan,
-            global_sampling_mesh: None,
+            antenna_sampling_mesh: None,
         };
         let (old_metadata, old_fem_mesh) = prepared_domain_publication(&snapshot, &read_model).unwrap();
         let mut old_domain: CurrentLiveSnapshotRequest = serde_json::from_value(json!({

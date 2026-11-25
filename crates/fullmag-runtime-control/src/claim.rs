@@ -376,6 +376,19 @@ fn claimed_task_resource_compatibility_for_snapshot(
                 study_step.step_id
             )
         })?;
+    if matches!(study_step.kind, fullmag_authoring::StudyStepKind::RetainedCurrentFieldInspection { .. }) {
+        if task_request.backend != "fem" || task_request.device != "cpu"
+            || task_request.precision != "double" || task_request.mode != "strict"
+            || claim.lease.kind != ResourceKind::Cpu || claim.lease.budget.gpu_memory_bytes != 0
+            || !matches!(execution_step.execution_plan.as_ref().map(|plan| &plan.backend_plan),
+                Some(fullmag_ir::BackendPlanIR::AntennaRetainedCurrentFieldInspection(_)
+                    | fullmag_ir::BackendPlanIR::AntennaRetainedPreparationFieldInspection(_)
+                    | fullmag_ir::BackendPlanIR::AntennaRetainedDirectFieldInspection(_))) {
+            return Ok(ClaimedTaskResourceCompatibility::Incompatible(
+                "retained-current H-only requires its own FEM CPU double strict plan and CPU lease without GPU memory".into()));
+        }
+        crate::study_inspection::inspection_bundle_budget(claim)?;
+    }
     if matches!(study_step.kind, fullmag_authoring::StudyStepKind::ClosedLoopInspection { .. }) {
         if claim.lease.kind != ResourceKind::Cpu {
             return Ok(ClaimedTaskResourceCompatibility::Incompatible("inspection realizes auto only on a CPU resource".into()));

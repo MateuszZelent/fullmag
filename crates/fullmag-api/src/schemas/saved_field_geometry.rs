@@ -78,6 +78,46 @@ pub struct SavedFieldGeometryDatasetResource {
     pub descriptor: MaterializedDatasetFieldDescriptorResource,
 }
 
+/// Opt-in source provenance read; ordinary geometry never loads parent evidence.
+#[derive(Debug, Default, Deserialize, IntoParams, ToSchema)]
+#[serde(deny_unknown_fields)]
+#[into_params(parameter_in = Query)]
+pub struct SavedFieldGeometryQuery {
+    /// Default false. May stream-hash historical CAS dependencies; display context only.
+    #[serde(default)]
+    pub include_antenna_source_context: Option<bool>,
+}
+
+/// Historical display provenance, never execution, current-source, basis or LLG authority.
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct SavedAntennaGeometrySourceContextResource {
+    pub purpose: SavedAntennaGeometrySourcePurposeResource,
+    pub source_package: SavedFieldGeometryArtifactResource,
+    pub parent: SavedAntennaGeometryParentResource,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum SavedAntennaGeometrySourcePurposeResource {
+    HistoricalGeometryOnly,
+}
+
+/// Minimum immutable owner needed to locate the conductor through Saved Results.
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct SavedAntennaGeometryParentResource {
+    pub project_id: String,
+    pub run_id: String,
+    pub study_step_id: String,
+    pub task_id: String,
+    pub attempt_id: String,
+    /// Canonical positive decimal u64.
+    pub ownership_epoch: String,
+    pub artifact_id: String,
+    pub package_object_ref: String,
+    /// Canonical positive decimal u64.
+    pub package_byte_length: String,
+}
+
 #[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct SavedFieldGeometryResource {
     pub schema_version: String,
@@ -121,6 +161,9 @@ pub struct SavedFieldGeometryResource {
     /// SHA-256 of the complete FMSP body.  Absent when the support body is
     /// over the bounded support transport budget.
     pub support_binary_sha256: Option<String>,
+    /// Optional display provenance. Older and unrelated geometry JSON is unchanged.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub antenna_source_context: Option<SavedAntennaGeometrySourceContextResource>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, ToSchema, PartialEq, Eq)]

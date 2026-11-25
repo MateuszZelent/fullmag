@@ -37,7 +37,7 @@ export function buildAuthoredMicrostripGeometry(paramsValue: unknown, outerValue
   return buildAuthoredAntennaGeometry("microstrip", paramsValue, outerValue);
 }
 
-/** Three disjoint lofts following CPWAntennaLayout._sections, not a solver mesh. */
+/** Authored lofts and optional connections follow CPWAntennaLayout, not a solver mesh. */
 export function buildAuthoredCpwGeometry(paramsValue: unknown, outerValue: unknown): AuthoredAntennaGeometry {
   return buildAuthoredAntennaGeometry("cpw", paramsValue, outerValue);
 }
@@ -135,6 +135,23 @@ function buildAuthoredAntennaGeometry(kind: "microstrip" | "cpw", paramsValue: u
     indices.push(end, end + 1, end + 2, end, end + 2, end + 3);
     parts.push({ id, indexStart, indexCount: indices.length - indexStart });
   }
+  const appendBox = (uBounds: number[], vBounds: number[], zBounds: number[]) => {
+    const base = positions.length / 3;
+    for (const u of uBounds) {
+      for (const [v, z] of [[vBounds[0], zBounds[0]], [vBounds[1], zBounds[0]], [vBounds[1], zBounds[1]], [vBounds[0], zBounds[1]]]) {
+        const point = worldPoint([u, v, z]);
+        if (point.some((value) => !Number.isFinite(value))) throw new Error("Antenna transformed vertices exceed finite coordinate range.");
+        positions.push(...point);
+        for (let axis = 0; axis < 3; axis++) { min[axis] = Math.min(min[axis], point[axis]); max[axis] = Math.max(max[axis], point[axis]); }
+      }
+    }
+    for (let side = 0; side < 4; side++) {
+      const a = base + side, b = base + (side + 1) % 4;
+      indices.push(a, b, b + 4, a, b + 4, a + 4);
+    }
+    indices.push(base, base + 2, base + 1, base, base + 3, base + 2);
+    indices.push(base + 4, base + 5, base + 6, base + 4, base + 6, base + 7);
+  };
   const loop = params.loop === undefined ? null : record(params.loop);
   if (kind === "microstrip" && loop?.enabled === true) {
     if (returnOffset <= 0) throw new Error("A closed microstrip requires positive return clearance.");
@@ -150,23 +167,31 @@ function buildAuthoredAntennaGeometry(kind: "microstrip" | "cpw", paramsValue: u
           throw new Error(`${end} bridge must contact signal and return with positive area.`);
         }
       }
-      const base = positions.length / 3;
       const indexStart = indices.length;
-      for (const u of endIndex === 0 ? [-bridgeLength, 0] : [length, length + bridgeLength]) {
-        for (const [v, z] of [[center - width / 2, -1.5 * thickness - returnOffset], [center + width / 2, -1.5 * thickness - returnOffset], [center + width / 2, thickness / 2], [center - width / 2, thickness / 2]]) {
-          const point = worldPoint([u, v, z]);
-          if (point.some((value) => !Number.isFinite(value))) throw new Error("Antenna transformed vertices exceed finite coordinate range.");
-          positions.push(...point);
-          for (let axis = 0; axis < 3; axis++) { min[axis] = Math.min(min[axis], point[axis]); max[axis] = Math.max(max[axis], point[axis]); }
-        }
-      }
-      for (let side = 0; side < 4; side++) {
-        const a = base + side, b = base + (side + 1) % 4;
-        indices.push(a, b, b + 4, a, b + 4, a + 4);
-      }
-      indices.push(base, base + 2, base + 1, base, base + 3, base + 2);
-      indices.push(base + 4, base + 5, base + 6, base + 4, base + 6, base + 7);
+      appendBox(endIndex === 0 ? [-bridgeLength, 0] : [length, length + bridgeLength],
+        [center - width / 2, center + width / 2], [-1.5 * thickness - returnOffset, thickness / 2]);
       parts.push({ id: bridgeIds[endIndex], indexStart, indexCount: indices.length - indexStart });
+    }
+  }
+  if (kind === "cpw" && loop?.enabled === true) {
+    const connectionIds = [partId(loop.inlet_connection_part_id), partId(loop.outlet_connection_part_id)];
+    if (new Set([...conductorIds, ...connectionIds]).size !== 5) throw new Error("All five circuit part IDs must differ.");
+    for (const [endIndex, end] of (["inlet", "outlet"] as const).entries()) {
+      const connectionLength = number(loop[`${end}_connection_length_m`], `${end} connection length`, true);
+      const bar = number(loop[`${end}_crossbar_length_m`], `${end} crossbar length`, true);
+      number(loop[`${end}_connection_conductivity_s_per_m`], `${end} connection conductivity`, true);
+      if (bar >= connectionLength) throw new Error(`${end} crossbar must leave a positive-length feed neck.`);
+      const station = stations[endIndex === 0 ? 0 : stations.length - 1];
+      const left = -(station.width / 2 + station.leftGap + station.leftWidth / 2);
+      const right = station.width / 2 + station.rightGap + station.rightWidth / 2;
+      const neckInterval = endIndex === 0 ? [-connectionLength + bar, 0] : [length, length + connectionLength - bar];
+      const barInterval = endIndex === 0 ? [-connectionLength, -connectionLength + bar] : [length + connectionLength - bar, length + connectionLength];
+      const indexStart = indices.length;
+      for (const [center, width] of [[0, station.width], [left, station.leftWidth], [right, station.rightWidth]]) {
+        appendBox(neckInterval, [center - width / 2, center + width / 2], [-thickness / 2, thickness / 2]);
+      }
+      appendBox(barInterval, [left - station.leftWidth / 2, right + station.rightWidth / 2], [-thickness / 2, thickness / 2]);
+      parts.push({ id: connectionIds[endIndex], indexStart, indexCount: indices.length - indexStart });
     }
   }
   if (max.some((value, axis) => value <= min[axis] || !Number.isFinite(Math.fround(value - min[axis])))) {

@@ -182,6 +182,19 @@ impl ReadTransaction {
     }
 }
 
+/// Read-only mirror of writer admission metadata checks. Caller holds a
+/// read transaction so a concurrent writer cannot change the record.
+pub(crate) fn validate_existing_writer_admission(root: &Path) -> Result<()> {
+    if checked_path(root, "LOCK")?.exists() { bail!("legacy session LOCK requires controlled owner recovery before writing"); }
+    if let Some(previous) = read_owner_record(root)? {
+        if previous.schema != "fullmag.writer.v1" { bail!("unsupported writer owner schema; controlled recovery required"); }
+        if !previous.released && previous.host != hostname()? {
+            bail!("foreign-host writer record requires controlled recovery; refusing PID/age based takeover");
+        }
+    }
+    Ok(())
+}
+
 impl Writer {
     pub(crate) fn new(root: PathBuf) -> Arc<Self> {
         Arc::new(Self {

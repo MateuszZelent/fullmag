@@ -41,7 +41,7 @@ export interface SavedViewportCameraController {
   cameraState: Viewport3DCameraState;
   beginInteraction: (epoch?: number) => number;
   endInteraction: (epoch?: number) => void;
-  fitCamera: (aspect?: number) => boolean;
+  fitCamera: (aspect?: number, fitBounds?: Viewport3DBounds | null) => boolean;
   patchCamera: (patch: SavedViewportCameraPatch, epoch?: number) => boolean;
   resetCamera: () => boolean;
   saveCameraState: (camera: Viewport3DCameraChange, epoch?: number) => boolean;
@@ -359,6 +359,10 @@ function createStore(): SavedViewportCameraStore {
         ...activeSnapshot.camera,
         position: fit.position,
         target: fit.target,
+        ...(perspective || !bounds ? {} : {
+          orthographic_scale: 2.3 * Math.max(bounds.radius, 1e-12) /
+            Math.min(1, Number.isFinite(aspect) && aspect > 0 ? aspect : 1),
+        }),
         up: [
           VIEWPORT_3D_WORLD_UP[0],
           VIEWPORT_3D_WORLD_UP[1],
@@ -492,14 +496,15 @@ export function useSavedViewportCamera({
     },
     [activeIdentityKey, activeIdentityRef, store],
   );
-  const fitCamera = useCallback((aspect = 1) => {
+  const fitCamera = useCallback((aspect = 1, fitBounds = bounds) => {
     if (
       !activeIdentityKey ||
       activeIdentityRef.current !== activeIdentityKey
     ) {
       return false;
     }
-    return store.fitCamera(activeIdentityKey, bounds, aspect);
+    if (!fitBounds) return false;
+    return store.fitCamera(activeIdentityKey, fitBounds, aspect);
   }, [activeIdentityKey, activeIdentityRef, bounds, store]);
   const resetCamera = useCallback(() => {
     if (

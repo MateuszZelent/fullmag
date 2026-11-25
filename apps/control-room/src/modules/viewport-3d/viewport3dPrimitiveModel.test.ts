@@ -24,6 +24,20 @@ const viewport3dPrimitiveModelSource = readFileSync(
 );
 
 describe("viewport3dPrimitiveModel", () => {
+  it("excludes hidden authored primitives from rendering, picking and framing", () => {
+    const geometry = { geometry_kind: "box", size: [1, 1, 1] };
+    const scene = {
+      revision: 2,
+      objects: [
+        { id: "closed", geometry, visible: false },
+        { id: "open", geometry, visible: true },
+        { id: "legacy", geometry },
+      ],
+    };
+    const model = buildViewport3DPrimitiveRenderModel(scene as never, null);
+    expect(model.objects.map((object) => object.objectId)).toEqual(["open", "legacy"]);
+  });
+
   it("never creates a parallel primitive or pick target for synthetic __air__", () => {
     const model = buildViewport3DPrimitiveRenderModel(
       {

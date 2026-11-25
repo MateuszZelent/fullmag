@@ -632,6 +632,18 @@ class FrontendAntennaShellBoundaryTests(unittest.TestCase):
             return subprocess.run([bash, '--noprofile', '--norc', '-c', program],
                                   env=environment, capture_output=True, text=True, timeout=15)
 
+    def test_dispatches_only_literal_gsg_preparation_scope(self):
+        recipe = ('python "/ignored/scripts/docker_volume_checks.py" '
+                  "--source-root '/selected/worktree' --scope 'gsg-preparation'")
+        result = self.dispatch(recipe)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(result.stdout),
+                         ['--source-root', '/selected/worktree', '--scope', 'gsg-preparation'])
+        for suffix in ("; echo MUST_NOT_RUN", " --modules test_other", "-extra"):
+            rejected = self.dispatch(recipe + suffix)
+            self.assertEqual(rejected.returncode, 2)
+            self.assertNotIn("MUST_NOT_RUN", rejected.stdout)
+
     def test_dispatches_literal_antenna_scope_as_fixed_argv(self):
         source_root = '/selected/$(printf literal);worktree'
         recipe = ('python "/ignored/scripts/docker_volume_checks.py" '

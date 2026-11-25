@@ -1,0 +1,29 @@
+{
+  "schema": "fullmag.stored_point_policy_readonly_audit.v1",
+  "checks_passed": 15,
+  "checks": [
+    "actual_component_0",
+    "actual_component_1",
+    "actual_component_2",
+    "actual_reconstructed_bits",
+    "old_gate_still_rejects_actual",
+    "old_mean_is_wrong_point_for_new_gate",
+    "analytic_constant_field",
+    "constant_boundary_inclusive",
+    "constant_next_float_rejected",
+    "zero_field",
+    "no_absolute_floor",
+    "nonfinite_sample_nan",
+    "nonfinite_sample_inf",
+    "current_scale_-500",
+    "current_scale_500"
+  ],
+  "actual_witness_sha256": "3337bf6858ecebfd9ee63eecb799a74353ae5ec5b45de8faf27a83b6e9c1d1db",
+  "actual_component_y_exact_error_apm2": 2.127993927816495e-25,
+  "actual_component_y_budget_apm2": 5.881850519618007e-22,
+  "native_cpp_executed": false,
+  "production_gate_changed": false,
+  "new_solver_runs": 0,
+  "accepted_source": false,
+  "physics_qualified": false
+}

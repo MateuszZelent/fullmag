@@ -996,6 +996,52 @@ void optional_demag_workspace_is_rejected_before_any_allocation() {
     fullmag_fdm_backend_destroy(handle);
 }
 
+void single_grid_admits_the_actual_cufft_workspace() {
+    if (fullmag_fdm_is_available() == 0) {
+        std::printf("single-grid cuFFT admission check skipped: CUDA backend unavailable\n");
+        return;
+    }
+
+    // A smooth 1280 x 768 batch-three plan fits in this envelope. Charging
+    // 24 complex temporary values per padded cell falsely rejects it.
+    DeviceMemoryReserve reserve;
+    const auto usable = reserve.reserve_until_usable_bytes(uint64_t{512} * 1024 * 1024);
+    check(usable > uint64_t{448} * 1024 * 1024,
+          "test device has too little usable memory for the exact cuFFT fixture");
+
+    constexpr uint32_t nx = 640, ny = 384;
+    constexpr uint64_t cells = static_cast<uint64_t>(nx) * ny;
+    constexpr uint64_t fft_cells = 4 * cells;
+    std::vector<double> initial_m(3 * cells, 0.0);
+    for (uint64_t i = 0; i < cells; ++i) {
+        initial_m[3 * i] = 1.0;
+    }
+    const std::vector<double> spectrum(2 * fft_cells, 0.0);
+    fullmag_fdm_plan_desc plan = make_single_grid_plan(initial_m.data());
+    plan.grid = {nx, ny, 1, 1.0e-8, 1.0e-8, 2.0e-8};
+    plan.initial_magnetization_len = initial_m.size();
+    plan.enable_demag = 1;
+    plan.demag_fft_nx = 2 * nx;
+    plan.demag_fft_ny = 2 * ny;
+    plan.demag_fft_nz = 1;
+    plan.demag_kernel_spectrum_len = spectrum.size();
+    plan.demag_kernel_xx_spectrum = spectrum.data();
+    plan.demag_kernel_yy_spectrum = spectrum.data();
+    plan.demag_kernel_zz_spectrum = spectrum.data();
+    plan.demag_kernel_xy_spectrum = spectrum.data();
+    plan.demag_kernel_xz_spectrum = spectrum.data();
+    plan.demag_kernel_yz_spectrum = spectrum.data();
+
+    fullmag_fdm_backend *handle = fullmag_fdm_backend_create(&plan);
+    check(handle != nullptr, "exact cuFFT fixture returned a null handle");
+    const char *error = fullmag_fdm_backend_last_error(handle);
+    check(error == nullptr, error == nullptr ? "" : error);
+    fullmag_fdm_step_stats stats{};
+    check(fullmag_fdm_backend_step(handle, 1.0e-13, &stats) == FULLMAG_FDM_OK,
+          "the admitted cuFFT plan failed its first integration step");
+    fullmag_fdm_backend_destroy(handle);
+}
+
 void aggregate_multilayer_workspace_is_rejected_before_any_allocation() {
     if (fullmag_fdm_is_available() == 0) {
         std::printf("aggregate multilayer preflight check skipped: CUDA backend unavailable\n");
@@ -1854,6 +1900,7 @@ int main() {
     oversized_multilayer_allocation_is_rejected_by_memory_preflight();
     aggregate_single_grid_workspace_is_rejected_before_any_allocation();
     optional_demag_workspace_is_rejected_before_any_allocation();
+    single_grid_admits_the_actual_cufft_workspace();
     aggregate_multilayer_workspace_is_rejected_before_any_allocation();
     disabled_demag_rejects_kernel_payload_before_any_allocation();
     maximum_convolution_cell_count_reports_overflow_before_allocation();

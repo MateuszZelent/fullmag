@@ -6,6 +6,10 @@ import {
 } from "./apiPaths";
 import { MODEL_OBJECT_SOURCE_SURFACE_PATH, MODEL_OBJECT_SOURCE_SURFACE_TOPOLOGY_PATH } from "./apiPaths";
 import type { ImportedSourceSurfaceResource, ImportedSourceSurfaceQuery } from "./apiTypes";
+
+import { savedPlanarFrameMatches } from "./savedPlanarIdentity";
+import type { SavedPlanarQuery, SavedPlanarResource } from "./apiTypes";
+import { PROJECT_SAVED_PLANAR_META_PATH, PROJECT_SAVED_PLANAR_SCALAR_PATH, PROJECT_SAVED_PLANAR_VECTORS_PATH, PROJECT_SAVED_PLANAR_OCCUPANCY_PATH } from "./apiPaths";
 import { WORKSPACE_ITEM_PLAYBACK_PATH, WORKSPACE_ITEM_PLAYBACK_FRAME_PATH, WORKSPACE_ITEM_PLAYBACK_GEOMETRY_PATH } from "./apiPaths";
 import type { SavedPlaybackResource } from "./savedResultsPlayback";
 import { artifactFieldResponseIdentityError } from "./artifactFieldResponseIdentity";
@@ -593,6 +597,7 @@ import type {
   SolutionSetDiscoveryPageResource,
   MaterializedDatasetResource,
   SavedFieldGeometryResource,
+  SavedFieldGeometryQuery,
   SolutionSetRevision,
   ObservationFrameListQuery,
   ObservationFrameListResource,
@@ -3813,9 +3818,70 @@ export class ControlRoomApi {
         }
         return decodeMaterializedDatasetSlice(result.data, dataset, range, options?.signal);
       },
-      savedFieldGeometry: async (dataset: MaterializedDatasetResource, options?: RequestOptions) => {
+      savedPlanar: async (
+        dataset: MaterializedDatasetResource,
+        geometry: SavedFieldGeometryResource,
+        query: SavedPlanarQuery,
+        options?: RequestOptions,
+      ) => {
+        validateSavedGeometry(geometry, dataset);
+        const path = savedGeometryPath(dataset);
+        const meta = await this.requestJson<SavedPlanarResource>(
+          PROJECT_SAVED_PLANAR_META_PATH, options, { path, query },
+        );
+        validateSavedGeometry(meta.source, dataset);
+        if (meta.source.geometry_payload.object_ref !== geometry.geometry_payload.object_ref ||
+            meta.source.geometry_manifest.object_ref !== geometry.geometry_manifest.object_ref ||
+            meta.reconstruction !== "tet4_linear_inspection_v1" || meta.qualification !== "not_verified" ||
+            meta.resolution[0] !== query.width || meta.resolution[1] !== query.height ||
+            meta.component !== query.component || !meta.request_identity ||
+            !savedPlanarFrameMatches(meta, query) ||
+            JSON.stringify(meta.bounds_uv_m) !== JSON.stringify([query.u_min_m, query.u_max_m, query.v_min_m, query.v_max_m]) ||
+            meta.occupancy_encoding !== "uint8.planar_occupancy.v1") {
+          throw new ControlRoomApiError("Saved planar source or request identity mismatch", 0);
+        }
+        const read = async (route: OpenApiV2Path) => {
+          const result = await this.requestBinaryResource(route, "raw-bytes", buffer => buffer,
+            { signal: options?.signal, maxResponseBytes: Number(query.max_response_bytes) }, path, query,
+            response => {
+              if (response.headers.get("x-fullmag-planar-identity") !== meta.request_identity) {
+                throw new ControlRoomApiError("Saved planar binary identity mismatch", 0);
+              }
+            });
+          if (result.status !== "ready") throw new ControlRoomApiError("Saved planar body is incomplete", 0);
+          return result.data;
+        };
+        const [scalarBody, vectorBody, maskBody] = await Promise.all([
+          read(PROJECT_SAVED_PLANAR_SCALAR_PATH), read(PROJECT_SAVED_PLANAR_VECTORS_PATH),
+          read(PROJECT_SAVED_PLANAR_OCCUPANCY_PATH),
+        ]);
+        const scalar = decodeFieldVector(scalarBody);
+        const vectors = decodeFieldVector(vectorBody);
+        const mask = new Uint8Array(maskBody);
+        const count = query.width * query.height;
+        if (scalar.nComp !== 1 || vectors.nComp !== 3 || scalar.pointCount !== count ||
+            vectors.pointCount !== count || mask.length !== count ||
+            scalar.grid[0] !== query.width || scalar.grid[1] !== query.height ||
+            vectors.grid[0] !== query.width || vectors.grid[1] !== query.height ||
+            mask.some(value => value > 4)) {
+          throw new ControlRoomApiError("Saved planar raster layout mismatch", 0);
+        }
+        for (let index = 0; index < count; index += 1) {
+          if (mask[index] === 0 && (!Number.isFinite(scalar.values[index]) ||
+              ![0, 1, 2].every(axis => Number.isFinite(vectors.values[index * 3 + axis])))) {
+            throw new ControlRoomApiError("Saved planar occupied sample is nonfinite", 0);
+          }
+        }
+        this.requireApiInstanceCurrent();
+        return { meta, scalar: scalar.values, vectors: vectors.values, mask };
+      },
+      savedFieldGeometry: async (
+        dataset: MaterializedDatasetResource,
+        options?: RequestOptions,
+        query: SavedFieldGeometryQuery = {},
+      ) => {
         const geometry = await this.requestJson<SavedFieldGeometryResource>(
-          PROJECT_SAVED_FIELD_GEOMETRY_PATH, options, { path: savedGeometryPath(dataset) },
+          PROJECT_SAVED_FIELD_GEOMETRY_PATH, options, { path: savedGeometryPath(dataset), query },
         );
         return validateSavedGeometry(geometry, dataset);
       },

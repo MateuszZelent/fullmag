@@ -8821,7 +8821,7 @@ class MeshScaffoldTests(unittest.TestCase):
                 ],
                 dtype=np.float64,
             ),
-            elements=np.asarray([[0, 1, 2, 3]], dtype=np.int32),
+            elements=np.asarray([[0, 2, 1, 3]], dtype=np.int32),
             element_markers=np.asarray([7], dtype=np.int32),
             boundary_faces=np.asarray(
                 [
@@ -8903,7 +8903,7 @@ class MeshScaffoldTests(unittest.TestCase):
                 ],
                 dtype=np.float64,
             ),
-            elements=np.asarray([[0, 1, 2, 3]], dtype=np.int32),
+            elements=np.asarray([[0, 2, 1, 3]], dtype=np.int32),
             element_markers=np.asarray([0], dtype=np.int32),
             boundary_faces=np.asarray(
                 [
@@ -9017,6 +9017,104 @@ class MeshScaffoldTests(unittest.TestCase):
         self.assertGreater(int(np.count_nonzero(merged.element_markers == 0)), 0)
         self.assertEqual(int(np.count_nonzero(merged.element_markers == 1)), frozen_mesh.n_elements)
         self.assertGreater(merged.n_nodes, frozen_mesh.n_nodes)
+
+    def test_frozen_domain_rejects_degenerate_air_before_reporting_success(self) -> None:
+        faces = np.asarray([[0, 1, 2], [0, 1, 3], [0, 2, 3], [1, 2, 3]], dtype=np.int32)
+        frozen = MeshData.from_legacy_tet4(
+            nodes=np.asarray([[0, 0, 0], [100e-9, 0, 0], [0, 100e-9, 0],
+                              [0, 0, 17.4e-9]], dtype=np.float64),
+            elements=np.asarray([[0, 1, 2, 3]], dtype=np.int32),
+            element_markers=np.asarray([1], dtype=np.int32),
+            boundary_faces=faces,
+            boundary_markers=np.full(4, 10, dtype=np.int32),
+        )
+        air = MeshData.from_legacy_tet4(
+            nodes=np.asarray([[200e-9, 0, -20e-9], [300e-9, 0, -20e-9],
+                              [200e-9, 0, 20e-9], [300e-9, 0, 20e-9]], dtype=np.float64),
+            elements=np.asarray([[0, 1, 2, 3]], dtype=np.int32),
+            element_markers=np.asarray([0], dtype=np.int32),
+            boundary_faces=faces,
+            boundary_markers=np.full(4, 99, dtype=np.int32),
+        )
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            frozen_path = Path(tmp_dir) / "frozen.npz"
+            air_path = Path(tmp_dir) / "air.npz"
+            frozen.save(frozen_path)
+            air.save(air_path)
+            with self.assertRaisesRegex(ValueError, "degenerate"):
+                realize_fem_domain_mesh_asset_from_components_with_report(
+                    [fm.Box(size=(100e-9, 100e-9, 17.4e-9), name="film")],
+                    fm.FEM(order=1, hmax=40e-9),
+                    study_universe={"mode": "manual", "size": [800e-9, 600e-9, 200e-9],
+                                    "center": [0.0, 0.0, 0.0]},
+                    mesh_workflow={
+                        "domain_mesh_mode": "generated_frozen_magnetic_submesh",
+                        "frozen_magnetic_submesh_source": {
+                            "mesh_source": str(frozen_path), "air_mesh_source": str(air_path),
+                            "region_markers": [{"geometry_name": "film", "marker": 1}],
+                        },
+                    },
+                )
+
+    def test_frozen_nanometre_film_survives_independent_airbox_extents(self) -> None:
+        try:
+            import gmsh  # noqa: F401
+        except ImportError:
+            self.skipTest("gmsh not available")
+
+        film = fm.Box(size=(400e-9, 200e-9, 17.4e-9), name="film")
+        options = {"algorithm_3d": ALGO_3D_DELAUNAY, "smoothing_steps": 0, "optimize": "Gmsh"}
+        compact = [800e-9, 600e-9, 200e-9]
+        baseline, markers, _ = realize_fem_domain_mesh_asset_from_components_with_report(
+            [film], fm.FEM(order=1, hmax=40e-9),
+            study_universe={"mode": "manual", "size": compact,
+                            "center": [0.0, 0.0, 0.0], "airbox_hmax": 120e-9},
+            mesh_workflow={"mesh_options": options},
+        )
+        frozen = mesh_asset_pipeline._extract_frozen_magnetic_submesh(
+            baseline, markers, geometry_name="film",
+        )
+        frozen.mesh.validate_strict()
+        counts = []
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            source = Path(tmp_dir) / "frozen_nanometre_film.npz"
+            frozen.mesh.save(source)
+            for size in (compact, [1000e-9, 800e-9, 300e-9]):
+                with self.subTest(airbox_size_m=size):
+                    mesh, _, report = realize_fem_domain_mesh_asset_from_components_with_report(
+                        [film], fm.FEM(order=1, hmax=40e-9),
+                        study_universe={"mode": "manual", "size": size,
+                                        "center": [0.0, 0.0, 0.0], "airbox_hmax": 120e-9},
+                        mesh_workflow={
+                            "domain_mesh_mode": "generated_frozen_magnetic_submesh",
+                            "frozen_magnetic_submesh_source": {
+                                "mesh_source": str(source), "region_markers": frozen.region_markers,
+                            },
+                            "mesh_options": options,
+                        },
+                    )
+                    mesh.validate_strict()
+                    self.assertEqual(
+                        mesh.nodes[:frozen.mesh.n_nodes].tobytes(), frozen.mesh.nodes.tobytes(),
+                    )
+                    self.assertEqual(
+                        mesh.cell_nodes[:len(frozen.mesh.cell_nodes)].tobytes(),
+                        frozen.mesh.cell_nodes.tobytes(),
+                    )
+                    np.testing.assert_array_equal(
+                        mesh.cell_offsets[:frozen.mesh.n_elements + 1], frozen.mesh.cell_offsets,
+                    )
+                    np.testing.assert_array_equal(
+                        mesh.element_markers[:frozen.mesh.n_elements], frozen.mesh.element_markers,
+                    )
+                    self.assertEqual(
+                        report.to_dict()["magnetic_submesh_signatures"],
+                        frozen.magnetic_submesh_signatures,
+                    )
+                    self.assertGreater(mesh.n_elements, frozen.mesh.n_elements)
+                    counts.append(mesh.n_elements)
+        self.assertEqual(len(counts), 2)
+        self.assertNotEqual(counts[0], counts[1])
 
     def test_generated_frozen_magnetic_submesh_keeps_magnetic_prefix_stable_across_airbox_sizes(self) -> None:
         try:

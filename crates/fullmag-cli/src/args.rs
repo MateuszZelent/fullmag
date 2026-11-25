@@ -143,6 +143,12 @@ pub(crate) enum Command {
     ValidateJson {
         path: PathBuf,
     },
+    /// Export only the immutable preparation inputs of one verified saved antenna source.
+    ExportAntennaSourcePreparation {
+        #[arg(long)] store: PathBuf,
+        #[arg(long)] source: PathBuf,
+        #[arg(long)] output: PathBuf,
+    },
     PlanJson {
         path: PathBuf,
         #[arg(long)]
@@ -351,6 +357,29 @@ pub(crate) struct UiCli {
 
 #[derive(Subcommand)]
 pub(crate) enum RuntimeCommand {
+    /// Inspect an existing quiescent ledger without initializing or mutating it.
+    #[command(name = "ledger-relocation-inspect", hide = true)]
+    LedgerRelocationInspect {
+        #[arg(long)]
+        ledger_root: PathBuf,
+        #[arg(long)]
+        host_id: String,
+        /// Keep native read fences until the exact stdin command "release\n".
+        #[arg(long)]
+        hold_fence: bool,
+    },
+    /// Validate a copied ledger against exact native source evidence.
+    #[command(name = "ledger-relocation-preview", hide = true)]
+    LedgerRelocationPreview {
+        #[arg(long)]
+        ledger_root: PathBuf,
+        #[arg(long)]
+        host_id: String,
+        #[arg(long)]
+        expected_inspection: PathBuf,
+        #[arg(long)]
+        expected_inspection_sha256: String,
+    },
     /// Internal native-thread proof of the observer pause protocol.
     #[command(hide = true)]
     VerifyDevelopmentObserverPause,
@@ -428,6 +457,20 @@ pub(crate) enum RuntimeCommand {
     /// after an authoritative managed teardown attestation.
     #[command(name = "service-recover-container", hide = true)]
     ServiceRecoverContainer {
+        #[arg(long)]
+        config: PathBuf,
+        #[arg(long)]
+        request: PathBuf,
+        #[arg(long)]
+        request_sha256: String,
+        #[arg(long)]
+        attestation: PathBuf,
+        #[arg(long)]
+        attestation_sha256: String,
+    },
+    /// Validate container recovery under native locks without writing runtime evidence.
+    #[command(name = "service-preview-container-recovery", hide = true)]
+    ServicePreviewContainerRecovery {
         #[arg(long)]
         config: PathBuf,
         #[arg(long)]

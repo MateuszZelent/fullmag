@@ -179,6 +179,11 @@ class AuthenticationTests(unittest.TestCase):
         f = Fixture(); del f.records["verification/stop-startup-diagnostic-" + B + ".json"]
         self.assertIsNone(f.invoke())
 
+    def test_ready_stop_v2_cannot_authorize_retained_restart(self):
+        f = Fixture(); f.journal["schema"] = "fullmag.docker-startup-diagnostic-stop.v2"; f.reseal()
+        with self.assertRaises(BuildControlError):
+            f.invoke()
+
     def test_no_backend_pin_keeps_existing_authority(self):
         self.assertIsNone(restart.retained_context(None, {}, {}, None,
             fresh_state=False, authorization={}))
@@ -206,7 +211,10 @@ class AuthenticationTests(unittest.TestCase):
             and isinstance(node.items[0].context_expr, ast.Name)
             and node.items[0].context_expr.id == "operation_context")
         # Execute the real startup-diagnostic branch from start, with its actual lease binding.
-        branch = ast.With(items=leased.items, body=[leased.body[0]], type_comment=None)
+        startup_branch = next(node for node in leased.body if isinstance(node, ast.If)
+            and any(isinstance(value, ast.Name) and value.id == "validated_startup_diagnostic_restart"
+                    for value in ast.walk(node.test)))
+        branch = ast.With(items=leased.items, body=[startup_branch], type_comment=None)
         module = ast.fix_missing_locations(ast.Module(body=[branch], type_ignores=[]))
         operation, metadata, proof = {}, {"schema": restart.SCHEMA}, {"proof": "pinned"}
         calls = []
@@ -218,6 +226,7 @@ class AuthenticationTests(unittest.TestCase):
         scope = {"operation_context": nullcontext(operation), "validated_startup_diagnostic_restart": metadata,
                  "recreation_resume_proof": proof, "_validate_recreation_resume_records": validate,
                  "args": None, "control": None, "selected": None, "identity": None,
+                 "helper_source_binding": None,
                  "BuildControlError": BuildControlError}
         exec(compile(module, dev.__file__, "exec"), scope)
         self.assertEqual(len(calls), 1)

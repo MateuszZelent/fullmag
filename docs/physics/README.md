@@ -60,6 +60,7 @@ Recommended filenames:
 - `0880-active-effective-field-terms.md`
 - `0900-native-fem-operator-contracts-and-validation.md`
 - `0950-quasistatic-microwave-antenna-field-basis-and-k-selective-excitation.md`
+- [0952 · Harmoniczne źródło antenowe RF dla CPW](0952-harmonic-rf-antenna-cpw.md) — projekt modelu RF i kwalifikacji względem Maxwella.
 - `0960-canonical-llg-time-domain-solver-and-qualification-contract.md`
 
 The numbering is semantic, not bureaucratic.

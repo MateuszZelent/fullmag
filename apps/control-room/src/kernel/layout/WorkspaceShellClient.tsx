@@ -24,6 +24,7 @@ import { WorkspaceDockLayout } from "./WorkspaceDockLayout";
 import { WorkspaceContentScopeProvider } from "./WorkspaceContentScope";
 import { useProjectDocumentSnapshot } from "../persistence/ProjectDocumentStatus";
 import { useKernel } from "../KernelContext";
+import { useSavedRunSelection } from "../saved-results/useSavedRun";
 import { useSavedResultsPlaybackSelection } from "../saved-results/useSavedResultsPlayback";
 import { sessionRequestScopeKey } from "../resources/sessionResourceIdentity";
 import { homeView, useHomeViewOpen } from "./homeView";
@@ -34,6 +35,7 @@ import { DeleteObjectImpactDialogHost } from "@/modules/inspector/public";
 
 export function WorkspaceShellClient() {
   const savedPlayback = useSavedResultsPlaybackSelection();
+  const savedRun = useSavedRunSelection();
   const sessions = useSessionCollection();
   const project = useProjectDocumentSnapshot();
   const sessionTabAddress = useSessionTabAddress();
@@ -114,6 +116,8 @@ export function WorkspaceShellClient() {
     homeView.close();
   }, [sessionScopeKey, startOwnsPage]);
 
+  if (savedRun) return <ProjectWorkspaceShell sessionState="no-session" onRetry={onRetry} />;
+
   if (savedPlayback && !savedPlayback.studyResult) return <SavedResultsWorkspaceShell />;
 
   if (sessionState !== "ready" && project.state === "ready") {
@@ -183,7 +187,8 @@ function ProjectWorkspaceShell({
   const kernel = useKernel();
   const panels = useLayoutSelector((layout) => layout.panelVisible);
   const homeOpen = useHomeViewOpen();
-  const detail = sessionState === "no-session"
+  const savedRun = useSavedRunSelection();
+  const detail = savedRun ? `Read only · ${savedRun.runId}. No simulation is started by this view.` : sessionState === "no-session"
     ? "No active session. Saved project results are available independently."
     : sessionState === "error"
       ? "Session list unavailable. Saved project results remain available."
@@ -207,6 +212,11 @@ function ProjectWorkspaceShell({
           <p className="m-0 text-fm-xs text-fm-muted" role={isError ? "alert" : "status"}>{detail}</p>
         </div>
         <div className="flex gap-2">
+          {savedRun ? <Button size="sm" variant="secondary" onClick={() => {
+            kernel.savedRun?.close();
+            kernel.visualization.clearSavedFieldPresentation();
+            kernel.selection.clear("saved-run");
+          }}>Close saved run</Button> : null}
           {isError ? <Button size="sm" variant="secondary" onClick={onRetry}>Retry</Button> : null}
           {!panels.left ? <Button size="sm" variant="secondary" onClick={() => kernel.layout.togglePanel("left")}>Show saved results</Button> : null}
           {!panels.right ? <Button size="sm" variant="secondary" onClick={() => kernel.layout.togglePanel("right")}>Show Inspector</Button> : null}

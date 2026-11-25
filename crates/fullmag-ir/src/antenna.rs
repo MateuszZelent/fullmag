@@ -126,6 +126,43 @@ impl MicrostripClosedLoopIR {
     }
 }
 
+/// Explicit finite end connections for the three coplanar conductors.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct CpwClosedLoopIR {
+    pub enabled: bool,
+    pub inlet_connection_length_m: f64,
+    pub inlet_crossbar_length_m: f64,
+    pub inlet_connection_part_id: String,
+    pub inlet_connection_conductivity_s_per_m: f64,
+    pub outlet_connection_length_m: f64,
+    pub outlet_crossbar_length_m: f64,
+    pub outlet_connection_part_id: String,
+    pub outlet_connection_conductivity_s_per_m: f64,
+}
+
+impl CpwClosedLoopIR {
+    pub(crate) fn validation_errors(&self) -> Vec<String> {
+        let valid_numbers = [
+            self.inlet_connection_length_m, self.inlet_crossbar_length_m,
+            self.inlet_connection_conductivity_s_per_m,
+            self.outlet_connection_length_m, self.outlet_crossbar_length_m,
+            self.outlet_connection_conductivity_s_per_m,
+        ].iter().all(|value| value.is_finite() && *value > 0.0);
+        if !self.enabled || !valid_numbers
+            || !nonempty(&self.inlet_connection_part_id)
+            || !nonempty(&self.outlet_connection_part_id)
+            || self.inlet_connection_part_id == self.outlet_connection_part_id
+            || self.inlet_crossbar_length_m >= self.inlet_connection_length_m
+            || self.outlet_crossbar_length_m >= self.outlet_connection_length_m
+        {
+            vec!["CPW loop requires finite positive connections, positive-length necks and distinct part IDs".into()]
+        } else {
+            Vec::new()
+        }
+    }
+}
+
 /// Local inlet/outlet face selectors for one conductor body.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
@@ -466,6 +503,7 @@ pub enum AntennaOerstedRealizationIR {
 }
 
 pub const ANTENNA_SURFACE_FIELD_POLICY_VERSION: &str = "caller_supplied_rt0_surface.inspection.v1";
+pub const ANTENNA_GSG_UNIVERSE_SURFACE_FIELD_POLICY_VERSION: &str = "caller_supplied_rt0_surface.gsg_universe_275.v1";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
@@ -507,7 +545,8 @@ pub struct AntennaSurfaceFieldPolicyIR {
 impl AntennaSurfaceFieldPolicyIR {
     pub fn validation_errors(&self, path: &str) -> Vec<String> {
         let mut errors = Vec::new();
-        if self.policy_version != ANTENNA_SURFACE_FIELD_POLICY_VERSION {
+        if !matches!(self.policy_version.as_str(), ANTENNA_SURFACE_FIELD_POLICY_VERSION
+            | ANTENNA_GSG_UNIVERSE_SURFACE_FIELD_POLICY_VERSION) {
             errors.push(format!("{path}.policy_version is unsupported"));
         }
         let limits = &self.limits;
@@ -541,6 +580,45 @@ pub struct AntennaNamedOutputIR {
     pub quantity: String,
 }
 
+/// Immutable locator only; accepted preparation authenticates durable ownership and CAS.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields, tag = "kind", rename_all = "snake_case")]
+pub enum AntennaRetainedCurrentSourceIR {
+    PublishedInspection {
+        project_id: String,
+        run_id: String,
+        task_id: String,
+        attempt_id: String,
+        ownership_epoch: String,
+        artifact_id: String,
+        object_ref: String,
+    },
+}
+
+impl AntennaRetainedCurrentSourceIR {
+    pub fn validation_errors(&self, prefix: &str) -> Vec<String> {
+        let Self::PublishedInspection {
+            project_id, run_id, task_id, attempt_id, ownership_epoch, artifact_id, object_ref,
+        } = self;
+        let mut errors = Vec::new();
+        for (name, value) in [
+            ("project_id", project_id), ("run_id", run_id), ("task_id", task_id),
+            ("attempt_id", attempt_id), ("artifact_id", artifact_id),
+        ] {
+            if value.is_empty() || value.trim() != value || value.chars().any(char::is_control) {
+                errors.push(format!("{prefix}.{name} must be a canonical non-empty identifier"));
+            }
+        }
+        if !ownership_epoch.parse::<u64>().ok().is_some_and(|value| value > 0 && value.to_string() == *ownership_epoch) {
+            errors.push(format!("{prefix}.ownership_epoch must be a canonical positive u64 string"));
+        }
+        if object_ref.len() != 64 || !object_ref.bytes().all(|value| value.is_ascii_digit() || (b'a'..=b'f').contains(&value)) {
+            errors.push(format!("{prefix}.object_ref must be a lowercase SHA256"));
+        }
+        errors
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct AntennaFieldSolveStageIR {
@@ -550,6 +628,10 @@ pub struct AntennaFieldSolveStageIR {
     pub port_mode_ids: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub conservative_current_view_ref: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retained_current_source: Option<AntennaRetainedCurrentSourceIR>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retained_source_preparation: Option<crate::AntennaSourcePreparationAssetRefIR>,
     pub model: AntennaFieldModelIR,
     pub oersted_realization: AntennaOerstedRealizationIR,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -796,7 +878,7 @@ fn antenna_solution_source_is_basis(
     output_id: &str,
 ) -> bool {
     stage.is_some_and(|stage| {
-        stage
+        stage.retained_current_source.is_none() && stage
             .outputs
             .iter()
             .any(|output| output.id == output_id && output.quantity == "H_ant_basis")
@@ -951,21 +1033,23 @@ fn validate_v2_port_structure(
             }
             return;
         }
-        let Some(crate::ConservativeCurrentSourceIR::ClosedGeometryPotentialJump(source)) = &definition.conservative_current_source else {
-            errors.push(format!("{prefix} v3 requires its prepared closed-loop source")); return;
+        let source = match &definition.conservative_current_source {
+            Some(crate::ConservativeCurrentSourceIR::ClosedGeometryPotentialJump(source)) => source,
+            Some(crate::ConservativeCurrentSourceIR::RetainedPreparationAsset(source)) => &source.historical_prepared_source,
+            _ => { errors.push(format!("{prefix} v3 requires its prepared closed-loop source")); return; }
         };
         let crate::ConservativeCurrentClosureIR::ClosedGeometry {source_cuts, ..} = &source.closure else { return; };
         if !matches!(&port.normalization, Some(AntennaPortNormalizationIR::SourceCutRt0 {source_cut_ref, orientation})
             if source_cuts.len()==1 && source_cut_ref==&source_cuts[0].id && orientation=="minus_outward") {
             errors.push(format!("{prefix}.normalization must select its actual cut and minus_outward RT0 current"));
         }
-        if source.object_id!=port.source_object_id || port.branches.len()!=2 {
-            errors.push(format!("{prefix} requires exactly two observed signal/return branches of the same source owner"));
+        if source.object_id!=port.source_object_id || !matches!((source.material_parts.len(), port.branches.len()), (4, 2) | (5, 3)) {
+            errors.push(format!("{prefix} requires the observed microstrip or GSG branches of the same source owner"));
         }
         for branch in &port.branches {
             let inlet = source.terminal_observations.iter().find(|obs| obs.id==branch.inlet_terminal_ref);
             let outlet = source.terminal_observations.iter().find(|obs| obs.id==branch.outlet_terminal_ref);
-            if !matches!((inlet, outlet), (Some(a),Some(b)) if a.part_id==b.part_id && a.selector=="local_u_min" && b.selector=="local_u_max") {
+            if !matches!((inlet, outlet), (Some(a),Some(b)) if a.part_id==branch.id && b.part_id==branch.id && a.selector=="local_u_min" && b.selector=="local_u_max") {
                 errors.push(format!("{prefix} branch '{}' requires actual inlet/outlet observations on the same part", branch.id));
             }
         }
@@ -1203,6 +1287,37 @@ fn validate_stage_current_view_ref(
     prefix: &str,
     errors: &mut Vec<String>,
 ) {
+    let asset_source = modules.iter().find_map(|module| match module {
+        CurrentModuleIR::CurrentTransport { name, definition: Some(definition), .. } if name == &stage.current_transport_id =>
+            match &definition.conservative_current_source {
+                Some(crate::ConservativeCurrentSourceIR::RetainedPreparationAsset(source)) => Some(source),
+                _ => None,
+            },
+        _ => None,
+    });
+    if stage.retained_source_preparation.is_some() || asset_source.is_some() {
+        if let Some(reference) = &stage.retained_source_preparation {
+            errors.extend(reference.validation_errors(&format!("{prefix}.retained_source_preparation")));
+        }
+        if !matches!((stage.retained_source_preparation.as_ref(), asset_source), (Some(reference), Some(source))
+            if reference == &source.preparation_asset && source.object_id == stage.source_object_id)
+            || stage.retained_current_source.is_none() {
+            errors.push(format!("{prefix} frozen preparation requires the same explicit stage/source asset and historical current locator"));
+        }
+    }
+    if let Some(source) = &stage.retained_current_source {
+        errors.extend(source.validation_errors(&format!("{prefix}.retained_current_source")));
+        if stage.conservative_current_view_ref.is_some() {
+            errors.push(format!("{prefix} retained current cannot coexist with a legacy current view"));
+        }
+        if stage.oersted_realization != AntennaOerstedRealizationIR::AnalyticRt0Surface
+            && !(stage.oersted_realization == AntennaOerstedRealizationIR::DirectTetraQuadrature
+                && stage.retained_source_preparation.is_some() && asset_source.is_some()
+                && stage.surface_field_policy.is_none()) {
+            errors.push(format!("{prefix} retained current requires analytic_rt0_surface or explicit asset-backed direct_tetra_quadrature"));
+        }
+        return;
+    }
     if let Some(reference) = stage.conservative_current_view_ref.as_deref() {
         if !nonempty(reference) {
             errors.push(format!(
@@ -1242,6 +1357,24 @@ fn validate_stage_surface_field_policy(stage: &AntennaFieldSolveStageIR, prefix:
 }
 
 pub(crate) fn validate_antenna_composition(problem: &ProblemIRV04, errors: &mut Vec<String>) {
+    if problem.current_modules.iter().any(|module| matches!(module,
+        CurrentModuleIR::CurrentTransport { definition: Some(definition), .. } if matches!(
+            &definition.conservative_current_source, Some(crate::ConservativeCurrentSourceIR::RetainedPreparationAsset(_))))) {
+        errors.push("retained preparation assets require the supported static H-only study, not a V04 magnetic study".into());
+    }
+
+    for module in &problem.current_modules {
+        if let CurrentModuleIR::CurrentTransport { name, definition: Some(definition), .. } = module {
+            if let Some(crate::ConservativeCurrentSourceIR::RetainedPreparationAsset(source)) = &definition.conservative_current_source {
+                if !problem.antenna_field_solve_stages.iter().any(|stage| stage.current_transport_id == *name
+                    && stage.source_object_id == source.object_id && stage.retained_current_source.is_some()
+                    && stage.retained_source_preparation.as_ref() == Some(&source.preparation_asset)) {
+                    errors.push("retained preparation source requires its explicit H-only stage and matching asset".into());
+                }
+            }
+        }
+    }
+
     let objects = problem
         .objects
         .iter()
@@ -1560,6 +1693,25 @@ pub(crate) fn validate_antenna_composition(problem: &ProblemIRV04, errors: &mut 
 /// validator here makes the additive 0.3 fields executable without silently
 /// accepting an unbound port or converting it to a prescribed field drive.
 pub(crate) fn validate_antenna_composition_v03(problem: &ProblemIR, errors: &mut Vec<String>) {
+    if !matches!(&problem.study, crate::StudyIR::FieldOnly { .. } | crate::StudyIR::AntennaFieldSolve { .. })
+        && problem.current_modules.iter().any(|module| matches!(module,
+            CurrentModuleIR::CurrentTransport { definition: Some(definition), .. } if matches!(
+                &definition.conservative_current_source, Some(crate::ConservativeCurrentSourceIR::RetainedPreparationAsset(_))))) {
+        errors.push("retained preparation assets require static H-only; Relax/Run and magnetic execution are forbidden".into());
+    }
+
+    for module in &problem.current_modules {
+        if let CurrentModuleIR::CurrentTransport { name, definition: Some(definition), .. } = module {
+            if let Some(crate::ConservativeCurrentSourceIR::RetainedPreparationAsset(source)) = &definition.conservative_current_source {
+                if !problem.antenna_field_solve_stages.iter().any(|stage| stage.current_transport_id == *name
+                    && stage.source_object_id == source.object_id && stage.retained_current_source.is_some()
+                    && stage.retained_source_preparation.as_ref() == Some(&source.preparation_asset)) {
+                    errors.push("retained preparation source requires its explicit H-only stage and matching asset".into());
+                }
+            }
+        }
+    }
+
     // Ownership is a global authoring invariant, even without an antenna stage.
     let bindings = match crate::physics_object_geometry_bindings_v03(problem) {
         Ok(bindings) => bindings,
@@ -1980,6 +2132,91 @@ mod tests {
         }
     }
 
+    fn retained_source_payload() -> serde_json::Value {
+        serde_json::json!({"kind":"published_inspection", "project_id":"project-source",
+            "run_id":"run-source", "task_id":"task-source", "attempt_id":"attempt-source",
+            "ownership_epoch":"1", "artifact_id":"artifact-source", "object_ref":"a".repeat(64)})
+    }
+
+    #[test]
+    fn retained_source_shape_is_lossless_and_has_no_authentication_side_effects() {
+        for epoch in ["1", "18446744073709551615"] {
+            let mut payload = retained_source_payload();
+            payload["ownership_epoch"] = epoch.into();
+            let value: AntennaRetainedCurrentSourceIR = serde_json::from_value(payload.clone()).unwrap();
+            assert!(value.validation_errors("source").is_empty());
+            assert_eq!(serde_json::to_value(value).unwrap(), payload);
+        }
+    }
+
+    #[test]
+    fn retained_source_rejects_unknown_wire_kind_fields_and_numeric_epoch() {
+        let mut cases = Vec::new();
+        let mut value = retained_source_payload(); value["kind"] = "stage_output".into(); cases.push(value);
+        let mut value = retained_source_payload(); value["accepted_source_digest"] = "a".repeat(64).into(); cases.push(value);
+        let mut value = retained_source_payload(); value["ownership_epoch"] = 1.into(); cases.push(value);
+        let mut value = retained_source_payload(); value["object_ref"] = serde_json::Value::Null; cases.push(value);
+        for value in cases {
+            assert!(serde_json::from_value::<AntennaRetainedCurrentSourceIR>(value).is_err());
+        }
+    }
+
+    #[test]
+    fn retained_source_validation_rejects_ambiguous_id_epoch_and_hash() {
+        for (field, values) in [
+            ("ownership_epoch", vec!["0", "01", "+1", "-1", "1.0", " 1", "18446744073709551616", "١"]),
+            ("object_ref", vec!["", "a", "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"]),
+            ("project_id", vec!["", " x", "x ", "x\ny", "x\u{0080}y"]),
+            ("run_id", vec![""]), ("task_id", vec![""]), ("attempt_id", vec![""]), ("artifact_id", vec![""]),
+        ] {
+            for value in values {
+                let mut payload = retained_source_payload(); payload[field] = value.into();
+                let source: AntennaRetainedCurrentSourceIR = serde_json::from_value(payload).unwrap();
+                assert!(source.validation_errors("source").iter().any(|message|message.contains(field)));
+            }
+        }
+    }
+
+    #[test]
+    fn retained_inspection_output_token_never_grants_basis_qualification() {
+        let mut stage = solved_stage();
+        assert!(antenna_solution_source_is_basis(Some(&stage), "basis"));
+        stage.retained_current_source = Some(serde_json::from_value(retained_source_payload()).unwrap());
+        assert!(!antenna_solution_source_is_basis(Some(&stage), "basis"));
+        assert!(!antenna_solution_source_is_basis(Some(&stage), "missing"));
+        assert!(!antenna_solution_source_is_basis(None, "basis"));
+    }
+
+    #[test]
+    fn retained_source_stage_wire_omits_absence_and_preserves_exact_locator() {
+        let stage = solved_stage();
+        let baseline = serde_json::to_value(&stage).unwrap();
+        assert!(baseline.get("retained_current_source").is_none());
+        let mut null = baseline.clone(); null["retained_current_source"] = serde_json::Value::Null;
+        let restored: AntennaFieldSolveStageIR = serde_json::from_value(null).unwrap();
+        assert_eq!(serde_json::to_value(restored).unwrap(), baseline);
+        let mut stage = stage;
+        stage.retained_current_source = Some(serde_json::from_value(retained_source_payload()).unwrap());
+        let wire = serde_json::to_value(&stage).unwrap();
+        assert_eq!(wire["retained_current_source"], retained_source_payload());
+        assert_eq!(serde_json::to_value(serde_json::from_value::<AntennaFieldSolveStageIR>(wire.clone()).unwrap()).unwrap(), wire);
+    }
+
+    #[test]
+    fn retained_source_cannot_mix_with_legacy_view_or_a_different_operator() {
+        let mut stage = solved_stage();
+        stage.retained_current_source = Some(serde_json::from_value(retained_source_payload()).unwrap());
+        let mut errors = Vec::new();
+        validate_stage_current_view_ref(&stage, &[], "stage", &mut errors);
+        assert!(errors.iter().any(|message|message.contains("legacy")));
+        assert!(errors.iter().any(|message|message.contains("analytic_rt0_surface")));
+        stage.conservative_current_view_ref = None;
+        stage.oersted_realization = AntennaOerstedRealizationIR::AnalyticRt0Surface;
+        errors.clear();
+        validate_stage_current_view_ref(&stage, &[], "stage", &mut errors);
+        assert!(errors.is_empty()); // Other stage validation still requires its explicit numerical policy.
+    }
+
     fn solved_stage() -> AntennaFieldSolveStageIR {
         AntennaFieldSolveStageIR {
             id: "antenna_solve".to_string(),
@@ -1987,6 +2224,8 @@ mod tests {
             current_transport_id: "antenna_current".to_string(),
             port_mode_ids: vec!["port_1".to_string()],
             conservative_current_view_ref: Some("current_view".to_string()),
+            retained_current_source: None,
+            retained_source_preparation: None,
             model: AntennaFieldModelIR::QuasistaticConductionBiotSavart3d,
             oersted_realization: AntennaOerstedRealizationIR::DirectTetraQuadrature,
             surface_field_policy: None,
@@ -2298,6 +2537,105 @@ mod tests {
         assert!(errors
             .iter()
             .any(|error| error.contains("positive signal path")));
+    }
+
+    fn prepared_gsg_contract_fixture() -> crate::PreparedAntennaClosedLoopSourceIR {
+        // Structural fixture only; this does not qualify a mesh or current solution.
+        let parts = ["signal", "ground_left", "ground_right", "feed", "closure"];
+        let digest = format!("sha256:{}", "a".repeat(64));
+        serde_json::from_value(serde_json::json!({
+            "schema_version": "conservative_current_source.v2",
+            "revision": digest,
+            "object_id": "antenna_1", "geometry_id": "antenna_geometry",
+            "mesh_digest": digest, "authored_input_digest": digest, "materials_digest": digest,
+            "stable_vertex_ids": [1, 2, 3, 4, 5, 6],
+            "closure": {
+                "kind": "closed_geometry", "operator_version": "fem_closed_current_geometry.v2",
+                "revision": digest, "digest": digest,
+                "source_cuts": [{"id": "feed_cut", "translation_m": [0., 0., 0.],
+                    "potential_drop_v": 1e-3, "face_pairs": [
+                        {"minus_face_vertex_ids": [1, 2, 3], "plus_face_vertex_ids": [4, 5, 6]}
+                    ]}]
+            },
+            "material_parts": parts.iter().enumerate().map(|(index, part)| serde_json::json!({
+                "part_id": part, "element_ordinals": [index], "material_assignment_index": index
+            })).collect::<Vec<_>>(),
+            "terminal_observations": parts[..3].iter().enumerate().flat_map(|(index, part)| {
+                ["local_u_min", "local_u_max"].into_iter().map(move |selector| serde_json::json!({
+                    "id": format!("{part}:{selector}"), "part_id": part, "selector": selector,
+                    "normal_convention": "outward_from_part",
+                    "faces": [{"face_vertex_ids": [1, 2, 3], "part_cell_ordinal": index,
+                        "bridge_cell_ordinal": if selector == "local_u_min" {3} else {4}}]
+                }))
+            }).collect::<Vec<_>>()
+        })).unwrap()
+    }
+
+    #[test]
+    fn prepared_closed_source_accepts_gsg_five_six_and_preserves_microstrip_four_four() {
+        let source = prepared_gsg_contract_fixture();
+        assert!(source.validation_errors("source").is_empty());
+        for (parts, observations) in [(5, 5), (4, 6), (6, 6)] {
+            let mut invalid = source.clone();
+            invalid.material_parts.resize(parts, source.material_parts[0].clone());
+            invalid.terminal_observations.truncate(observations);
+            assert!(!invalid.validation_errors("source").is_empty(), "{parts}/{observations}");
+        }
+        let mut microstrip = source;
+        microstrip.material_parts.remove(2);
+        microstrip.terminal_observations.truncate(4);
+        for (index, part) in microstrip.material_parts.iter_mut().enumerate() {
+            part.element_ordinals = vec![index as u64];
+            part.material_assignment_index = index as u32;
+        }
+        assert!(microstrip.validation_errors("source").is_empty());
+    }
+
+    #[test]
+    fn closed_gsg_port_binds_three_observed_parts_and_its_actual_source_cut() {
+        let source = prepared_gsg_contract_fixture();
+        let transport = stage_transport("antenna_current", Some(
+            crate::ConservativeCurrentSourceIR::ClosedGeometryPotentialJump(source.clone())));
+        let CurrentModuleIR::CurrentTransport { definition: Some(definition), .. } = transport
+            else { unreachable!("current transport fixture") };
+        let branches = ["signal", "ground_left", "ground_right"].map(|part| {
+            serde_json::json!({
+                "id": part, "inlet_terminal_ref": format!("{part}:local_u_min"),
+                "outlet_terminal_ref": format!("{part}:local_u_max"), "signed_weight": 0.
+            })
+        });
+        let port: AntennaPortModeIR = serde_json::from_value(serde_json::json!({
+            "schema_version": ANTENNA_PORT_MODE_SCHEMA_VERSION_V3,
+            "id": "port", "source_object_id": "antenna_1", "current_transport_id": "antenna_current",
+            "normalization": {"kind": "source_cut_rt0", "source_cut_ref": "feed_cut", "orientation": "minus_outward"},
+            "branches": branches,
+        })).unwrap();
+        let mut errors = Vec::new();
+        validate_v2_port_structure(&port, Some(&definition), "port", &mut errors);
+        assert!(errors.is_empty(), "{errors:?}");
+        for mutation in ["missing_branch", "owner", "foreign_part", "reversed", "missing_observation", "foreign_cut"] {
+            let mut invalid = port.clone();
+            match mutation {
+                "missing_branch" => { invalid.branches.pop(); }
+                "owner" => invalid.source_object_id = "other".into(),
+                "foreign_part" => {
+                    // Keep terminal refs unique so this exercises part ownership.
+                    invalid.branches[1].id = "foreign_part".into();
+                }
+                "reversed" => {
+                    let branch = &mut invalid.branches[1];
+                    std::mem::swap(&mut branch.inlet_terminal_ref, &mut branch.outlet_terminal_ref);
+                }
+                "missing_observation" => invalid.branches[1].inlet_terminal_ref = "absent".into(),
+                "foreign_cut" => invalid.normalization = Some(AntennaPortNormalizationIR::SourceCutRt0 {
+                    source_cut_ref: "other_cut".into(), orientation: "minus_outward".into()
+                }),
+                _ => unreachable!(),
+            }
+            errors.clear();
+            validate_v2_port_structure(&invalid, Some(&definition), "port", &mut errors);
+            assert!(!errors.is_empty(), "{mutation} must be refused");
+        }
     }
 
     #[test]

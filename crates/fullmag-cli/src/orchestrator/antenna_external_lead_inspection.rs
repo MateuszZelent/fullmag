@@ -19,6 +19,9 @@ mod carrier;
 pub(super) use carrier::{plan_carrier, plan_closed_loop_carrier};
 
 pub(super) fn is_carrier(plan: &fullmag_ir::ExecutionPlanIR) -> bool {
+    if matches!(&plan.backend_plan, BackendPlanIR::AntennaRetainedCurrentFieldInspection(_) | BackendPlanIR::AntennaRetainedDirectFieldInspection(_) | BackendPlanIR::AntennaRetainedPreparationFieldInspection(_)) {
+        return false;
+    }
     matches!(plan.backend_plan, BackendPlanIR::AntennaExternalLeadInspection(_))
         || plan.provenance
         .notes

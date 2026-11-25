@@ -1,6 +1,6 @@
 //! Signed closed-loop field publication. Raw inspection is not scientific qualification.
 use super::closed_loop_field_evidence::ClosedLoopFieldEvidence;
-#[cfg(any(feature = "fem-gpu", test))]
+#[cfg(any(feature = "fem-native", test))]
 use super::closed_loop_field_evidence::ClosedLoopFieldSnapshot;
 use super::{AntennaFieldSolutionSignatures, AntennaSampleCarrier};
 use crate::types::{AuxiliaryArtifact, RunError};
@@ -72,7 +72,7 @@ pub(crate) struct ClosedLoopAcceptedSourceInputV2 {
     /// Exact serialized already-hashed authored input body from the admitted planner.
     pub authored_input_json: Vec<u8>,
 }
-#[cfg(any(feature = "fem-gpu", test))]
+#[cfg(any(feature = "fem-native", test))]
 #[derive(Debug, Clone)]
 pub(crate) struct ClosedLoopFieldSolutionInputV2 {
     pub asset_id: String,
@@ -208,7 +208,7 @@ pub(crate) fn field_signature(
     hash.update(&evidence_bytes);
     Ok(format!("sha256:{:x}", hash.finalize()))
 }
-fn validate_sampling_mesh(
+pub(crate) fn validate_sampling_mesh(
     carrier: &AntennaSampleCarrier,
     positions: &[[f64; 3]],
     cells: &[[u32; 4]],
@@ -270,7 +270,7 @@ fn path_identifier(s: &str) -> Result<(), RunError> {
     }
     Ok(())
 }
-#[cfg(any(feature = "fem-gpu", test))]
+#[cfg(any(feature = "fem-native", test))]
 fn floats(values: impl IntoIterator<Item = f64>, scale: f64) -> Result<Vec<u8>, RunError> {
     let values = values.into_iter();
     let (minimum, _) = values.size_hint();
@@ -404,7 +404,7 @@ fn source_valid(s: &ClosedLoopAcceptedSourceInputV2) -> Result<(), RunError> {
     }
     Ok(())
 }
-#[cfg(any(feature = "fem-gpu", test))]
+#[cfg(any(feature = "fem-native", test))]
 fn insert_payload(
     m: &mut ManifestV2,
     artifacts: &mut Vec<AuxiliaryArtifact>,
@@ -436,7 +436,7 @@ fn copy_bytes(bytes: &[u8]) -> Result<Vec<u8>, RunError> {
     out.extend_from_slice(bytes);
     Ok(out)
 }
-#[cfg(any(feature = "fem-gpu", test))]
+#[cfg(any(feature = "fem-native", test))]
 fn records(s: &ClosedLoopAcceptedSourceInputV2) -> Result<(Vec<u8>, Vec<u8>, Vec<u8>), RunError> {
     let mut cells = Vec::new();
     let mut faces = Vec::new();
@@ -491,7 +491,7 @@ fn records(s: &ClosedLoopAcceptedSourceInputV2) -> Result<(Vec<u8>, Vec<u8>, Vec
     }
     Ok((cells, faces, weak))
 }
-#[cfg(any(feature = "fem-gpu", test))]
+#[cfg(any(feature = "fem-native", test))]
 pub(crate) fn build(
     input: &ClosedLoopFieldSolutionInputV2,
 ) -> Result<Vec<AuxiliaryArtifact>, RunError> {
@@ -915,6 +915,26 @@ pub(crate) fn verify(
     artifacts: &[AuxiliaryArtifact],
     exact: bool,
 ) -> Result<(), RunError> {
+    verify_and_decode_source(bytes, artifacts, exact).map(drop)
+}
+
+/// The same complete verifier, retaining its decoded source only on explicit request.
+/// This proves bundle content, never durable ownership or execution admission.
+pub(crate) fn verify_and_decode_source(
+    bytes: &[u8],
+    artifacts: &[AuxiliaryArtifact],
+    exact: bool,
+) -> Result<ClosedLoopAcceptedSourceInputV2, RunError> {
+    // Opt-in cold-reader diagnostics; no per-cell logs or timing when disabled.
+    let profile = std::env::var_os("FULLMAG_ANTENNA_COLD_READ_PROFILE")
+        .is_some_and(|value| value == "1");
+    let mut phase_started = profile.then(std::time::Instant::now);
+    let mut phase = |name: &str| {
+        if let Some(started) = phase_started.as_mut() {
+            eprintln!("antenna_cold_read phase={name} wall_ns={}", started.elapsed().as_nanos());
+            *started = std::time::Instant::now();
+        }
+    };
     let lengths = payload_lengths(bytes)?;
     let m = parse(bytes)?;
     let mut provided = BTreeMap::new();
@@ -939,6 +959,7 @@ pub(crate) fn verify(
         }
         data.insert(name.as_str(), b);
     }
+    phase("manifest_and_payload_hashes");
     let get = |key: &str| *data.get(key).expect("complete payload closure");
     let mut cells = Vec::new();
     cells
@@ -994,6 +1015,7 @@ pub(crate) fn verify(
         authored_input_json: copy_bytes(get("authoring_receipt"))?,
     };
     source_valid(&source)?;
+    phase("decode_and_source_validation");
     super::closed_loop_identity_v2::verify(
         &source,
         &m.requested_intent,
@@ -1005,6 +1027,7 @@ pub(crate) fn verify(
         &m.port_mode_id,
         &m.solution_id,
     )?;
+    phase("source_identity_and_rt0");
     for (name, values) in [
         ("v", source.electric_potential_v.clone()),
         (
@@ -1047,7 +1070,8 @@ pub(crate) fn verify(
         &xyz(get("h_raw"))?,
         &xyz(get("h_per_a"))?,
     )?;
-    Ok(())
+    phase("normalization_and_field_evidence");
+    Ok(source)
 }
 
 #[cfg(test)]
