@@ -259,7 +259,7 @@ fn build_resident_step_stats(
     scalar_d2h_bytes: u64,
     scalar_host_syncs: u64,
 ) -> StepStats {
-    let (e_dmi, e_rotated_dmi) = backend.split_dmi_energy(eval.e_dmi_aggregate);
+    let (e_dmi, e_rotated_dmi) = backend.split_dmi_energy_components(eval.e_dmi_aggregate);
     let mut stats = StepStats {
         step: accepted_step,
         time: 0.0,

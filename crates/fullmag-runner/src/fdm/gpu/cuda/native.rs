@@ -2545,8 +2545,12 @@ impl NativeFdmBackend {
         })
     }
 
-    pub(crate) fn split_dmi_energy(&self, aggregate_dmi_energy: f64) -> (f64, f64) {
+    fn split_dmi_energy(&self, aggregate_dmi_energy: f64) -> (f64, f64) {
         crate::types::split_rotated_only_dmi_energy(self.rotated_dmi_only, aggregate_dmi_energy)
+    }
+
+    pub(crate) fn split_dmi_energy_components(&self, aggregate_dmi_energy: f64) -> (f64, f64) {
+        self.split_dmi_energy(aggregate_dmi_energy)
     }
 
     pub(crate) fn stats_policy(&self) -> NativeStatsPolicy {
