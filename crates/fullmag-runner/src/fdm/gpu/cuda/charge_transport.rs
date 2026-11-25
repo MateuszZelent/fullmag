@@ -1588,11 +1588,17 @@ pub(crate) fn execute_public_gpu_charge_only(
     )?;
     let (field_snapshots, field_snapshot_count, provenance) = artifacts.finish();
 
+    let linear_solver_realization = resolve_charge_linear_solver_realization(
+        std::env::var("FULLMAG_FDM_CHARGE_GPU_DIRECT_SOLVER")
+            .ok()
+            .as_deref(),
+    );
     let auxiliary_artifact = AuxiliaryArtifact {
         relative_path: format!("transport/{}/fdm_gpu_charge_v1.json", descriptor.module_id),
         bytes: serde_json::to_vec_pretty(&serde_json::json!({
             "execution": charge_provenance,
             "supported_features": solved.supported_features,
+            "linear_solver_realization": linear_solver_realization,
         }))
         .map_err(|error| RunError {
             message: format!("serialize FDM GPU charge provenance: {error}"),
@@ -1616,6 +1622,21 @@ pub(crate) fn execute_public_gpu_charge_only(
         auxiliary_artifacts: vec![auxiliary_artifact],
         provenance,
     })
+}
+
+fn resolve_charge_linear_solver_realization(override_value: Option<&str>) -> &'static str {
+    match override_value {
+        Some(raw)
+            if raw
+                .chars()
+                .filter(|c| !c.is_whitespace())
+                .collect::<String>()
+                .eq_ignore_ascii_case("cudss") =>
+        {
+            "cudss_direct_cholesky_opt_in"
+        }
+        _ => "cg_device_amg_wcycle_v1",
+    }
 }
 
 #[cfg(feature = "cuda")]
@@ -2045,6 +2066,30 @@ mod tests {
         assert!(parse_sha256("").is_err());
         assert!(parse_sha256("sha256:ab").is_err());
         assert!(parse_sha256(&format!("sha256:{}g", "00".repeat(31))).is_err());
+    }
+
+    #[test]
+    fn opt_in_cudss_linear_solver_realization_matches_native_env_parsing() {
+        assert_eq!(
+            resolve_charge_linear_solver_realization(None),
+            "cg_device_amg_wcycle_v1"
+        );
+        assert_eq!(
+            resolve_charge_linear_solver_realization(Some("")),
+            "cg_device_amg_wcycle_v1"
+        );
+        assert_eq!(
+            resolve_charge_linear_solver_realization(Some("amg")),
+            "cg_device_amg_wcycle_v1"
+        );
+        assert_eq!(
+            resolve_charge_linear_solver_realization(Some("cudss")),
+            "cudss_direct_cholesky_opt_in"
+        );
+        assert_eq!(
+            resolve_charge_linear_solver_realization(Some("  CuDSS \t\n")),
+            "cudss_direct_cholesky_opt_in"
+        );
     }
 
     #[test]
