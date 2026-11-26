@@ -158,6 +158,7 @@ import { resolveCrossSectionQueryFromVisualizationState } from "@/shared/domain/
 import {
   FDM_DISPLAY_CELL_BUDGET,
   FDM_NATIVE_LAYER_DISPLAY_CELL_BUDGET,
+  FDM_SURFACE_CELL_BUDGET,
   formatFdmDisplaySamplingSummary,
 } from "@/shared/domain/mesh/fdmDisplaySampling";
 import { buildPeriodicOverlayModel } from "@/shared/domain/mesh/periodicOverlayModel";
@@ -3670,22 +3671,25 @@ export function useViewport3DSceneModel({
         liveViewportResourcesEnabled &&
         Boolean(fdmLaneActive && fdmMultilayerLayout.data?.available),
     });
+  const explicitFdmCellBudget = commandState.widgets.fdmCellBudget;
+  const fdmDisplayCellBudget = explicitFdmCellBudget ?? FDM_DISPLAY_CELL_BUDGET;
+  const fdmSurfaceCellBudget = explicitFdmCellBudget ?? FDM_SURFACE_CELL_BUDGET;
   const fdmNativeLayerDomains = useMemo(
     () =>
       adaptFdmMultilayerNativeLayerDomains(
         fdmMultilayerLayout.data,
-        FDM_NATIVE_LAYER_DISPLAY_CELL_BUDGET,
+        explicitFdmCellBudget ?? FDM_NATIVE_LAYER_DISPLAY_CELL_BUDGET,
       ),
-    [fdmMultilayerLayout.data],
+    [explicitFdmCellBudget, fdmMultilayerLayout.data],
   );
   const fdmMultilayerAirboxDomain = useMemo(
     () =>
       adaptFdmMultilayerAirboxDomain(
         fdmMultilayerLayout.data,
-        FDM_DISPLAY_CELL_BUDGET,
+        fdmDisplayCellBudget,
         authoredUniverseBounds,
       ),
-    [authoredUniverseBounds, fdmMultilayerLayout.data],
+    [authoredUniverseBounds, fdmDisplayCellBudget, fdmMultilayerLayout.data],
   );
   const fieldCatalog = useFieldCatalogResource({
     enabled: Boolean(
@@ -3838,10 +3842,10 @@ export function useViewport3DSceneModel({
       scene.data,
     ],
   );
-  const fdmDomain = useMemo(
-    () => adaptFdmDomainPresentation(fdmDomainPresentation, FDM_DISPLAY_CELL_BUDGET),
-    [fdmDomainPresentation],
-  );
+  const fdmDomain = useMemo(() => {
+    const domain = adaptFdmDomainPresentation(fdmDomainPresentation, fdmDisplayCellBudget);
+    return domain ? { ...domain, surfaceCellBudget: fdmSurfaceCellBudget } : null;
+  }, [fdmDisplayCellBudget, fdmDomainPresentation, fdmSurfaceCellBudget]);
   const fdmSelectionGrid = useMemo<FdmSelectionGrid | null>(() => {
     if (!fdmDomain) return null;
     return {
@@ -6120,7 +6124,7 @@ export function useViewport3DSceneModel({
         : String(fdmFieldRevision)
       : null;
   const fdmBuildSamplingRevision = fdmDomain
-    ? `shape=${fdmDomain.shape.join("x")}|display=${fdmDomain.displayCellCount}|total=${fdmDomain.totalCells}|stride=${fdmDomain.stride}|membership=${fdmRegionMembershipDataRevision ?? "none"}`
+    ? `shape=${fdmDomain.shape.join("x")}|display=${fdmDomain.displayCellCount}|surface=${fdmDomain.surfaceCellBudget}|total=${fdmDomain.totalCells}|stride=${fdmDomain.stride}|membership=${fdmRegionMembershipDataRevision ?? "none"}`
     : "none";
   const fdmBuildStyleRevision = [
     `fill=${visualProfile.voxelFillRatio}`,
@@ -6129,7 +6133,7 @@ export function useViewport3DSceneModel({
   ].join("|");
   const fdmBuildKey = fdmInstanceModelEnabled
     ? buildViewport3DFdmCuboidJobKey({
-        algorithmVersion: 1,
+        algorithmVersion: 2,
         component: fdmInstanceModelNeedsFieldVector
           ? fdmVoxelTopography.component
           : null,
@@ -6200,7 +6204,7 @@ export function useViewport3DSceneModel({
       const membershipRevision = resolveFdmCuboidMembershipRevision(realizedRegionIds);
       const topologyKey = `fdm-conductor:${target.id}:${fdmDomainGenerationId}:${membershipRevision}`;
       const entry: FdmCuboidAsyncBuildEntry = {
-        buildKey: `${topologyKey}:fill=${visualProfile.voxelFillRatio}`,
+        buildKey: `${topologyKey}:fill=${visualProfile.voxelFillRatio}:samples=${fdmDomain.displayCellCount}:surface=${fdmDomain.surfaceCellBudget}`,
         cellSelection: "active",
         domain: fdmDomain,
         enabled: true,
@@ -7904,12 +7908,18 @@ export function useViewport3DSceneModel({
     [effectiveViewportFallbackSettings, getPartSettings, savedSelectionActive],
   );
   const domainSummary = fdmDomain
-    ? formatFdmDisplaySamplingSummary({
-        budget: fdmDomain.displayCellBudget,
-        displaySamples: fdmDomain.displayCellCount,
-        stride: fdmDomain.stride,
-        total: fdmDomain.totalCells,
-      })
+    ? fdmInstanceModel
+      ? [
+          `cells ${fdmDomain.totalCells.toLocaleString("en-US")}`,
+          `material samples ${fdmInstanceModel.count.toLocaleString("en-US")}`,
+          fdmInstanceModel.boundaryCoverage === "sampled" ? "sampled surface" : null,
+        ].filter(Boolean).join(" · ")
+      : formatFdmDisplaySamplingSummary({
+          budget: fdmDomain.displayCellBudget,
+          displaySamples: fdmDomain.displayCellCount,
+          stride: fdmDomain.stride,
+          total: fdmDomain.totalCells,
+        })
     : `${femDomain.magneticParts.length}+${femDomain.airboxParts.length}`;
   const buildDiagnosticsSnapshotVersion = useSyncExternalStore(
     (onStoreChange) =>

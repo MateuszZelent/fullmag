@@ -124,6 +124,8 @@ export interface FdmGridRenderDomain {
   bounds: Viewport3DBounds | null;
   displayCellBudget: number;
   displayCellCount: number;
+  /** Maximum number of active cells reserved for the exact exterior. */
+  surfaceCellBudget?: number;
   /** True only for authored-grid preview geometry with no accepted field carrier. */
   geometryOnly?: boolean;
   kind: "fdm-grid";
