@@ -20780,10 +20780,12 @@ fn fem_eigen_branch_tracking_rejects_prism_topologies_in_planner_guard() {
             let ir = branch_selector_fem_eigen_ir(Some(sampling));
             let reason = crate::mesh::reject_unsupported_mixed_topology(&ir, &mesh, None)
                 .expect_err("prism6 eigen intent must fail before a tetra-only tracking consumer");
-            assert!(
-                reason.contains("fem_typed_topology_unsupported_before_backend"),
-                "{reason}"
-            );
+            let expected_code = if include_tet {
+                "fem_typed_topology_unsupported_before_backend"
+            } else {
+                "fem_pure_prism_p2_certificate_required"
+            };
+            assert!(reason.contains(expected_code), "{reason}");
             assert!(reason.contains("prism6"), "{reason}");
             let expected_families = if include_tet {
                 "actual_topology=cells=[prism6,tet4]"
@@ -20821,6 +20823,42 @@ fn fem_eigen_branch_tracking_rejects_certified_mixed_eigen_study() {
     assert!(reason.contains("fem_mixed_p1_scope_rejected"), "{reason}");
     assert!(reason.contains("unsupported_study"), "{reason}");
     assert!(reason.contains("fallback=none"), "{reason}");
+
+    // Certified pure_prism_p2 must equally fail closed on eigen studies.
+    let mut pure_prism_ir = mixed_cpu_relaxation_ir(
+        fullmag_ir::RelaxationAlgorithmIR::ProjectedGradientBb,
+        fullmag_ir::RequestedFemDemagIR::PoissonRobin,
+    );
+    let pure_prism_asset = valid_pure_prism_certificate_asset_for_layers(1);
+    let pure_prism_mesh = pure_prism_asset
+        .mesh
+        .as_ref()
+        .expect("pure prism fixture has inline mesh");
+    crate::mesh::reject_unsupported_mixed_topology(
+        &pure_prism_ir,
+        pure_prism_mesh,
+        pure_prism_asset.build_report.as_ref(),
+    )
+    .expect("control: certified pure_prism_p2 relaxation remains admitted");
+    pure_prism_ir.study = ir.study.clone();
+    let pure_prism_reason = crate::mesh::reject_unsupported_mixed_topology(
+        &pure_prism_ir,
+        pure_prism_mesh,
+        pure_prism_asset.build_report.as_ref(),
+    )
+    .expect_err("a valid pure prism certificate must not admit the unsupported eigen study");
+    assert!(
+        pure_prism_reason.contains("fem_pure_prism_p2_scope_rejected"),
+        "{pure_prism_reason}"
+    );
+    assert!(
+        pure_prism_reason.contains("unsupported_study"),
+        "{pure_prism_reason}"
+    );
+    assert!(
+        pure_prism_reason.contains("fallback=none"),
+        "{pure_prism_reason}"
+    );
 }
 
 #[test]
