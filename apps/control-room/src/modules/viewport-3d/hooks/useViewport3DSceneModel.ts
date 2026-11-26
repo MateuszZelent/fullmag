@@ -4863,25 +4863,37 @@ export function useViewport3DSceneModel({
     () => [...fdmTargetSettingsById.values()],
     [fdmTargetSettingsById],
   );
+  // Live shared-grid objects already have a certified membership carrier.
+  // Wait for that membership rather than warming a redundant full-grid field.
+  const fdmLiveObjectFields = Boolean(fdmDomain && !preparedSource &&
+    !analysisOverlay && !analysisFieldIntent && !pinnedObservationActive &&
+    !selectedSnapshotQuery && !selectedSnapshotId);
+  const fdmObjectFieldsActive = fdmLiveObjectFields &&
+    !commandState.widgets.fdmTopographyEnabled && visualProfile.voxelMagnitudeThreshold === 0;
   const fdmTargetSettingsForPlanning = useMemo(() => {
+    const conductorIds = new Set(fdmConductorTargets.map(({ target }) => target.id));
     const magneticTargets = fdmTargetDefinitionsResult.status === "ready"
-      ? fdmTargetDefinitionsResult.definitions.map(({ target }) => target)
+      ? fdmTargetDefinitionsResult.definitions
+          .filter(({ target }) => !conductorIds.has(target.id))
+          .map(({ ownerTarget, target }) => ({
+            objectScopeId: fdmLiveObjectFields ? ownerTarget.id.slice("object:".length) : undefined,
+            target,
+          }))
       : [];
-    const conductorIds = new Map<string, string>(fdmConductorTargets.map(({ objectId, target }) => [target.id, objectId]));
     const targets = [
-      ...magneticTargets.filter((target) => !conductorIds.has(target.id)),
-      ...fdmConductorTargets.map(({ target }) => target),
+      ...magneticTargets,
+      ...fdmConductorTargets.map(({ objectId, target }) => ({ objectScopeId: objectId, target })),
     ];
-    return targets.flatMap((target) => {
+    return targets.flatMap(({ objectScopeId, target }) => {
       const settings = fdmTargetSettingsById.get(target.id);
       return settings ? [{
         label: target.label ?? target.id,
-        objectScopeId: conductorIds.get(target.id),
+        objectScopeId,
         settings,
         targetId: target.id,
       }] : [];
     });
-  }, [fdmConductorTargets, fdmTargetDefinitionsResult, fdmTargetSettingsById]);
+  }, [fdmConductorTargets, fdmLiveObjectFields, fdmTargetDefinitionsResult, fdmTargetSettingsById]);
   const airboxSettings = useMemo(
     () =>
       resolveTargetVisualization({
@@ -5137,6 +5149,7 @@ export function useViewport3DSceneModel({
   const targetQuantityFieldDemandPlan = useMemo(() => {
     return resolveViewport3DTargetQuantityFieldDemandPlan({
       fdmAirboxSettings: fdmSingleGridAirboxSettings,
+      fdmObjectFieldsActive,
       fdmSettings: fdmDomain ? fdmSettings : null,
       fdmTargetSettings: fdmTargetSettingsForPlanning,
       getPartSettings: (part) => getPartSettings(part as Viewport3DMeshPart),
@@ -5151,6 +5164,7 @@ export function useViewport3DSceneModel({
     });
   }, [
     fdmDomain,
+    fdmObjectFieldsActive,
     fdmSettings,
     fdmTargetSettingsForPlanning,
     fdmSingleGridAirboxSettings,
@@ -5478,6 +5492,7 @@ export function useViewport3DSceneModel({
     fdmVoxelMagnitudeThreshold > 0 || fdmTopographyEnabled;
   const primaryFieldVectorEnabled =
     Boolean(primaryFieldQuantityId) &&
+    !fdmObjectFieldsActive &&
     !analysisFieldIntent &&
     Boolean(fdmDomain || fieldCompatibleTopologyRenderModel) &&
     (Boolean(analysisOverlay || preparedSource) ||
@@ -5512,16 +5527,17 @@ export function useViewport3DSceneModel({
     () =>
       resolveViewport3DPrimaryFieldDemandPlan({
         fdmInstanceModelNeedsFieldVector,
-        fdmSurfaceColorMode,
+        fdmSurfaceColorMode: fdmObjectFieldsActive ? null : fdmSurfaceColorMode,
         fdmTopographyEnabled,
-        fdmVectorsVisible: fdmVectorsVisible || fdmAirboxVectorsVisible,
-        fieldRenderOptions: primaryFieldDataOptions,
+        fdmVectorsVisible: !fdmObjectFieldsActive && (fdmVectorsVisible || fdmAirboxVectorsVisible),
+        fieldRenderOptions: fdmObjectFieldsActive ? { scalarColorsVisible: false } : primaryFieldDataOptions,
         primaryFieldQuantityId,
         snapshotId: selectedSnapshotId,
         snapshotQuery: selectedSnapshotQuery,
       }),
     [
       fdmInstanceModelNeedsFieldVector,
+      fdmObjectFieldsActive,
       // The React Compiler cannot prove these derived lane values are immutable;
       // the explicit dependency list is intentional for the viewport model.
       fdmSurfaceColorMode,
@@ -6537,7 +6553,7 @@ export function useViewport3DSceneModel({
           if (!settings) return [];
           const targetField = resolveViewport3DFdmTargetFieldVectorForTarget({
             primaryFieldQuantityId,
-            primaryFieldVector: fdmPrimaryFieldVector,
+            primaryFieldVector: fdmObjectFieldsActive ? null : fdmPrimaryFieldVector,
             quantityId: settings.activeQuantityId,
             targetFieldRequests: targetQuantityFieldRequests,
             targetFieldVectors: targetQuantityFieldVectors.data,
@@ -6831,6 +6847,7 @@ export function useViewport3DSceneModel({
       fdmBuildTopologyRevision,
       fdmDomain,
       fdmFieldDomainIdentity,
+      fdmObjectFieldsActive,
       fdmPrimaryFieldVector,
       fdmTargetSettingsById,
       fdmTargetViewsResult,

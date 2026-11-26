@@ -52,6 +52,23 @@ export function buildFdmFieldIndexResolver(
     return { reason: "missing-node-indices", status: "degraded" };
   }
 
+  // A thin-film object often occupies consecutive global ordinals. Verify
+  // the entire run before using direct arithmetic, with no per-cell map.
+  const first = nodeIndices[0];
+  const last = nodeIndices[nodeIndices.length - 1];
+  if (first !== undefined && Number.isInteger(first) && first >= 0 &&
+      last !== undefined && last < safeDomainCellCount &&
+      last - first + 1 === nodeIndices.length &&
+      nodeIndices.findIndex((ordinal, index) => ordinal !== first + index) === -1) {
+    return {
+      indexing,
+      resolve: (ordinal) => Number.isInteger(ordinal) && ordinal >= first && ordinal <= last
+        ? ordinal - first
+        : null,
+      status: "compatible",
+    };
+  }
+
   const fieldIndexByCell = new Map<number, number>();
   for (let fieldIndex = 0; fieldIndex < nodeIndices.length; fieldIndex += 1) {
     const cellOrdinal = nodeIndices[fieldIndex];

@@ -96,6 +96,16 @@ describe("buildFdmFieldIndexResolver", () => {
     expect(resolver.resolve(0)).toBeNull();
   });
 
+  it("maps a compact contiguous layer using its global offset", () => {
+    const resolver = expectCompatible(
+      buildFdmFieldIndexResolver(fieldVector(3, "explicit_node_indices", [5, 6, 7]), 12),
+    );
+    expect([4, 5, 6, 7, 8].map(resolver.resolve)).toEqual([null, 0, 1, 2, null]);
+    expect(
+      buildFdmFieldIndexResolver(fieldVector(3, "explicit_node_indices", [5, 5, 7]), 12),
+    ).toMatchObject({ reason: "duplicate-node-index", status: "degraded" });
+  });
+
   it("maps sampled FDM cell indices and leaves unsampled cells unresolved", () => {
     const resolver = expectCompatible(
       buildFdmFieldIndexResolver(

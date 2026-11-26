@@ -215,6 +215,7 @@ export function resolveViewport3DFieldDomainCompatibility({
   }
 
   if (
+    domain.discretization !== "fdm" &&
     (field.indexing === "explicit_node_indices" ||
       field.indexing === "sampled_node_indices") &&
     hasDuplicateFieldNodeIndex(field.nodeIndices, field.pointCount)
