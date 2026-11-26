@@ -355,7 +355,7 @@ class FDM:
 _SWEEP_KINDS = ("uniform", "arithmetic", "geometric")
 _SWEEP_DIRECTIONS = ("auto", "x", "y", "z")
 _SWEEP_ELEMENT_FAMILIES = ("prism", "hex")
-_SWEEP_TRANSITION_POLICIES = ("pyramid_to_tetrahedra", "reject")
+_SWEEP_TRANSITION_POLICIES = ("pyramid_to_tetrahedra", "pure_prism", "reject")
 
 
 @dataclass(frozen=True, slots=True)
@@ -436,7 +436,7 @@ class SweptMeshControls:
     distribution: SweepDistribution = field(default_factory=SweepDistribution)
     sweep_direction: Literal["auto", "x", "y", "z"] = "auto"
     element_family: Literal["prism", "hex"] = "prism"
-    transition_policy: Literal["pyramid_to_tetrahedra", "reject"] = "reject"
+    transition_policy: Literal["pyramid_to_tetrahedra", "pure_prism", "reject"] = "reject"
     exact_layer_count: bool = False
 
     def __post_init__(self) -> None:
@@ -462,8 +462,8 @@ class SweptMeshControls:
             )
         if not isinstance(self.exact_layer_count, bool):
             raise TypeError("exact_layer_count must be bool")
-        if self.element_family == "hex" and self.transition_policy == "pyramid_to_tetrahedra":
-            raise ValueError("hex element_family contradicts pyramid_to_tetrahedra transition")
+        if self.element_family == "hex" and self.transition_policy in {"pyramid_to_tetrahedra", "pure_prism"}:
+            raise ValueError(f"hex element_family contradicts {self.transition_policy} transition")
         if self.exact_layer_count and self.distribution.kind != "uniform":
             raise ValueError("exact_layer_count requires a uniform distribution")
 
@@ -922,9 +922,9 @@ class PerObjectMeshRecipe:
             raise ValueError("sweep_direction must be 'auto', 'x', 'y', or 'z'")
         if self.element_family not in {None, "prism", "hex"}:
             raise ValueError("element_family must be 'prism' or 'hex'")
-        if self.transition_policy not in {None, "pyramid_to_tetrahedra", "reject"}:
+        if self.transition_policy not in {None, "pyramid_to_tetrahedra", "pure_prism", "reject"}:
             raise ValueError(
-                "transition_policy must be 'pyramid_to_tetrahedra' or 'reject'"
+                "transition_policy must be 'pyramid_to_tetrahedra', 'pure_prism', or 'reject'"
             )
         if self.exact_layer_count is not None and not isinstance(
             self.exact_layer_count, bool
@@ -954,17 +954,20 @@ class PerObjectMeshRecipe:
                 raise ValueError("prismatic mesh requires triangular source faces")
             if self.exact_layer_count is False:
                 raise ValueError("strict prismatic mesh requires exact_layer_count=True")
-        if self.topology == "prismatic" and self.transition_policy != "pyramid_to_tetrahedra":
+        if self.topology == "prismatic" and self.transition_policy not in {
+            "pyramid_to_tetrahedra",
+            "pure_prism",
+        }:
             raise ValueError(
-                "prismatic thin-film topology requires pyramid_to_tetrahedra transition"
+                "prismatic thin-film topology requires 'pyramid_to_tetrahedra' or 'pure_prism' transition"
             )
         if self.element_family == "hex":
             if self.mesh_strategy != "swept_hex":
                 raise ValueError("hex mesh requires mesh_strategy='swept_hex'")
             if self.sweep_face_meshing != "quadrilateral":
                 raise ValueError("hex mesh requires quadrilateral source faces")
-            if self.transition_policy == "pyramid_to_tetrahedra":
-                raise ValueError("hex mesh contradicts pyramid_to_tetrahedra transition")
+            if self.transition_policy in {"pyramid_to_tetrahedra", "pure_prism"}:
+                raise ValueError(f"hex mesh contradicts {self.transition_policy} transition")
 
         layered_requested = self.mesh_strategy in {"swept_prism", "swept_hex"} or any(
             value is not None

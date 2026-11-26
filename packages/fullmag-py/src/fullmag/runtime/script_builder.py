@@ -9444,7 +9444,7 @@ def _render_thin_film_mesh_kwargs(mesh_config: dict[str, object]) -> list[str] |
     if prismatic and (
         mesh_config.get("sweep_direction") != "auto"
         or mesh_config.get("element_family") != "prism"
-        or mesh_config.get("transition_policy") != "pyramid_to_tetrahedra"
+        or mesh_config.get("transition_policy") not in {"pyramid_to_tetrahedra", "pure_prism"}
         or not isinstance(mesh_config.get("exact_layer_count"), bool)
         or mesh_config.get("through_thickness_element_ratio") is not None
         or mesh_config.get("through_thickness_symmetric") is True

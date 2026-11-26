@@ -3971,3 +3971,339 @@ def test_translate_imported_mixed_mesh_never_enters_tet_compatibility(
     assert translated.cell_types.tolist() == ["prism6", "pyramid5", "tet4"]
     assert translated.facet_types.tolist() == ["tri3", "quad4"]
     assert translated.facet_roles.tolist() == ["exterior", "material_interface"]
+
+
+class _SyntheticSameSideStarGmsh:
+    """Minimal Gmsh double representing an octahedron + folded bipyramid star."""
+
+    def __init__(self, *, movable_interior: bool = True) -> None:
+        # 8 vertices:
+        #   1..6: boundary octahedron corners (+/-1,0,0), (0,+/-1,0), (0,0,+/-1)
+        #   7, 8: two interior vertices forming a folded 2-tet bipyramid when
+        #         vertex 7 crosses the equatorial plane z=0 above vertex 8.
+        # Build a clean 10-tet decomposition of the octahedron:
+        #   - Lower hemisphere (z <= 0): 4 tets sharing apex 7=(0,0,0.4) -> inverted!
+        #     Wait: construct an explicit star of 10 tets around interior vertex 7
+        #     and 8:
+        #     Let ring A = (1, 2, 3, 4) on z=0: (1,0,0), (0,1,0), (-1,0,0), (0,-1,0)
+        #     Top pole 5 = (0,0,1), bottom pole 6 = (0,0,-1).
+        #     Split the square (1,2,3,4) along diagonal (1,3) into 2 triangles:
+        #       T_a = (1, 2, 3), T_b = (1, 3, 4).
+        #     Healthy interior nodes: 7 = (0.15, 0.2, 0.05) and 8 = (-0.15, -0.2, -0.05)
+        #     Even simpler: 8 outer octahedron boundary faces around a single
+        #     interior vertex 7 (8 tets), PLUS split one equatorial edge (1,2)
+        #     by adding interior vertex 8 -> 10 tets with a 2-tet bipyramid
+        #     sharing face (7, 8, 5) that can be folded by moving 7 across the
+        #     plane (8, 5, 1) & (8, 5, 2) while flipping Gmsh tet orientation!
+        #
+        # Construction of exact 10-tet star around interior node 7:
+        #   Outer convex polyhedron: hexagonal bipyramid with 6 equatorial
+        #   boundary vertices on z=0 (radius 1) and poles 5=(0,0,1), 6=(0,0,-1),
+        #   OR a triangular bipyramid + 1 extra interior node 8!
+        #   Let's use a 5-vertex outer triangular bipyramid:
+        #     1=(1,0,0), 2=(-0.5, 0.866, 0), 3=(-0.5, -0.866, 0),
+        #     4=(0,0,1), 5=(0,0,-1)
+        #   With 2 interior nodes:
+        #     6=(0.25, 0.0, 0.0) [movable interior node]
+        #     7=(-0.25, 0.0, 0.0) [fixed interior node]
+        #   Partition the outer bipyramid cleanly into 10 positive tets:
+        #     Edge (6, 7) connects the 2 interior nodes; surround it by the
+        #     3-cycle (4, 2, 5, 3) -> 4 tets around (6,7), plus 3 caps on 6
+        #     towards vertex 1, plus 3 caps on 7 towards (2,3)?
+        #     Check faces!
+        #     6 is on the +x side (near vertex 1=(1,0,0)):
+        #       caps on 6 with boundary edges of vertex 1:
+        #         (1, 2, 4, 6), (1, 4, 3, 6), (1, 3, 5, 6), (1, 5, 2, 6)  [4 tets]
+        #     7 is on the -x side (near edge (2,3)):
+        #       caps on 7 with boundary faces containing (2,3):
+        #         (2, 3, 4, 7), (2, 5, 3, 7)                              [2 tets]
+        #     Shared equatorial ring between 6 and 7: cycle (2, 4, 3, 5)
+        #     Wait: the 4 faces on the 6-side are (2,4,6), (4,3,6), (3,5,6), (5,2,6)
+        #     and on the 7-side are (2,4,7), (4,3,7), (3,5,7), (5,2,7) —
+        #     wait: (2,4,3,5) splits along diagonal (4,5) into triangles (2,4,5) & (3,5,4)!
+        #     Then connecting 6 to (2,4,5) and (3,5,4), and 7 to (2,4,5) and (3,5,4)
+        #     gives 4 interior tets sharing (2,4,5) & (3,5,4):
+        #       (6, 2, 4, 5), (6, 3, 5, 4)  [2 tets on +x side of (2,4,5)/(3,5,4)]
+        #       (7, 2, 5, 4), (7, 3, 4, 5)  [2 tets on -x side of (2,4,5)/(3,5,4)]
+        #     Total = 4 + 2 + 4 = 10 tets! Exact conforming partition of the
+        #     triangular bipyramid!
+        #     Now push node 6 from (+0.25, 0, 0) to (-0.12, 0, 0) (crossing the
+        #     plane x = -0.5? Wait: x of 2,3 is -0.5, x of 4,5 is 0.0!
+        #     The plane (2, 4, 5) is x/(-0.5) + y/0.866 = 0? No: 4=(0,0,1), 5=(0,0,-1),
+        #     so plane (2, 4, 5) passes through z-axis and (-0.5, 0.866, 0)!
+        #     Even simpler: put 4=(0, 0, 1), 5=(0, 0, -1), 2=(0, 1, 0), 3=(0, -1, 0),
+        #     1=(1, 0, 0), 8=(-1, 0, 0) -> octahedron!
+        #     Then plane (2, 4, 5) and plane (3, 5, 4) are BOTH the exact plane x = 0!
+        #     The 10 tets are:
+        #       +x half (with node 6 at x=+0.3, y=0, z=0):
+        #         4 outer tets: (1,2,4,6), (1,4,3,6), (1,3,5,6), (1,5,2,6)
+        #         2 mid tets:   (6,2,4,5)? Wait: (2,4,5) has vertices on x=0!
+        #         So (6, 2, 4, 5) and (6, 3, 5, 4) fill the +x side of the x=0 disk!
+        #       -x half (with node 7 at x=-0.3, y=0, z=0):
+        #         4 outer tets: (8,4,2,7), (8,3,4,7), (8,5,3,7), (8,2,5,7)
+        #         2 mid tets:   (7,2,5,4), (7,3,4,5)
+        #     Total = 12 tets (6 on +x, 6 on -x), sharing the 2 triangles
+        #     (2, 4, 5) and (3, 5, 4) on the plane x=0!
+        #     Now fold node 6 across x=0 to (-0.08, 0.0, 0.0)!
+        #     The 2 mid tets (6, 2, 4, 5) and (6, 3, 5, 4) invert (and Gmsh flips
+        #     their vertex order [2]<->[3] so all 12 tets have det > 0!),
+        #     producing a folded 2-tet bipyramid overlapping the -x half and
+        #     creating 6 same_side_two_owner_face conflicts!
+        self.coordinates: dict[int, np.ndarray] = {
+            1: np.asarray([1.0, 0.0, 0.0], dtype=np.float64),
+            2: np.asarray([0.0, 1.0, 0.0], dtype=np.float64),
+            3: np.asarray([0.0, -1.0, 0.0], dtype=np.float64),
+            4: np.asarray([0.0, 0.0, 1.0], dtype=np.float64),
+            5: np.asarray([0.0, 0.0, -1.0], dtype=np.float64),
+            8: np.asarray([-1.0, 0.0, 0.0], dtype=np.float64),
+            # Folded node 6 pushed past x=0 into the -x half:
+            6: np.asarray([-0.08, 0.0, 0.0], dtype=np.float64),
+            7: np.asarray([-0.45, 0.0, 0.0], dtype=np.float64),
+        }
+        self.dimensions: dict[int, int] = {
+            1: 2,
+            2: 2,
+            3: 2,
+            4: 2,
+            5: 2,
+            8: 2,
+            6: 3 if movable_interior else 2,
+            7: 2,  # pin node 7 so only node 6 can move when movable_interior=True
+        }
+        # Build all 12 tets and flip any negative-det tet exactly as Gmsh does.
+        raw_tets = [
+            (101, [1, 2, 4, 6]),
+            (102, [1, 4, 3, 6]),
+            (103, [1, 3, 5, 6]),
+            (104, [1, 5, 2, 6]),
+            (105, [6, 2, 4, 5]),  # inverted by node 6 at x=-0.08
+            (106, [6, 3, 5, 4]),  # inverted by node 6 at x=-0.08
+            (107, [8, 4, 2, 7]),
+            (108, [8, 3, 4, 7]),
+            (109, [8, 5, 3, 7]),
+            (110, [8, 2, 5, 7]),
+            (111, [7, 2, 5, 4]),
+            (112, [7, 3, 4, 5]),
+        ]
+        self.tets: dict[int, list[int]] = {}
+        for tag, nodes in raw_tets:
+            pts = np.asarray([self.coordinates[n] for n in nodes], dtype=np.float64)
+            det = float(np.linalg.det(np.stack((pts[1] - pts[0], pts[2] - pts[0], pts[3] - pts[0]), axis=1)))
+            if det < 0.0:
+                nodes = [nodes[0], nodes[1], nodes[3], nodes[2]]
+            self.tets[tag] = nodes
+        self.model = self
+        self.mesh = self
+
+    def getEntities(self, dim: int = -1) -> list[tuple[int, int]]:
+        return [(3, 1)] if dim in (-1, 3) else []
+
+    def getNodes(self) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        tags = np.asarray(sorted(self.coordinates), dtype=np.int64)
+        coords = np.concatenate([self.coordinates[int(t)] for t in tags])
+        return tags, coords, np.asarray([], dtype=np.float64)
+
+    def getNode(self, node_tag: int) -> tuple[np.ndarray, list[float], int, int]:
+        return self.coordinates[int(node_tag)], [], self.dimensions[int(node_tag)], 1
+
+    def setNode(self, node_tag: int, coords: list[float], params: list[float]) -> None:
+        del params
+        self.coordinates[int(node_tag)] = np.asarray(coords, dtype=np.float64)
+
+    def getElementsByType(
+        self, element_type: int, tag: int = -1
+    ) -> tuple[np.ndarray, np.ndarray]:
+        del tag
+        if int(element_type) != 4:
+            return np.asarray([], dtype=np.int64), np.asarray([], dtype=np.int64)
+        etags = np.asarray(sorted(self.tets), dtype=np.int64)
+        enodes = np.asarray([n for t in etags for n in self.tets[int(t)]], dtype=np.int64)
+        return etags, enodes
+
+    def removeElements(self, dim: int, tag: int, elementTags: list[int]) -> None:
+        assert dim == 3 and tag == 1
+        for etag in elementTags:
+            del self.tets[int(etag)]
+
+    def addElementsByType(
+        self, tag: int, elementType: int, elementTags: list[int], nodeTags: list[int]
+    ) -> None:
+        assert tag == 1 and elementType == 4
+        arr = np.asarray(nodeTags, dtype=np.int64).reshape((-1, 4))
+        for etag, row in zip(elementTags, arr.tolist(), strict=True):
+            self.tets[int(etag)] = [int(n) for n in row]
+
+
+@pytest.mark.parametrize("use_scipy", [True, False], ids=["scipy_highs", "numpy_fallback"])
+def test_untangle_same_side_synthetic_bipyramid_scipy_and_numpy(use_scipy: bool) -> None:
+    fake = _SyntheticSameSideStarGmsh(movable_interior=True)
+    # Confirm initial state reproduces Gmsh: all individual det > 0 yet same_side == 6.
+    tags_before, nodes_before = fake.getElementsByType(4)
+    ntags, ncoords, _ = fake.getNodes()
+    order = np.argsort(ntags)
+    stags = ntags[order]
+    scoords = ncoords.reshape((-1, 3))[order]
+    tet_dense = np.searchsorted(stags, nodes_before.reshape((-1, 4)))
+    for row in tet_dense:
+        pts = scoords[row]
+        det = float(np.linalg.det(np.stack((pts[1] - pts[0], pts[2] - pts[0], pts[3] - pts[0]), axis=1)))
+        assert det > 0.0
+    _, _, _, _, _, bad_before, _ = gmsh_swept._detect_same_side_triangular_faces(
+        scoords,
+        tet_dense,
+        np.zeros((0, 5), dtype=np.int64),
+        np.zeros((0, 6), dtype=np.int64),
+    )
+    assert int(np.count_nonzero(bad_before)) == 6
+    original_boundary = {k: fake.coordinates[k].copy() for k in (1, 2, 3, 4, 5, 7, 8)}
+
+    moved = gmsh_swept._untangle_same_side_mixed_tetrahedra(fake, use_scipy=use_scipy)
+
+    assert moved == 1
+    assert fake.coordinates[6][0] > 0.0
+    for k, expected_pos in original_boundary.items():
+        np.testing.assert_array_equal(fake.coordinates[k], expected_pos)
+
+    tags_after, nodes_after = fake.getElementsByType(4)
+    np.testing.assert_array_equal(tags_after, tags_before)
+    ntags2, ncoords2, _ = fake.getNodes()
+    order2 = np.argsort(ntags2)
+    stags2 = ntags2[order2]
+    scoords2 = ncoords2.reshape((-1, 3))[order2]
+    tet_dense2 = np.searchsorted(stags2, nodes_after.reshape((-1, 4)))
+    for row in tet_dense2:
+        pts = scoords2[row]
+        det = float(np.linalg.det(np.stack((pts[1] - pts[0], pts[2] - pts[0], pts[3] - pts[0]), axis=1)))
+        assert det > 0.0, "reoriented tet must retain strictly positive Jacobian"
+    _, _, _, _, _, bad_after, _ = gmsh_swept._detect_same_side_triangular_faces(
+        scoords2,
+        tet_dense2,
+        np.zeros((0, 5), dtype=np.int64),
+        np.zeros((0, 6), dtype=np.int64),
+    )
+    assert int(np.count_nonzero(bad_after)) == 0
+
+
+def test_untangle_same_side_fails_closed_when_no_movable_interior_node() -> None:
+    fake = _SyntheticSameSideStarGmsh(movable_interior=False)
+    with pytest.raises(RuntimeError, match="mixed_tet_untangle_failed"):
+        gmsh_swept._untangle_same_side_mixed_tetrahedra(fake)
+
+
+@pytest.mark.parametrize("layers", [1, 2, 3])
+def test_thin_film_prismatic_layers_2_300x300x5_conforming(
+    monkeypatch: pytest.MonkeyPatch,
+    layers: int,
+) -> None:
+    pytest.importorskip("gmsh")
+    monkeypatch.setenv("FULLMAG_FEM_MESH_CACHE_DIR", "")
+    fm.reset()
+    try:
+        h_inplane = 2.5e-9 if layers == 2 else 5.0e-9
+        study = fm.study(f"test_thin_film_300x300x5_L{layers}")
+        study.engine("fem")
+        study.universe(
+            mode="manual",
+            size=(900.0e-9, 900.0e-9, 600.0e-9),
+            center=(0.0, 0.0, 0.0),
+            padding=(0.0, 0.0, 0.0),
+        )
+        study.universe.mesh(
+            minimum_element_size=10.0e-9,
+            maximum_element_size=110.0e-9,
+            maximum_element_growth_rate=1.9,
+            grading="geometric",
+        )
+        film = study.geometry(fm.Box(size=(300.0e-9, 300.0e-9, 5.0e-9), name="film"), name="film")
+        film.Ms = 8.0e5
+        film.Aex = 1.3e-11
+        film.alpha = 0.02
+        film.m = fm.init.UniformMagnetization((1.0, 0.1, 0.0))
+        film.mesh.thin_film(
+            minimum_element_size=h_inplane,
+            maximum_element_size=h_inplane,
+            layers=layers,
+            topology="prismatic",
+            exact_layers=True,
+            transition="pyramid_to_tetrahedra",
+            order=1,
+        )
+        study.demag(realization="poisson_robin")
+        study.build_domain_mesh()
+        artifact = study.mesh._current_artifact()
+        mesh = artifact.mesh
+        assert artifact.build_report is not None
+        assert artifact.build_report["build_mode"] == "single_geometry_geo_mixed"
+        assert artifact.build_report["degraded"] is False
+        cert = mesh.mixed_layer_topology_certificate
+        assert isinstance(cert, MixedLayerTopologyCertificate)
+        assert cert.certificate_status == "accepted"
+        assert cert.realized_layer_count == layers
+        assert cert.nonconforming_face_count == 0
+        assert cert.orphan_face_count == 0
+        assert cert.nonmanifold_face_count == 0
+        assert cert.coincident_interface_face_count == 0
+        for family in ("prism6", "pyramid5", "tet4"):
+            assert cert.jacobian_minima_m3_by_family[family] > 0.0
+            assert cert.scaled_jacobian_p05_by_family[family] >= 0.1
+        assert _mixed_same_side_two_owner_face_count(mesh, tolerance=cert.plane_tolerance_m) == 0
+    finally:
+        fm.reset()
+
+
+@pytest.mark.parametrize("layers", [1, 2, 3])
+def test_thin_film_prismatic_sp4_500x125x3_conforming(
+    monkeypatch: pytest.MonkeyPatch,
+    layers: int,
+) -> None:
+    pytest.importorskip("gmsh")
+    monkeypatch.setenv("FULLMAG_FEM_MESH_CACHE_DIR", "")
+    fm.reset()
+    try:
+        h_inplane = 5.0e-9
+        study = fm.study(f"test_thin_film_sp4_L{layers}")
+        study.engine("fem")
+        study.universe(
+            mode="manual",
+            size=(1500.0e-9, 375.0e-9, 300.0e-9),
+            center=(0.0, 0.0, 0.0),
+            padding=(0.0, 0.0, 0.0),
+        )
+        study.universe.mesh(
+            minimum_element_size=10.0e-9,
+            maximum_element_size=80.0e-9,
+            maximum_element_growth_rate=1.8,
+            grading="geometric",
+        )
+        film = study.geometry(fm.Box(size=(500.0e-9, 125.0e-9, 3.0e-9), name="film"), name="film")
+        film.Ms = 8.0e5
+        film.Aex = 1.3e-11
+        film.alpha = 0.02
+        film.m = fm.init.UniformMagnetization((1.0, 0.1, 0.0))
+        film.mesh.thin_film(
+            minimum_element_size=h_inplane,
+            maximum_element_size=h_inplane,
+            layers=layers,
+            topology="prismatic",
+            exact_layers=True,
+            transition="pyramid_to_tetrahedra",
+            order=1,
+        )
+        study.demag(realization="poisson_robin")
+        study.build_domain_mesh()
+        artifact = study.mesh._current_artifact()
+        mesh = artifact.mesh
+        assert artifact.build_report is not None
+        assert artifact.build_report["build_mode"] == "single_geometry_geo_mixed"
+        assert artifact.build_report["degraded"] is False
+        cert = mesh.mixed_layer_topology_certificate
+        assert isinstance(cert, MixedLayerTopologyCertificate)
+        assert cert.certificate_status == "accepted"
+        assert cert.realized_layer_count == layers
+        assert cert.nonconforming_face_count == 0
+        for family in ("prism6", "pyramid5", "tet4"):
+            assert cert.jacobian_minima_m3_by_family[family] > 0.0
+            assert cert.scaled_jacobian_p05_by_family[family] >= 0.1
+        assert _mixed_same_side_two_owner_face_count(mesh, tolerance=cert.plane_tolerance_m) == 0
+    finally:
+        fm.reset()

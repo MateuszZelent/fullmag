@@ -50,6 +50,213 @@ MIXED_QUALITY_METRIC = "mixed_topology_scaled_jacobian.v1"
 MIXED_SCALED_JACOBIAN_P05_MIN = 0.1
 MIXED_PYRAMID_APEX_SCALE_STEP = 0.001
 MIXED_PYRAMID_APEX_SCALE_MAX = 1.25
+PURE_PRISM_CERT_SCHEMA_VERSION = "pure_prism_topology_certificate.v1"
+PURE_PRISM_SHARED_GEO_STRATEGY = "pure_prism_extruded_shared_domain"
+
+_PURE_PRISM_CERT_REQUIRED_FIELDS = frozenset(
+    {
+        "schema_version",
+        "certificate_status",
+        "requested_sweep_direction",
+        "resolved_sweep_direction",
+        "requested_layer_count",
+        "realized_layer_count",
+        "lower_air_layer_count",
+        "upper_air_layer_count",
+        "magnetic_plane_coordinates_m",
+        "plane_tolerance_m",
+        "interface_marker",
+        "outer_boundary_marker",
+        "magnetic_bounds_min_m",
+        "magnetic_bounds_max_m",
+        "airbox_bounds_min_m",
+        "airbox_bounds_max_m",
+        "magnetic_bounds_relative_error",
+        "airbox_bounds_relative_error",
+        "cell_family_counts_by_marker",
+        "cell_family_counts_by_part",
+        "facet_family_counts_by_role_marker",
+        "jacobian_minima_m3_by_family",
+        "quality_metric",
+        "scaled_jacobian_minima_by_family",
+        "scaled_jacobian_p05_by_family",
+        "magnetic_volume_m3",
+        "expected_magnetic_volume_m3",
+        "magnetic_relative_volume_error",
+        "air_volume_m3",
+        "shared_domain_volume_m3",
+        "expected_shared_domain_volume_m3",
+        "shared_domain_relative_volume_error",
+        "marker_coverage_complete",
+        "nonconforming_face_count",
+        "orphan_face_count",
+        "nonmanifold_face_count",
+        "coincident_interface_face_count",
+        "topology_fingerprint_version",
+        "topology_fingerprint",
+        "gmsh_version",
+        "strategy",
+        "effective_gmsh_thread_count",
+        "deterministic_inputs",
+        "fallbacks_triggered",
+    }
+)
+
+
+def _validate_pure_prism_topology_certificate_payload(
+    payload: object,
+) -> dict[str, Any]:
+    """Validate and copy a ``pure_prism_topology_certificate.v1`` mapping."""
+    if not isinstance(payload, Mapping):
+        raise TypeError(
+            "pure_prism_topology_certificate must be a mapping or None"
+        )
+    cert = json.loads(json.dumps(dict(payload), allow_nan=False))
+    if set(cert) != _PURE_PRISM_CERT_REQUIRED_FIELDS:
+        missing = sorted(_PURE_PRISM_CERT_REQUIRED_FIELDS - set(cert))
+        extra = sorted(set(cert) - _PURE_PRISM_CERT_REQUIRED_FIELDS)
+        raise ValueError(
+            "pure_prism_topology_certificate has invalid field set: "
+            f"missing={missing}, extra={extra}"
+        )
+    if cert["schema_version"] != PURE_PRISM_CERT_SCHEMA_VERSION:
+        raise ValueError(
+            "pure_prism_topology_certificate schema_version must be "
+            f"{PURE_PRISM_CERT_SCHEMA_VERSION!r}"
+        )
+    if cert["certificate_status"] != "accepted":
+        raise ValueError("pure_prism_topology_certificate must be accepted")
+    if cert["requested_sweep_direction"] not in {"auto", "x", "y", "z"} or (
+        cert["resolved_sweep_direction"] not in {"x", "y", "z"}
+    ):
+        raise ValueError("pure_prism_topology_certificate has invalid sweep direction")
+    if cert["requested_sweep_direction"] != "auto" and (
+        cert["requested_sweep_direction"] != cert["resolved_sweep_direction"]
+    ):
+        raise ValueError("pure_prism_topology_certificate cannot change sweep direction")
+    for name in (
+        "requested_layer_count",
+        "realized_layer_count",
+        "lower_air_layer_count",
+        "upper_air_layer_count",
+        "interface_marker",
+        "outer_boundary_marker",
+        "effective_gmsh_thread_count",
+    ):
+        value = cert[name]
+        if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+            raise ValueError(
+                f"pure_prism_topology_certificate {name} must be a positive integer"
+            )
+    if cert["requested_layer_count"] != cert["realized_layer_count"]:
+        raise ValueError("pure_prism_topology_certificate layer count mismatch")
+    if cert["interface_marker"] == cert["outer_boundary_marker"]:
+        raise ValueError("pure_prism_topology_certificate markers must be distinct")
+    if cert["effective_gmsh_thread_count"] != 1:
+        raise ValueError(
+            "pure_prism_topology_certificate requires one effective Gmsh thread"
+        )
+    planes = cert["magnetic_plane_coordinates_m"]
+    if (
+        not isinstance(planes, list)
+        or len(planes) != cert["realized_layer_count"] + 1
+        or any(isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(float(v)) for v in planes)
+        or any(float(right) <= float(left) for left, right in zip(planes, planes[1:], strict=False))
+    ):
+        raise ValueError("pure_prism_topology_certificate magnetic planes are invalid")
+    if (
+        isinstance(cert["plane_tolerance_m"], bool)
+        or not isinstance(cert["plane_tolerance_m"], (int, float))
+        or not math.isfinite(float(cert["plane_tolerance_m"]))
+        or float(cert["plane_tolerance_m"]) <= 0.0
+    ):
+        raise ValueError("pure_prism_topology_certificate plane_tolerance_m must be positive")
+    for prefix in ("magnetic", "airbox"):
+        lo = cert[f"{prefix}_bounds_min_m"]
+        hi = cert[f"{prefix}_bounds_max_m"]
+        if (
+            not isinstance(lo, list)
+            or not isinstance(hi, list)
+            or len(lo) != 3
+            or len(hi) != 3
+            or any(isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(float(v)) for v in (*lo, *hi))
+            or any(float(right) <= float(left) for left, right in zip(lo, hi, strict=True))
+        ):
+            raise ValueError(f"pure_prism_topology_certificate {prefix} bounds are invalid")
+    for name in (
+        "magnetic_volume_m3",
+        "expected_magnetic_volume_m3",
+        "air_volume_m3",
+        "shared_domain_volume_m3",
+        "expected_shared_domain_volume_m3",
+    ):
+        val = cert[name]
+        if isinstance(val, bool) or not isinstance(val, (int, float)) or not math.isfinite(float(val)) or float(val) <= 0.0:
+            raise ValueError(f"pure_prism_topology_certificate {name} must be positive")
+    for name in (
+        "magnetic_relative_volume_error",
+        "shared_domain_relative_volume_error",
+        "magnetic_bounds_relative_error",
+        "airbox_bounds_relative_error",
+    ):
+        val = cert[name]
+        if isinstance(val, bool) or not isinstance(val, (int, float)) or not math.isfinite(float(val)) or float(val) < 0.0 or float(val) > 1.0e-8:
+            raise ValueError(f"pure_prism_topology_certificate {name} exceeds 1e-8")
+    if cert["marker_coverage_complete"] is not True:
+        raise ValueError("pure_prism_topology_certificate marker_coverage_complete must be true")
+    for name in (
+        "nonconforming_face_count",
+        "orphan_face_count",
+        "nonmanifold_face_count",
+        "coincident_interface_face_count",
+    ):
+        if cert[name] != 0 or isinstance(cert[name], bool):
+            raise ValueError(f"pure_prism_topology_certificate {name} must be zero")
+    if cert["topology_fingerprint_version"] != "v3":
+        raise ValueError("pure_prism_topology_certificate requires topology_fingerprint_version='v3'")
+    fingerprint = cert["topology_fingerprint"]
+    if (
+        not isinstance(fingerprint, str)
+        or not fingerprint.startswith("sha256:")
+        or len(fingerprint) != len("sha256:") + 64
+    ):
+        raise ValueError("pure_prism_topology_certificate has an invalid fingerprint")
+    if not isinstance(cert["gmsh_version"], str) or not cert["gmsh_version"].strip():
+        raise ValueError("pure_prism_topology_certificate gmsh_version must be non-empty")
+    if cert["strategy"] != PURE_PRISM_SHARED_GEO_STRATEGY:
+        raise ValueError(
+            "pure_prism_topology_certificate strategy must be "
+            f"{PURE_PRISM_SHARED_GEO_STRATEGY!r}"
+        )
+    if cert["quality_metric"] != MIXED_QUALITY_METRIC:
+        raise ValueError(
+            f"pure_prism_topology_certificate quality_metric must be {MIXED_QUALITY_METRIC!r}"
+        )
+    if not isinstance(cert["deterministic_inputs"], dict) or not cert["deterministic_inputs"]:
+        raise ValueError("pure_prism_topology_certificate deterministic_inputs must be non-empty")
+    if not isinstance(cert["fallbacks_triggered"], list) or cert["fallbacks_triggered"]:
+        raise ValueError("pure_prism_topology_certificate requires empty fallbacks_triggered")
+    for name in (
+        "jacobian_minima_m3_by_family",
+        "scaled_jacobian_minima_by_family",
+        "scaled_jacobian_p05_by_family",
+    ):
+        mapping = cert[name]
+        if (
+            not isinstance(mapping, dict)
+            or set(mapping) != {"prism6"}
+            or isinstance(mapping["prism6"], bool)
+            or not isinstance(mapping["prism6"], (int, float))
+            or not math.isfinite(float(mapping["prism6"]))
+            or float(mapping["prism6"]) <= 0.0
+        ):
+            raise ValueError(f"pure_prism_topology_certificate {name} must contain positive prism6 value")
+    if float(cert["scaled_jacobian_p05_by_family"]["prism6"]) < MIXED_SCALED_JACOBIAN_P05_MIN:
+        raise ValueError(
+            "pure_prism_topology_certificate scaled_jacobian_p05_by_family['prism6'] "
+            f"must be >= {MIXED_SCALED_JACOBIAN_P05_MIN}"
+        )
+    return cert
 
 FEM_CELL_ARITIES = {"tet4": 4, "prism6": 6, "pyramid5": 5, "hex8": 8}
 FEM_FACET_ARITIES = {"tri3": 3, "quad4": 4}
@@ -2173,6 +2380,7 @@ class MeshData:
     per_domain_quality: dict[int, MeshQualityReport] | None = None
     realization_report: MeshRealizationReport | None = None
     mixed_layer_topology_certificate: MixedLayerTopologyCertificateLike | None = None
+    pure_prism_topology_certificate: dict[str, Any] | None = None
     # Retained mesh-owner labels, not authentication or a solved-field certificate.
     vertex_identity: Mapping[str, object] | None = None
     # Mesher execution evidence only; never a solved-field certificate.
@@ -2245,6 +2453,22 @@ class MeshData:
             raise TypeError(
                 "mixed_layer_topology_certificate must be a supported mixed certificate"
             )
+        if (
+            self.mixed_layer_topology_certificate is not None
+            and self.pure_prism_topology_certificate is not None
+        ):
+            raise ValueError(
+                "mesh cannot carry both mixed_layer_topology_certificate and "
+                "pure_prism_topology_certificate"
+            )
+        if self.pure_prism_topology_certificate is not None:
+            object.__setattr__(
+                self,
+                "pure_prism_topology_certificate",
+                _validate_pure_prism_topology_certificate_payload(
+                    self.pure_prism_topology_certificate
+                ),
+            )
 
         # A native mixed certificate is emitted only after the Rust bridge has
         # parsed and validated the complete typed CSR mesh (including node
@@ -2264,6 +2488,7 @@ class MeshData:
         self.validate()
         self._validate_realization_report()
         self._validate_mixed_layer_topology_certificate()
+        self._validate_pure_prism_topology_certificate()
 
     def _validate_realization_report(self) -> None:
         report = self.realization_report
@@ -2437,6 +2662,29 @@ class MeshData:
             )
             object.__setattr__(result, descriptor.name, value)
         return result
+
+    def _validate_pure_prism_topology_certificate(self) -> None:
+        certificate = self.pure_prism_topology_certificate
+        if certificate is None:
+            return
+        cell_families = set(self.cell_types.tolist())
+        if cell_families != {"prism6"}:
+            raise ValueError(
+                "pure_prism_topology_certificate requires prism6-only cells; "
+                f"found {sorted(cell_families)}"
+            )
+        facet_families = set(self.facet_types.tolist())
+        if facet_families != {"tri3", "quad4"}:
+            raise ValueError(
+                "pure_prism_topology_certificate requires tri3 and quad4 facets; "
+                f"found {sorted(facet_families)}"
+            )
+        actual_fingerprint = self.topology_fingerprint_v3()
+        if certificate["topology_fingerprint"] != actual_fingerprint:
+            raise ValueError(
+                "pure_prism_topology_certificate topology fingerprint is stale: "
+                f"certificate={certificate['topology_fingerprint']}, actual={actual_fingerprint}"
+            )
 
     def _validate_mixed_layer_topology_certificate(self) -> None:
         certificate = self.mixed_layer_topology_certificate
@@ -3532,6 +3780,7 @@ class MeshData:
             per_domain_quality=None,
             realization_report=self.realization_report,
             mixed_layer_topology_certificate=None,
+            pure_prism_topology_certificate=None,
             vertex_identity=self.vertex_identity,
             size_field_realization=self.size_field_realization,
         )
@@ -3575,6 +3824,11 @@ class MeshData:
                         "mixed_layer_topology_certificate": (
                             self.mixed_layer_topology_certificate.to_dict()
                             if self.mixed_layer_topology_certificate is not None
+                            else None
+                        ),
+                        "pure_prism_topology_certificate": (
+                            dict(self.pure_prism_topology_certificate)
+                            if self.pure_prism_topology_certificate is not None
                             else None
                         ),
                     },
@@ -3631,6 +3885,13 @@ class MeshData:
                 json.dumps(
                     self.mixed_layer_topology_certificate.to_dict()
                     if self.mixed_layer_topology_certificate is not None
+                    else None
+                ),
+            ),
+            pure_prism_topology_certificate_json=np.asarray(
+                json.dumps(
+                    dict(self.pure_prism_topology_certificate)
+                    if self.pure_prism_topology_certificate is not None
                     else None
                 ),
             ),
@@ -3817,6 +4078,18 @@ class MeshData:
                 mixed_layer_topology_certificate = _mixed_layer_topology_certificate_from_serialized(
                     raw_certificate
                 )
+        pure_prism_topology_certificate = None
+        if "pure_prism_topology_certificate_json" in data.files:
+            raw_pure_prism = json.loads(
+                str(data["pure_prism_topology_certificate_json"])
+            )
+            if raw_pure_prism is not None:
+                if not isinstance(raw_pure_prism, dict):
+                    raise TypeError(
+                        "serialized pure_prism_topology_certificate must be "
+                        "an object or null"
+                    )
+                pure_prism_topology_certificate = raw_pure_prism
         payload = {name: data[name] for name in data.files if not name.endswith("_json")}
         payload.update(
             size_field_realization=(
@@ -3834,6 +4107,7 @@ class MeshData:
             per_domain_quality=per_domain_quality,
             realization_report=realization_report,
             mixed_layer_topology_certificate=mixed_layer_topology_certificate,
+            pure_prism_topology_certificate=pure_prism_topology_certificate,
         )
         return cls._from_serialized_mapping(payload)
 
@@ -3868,6 +4142,11 @@ class MeshData:
                 _mixed_layer_topology_certificate_from_serialized(
                     payload.get("mixed_layer_topology_certificate")
                 )
+            ),
+            pure_prism_topology_certificate=(
+                dict(payload["pure_prism_topology_certificate"])
+                if payload.get("pure_prism_topology_certificate") is not None
+                else None
             ),
         )
         if legacy:
@@ -3954,6 +4233,10 @@ class MeshData:
         if mesh.mixed_layer_topology_certificate is not None:
             ir["mixed_layer_topology_certificate"] = (
                 mesh.mixed_layer_topology_certificate.to_dict()
+            )
+        if mesh.pure_prism_topology_certificate is not None:
+            ir["pure_prism_topology_certificate"] = dict(
+                mesh.pure_prism_topology_certificate
             )
         if _legacy_per_domain_quality_is_complete(mesh):
             assert mesh.per_domain_quality is not None
