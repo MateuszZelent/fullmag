@@ -1733,7 +1733,8 @@ int solve(
         "\"charge_converged\":true,\"charge_iterations\":%u,"
         "\"charge_relative_residual\":%.17g,\"net_boundary_current_A\":%.17g,"
         "\"spin_converged\":true,\"spin_iterations\":%u,"
-        "\"spin_relative_residual\":%.17g,\"torque_l2_per_s\":%.17g}",
+        "\"spin_relative_residual\":%.17g,\"torque_l2_per_s\":%.17g,"
+        "\"resolved_charge_solver\":\"%s\",\"resolved_spin_solver\":\"%s\"}",
         kConstitutiveVersion,
         kOperatorVersion,
         kPhysicalResidualVersion,
@@ -1742,7 +1743,9 @@ int solve(
         result.net_boundary_current_a,
         result.spin_iterations,
         result.spin_relative_residual,
-        result.torque_l2_per_s);
+        result.torque_l2_per_s,
+        charge.resolved_solver.c_str(),
+        spin.resolved_solver.c_str());
     return FULLMAG_FEM_OK;
 }
 
@@ -1918,14 +1921,15 @@ int solve_charge(
     std::snprintf(
         result.diagnostics_json,
         sizeof(result.diagnostics_json),
-        "{\"schema_version\":\"fem_charge_transport_diagnostics.v1\"," \
-        "\"constitutive_version\":\"%s\",\"operator_version\":\"%s\"," \
-        "\"physical_residual_version\":\"%s\"," \
-        "\"execution_lane\":\"fem_cpu_double\"," \
-        "\"charge_converged\":true,\"charge_iterations\":%u," \
-        "\"charge_relative_residual\":%.17g," \
-        "\"net_boundary_current_A\":%.17g," \
-        "\"current_density_volume_average_Apm2\":[%.17g,%.17g,%.17g]}",
+        "{\"schema_version\":\"fem_charge_transport_diagnostics.v1\","
+        "\"constitutive_version\":\"%s\",\"operator_version\":\"%s\","
+        "\"physical_residual_version\":\"%s\","
+        "\"execution_lane\":\"fem_cpu_double\","
+        "\"charge_converged\":true,\"charge_iterations\":%u,"
+        "\"charge_relative_residual\":%.17g,"
+        "\"net_boundary_current_A\":%.17g,"
+        "\"current_density_volume_average_Apm2\":[%.17g,%.17g,%.17g],"
+        "\"resolved_charge_solver\":\"%s\"}",
         kChargeConstitutiveVersion,
         kChargeOperatorVersion,
         kChargePhysicalResidualVersion,
@@ -1934,7 +1938,8 @@ int solve_charge(
         result.net_boundary_current_a,
         result.current_density_volume_average_apm2[0],
         result.current_density_volume_average_apm2[1],
-        result.current_density_volume_average_apm2[2]);
+        result.current_density_volume_average_apm2[2],
+        diagnostics.resolved_solver.c_str());
     if (prescribed_currents) {
         for (uint64_t terminal = 0; terminal < current_request->terminal_count; ++terminal) {
             current_result->terminal_voltages_v[terminal] =
@@ -1956,11 +1961,13 @@ int solve_charge(
             "{\"schema_version\":\"fem_charge_terminal_current_diagnostics.v3\","
             "\"operator_version\":\"%s\",\"execution_lane\":\"fem_cpu_double\","
             "\"terminal_count\":%llu,\"gauge_component_count\":%llu,"
-            "\"charge_converged\":true,\"charge_relative_residual\":%.17g}",
+            "\"charge_converged\":true,\"charge_relative_residual\":%.17g,"
+            "\"resolved_charge_solver\":\"%s\"}",
             kChargeOperatorVersion,
             static_cast<unsigned long long>(current_request->terminal_count),
             static_cast<unsigned long long>(current_solution.gauge_terminal_indices.size()),
-            result.charge_relative_residual);
+            result.charge_relative_residual,
+            diagnostics.resolved_solver.c_str());
     }
     return FULLMAG_FEM_OK;
 }
@@ -2101,7 +2108,8 @@ int solve_m2(
         "\"interface_model\":\"transparent_conforming_h1\",\"constitutive_model\":\"reciprocal_m2\","
         "\"charge_converged\":true,\"charge_iterations\":%u,"
         "\"charge_relative_residual\":%.17g,\"spin_converged\":true,\"spin_iterations\":%u,"
-        "\"spin_relative_residual\":%.17g,\"torque_l2_per_s\":%.17g}",
+        "\"spin_relative_residual\":%.17g,\"torque_l2_per_s\":%.17g,"
+        "\"resolved_charge_solver\":\"%s\",\"resolved_spin_solver\":\"%s\"}",
         kM2ConstitutiveVersion,
         kM2OperatorVersion,
         kPhysicalResidualVersion,
@@ -2109,7 +2117,9 @@ int solve_m2(
         result.charge_relative_residual,
         result.spin_iterations,
         result.spin_relative_residual,
-        result.torque_l2_per_s);
+        result.torque_l2_per_s,
+        diagnostics.charge.resolved_solver.c_str(),
+        diagnostics.spin.resolved_solver.c_str());
     return FULLMAG_FEM_OK;
 }
 
@@ -2552,14 +2562,17 @@ int solve_rt0(
             "{\"schema_version\":\"%s\","
             "\"operator_version\":\"%s\",\"source_view_identity_digest\":\"%s\","
             "\"target_count\":%llu,\"source_target_pairs\":%llu,"
-            "\"unconverged_pair_count\":%llu,\"maximum_pair_error_apm\":%.17g}",
+            "\"unconverged_pair_count\":%llu,\"maximum_pair_error_apm\":%.17g,"
+            "\"resolved_execution_policy\":\"%s\",\"effective_worker_threads\":%d}",
             oersted_result->operator_version,
             oersted_result->operator_version,
             oersted_result->source_view_identity_digest,
             static_cast<unsigned long long>(target_count),
             static_cast<unsigned long long>(oersted_result->source_target_pairs),
             static_cast<unsigned long long>(oersted_result->unconverged_pair_count),
-            oersted_result->maximum_pair_error_apm);
+            oersted_result->maximum_pair_error_apm,
+            direct.diagnostics.resolved_execution_policy.c_str(),
+            direct.diagnostics.effective_worker_threads);
         if (quadrature_snapshot != nullptr) {
             rt0_require(direct.target_diagnostics.size() == target_count &&
                     direct.h_xyz_apm.size() == target_count * 3u,
@@ -2699,7 +2712,8 @@ int solve_rt0(
             "\"converged\":true,\"nd_dofs\":%d,\"h1_dofs\":%d,"
             "\"harmonic_count\":%d,\"first_block_residual\":%.17g,"
             "\"constraint_residual\":%.17g,\"compatible_divergence_residual\":%.17g,"
-            "\"nodal_h_xyz_apm_len\":%llu,\"nodal_projection_residual\":%.17g}",
+            "\"nodal_h_xyz_apm_len\":%llu,\"nodal_projection_residual\":%.17g,"
+            "\"resolved_linear_solver\":\"%s\",\"linear_iterations\":%d}",
             vector_potential_result->operator_version,
             vector_potential_result->source_view_identity_digest,
             vector_potential_result->boundary_gauge_variant,
@@ -2710,7 +2724,9 @@ int solve_rt0(
             mixed.diagnostics.constraint_residual,
             mixed.diagnostics.compatible_divergence_residual,
             static_cast<unsigned long long>(vector_potential_result->nodal_h_xyz_apm_len),
-            mixed.diagnostics.nodal_projection_residual);
+            mixed.diagnostics.nodal_projection_residual,
+            mixed.diagnostics.resolved_linear_solver.c_str(),
+            mixed.diagnostics.linear_iterations);
     }
     if (source_snapshot != nullptr) {
         fullmag::fem::transport::export_closed_loop_source_snapshot(*view, closed_closure, *periodic_snapshot, *source_snapshot, prepared_snapshot);
