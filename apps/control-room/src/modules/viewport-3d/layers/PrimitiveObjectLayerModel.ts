@@ -10,6 +10,7 @@ import {
 } from "three";
 
 import type { VisualizationTargetSettings } from "@/kernel/visualization/ObjectVisualizationController";
+import { isTransportConductorRole } from "@/shared/domain/physics/objectMagneticModel";
 import { resolvePrimitiveSurfaceColor } from "@/kernel/visualization/primitiveSurfaceColor";
 import type { PrimitiveDraft } from "@/kernel/authoring/geometryLifecycleCommands";
 
@@ -174,6 +175,13 @@ export function shouldRenderPrimitiveTransformGizmo(
   return false;
 }
 
+/** Keep explicitly enabled conductor edges inspectable through an overlapping magnetic solid. */
+export function primitiveObjectWireframeRenderSemantic(
+  object: Pick<Viewport3DPrimitiveObject, "role">,
+): "featureEdges" | "hiddenEdges" {
+  return isTransportConductorRole(object.role) ? "hiddenEdges" : "featureEdges";
+}
+
 /**
  * A primitive-only carrier has no field-capable mesh surface. When the user
  * requests the shaded pass, represent that pass with the field-free primitive
@@ -317,9 +325,15 @@ export function shouldRenderPrimitiveObject(
     settings,
     allowMeshReadyPreview,
   );
+  // A conductor's authored scene geometry remains the field-free preview until
+  // a target-scoped transport field builds a realized FDM replacement.
+  const conductorScenePreview =
+    isTransportConductorRole(object.role) && !hasRealizedObjectGeometry;
   return (
     !hasRealizedObjectGeometry &&
-    (object.meshState !== "mesh-ready" || allowMeshReadyPreview) &&
+    (object.meshState !== "mesh-ready" ||
+      allowMeshReadyPreview ||
+      conductorScenePreview) &&
     renderSettings.visible &&
     (renderSettings.primitiveVisible === true ||
       renderSettings.shaderVisible ||
