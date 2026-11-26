@@ -41,6 +41,9 @@ struct FemGpuFieldBufferDeviceState {
     uint64_t regional_drive_count = 0;
     uint64_t regional_drive_point_count = 0;
     uint64_t regional_drive_device_bytes = 0;
+    // Raw cudaMalloc leaves h_drive uninitialized; start false and set true only
+    // after an explicit cudaMemset/cudaMemsetAsync zeroes all three components.
+    bool h_drive_zeroed = false;
 };
 
 } // namespace fullmag::fem

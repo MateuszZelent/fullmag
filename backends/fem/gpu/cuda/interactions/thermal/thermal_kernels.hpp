@@ -12,7 +12,8 @@
 
 namespace fullmag::fem {
 
-/// Deterministic Brown thermal field and per-block max sigma partials.
+/// Deterministic Brown thermal field and optional per-block max sigma partials.
+/// Passing block_max_sigma == nullptr skips max-sigma block reduction.
 void fullmag_cuda_thermal_field_blocks(
     const double *ms,
     const double *alpha,

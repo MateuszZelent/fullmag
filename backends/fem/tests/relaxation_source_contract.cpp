@@ -1414,6 +1414,12 @@ void gpu_relaxation_pgbb_building_blocks_live_under_native_cuda() {
     const std::string step_stats_header =
         read_text_file(root / "gpu" / "cuda" / "integrators" / "rk" /
                        "rk_step_stats.hpp");
+    const std::string step_stats_cuda_source =
+        read_text_file(root / "gpu" / "cuda" / "integrators" / "rk" /
+                       "rk_step_stats.cu");
+    const std::string step_stats_fallback_source =
+        read_text_file(root / "gpu" / "cuda" / "integrators" / "rk" /
+                       "rk_step_stats.cpp");
     const std::string kernels_header =
         read_text_file(relaxation_root / "pgbb_kernels.hpp");
     const std::string kernels_source =
@@ -1471,7 +1477,7 @@ void gpu_relaxation_pgbb_building_blocks_live_under_native_cuda() {
     const auto pgbb_step_end =
         pgbb_step_start == std::string::npos
             ? std::string::npos
-            : pgbb_source.find("#else", pgbb_step_start);
+            : pgbb_source.find("#else\n    (void)ctx;", pgbb_step_start);
     const std::string pgbb_step =
         pgbb_step_start == std::string::npos
             ? std::string()
@@ -1832,18 +1838,43 @@ void gpu_relaxation_pgbb_building_blocks_live_under_native_cuda() {
             pgbb_source.find("std::clamp(ctx.relaxation.step_size, kMinStepSize, kMaxStepSize)") !=
                 std::string::npos,
         "native FEM GPU projected-gradient BB must sanitize invalid runtime step sizes before retraction");
+    const auto pgbb_enqueue_curvature_start =
+        pgbb_source.find("bool gpu_relax_enqueue_accepted_bb_curvature_and_next_norms(");
+    const auto pgbb_enqueue_curvature_end =
+        pgbb_enqueue_curvature_start == std::string::npos
+            ? std::string::npos
+            : pgbb_source.find("\n} // namespace", pgbb_enqueue_curvature_start);
+    const std::string pgbb_enqueue_curvature =
+        pgbb_enqueue_curvature_start == std::string::npos
+            ? std::string()
+            : pgbb_source.substr(
+                  pgbb_enqueue_curvature_start,
+                  pgbb_enqueue_curvature_end == std::string::npos
+                      ? std::string::npos
+                      : pgbb_enqueue_curvature_end - pgbb_enqueue_curvature_start);
     check(
-        pgbb_source.find("gpu_relax_compute_accepted_bb_curvature(") !=
+        pgbb_source.find("gpu_relax_enqueue_accepted_bb_curvature_and_next_norms(") !=
                 std::string::npos &&
-            pgbb_source.find("fullmag_cuda_relax_bb_curvature_blocks(") !=
+            pgbb_enqueue_curvature.find("fullmag_cuda_relax_bb_curvature_blocks(") !=
                 std::string::npos &&
-            pgbb_source.find("accepted curvature scalars device->host") !=
+            pgbb_enqueue_curvature.find("gpu.reductions.scalar_result + kGpuFinalScalarSlots") !=
+                std::string::npos &&
+            pgbb_enqueue_curvature.find("tail + 0") != std::string::npos &&
+            pgbb_enqueue_curvature.find("tail + 1") != std::string::npos &&
+            pgbb_enqueue_curvature.find("tail + 2") != std::string::npos &&
+            pgbb_enqueue_curvature.find("tail + 3") != std::string::npos &&
+            pgbb_enqueue_curvature.find("tail + 4") != std::string::npos &&
+            pgbb_enqueue_curvature.find("gpu.reductions.scalar_result + 1") ==
+                std::string::npos &&
+            pgbb_enqueue_curvature.find("gpu.reductions.scalar_result + 2") ==
+                std::string::npos &&
+            pgbb_enqueue_curvature.find("gpu_rk_read_control_scalar_results(") ==
                 std::string::npos &&
             pgbb_source.find("gpu_relax_apply_bb_step_size_from_curvature(") !=
                 std::string::npos &&
             pgbb_source.find("ctx.relaxation.use_bb1") !=
                 std::string::npos,
-        "native FEM GPU projected-gradient BB must update BB1/BB2 step size from device-reduced curvature");
+        "native FEM GPU projected-gradient BB must enqueue BB curvature and next-step gradient norms into scalar tail slots without overwriting slots 0..17 or adding a sync");
     check(
         direct_energy_source.find("GPU projected-gradient BB produced non-finite total energy") !=
                 std::string::npos &&
@@ -1972,36 +2003,82 @@ void gpu_relaxation_pgbb_building_blocks_live_under_native_cuda() {
             pgbb_source.find("update_stage_completion_from_stats(ctx, out_stats)") ==
                 std::string::npos,
         "native FEM GPU projected-gradient BB must leave stage-completion updates to the finalized native stats publisher");
+    const std::size_t pgbb_rollback_capture =
+        pgbb_source.find("capture_gpu_relax_pgbb_rollback_state(ctx)");
     const std::size_t pgbb_accepted_finalize =
-        pgbb_source.find("if (!gpu_rk_finalize_step_stats_control_readback(ctx, out_stats, reason))");
+        pgbb_rollback_capture == std::string::npos
+        ? std::string::npos
+        : pgbb_source.find(
+              "gpu_rk_finalize_step_stats_control_readback_with_scalar_tail_reuse_energy(",
+              pgbb_rollback_capture);
     const std::size_t pgbb_accepted_finalize_restore =
         pgbb_accepted_finalize == std::string::npos
         ? std::string::npos
         : pgbb_source.find(
               "return gpu_relax_restore_accepted_step_after_finalize_failure(",
               pgbb_accepted_finalize);
+    const std::size_t pgbb_curvature_apply =
+        pgbb_accepted_finalize == std::string::npos
+        ? std::string::npos
+        : pgbb_source.find(
+              "gpu_relax_apply_bb_step_size_from_curvature(ctx, accepted_tail, reason)",
+              pgbb_accepted_finalize);
+    const std::size_t pgbb_curvature_restore =
+        pgbb_curvature_apply == std::string::npos
+        ? std::string::npos
+        : pgbb_source.find(
+              "return gpu_relax_restore_accepted_step_after_finalize_failure(",
+              pgbb_curvature_apply);
     const std::size_t pgbb_stage_completion_update =
         pgbb_source.find("update_stage_completion_from_stats(ctx, out_stats)");
+    const std::string pgbb_pre_rollback =
+        pgbb_rollback_capture == std::string::npos
+        ? std::string()
+        : pgbb_source.substr(0, pgbb_rollback_capture);
     check(
         pgbb_source.find("struct GpuRelaxPgbbRollbackState") !=
                 std::string::npos &&
-            pgbb_source.find("capture_gpu_relax_pgbb_rollback_state(ctx)") !=
-                std::string::npos &&
+            pgbb_rollback_capture != std::string::npos &&
             pgbb_source.find("restore_gpu_relax_pgbb_metadata(ctx, rollback)") !=
                 std::string::npos &&
             pgbb_source.find("gpu_relax_restore_accepted_step_after_finalize_failure(") !=
                 std::string::npos &&
             pgbb_source.find("accepted-step stats finalization failure") !=
                 std::string::npos &&
-            pgbb_source.find("capture_gpu_relax_pgbb_rollback_state(ctx)") <
+            pgbb_rollback_capture <
                 pgbb_source.find("ctx.relaxation.accepted_steps += 1") &&
             pgbb_accepted_finalize != std::string::npos &&
             pgbb_accepted_finalize_restore != std::string::npos &&
+            pgbb_curvature_apply != std::string::npos &&
+            pgbb_curvature_restore != std::string::npos &&
             pgbb_stage_completion_update == std::string::npos &&
             pgbb_accepted_finalize < pgbb_accepted_finalize_restore &&
+            pgbb_accepted_finalize_restore < pgbb_curvature_apply &&
+            pgbb_curvature_apply < pgbb_curvature_restore &&
+            count_occurrences(
+                pgbb_pre_rollback,
+                "gpu_rk_finalize_step_stats_control_readback(ctx, out_stats, reason)") == 3u &&
+            pgbb_pre_rollback.find(
+                "gpu_rk_finalize_step_stats_control_readback_with_scalar_tail_reuse_energy(") ==
+                std::string::npos &&
+            relaxation_state.find("state.pgbb_accepted_field.has_cached_metrics = false;") !=
+                std::string::npos &&
+            step_stats_header.find(
+                "gpu_rk_finalize_step_stats_control_readback_with_scalar_tail_reuse_energy(") !=
+                std::string::npos &&
+            step_stats_cuda_source.find("bool skip_energy_reduction") !=
+                std::string::npos &&
+            step_stats_cuda_source.find(
+                "if (!skip_energy_reduction &&\n        !gpu_rk_reduce_final_energy_terms(") !=
+                std::string::npos &&
+            step_stats_fallback_source.find(
+                "gpu_rk_finalize_step_stats_control_readback_with_scalar_tail_reuse_energy(") !=
+                std::string::npos &&
+            step_stats_fallback_source.find("std::fill_n(tail_scalars, tail_count, 0.0);") !=
+                std::string::npos &&
             pgbb_source.find("context_update_stage_completion_from_stats(ctx, stats)") ==
                 std::string::npos,
-        "native FEM GPU projected-gradient BB must roll back device state and step metadata if accepted-step stats finalization fails");
+        "native FEM GPU projected-gradient BB must reuse accepted energy reductions only after Armijo acceptance, keep full readbacks on all three early exits, and roll back device state and metadata on finalize or curvature failure");
     check(
         kernels_source.find("GPU CUDA projected-gradient BB relaxation kernels source contract") !=
                 std::string::npos,

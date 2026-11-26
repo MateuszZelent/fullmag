@@ -112,6 +112,7 @@ __device__ __forceinline__ double exchange_polarized_operand_scale(
          fabs(endpoint_sum_difference.lo));
 }
 
+template <bool Compensated>
 __global__ void legacy_sparse_exchange_kernel(
     const uint32_t *__restrict__ csr_row_offsets,
     const uint32_t *__restrict__ csr_col_indices,
@@ -141,22 +142,34 @@ __global__ void legacy_sparse_exchange_kernel(
         return;
     }
 
-    gpu_relax_dd::Value km{0.0, 0.0};
+    const double m_row = m_component[row];
     const uint32_t begin = csr_row_offsets[row];
     const uint32_t end = csr_row_offsets[row + 1];
-    for (uint32_t cursor = begin; cursor < end; ++cursor) {
-        const uint32_t col = csr_col_indices[cursor];
-        if (col != static_cast<uint32_t>(row)) {
-            km = gpu_relax_dd::add(
-                km,
-                gpu_relax_dd::scale(
-                    gpu_relax_dd::two_diff(
-                        m_component[col], m_component[row]),
-                    csr_values[cursor]));
+    if constexpr (Compensated) {
+        gpu_relax_dd::Value km{0.0, 0.0};
+        for (uint32_t cursor = begin; cursor < end; ++cursor) {
+            const uint32_t col = csr_col_indices[cursor];
+            if (col != static_cast<uint32_t>(row)) {
+                km = gpu_relax_dd::add(
+                    km,
+                    gpu_relax_dd::scale(
+                        gpu_relax_dd::two_diff(
+                            m_component[col], m_row),
+                        csr_values[cursor]));
+            }
         }
+        h_component[row] =
+            -(2.0 / (kMu0 * ms_i)) * gpu_relax_dd::rounded(km) * inv_mass;
+    } else {
+        double km = 0.0;
+        for (uint32_t cursor = begin; cursor < end; ++cursor) {
+            const uint32_t col = csr_col_indices[cursor];
+            if (col != static_cast<uint32_t>(row)) {
+                km = fma(csr_values[cursor], m_component[col] - m_row, km);
+            }
+        }
+        h_component[row] = -(2.0 / (kMu0 * ms_i)) * km * inv_mass;
     }
-    h_component[row] =
-        -(2.0 / (kMu0 * ms_i)) * gpu_relax_dd::rounded(km) * inv_mass;
 }
 
 __global__ void exchange_row_scale_kernel(
@@ -176,6 +189,7 @@ __global__ void exchange_row_scale_kernel(
     row_scale[row] = ms_i <= 0.0 ? 0.0 : -(2.0 / (kMu0 * ms_i));
 }
 
+template <bool Compensated>
 __global__ void legacy_sparse_exchange_xyz_kernel(
     const uint32_t *__restrict__ csr_row_offsets,
     const uint32_t *__restrict__ csr_col_indices,
@@ -209,27 +223,49 @@ __global__ void legacy_sparse_exchange_xyz_kernel(
         hz[row] = 0.0;
         return;
     }
-    gpu_relax_dd::Value kx{0.0, 0.0};
-    gpu_relax_dd::Value ky{0.0, 0.0};
-    gpu_relax_dd::Value kz{0.0, 0.0};
+    const double mx_row = mx[row];
+    const double my_row = my[row];
+    const double mz_row = mz[row];
     const uint32_t begin = csr_row_offsets[row];
     const uint32_t end = csr_row_offsets[row + 1];
-    for (uint32_t cursor = begin; cursor < end; ++cursor) {
-        const uint32_t col = csr_col_indices[cursor];
-        if (col == static_cast<uint32_t>(row)) {
-            continue;
+    if constexpr (Compensated) {
+        gpu_relax_dd::Value kx{0.0, 0.0};
+        gpu_relax_dd::Value ky{0.0, 0.0};
+        gpu_relax_dd::Value kz{0.0, 0.0};
+        for (uint32_t cursor = begin; cursor < end; ++cursor) {
+            const uint32_t col = csr_col_indices[cursor];
+            if (col == static_cast<uint32_t>(row)) {
+                continue;
+            }
+            const double weight = csr_values[cursor];
+            kx = gpu_relax_dd::add(kx, gpu_relax_dd::scale(
+                gpu_relax_dd::two_diff(mx[col], mx_row), weight));
+            ky = gpu_relax_dd::add(ky, gpu_relax_dd::scale(
+                gpu_relax_dd::two_diff(my[col], my_row), weight));
+            kz = gpu_relax_dd::add(kz, gpu_relax_dd::scale(
+                gpu_relax_dd::two_diff(mz[col], mz_row), weight));
         }
-        const double weight = csr_values[cursor];
-        kx = gpu_relax_dd::add(kx, gpu_relax_dd::scale(
-            gpu_relax_dd::two_diff(mx[col], mx[row]), weight));
-        ky = gpu_relax_dd::add(ky, gpu_relax_dd::scale(
-            gpu_relax_dd::two_diff(my[col], my[row]), weight));
-        kz = gpu_relax_dd::add(kz, gpu_relax_dd::scale(
-            gpu_relax_dd::two_diff(mz[col], mz[row]), weight));
+        hx[row] = material_scale * gpu_relax_dd::rounded(kx) * inv_mass;
+        hy[row] = material_scale * gpu_relax_dd::rounded(ky) * inv_mass;
+        hz[row] = material_scale * gpu_relax_dd::rounded(kz) * inv_mass;
+    } else {
+        double kx = 0.0;
+        double ky = 0.0;
+        double kz = 0.0;
+        for (uint32_t cursor = begin; cursor < end; ++cursor) {
+            const uint32_t col = csr_col_indices[cursor];
+            if (col == static_cast<uint32_t>(row)) {
+                continue;
+            }
+            const double weight = csr_values[cursor];
+            kx = fma(weight, mx[col] - mx_row, kx);
+            ky = fma(weight, my[col] - my_row, ky);
+            kz = fma(weight, mz[col] - mz_row, kz);
+        }
+        hx[row] = material_scale * kx * inv_mass;
+        hy[row] = material_scale * ky * inv_mass;
+        hz[row] = material_scale * kz * inv_mass;
     }
-    hx[row] = material_scale * gpu_relax_dd::rounded(kx) * inv_mass;
-    hy[row] = material_scale * gpu_relax_dd::rounded(ky) * inv_mass;
-    hz[row] = material_scale * gpu_relax_dd::rounded(kz) * inv_mass;
 }
 
 __global__ void legacy_sparse_exchange_energy_blocks_kernel(
@@ -486,6 +522,7 @@ __global__ void periodic_legacy_sparse_exchange_kernel(
     h_component[row] = -(2.0 / (kMu0 * ms_i)) * reduced_km / reduced_mass;
 }
 
+template <bool Compensated>
 __global__ void periodic_reduced_exchange_kernel(
     const uint32_t *__restrict__ reduced_row_offsets,
     const uint32_t *__restrict__ reduced_col_indices,
@@ -515,28 +552,46 @@ __global__ void periodic_reduced_exchange_kernel(
         reduced_hz[reduced] = 0.0;
         return;
     }
-    gpu_relax_dd::Value kx{0.0, 0.0};
-    gpu_relax_dd::Value ky{0.0, 0.0};
-    gpu_relax_dd::Value kz{0.0, 0.0};
     const double mrx = mx[representative];
     const double mry = my[representative];
     const double mrz = mz[representative];
-    for (uint32_t p = reduced_row_offsets[reduced];
-         p < reduced_row_offsets[reduced + 1u]; ++p) {
-        const uint32_t col_representative =
-            periodic_representative_nodes[reduced_col_indices[p]];
-        const double weight = reduced_values[p];
-        kx = gpu_relax_dd::add(kx, gpu_relax_dd::scale(
-            gpu_relax_dd::two_diff(mx[col_representative], mrx), weight));
-        ky = gpu_relax_dd::add(ky, gpu_relax_dd::scale(
-            gpu_relax_dd::two_diff(my[col_representative], mry), weight));
-        kz = gpu_relax_dd::add(kz, gpu_relax_dd::scale(
-            gpu_relax_dd::two_diff(mz[col_representative], mrz), weight));
-    }
     const double scale = -(2.0 / (kMu0 * ms_i)) / mass;
-    reduced_hx[reduced] = scale * gpu_relax_dd::rounded(kx);
-    reduced_hy[reduced] = scale * gpu_relax_dd::rounded(ky);
-    reduced_hz[reduced] = scale * gpu_relax_dd::rounded(kz);
+    if constexpr (Compensated) {
+        gpu_relax_dd::Value kx{0.0, 0.0};
+        gpu_relax_dd::Value ky{0.0, 0.0};
+        gpu_relax_dd::Value kz{0.0, 0.0};
+        for (uint32_t p = reduced_row_offsets[reduced];
+             p < reduced_row_offsets[reduced + 1u]; ++p) {
+            const uint32_t col_representative =
+                periodic_representative_nodes[reduced_col_indices[p]];
+            const double weight = reduced_values[p];
+            kx = gpu_relax_dd::add(kx, gpu_relax_dd::scale(
+                gpu_relax_dd::two_diff(mx[col_representative], mrx), weight));
+            ky = gpu_relax_dd::add(ky, gpu_relax_dd::scale(
+                gpu_relax_dd::two_diff(my[col_representative], mry), weight));
+            kz = gpu_relax_dd::add(kz, gpu_relax_dd::scale(
+                gpu_relax_dd::two_diff(mz[col_representative], mrz), weight));
+        }
+        reduced_hx[reduced] = scale * gpu_relax_dd::rounded(kx);
+        reduced_hy[reduced] = scale * gpu_relax_dd::rounded(ky);
+        reduced_hz[reduced] = scale * gpu_relax_dd::rounded(kz);
+    } else {
+        double kx = 0.0;
+        double ky = 0.0;
+        double kz = 0.0;
+        for (uint32_t p = reduced_row_offsets[reduced];
+             p < reduced_row_offsets[reduced + 1u]; ++p) {
+            const uint32_t col_representative =
+                periodic_representative_nodes[reduced_col_indices[p]];
+            const double weight = reduced_values[p];
+            kx = fma(weight, mx[col_representative] - mrx, kx);
+            ky = fma(weight, my[col_representative] - mry, ky);
+            kz = fma(weight, mz[col_representative] - mrz, kz);
+        }
+        reduced_hx[reduced] = scale * kx;
+        reduced_hy[reduced] = scale * ky;
+        reduced_hz[reduced] = scale * kz;
+    }
 }
 
 __global__ void periodic_reduced_exchange_lift_kernel(
@@ -576,19 +631,36 @@ void fullmag_cuda_legacy_sparse_exchange(
     const uint8_t *magnetic_node_mask,
     double *h_component,
     int rows,
-    cudaStream_t stream)
+    cudaStream_t stream,
+    bool compensated_accumulation)
 {
+    if (rows <= 0) {
+        return;
+    }
     const int num_blocks = (rows + kBlockSize - 1) / kBlockSize;
-    legacy_sparse_exchange_kernel<<<num_blocks, kBlockSize, 0, stream>>>(
-        csr_row_offsets,
-        csr_col_indices,
-        csr_values,
-        m_component,
-        ms,
-        inv_lumped_mass,
-        magnetic_node_mask,
-        h_component,
-        rows);
+    if (compensated_accumulation) {
+        legacy_sparse_exchange_kernel<true><<<num_blocks, kBlockSize, 0, stream>>>(
+            csr_row_offsets,
+            csr_col_indices,
+            csr_values,
+            m_component,
+            ms,
+            inv_lumped_mass,
+            magnetic_node_mask,
+            h_component,
+            rows);
+    } else {
+        legacy_sparse_exchange_kernel<false><<<num_blocks, kBlockSize, 0, stream>>>(
+            csr_row_offsets,
+            csr_col_indices,
+            csr_values,
+            m_component,
+            ms,
+            inv_lumped_mass,
+            magnetic_node_mask,
+            h_component,
+            rows);
+    }
 }
 
 void fullmag_cuda_prepare_exchange_row_scale(
@@ -616,13 +688,24 @@ void fullmag_cuda_legacy_sparse_exchange_xyz(
     double *hy,
     double *hz,
     int rows,
-    cudaStream_t stream)
+    cudaStream_t stream,
+    bool compensated_accumulation)
 {
+    if (rows <= 0) {
+        return;
+    }
     const int num_blocks = (rows + kBlockSize - 1) / kBlockSize;
-    legacy_sparse_exchange_xyz_kernel<<<num_blocks, kBlockSize, 0, stream>>>(
-        csr_row_offsets, csr_col_indices, csr_values,
-        mx, my, mz, row_scale, inv_lumped_mass, magnetic_node_mask,
-        hx, hy, hz, rows);
+    if (compensated_accumulation) {
+        legacy_sparse_exchange_xyz_kernel<true><<<num_blocks, kBlockSize, 0, stream>>>(
+            csr_row_offsets, csr_col_indices, csr_values,
+            mx, my, mz, row_scale, inv_lumped_mass, magnetic_node_mask,
+            hx, hy, hz, rows);
+    } else {
+        legacy_sparse_exchange_xyz_kernel<false><<<num_blocks, kBlockSize, 0, stream>>>(
+            csr_row_offsets, csr_col_indices, csr_values,
+            mx, my, mz, row_scale, inv_lumped_mass, magnetic_node_mask,
+            hx, hy, hz, rows);
+    }
 }
 
 void fullmag_cuda_periodic_legacy_sparse_exchange(
@@ -674,23 +757,44 @@ void fullmag_cuda_periodic_reduced_exchange_xyz(
     double *hz,
     int rows,
     int reduced_rows,
-    cudaStream_t stream)
+    cudaStream_t stream,
+    bool compensated_accumulation)
 {
+    if (rows <= 0 || reduced_rows <= 0) {
+        return;
+    }
     const int reduced_blocks = (reduced_rows + kBlockSize - 1) / kBlockSize;
-    periodic_reduced_exchange_kernel<<<reduced_blocks, kBlockSize, 0, stream>>>(
-        reduced_row_offsets,
-        reduced_col_indices,
-        reduced_values,
-        reduced_mass,
-        mx,
-        my,
-        mz,
-        ms,
-        periodic_representative_nodes,
-        reduced_hx,
-        reduced_hy,
-        reduced_hz,
-        reduced_rows);
+    if (compensated_accumulation) {
+        periodic_reduced_exchange_kernel<true><<<reduced_blocks, kBlockSize, 0, stream>>>(
+            reduced_row_offsets,
+            reduced_col_indices,
+            reduced_values,
+            reduced_mass,
+            mx,
+            my,
+            mz,
+            ms,
+            periodic_representative_nodes,
+            reduced_hx,
+            reduced_hy,
+            reduced_hz,
+            reduced_rows);
+    } else {
+        periodic_reduced_exchange_kernel<false><<<reduced_blocks, kBlockSize, 0, stream>>>(
+            reduced_row_offsets,
+            reduced_col_indices,
+            reduced_values,
+            reduced_mass,
+            mx,
+            my,
+            mz,
+            ms,
+            periodic_representative_nodes,
+            reduced_hx,
+            reduced_hy,
+            reduced_hz,
+            reduced_rows);
+    }
     const int row_blocks = (rows + kBlockSize - 1) / kBlockSize;
     periodic_reduced_exchange_lift_kernel<<<row_blocks, kBlockSize, 0, stream>>>(
         periodic_reduced_node,

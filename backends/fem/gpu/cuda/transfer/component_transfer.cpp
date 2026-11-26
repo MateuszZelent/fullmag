@@ -252,6 +252,122 @@ bool gpu_component_upload_aos(
 #endif
 }
 
+bool gpu_component_upload_aos_packed(
+    const FemGpuLifecycleDeviceState &lifecycle,
+    FemGpuComponentField &field,
+    double *aos_device_scratch,
+    uint64_t scratch_dof_len,
+    void *raw_stream,
+    const double *xyz,
+    uint64_t len,
+    const char *label,
+    TransferAudit &audit,
+    std::string &error)
+{
+    if (!lifecycle.allocated) {
+        return true;
+    }
+    if (xyz == nullptr) {
+        error = std::string("FemGpuState ") + label + " packed upload received a null pointer";
+        return false;
+    }
+    if (len != lifecycle.dof_len) {
+        error = std::string("FemGpuState ") + label + " packed upload length mismatch";
+        return false;
+    }
+    if (lifecycle.node_count == 0 && lifecycle.dof_len == 0) {
+        return true;
+    }
+    if (lifecycle.node_count > std::numeric_limits<uint64_t>::max() / 3ull ||
+        lifecycle.dof_len != lifecycle.node_count * 3ull) {
+        error = std::string("FemGpuState ") + label +
+            " packed upload has inconsistent vector DOF metadata";
+        return false;
+    }
+    if (field.x == nullptr || field.y == nullptr || field.z == nullptr) {
+        error = std::string("FemGpuState ") + label +
+            " packed upload requires allocated device component buffers";
+        return false;
+    }
+    if (aos_device_scratch == nullptr || scratch_dof_len != lifecycle.dof_len) {
+        error = std::string("FemGpuState ") + label +
+            " packed upload requires a matching persistent device AoS buffer";
+        return false;
+    }
+    if (raw_stream == nullptr) {
+        error = std::string("FemGpuState ") + label +
+            " packed upload requires an explicit non-default CUDA stream";
+        return false;
+    }
+
+#if FULLMAG_HAS_CUDA_RUNTIME
+    if (lifecycle.node_count > static_cast<uint64_t>(std::numeric_limits<int>::max())) {
+        error = std::string("FemGpuState ") + label +
+            " packed upload node count exceeds CUDA kernel range";
+        return false;
+    }
+
+    size_t packed_bytes = 0;
+    if (!gpu_device_checked_node_bytes(lifecycle.dof_len, packed_bytes, error)) {
+        return false;
+    }
+    const cudaStream_t stream = reinterpret_cast<cudaStream_t>(raw_stream);
+    const std::string copy_operation = std::string(
+        "cudaMemcpyAsync FemGpuState ") + label + " packed host->device";
+    if (!cuda_ok(
+            cudaMemcpyAsync(
+                aos_device_scratch,
+                xyz,
+                packed_bytes,
+                cudaMemcpyHostToDevice,
+                stream),
+            copy_operation.c_str(),
+            error)) {
+        const cudaError_t sync_rc = cudaStreamSynchronize(stream);
+        if (sync_rc != cudaSuccess) {
+            error += std::string("; cudaStreamSynchronize after failed packed upload failed: ") +
+                cudaGetErrorString(sync_rc);
+        }
+        return false;
+    }
+
+    const std::string unpack_operation = std::string(
+        "fullmag_cuda_unpack_aos_to_soa FemGpuState ") + label + " device unpack";
+    if (!cuda_ok(
+            fullmag_cuda_unpack_aos_to_soa(
+                aos_device_scratch,
+                field.x,
+                field.y,
+                field.z,
+                static_cast<int>(lifecycle.node_count),
+                stream),
+            unpack_operation.c_str(),
+            error)) {
+        const cudaError_t sync_rc = cudaStreamSynchronize(stream);
+        if (sync_rc != cudaSuccess) {
+            error += std::string("; cudaStreamSynchronize after failed device unpack failed: ") +
+                cudaGetErrorString(sync_rc);
+        }
+        return false;
+    }
+
+    if (!cuda_ok(
+            cudaStreamSynchronize(stream),
+            (std::string("cudaStreamSynchronize FemGpuState ") + label +
+                " packed host->device").c_str(),
+            error)) {
+        return false;
+    }
+
+    record_host_to_device(audit, static_cast<uint64_t>(packed_bytes));
+    return true;
+#else
+    (void)audit;
+    error = "FemGpuState packed upload requires CUDA runtime support";
+    return false;
+#endif
+}
+
 bool gpu_component_zero_device(
     const FemGpuLifecycleDeviceState &lifecycle,
     FemGpuComponentField &field,

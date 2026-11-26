@@ -12,7 +12,41 @@
 
 namespace fullmag::fem::frequency_domain {
 
-constexpr std::uint32_t kDrivenFrequencyResponseSolveRequestAbiVersion = 13;
+constexpr std::uint32_t kDrivenFrequencyResponseSolveRequestAbiVersion = 14;
+
+enum class DrivenFrequencyResponseGpuDirectPolicy : std::uint32_t {
+    Auto = 0,
+    Disabled = 1,
+    Required = 2,
+};
+
+struct DrivenFrequencyResponseSparseCsrView {
+    std::uint64_t num_rows = 0;
+    std::uint64_t num_cols = 0;
+    std::uint64_t nnz = 0;
+    const std::uint32_t *row_ptr = nullptr;
+    const std::uint32_t *col_indices = nullptr;
+    const double *values = nullptr;
+};
+
+struct DrivenFrequencyResponseDemagSparseBlocks {
+    std::uint32_t is_periodic_reduced = 0;
+    std::uint32_t reserved = 0;
+    std::uint64_t full_node_count = 0;
+    std::uint64_t phi_dof_count = 0;
+    std::uint64_t magnetic_node_count = 0;
+    std::uint64_t ess_tdof_count = 0;
+    DrivenFrequencyResponseSparseCsrView poisson_matrix{};
+    DrivenFrequencyResponseSparseCsrView rhs_x{};
+    DrivenFrequencyResponseSparseCsrView rhs_y{};
+    DrivenFrequencyResponseSparseCsrView rhs_z{};
+    DrivenFrequencyResponseSparseCsrView recovery_x{};
+    DrivenFrequencyResponseSparseCsrView recovery_y{};
+    DrivenFrequencyResponseSparseCsrView recovery_z{};
+    const std::uint32_t *magnetic_node_indices = nullptr;
+    const std::uint32_t *ess_tdofs = nullptr;
+    const std::uint32_t *periodic_reduced_node = nullptr;
+};
 
 struct DrivenFrequencyResponseSolverOptions {
     // Zero-valued options use the runtime defaults selected by the production
@@ -123,8 +157,9 @@ struct DrivenFrequencyResponseSolveRequest {
     std::uint32_t abi_version = kDrivenFrequencyResponseSolveRequestAbiVersion;
     std::uint32_t reserved_contract_flags = 0;
     // struct_size == 0 preserves legacy/default C++ callers. Nonzero values
-    // must match sizeof(DrivenFrequencyResponseSolveRequest), or the legacy
-    // prefix size for ABI 0/9/12. Legacy requests never carry artifact identity.
+    // must match sizeof(DrivenFrequencyResponseSolveRequest), the ABI 13 prefix
+    // size preceding gpu_direct_policy, or the ABI 0/9/12 prefix size preceding
+    // artifact_identity.
     std::uint64_t struct_size = 0;
     DrivenFrequencyResponseRequest solve_request{};
     DrivenFrequencyResponseSolverOptions solver_options{};
@@ -158,6 +193,9 @@ struct DrivenFrequencyResponseSolveRequest {
     DrivenFrequencyResponseTinyValidationProblem tiny_validation_problem{};
     DrivenFrequencyResponseMfemValidationProblem mfem_validation_problem{};
     const FullmagFemFrequencyDomainArtifactIdentityV1 *artifact_identity = nullptr;
+    DrivenFrequencyResponseGpuDirectPolicy gpu_direct_policy =
+        DrivenFrequencyResponseGpuDirectPolicy::Auto;
+    const DrivenFrequencyResponseDemagSparseBlocks *demag_sparse_blocks = nullptr;
 };
 
 struct DrivenFrequencyResponseSolveResult {

@@ -113,6 +113,7 @@ void gpu_regional_field_drive_destroy(FemGpuFieldBufferDeviceState &fields)
     fields.regional_drive_count = 0;
     fields.regional_drive_point_count = 0;
     fields.regional_drive_device_bytes = 0;
+    fields.h_drive_zeroed = false;
 }
 
 bool gpu_regional_field_drive_upload(Context &ctx, std::string &error)
@@ -130,9 +131,14 @@ bool gpu_regional_field_drive_upload(Context &ctx, std::string &error)
     if (!cuda_ok(cudaMemset(fields.h_drive.x, 0, field_bytes), "clear uploaded H_drive x", error) ||
         !cuda_ok(cudaMemset(fields.h_drive.y, 0, field_bytes), "clear uploaded H_drive y", error) ||
         !cuda_ok(cudaMemset(fields.h_drive.z, 0, field_bytes), "clear uploaded H_drive z", error)) {
+        fields.h_drive_zeroed = false;
         return false;
     }
-    if (drive_count == 0) return true;
+    if (drive_count == 0) {
+        fields.h_drive_zeroed = true;
+        return true;
+    }
+    fields.h_drive_zeroed = false;
     if (node_count != 0 && drive_count > std::numeric_limits<uint64_t>::max() / node_count) {
         error = "regional field drive GPU basis size overflow";
         return false;
@@ -217,13 +223,24 @@ bool gpu_regional_field_drive_materialize_and_accumulate(
 {
     auto &fields = ctx.gpu_state.device.fields;
     if (fields.regional_drive_count == 0) {
-        return cuda_ok(cudaMemsetAsync(fields.h_drive.x, 0, node_count * sizeof(double), stream),
-                       "clear H_drive x", error) &&
-               cuda_ok(cudaMemsetAsync(fields.h_drive.y, 0, node_count * sizeof(double), stream),
-                       "clear H_drive y", error) &&
-               cuda_ok(cudaMemsetAsync(fields.h_drive.z, 0, node_count * sizeof(double), stream),
-                       "clear H_drive z", error);
+        if (fields.h_drive_zeroed) {
+            return true;
+        }
+        const size_t field_bytes =
+            node_count > 0 ? static_cast<size_t>(node_count) * sizeof(double) : 0u;
+        const bool ok =
+            cuda_ok(cudaMemsetAsync(fields.h_drive.x, 0, field_bytes, stream),
+                    "clear H_drive x", error) &&
+            cuda_ok(cudaMemsetAsync(fields.h_drive.y, 0, field_bytes, stream),
+                    "clear H_drive y", error) &&
+            cuda_ok(cudaMemsetAsync(fields.h_drive.z, 0, field_bytes, stream),
+                    "clear H_drive z", error);
+        if (ok) {
+            fields.h_drive_zeroed = true;
+        }
+        return ok;
     }
+    fields.h_drive_zeroed = false;
     // Host-expression drives (mask terms): one number per drive, evaluated here
     // at the drive's clock, in the slot order assigned at upload.
     RegionalFieldDriveHostMultipliers host_multipliers{};

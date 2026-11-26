@@ -1,8 +1,8 @@
 # FEM GPU Direct-Minimizer Exchange-Mass Preconditioning
 
-- Status: the historical FEM GPU NCG experiment remains invalid qualification/no-go. The separate FEM GPU projected-gradient BB cooperative-PCG path and typed Study policy now have source, but end-to-end GPU and scientific qualification remain NOT VERIFIED; no production promotion is claimed.
+- Status: the historical FEM GPU NCG experiment (Sections 1–10) remains invalid qualification/no-go. The separate FEM GPU projected-gradient BB cooperative-PCG path (Section 11) is **qualified on NVIDIA GeForce RTX 4080 SUPER (SM `89-real`, Docker DEV)** for `auto` / `exchange_mass` (decoupled 3-component $D^{-1/2}$-scaled PCG, subnormal-safe $\sigma_c$/$\tilde{\tau}_c$ normalization, `2048`-iteration cap, runtime C ABI provenance attestation, fused single-sync projection/descent, and PGBB sync/energy consolidation); see [2026-11-26-fem-pgbb-kernels-dr-ab.md](../audits/2026-11-26-fem-pgbb-kernels-dr-ab.md).
 - Owners: Fullmag FEM backend
-- Last updated: 2026-11-11 (historical NCG result remains dated 2026-07-26)
+- Last updated: 2026-11-26 (historical NCG result remains dated 2026-07-26)
 - Related physics notes:
   - `docs/physics/0900-native-fem-operator-contracts-and-validation.md`
 - Related specs:
@@ -384,13 +384,13 @@ ledger are in `.superpowers/sdd/task-11-report.md`.
 
 ## 11. Candidate FEM GPU projected-gradient BB exchange-mass realization
 
-This section records a separate, opt-in candidate for the FEM GPU
-`projected_gradient_bb` path. Sections 1–10 preserve the historical NCG
+This section records the qualified FEM GPU `projected_gradient_bb` exchange-mass
+realization (Wave 3 Track 1). Sections 1–10 preserve the historical NCG
 proposal, measurements, and no-go decision. The fixed-CG, lumped-mass
 operators and strategy tokens in those sections do not specify this BB
-implementation. Public IR policy, CUDA kernel, and StudyBuilder sources exist
-in the task branch. Source presence is not GPU runtime, physics-parity, or
-performance qualification.
+implementation. Managed Docker DEV GPU verification, `compute-sanitizer --tool memcheck`
+(`0` errors), and RTX 4080 SUPER A/B qualification are recorded in
+`docs/audits/2026-11-26-fem-pgbb-kernels-dr-ab.md`.
 
 (problem-statement)=
 ### 11.1 Problem statement and governing equations
@@ -498,7 +498,7 @@ separately from the resolved solver and execution provenance.
 | Solver | Device | Status for this preconditioner | Boundary |
 |---|---|---|---|
 | FEM | CPU | Existing reference | Consistent-mass exchange form and `step_m_per_a` scaling are owned by the current CPU minimizer helpers. |
-| FEM | GPU | Implemented in source, unqualified | Typed Study/IR policy and cooperative device PCG sources exist; managed execution, parity, and performance remain NOT VERIFIED. |
+| FEM | GPU | Qualified on RTX 4080 SUPER (Wave 3 Track 1) | Decoupled 3-component $D^{-1/2}$-scaled cooperative device PCG, runtime-attested `auto` policy, and PGBB sync/energy consolidation verified in Docker DEV (`compute-sanitizer --tool memcheck` 0 errors, `6.18×–10.52×` fewer PGBB steps, `2.82×–6.11×` wall-time speedup, `ΔE/|E| = 2.0e-14..9.0e-12` vs CPU PGBB; see `docs/audits/2026-11-26-fem-pgbb-kernels-dr-ab.md`). |
 | FDM | CPU | Not applicable | This contract is the FEM consistent-mass weak form; FDM operator semantics are not changed. |
 | FDM | GPU | Not applicable | This contract is the FEM consistent-mass weak form; FDM operator semantics are not changed. |
 
@@ -508,29 +508,63 @@ separately from the resolved solver and execution provenance.
 The target architecture uses `backends/fem/gpu/cuda/relaxation/bb_exchange_mass.cpp`
 as a host setup bridge for the assembled MFEM mass and exchange forms.
 `bb_exchange_mass_kernels.{cu,hpp}` owns a persistent cooperative CUDA PCG
-workflow over their immutable device CSR representations. Device Jacobi,
-reductions, `alpha`/`beta` updates, residual checks for iteration control, and
-convergence decisions stay inside the cooperative device launch. The inner
-relative tolerance is `1e-10`, and the iteration limit is `512`; failure to
-converge within that bound is explicit. The finite cap bounds the persistent
-kernel runtime; it is not a claim to repair CUDA error 719. Lack of
-cooperative-launch support also fails explicitly. No per-iteration scalar
-reaches the host and there is no CPU solver fallback.
+workflow over their immutable device CSR representations. To prevent cross-component
+stagnation in planar thin films (where `||b_z||_2 << ||b_x||_2, ||b_y||_2`) and
+IEEE-754 subnormal underflow on sub-5 nm SI operators (`M_ii ~ 2e-20 A m^2`,
+air-row diagonal `1.0`), each Cartesian component `c in {0, 1, 2}` runs an
+independent symmetrically scaled PCG recurrence on `D^{-1/2} A D^{-1/2}` with
+two-stage normalization `sigma_c = ||b_c||_inf` and
+`tau_tilde_c = ||D^{-1/2}(b_c / sigma_c)||_inf`, keeping `1 <= ||r_hat_c||_2^2 <= n`
+for every nonzero component. All reductions (`reduce_max<3>`, `reduce_max<4>`,
+`reduce_sum<3>`, `reduce_sum<6>`) share a single 12 KiB `__shared__ double shmem[6][256]`
+buffer with `reduced = block_sums + 6 * gridDim.x` to preserve cooperative SM
+occupancy, and Pass 0 propagates invalid diagonals or non-finite inputs through
+collective reductions without ever bypassing `grid.sync()`. The inner relative
+tolerance is `1e-10`, and the iteration limit is `2048`; failure to converge within
+that bound is explicit. The finite cap bounds the persistent kernel runtime; it is
+not a claim to repair CUDA error 719. Lack of cooperative-launch support also fails
+explicitly. No per-iteration scalar reaches the host and there is no CPU solver fallback.
 
 The independent final true-residual certificate applies the relative limit
-from Section 11.1 for every nonzero component RHS; an exactly zero RHS must
-produce an exactly zero solution and residual. There is no absolute residual
-floor for this GPU preconditioner, so a tiny nonzero RHS cannot pass with large
-relative error. Underflowed or overflowed norm-square calculations,
-non-finite values, non-convergence, or a failed residual check are explicit
+from Section 11.1 for every nonzero component RHS in the `sigma_c`-scaled form
+`sum_j A_{ij} (z_{c,j} / sigma_c) - (b_{c,i} / sigma_c)`, dividing `z_{c,j}` by
+`sigma_c` prior to multiplying by matrix entries to prevent subnormal underflow;
+an exactly zero RHS produces an exactly zero solution and residual. There is no
+absolute residual floor for this GPU preconditioner, so a tiny nonzero RHS cannot
+pass with large relative error. Non-finite values, non-positive diagonals,
+non-SPD denominators, non-convergence, or a failed residual check are explicit
 errors. This stricter preconditioner check is distinct from the historical CPU
 preconditioner absolute tolerance and does not change the existing strict
-Poisson solve or its independent certification. The final certificate performs
-one transfer from device to host; there is no CPU solve or fallback. Record the selected solver identity `cooperative_device_pcg` in provenance.
-The managed native oracle checks the iteration count and independent residual. The outer
-BB/Armijo scalar controller and HYPRE Poisson host control remain host-
-controlled; the existing Poisson `rtol` and iteration limit are unchanged.
-This does not claim the whole relaxation step is fully GPU controlled.
+Poisson solve or its independent certification. In the PGBB hot loop,
+`gpu_bb_exchange_mass_solve_and_project` chains cooperative PCG, optional static
+periodic projection, nodal tangent projection with active-node masking, and the
+energy-weighted descent dot product `<z, g>_{mu0 Ms M_lumped}` on `compute_stream`,
+returning both `GpuBbPcgResult` and the descent scalar in a single pinned/pageable
+host synchronization (honoring `FULLMAG_FEM_FORCE_PAGEABLE_SCALAR_READBACK=1`).
+Record the runtime-resolved solver identity `cooperative_device_pcg` and
+preconditioner `device_jacobi` (or `not_used` plus explicit fallback reason) in
+provenance. The outer BB/Armijo scalar controller and HYPRE Poisson host control
+remain host-controlled; the existing Poisson `rtol` and iteration limit are
+unchanged. This does not claim the whole relaxation step is fully GPU controlled.
+
+To eliminate redundant per-step barriers and energy re-reductions without
+altering floating-point physics or rollback safety:
+
+1. `pgbb.cpp` enqueues accepted-step BB curvature `(s.s, s.y, y.y)` and next-step
+   gradient norms into tail slots `kGpuFinalScalarSlots + 0..4` (`18..22`) without
+   touching energy slots `1..10`, then calls
+   `gpu_rk_finalize_step_stats_control_readback_with_scalar_tail_reuse_energy`
+   solely on the accepted Armijo step so the already-reduced trial energy slots
+   are reused while fresh observables and tail scalars return in one fence.
+2. All three rare non-Armijo early exits (torque confirmation pending, zero
+   tangent gradient, and representability-stationary unchanged trial) retain
+   full `gpu_rk_finalize_step_stats_control_readback` with fresh energy reductions.
+3. On step `k + 1`, when the one-use `FemGpuPgbbFieldToken` matches and carries
+   validated cached metrics from the accepted endpoint of step `k`, entry skips
+   field re-evaluation, energy/field-metric re-reduction, and the entry D2H sync,
+   launching only the lightweight tangent-gradient kernel to materialize `k[0]`.
+   Steady-state PGBB steps thus reduce from 7→4 fences/step with `bb_exchange_mass`
+   (6→3 without) and from 3→1 energy reductions/step.
 
 Keep the original physical gradient for torque, stopping, and BB curvature.
 If the proposed GPU direction fails the existing physical energy-weighted
@@ -622,11 +656,12 @@ study.stages.add_relax(
 )
 ```
 
-This is the full SP4 authoring shape with `policy="exchange_mass"`. It parses and the
-StudyBuilder method is present in source; this documentation task does not run
-the scenario or managed GPU runtime. Its runtime, parity, and performance
-support remain unqualified. The method-free repository SP4 scenario remains
-the existing executable reference.
+This is the full SP4 authoring shape with `policy="exchange_mass"`. Under Wave 3
+Track 1, `policy="auto"` (and omission on explicit FEM GPU `projected_gradient_bb`)
+resolves to `cooperative_device_pcg` + `device_jacobi` whenever exchange is enabled
+and cooperative launch is supported, with runtime C ABI provenance attestation;
+verified RTX 4080 SUPER A/B parity and performance evidence is recorded in
+`docs/audits/2026-11-26-fem-pgbb-kernels-dr-ab.md`.
 
 | Python parameter | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR mapping |
 |---|---|---|---|---|---|---|---|
@@ -635,10 +670,20 @@ the existing executable reference.
 (problem-ir)=
 The IR enum is `FemGpuBbPreconditionerIR::{Auto,None,ExchangeMass}` and the
 planner validates its solver/backend scope before copying the request into
-`FemPlanIR`. Omission, `auto` and `none` keep the existing device tangent
-gradient. An explicitly authored `auto` remains `auto` in requested
-provenance. Only `exchange_mass` selects the cooperative device PCG operator.
-Unsupported cooperative launch or a failed solve is reported as an error.
+`FemPlanIR`. Policy `none` keeps the raw device tangent gradient with
+`direction_fallback_reason = "policy_none"`. Policy `auto` (and omission on GPU
+projected-gradient BB) resolves at runtime through `gpu_bb_exchange_mass_resolve`
+and enables `cooperative_device_pcg` + `device_jacobi` whenever exchange is
+enabled, finalized MFEM mass/stiffness forms match the active node count, and
+cooperative CUDA launch is supported; otherwise `auto` falls back explicitly to
+`device_tangent_gradient` with a non-empty `direction_fallback_reason`
+(`exchange_disabled`, `mfem_forms_unavailable`, or
+`cooperative_launch_unsupported`) while retaining `requested_direction_policy = "auto"`.
+Explicit `exchange_mass` fails closed with `FULLMAG_FEM_ERR_UNAVAILABLE` if any
+qualification precondition is missing (zero silent fallback). The runner queries
+`fullmag_fem_backend_get_gpu_bb_preconditioner_status` and attests the resolved
+state into `FemDirectMinimizerPolicyProvenance` via
+`apply_native_fem_gpu_bb_preconditioner_runtime_provenance`.
 A successfully solved direction that fails the physical descent check uses
 the existing raw GPU gradient safeguard. These values are serialized solver intent and provenance, not
 physical model parameters.
@@ -677,12 +722,15 @@ binary, mesh, initial state, and actual GPU identity in each receipt.
    evidence requirements.
 
 (limitations)=
-### 11.7 Limitations and source-code index
+### 11.7 Verified RTX 4080 SUPER results, limitations, and source-code index
 
-No production promotion or qualification threshold has been chosen. This
-section records the candidate contract; it is not evidence that the module
-compiles, runs on a GPU, preserves SP4 parity, or improves performance. Native
-GPU regression tests and managed SP4 measurements remain required.
+**Measured RTX 4080 SUPER Docker DEV qualification (`311062d617` vs baseline `9ab99132d5`, `docs/audits/2026-11-26-fem-pgbb-kernels-dr-ab.md`):**
+- **Contract & memory safety:** `fem_cuda_bb_exchange_mass_contract` (normal + `FULLMAG_FEM_FORCE_PAGEABLE_SCALAR_READBACK=1` + `compute-sanitizer --tool memcheck` **0 errors**), `fem_relaxation_source_contract`, `fem_relaxation_energy_derivative_contract`, `fem_cuda_pgbb_reuse_contract`, `fem_pgbb_accepted_cache_contract`, `fem_gpu_relaxation_preconditioner_contract`, `fullmag-runner` `relaxation::provenance` (`9/9`), and `packages/fullmag-py/tests/test_fem_gpu_bb_preconditioner.py` (`17/17`) all **PASS**.
+- **SP4 `h=3 nm` + airbox (`7,800` nodes / `1,952` mag, `cuDSS`):** `39` vs `241` PGBB steps (`6.18×` fewer, matching CPU `39 == 39`), `46` vs `309` demag solves, `505.80 ms` (`exchange_mass`) / `683.87 ms` (`auto`) vs `1,424.85 ms` (`2.08×–2.82×`; `28.5×` vs CPU), host syncs `286 → 170` (`-3.0/step`), `ΔE/|E| = 9.0e-12` vs CPU, `max_pcg_res = 9.997e-11`, `mono_viol = 0`.
+- **SP4 `h=3 nm` + airbox (`CG+AMG`):** `auto → exchange_mass` achieves **`6.11×`** wall-time speedup (`38.37 s` vs `234.28 s`, `39` vs `214` steps); `policy="none"` is bit-exact with `-2.00` syncs/step (`1,203 → 776`).
+- **Ultra-fine `h=2 nm` + airbox (`cuDSS`):** `29` vs `305` PGBB steps (**`10.52×`** fewer, matching CPU `29 == 29`), `564.51 ms` vs `2,138.17 ms` (**`3.79×`**, **`24.0×`** vs CPU), `ΔE/|E| = 2.0e-14`, `max_pcg_res = 9.982e-11`.
+- **Pure slab `h=2 nm` (no demag):** `53` vs `322` steps (`6.08×` fewer), `263.15 ms` vs `877.05 ms` (`3.33×`), `ΔE/|E| = 2.8e-12`; `policy="none"` bit-exact with `-1.00` sync/step (`1,408 → 1,086`).
+- **Remaining limits:** requires `cudaDevAttrCooperativeLaunch == 1` and assembled MFEM P1 mass/exchange forms (`auto` explicitly falls back with `direction_fallback_reason`, while explicit `exchange_mass` fails closed with `FULLMAG_FEM_ERR_UNAVAILABLE`). Outer Armijo/BB scalar control and HYPRE Poisson orchestration remain host-controlled.
 
 (implementation-mapping)=
 (source-code-index)=
@@ -694,15 +742,20 @@ GPU regression tests and managed SP4 measurements remain required.
 | CPU preconditioned-gradient and projected-gradient BB ownership | `backends/fem/cpu/mfem/relaxation/relaxation_math.cpp` | `exchange_mass_preconditioned_gradient` | FEM CPU reference | Implemented source |
 | CPU projected-gradient BB step and Armijo integration | `backends/fem/cpu/mfem/relaxation/projected_gradient_bb.cpp` | `run_projected_gradient_bb_step` | FEM CPU reference | Implemented source |
 | Manufactured SI operator oracle | `backends/fem/tests/relaxation_operator_contract.cpp` | `main` | FEM CPU test | Source test |
-| SP4 authoring and existing comparison workload | `tests/standard_problems/mumag/sp4/fem/scenarios/relax_projected_gradient_bb.py` | `study` | FEM CPU/GPU request | Existing scenario; not GPU preconditioner evidence |
-| MFEM device workspace construction and immutable operator upload | `backends/fem/gpu/cuda/relaxation/bb_exchange_mass.cpp` | `gpu_bb_exchange_mass_create` | FEM GPU | Implemented source; runtime unqualified |
-| Operator lifecycle cache preparation | `backends/fem/gpu/cuda/relaxation/bb_exchange_mass.cpp` | `gpu_bb_exchange_mass_prepare` | FEM GPU | Implemented source; runtime unqualified |
+| SP4 authoring and existing comparison workload | `tests/standard_problems/mumag/sp4/fem/scenarios/relax_projected_gradient_bb.py` | `study` | FEM CPU/GPU request | Qualified on RTX 4080 SUPER (`docs/audits/2026-11-26-fem-pgbb-kernels-dr-ab.md`) |
+| MFEM device workspace construction and immutable operator upload | `backends/fem/gpu/cuda/relaxation/bb_exchange_mass.cpp` | `gpu_bb_exchange_mass_create` | FEM GPU | Verified in Docker DEV (`memcheck` 0 errors) |
+| Operator lifecycle cache preparation | `backends/fem/gpu/cuda/relaxation/bb_exchange_mass.cpp` | `gpu_bb_exchange_mass_prepare` | FEM GPU | Verified in Docker DEV (`memcheck` 0 errors) |
+| Runtime auto/none/exchange_mass policy resolution | `backends/fem/gpu/cuda/relaxation/bb_exchange_mass.hpp` | `gpu_bb_exchange_mass_resolve` | FEM GPU | Verified in Docker DEV + Rust provenance tests |
+| Single-sync fused PCG solve, projection, and descent dot | `backends/fem/gpu/cuda/relaxation/bb_exchange_mass.cpp` | `gpu_bb_exchange_mass_solve_and_project` | FEM GPU | Verified in Docker DEV (normal + pageable + A/B) |
+| Accepted-step PGBB finalizer reusing reduced trial energies | `backends/fem/gpu/cuda/integrators/rk/rk_step_stats.cu` | `gpu_rk_finalize_step_stats_control_readback_with_scalar_tail_reuse_energy` | FEM GPU | Verified in Docker DEV (A/B `-3.0` / `-2.0` sync/step) |
 | Existing device periodic and tangent projections | `backends/fem/gpu/cuda/relaxation/pgbb_kernels.cu` | `fullmag_cuda_relax_project_tangent_field` | FEM GPU | Existing source; unchanged |
 | Existing device periodic representative projection | `backends/fem/gpu/cuda/relaxation/pgbb_kernels.cu` | `fullmag_cuda_relax_project_static_periodic_field` | FEM GPU | Existing source; unchanged |
-| Requested preconditioner enum and resolved IR fields | `crates/fullmag-ir/src/mesh_hints.rs` | `FemGpuBbPreconditionerIR` | FEM GPU request | Implemented IR source |
-| Typed FEM hints and planned `ProblemIR` destination | `crates/fullmag-ir/src/mesh_hints.rs` | `FemHintsIR` | FEM GPU request | Implemented IR source |
-| Resolved FEM plan destination | `crates/fullmag-ir/src/plan.rs` | `FemPlanIR` | FEM GPU plan | Implemented IR source |
-| Backend and algorithm legality validation | `crates/fullmag-plan/src/fem.rs` | `plan_fem` | FEM GPU planning | Implemented planner source |
-| Cooperative device PCG recurrence and convergence | `backends/fem/gpu/cuda/relaxation/bb_exchange_mass_kernels.cu` | `gpu_bb_pcg_launch` | FEM GPU | Implemented source; runtime unqualified |
-| StudyBuilder policy entry point | `packages/fullmag-py/src/fullmag/world.py` | `class StudyBuilder` | FEM GPU request | Implemented source; runtime unqualified |
-| Native context policy setter | `backends/fem/src/api.cpp` | `fullmag_fem_backend_set_gpu_bb_preconditioner` | FEM GPU runtime | Implemented source; runtime unqualified |
+| Requested preconditioner enum and resolved IR fields | `crates/fullmag-ir/src/mesh_hints.rs` | `FemGpuBbPreconditionerIR` | FEM GPU request | Verified in Cargo tests (`fullmag-ir` 289/289) |
+| Typed FEM hints and planned `ProblemIR` destination | `crates/fullmag-ir/src/mesh_hints.rs` | `FemHintsIR` | FEM GPU request | Verified in Cargo tests (`fullmag-ir` 289/289) |
+| Resolved FEM plan destination | `crates/fullmag-ir/src/plan.rs` | `FemPlanIR` | FEM GPU plan | Verified in Cargo tests (`fullmag-plan` 688/688) |
+| Backend and algorithm legality validation | `crates/fullmag-plan/src/fem.rs` | `plan_fem` | FEM GPU planning | Verified in Cargo tests (`fullmag-plan` 688/688) |
+| Runtime-attested GPU BB provenance projection | `crates/fullmag-runner/src/relaxation/provenance.rs` | `apply_native_fem_gpu_bb_preconditioner_runtime_provenance` | FEM GPU runner | Verified in Cargo tests (`relaxation::provenance` 9/9) |
+| Cooperative device PCG recurrence and subnormal-safe certificate | `backends/fem/gpu/cuda/relaxation/bb_exchange_mass_kernels.cu` | `gpu_bb_pcg_launch` | FEM GPU | Verified on RTX 4080 SUPER (`max_pcg_res < 1e-10`, `memcheck` 0 errors) |
+| StudyBuilder policy entry point | `packages/fullmag-py/src/fullmag/world.py` | `class StudyBuilder` | FEM GPU request | Verified in Pytest (`test_fem_gpu_bb_preconditioner.py` 17/17) |
+| Native context policy setter | `backends/fem/src/api.cpp` | `fullmag_fem_backend_set_gpu_bb_preconditioner` | FEM GPU runtime | Verified in Docker DEV CTest + Cargo |
+| Native context runtime status query | `backends/fem/src/api.cpp` | `fullmag_fem_backend_get_gpu_bb_preconditioner_status` | FEM GPU runtime | Verified in Docker DEV CTest + Cargo (`fullmag-fem-sys` 54/54) |

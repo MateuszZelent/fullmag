@@ -1677,6 +1677,7 @@ pub enum FrequencyResponseSolverMethodIR {
     ModalReduced,
     GpuOperatorHostKrylov,
     GpuDeviceKrylov,
+    GpuSparseDirect,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]

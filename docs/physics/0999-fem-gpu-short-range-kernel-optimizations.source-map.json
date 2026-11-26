@@ -1,0 +1,520 @@
+{
+  "document": {
+    "path": "docs/physics/0999-fem-gpu-short-range-kernel-optimizations.md"
+  },
+  "backend_matrix": [
+    {
+      "solver": "FEM",
+      "device": "CPU",
+      "status": "unsupported",
+      "reason": "This note documents device-resident CUDA kernel and host-device transfer optimizations for the FEM GPU pipeline; FEM CPU retains its existing host MFEM realization."
+    },
+    {
+      "solver": "FEM",
+      "device": "GPU",
+      "status": "qualified-rtx4080-super"
+    },
+    {
+      "solver": "FDM",
+      "device": "CPU",
+      "status": "not-applicable",
+      "reason": "FDM uses structured-grid finite-difference stencils on host memory rather than unstructured FEM CSR exchange, tetrahedral DMI, or GPU SoA/AoS transfer buffers."
+    },
+    {
+      "solver": "FDM",
+      "device": "GPU",
+      "status": "not-applicable",
+      "reason": "FDM uses structured-grid CUDA stencil kernels and its own device layout rather than the FEM GPU RK field and state_io pipeline."
+    }
+  ],
+  "equations": [
+    {
+      "id": "eq-exchange-graph-laplacian",
+      "symbols": [
+        "h_ex",
+        "mu0",
+        "ms_i",
+        "m_lumped_i",
+        "k_ij",
+        "m_i"
+      ],
+      "sources": [
+        "exchange-xyz",
+        "exchange-periodic",
+        "rk-exchange-dispatch",
+        "rk-rhs-fast",
+        "rk-rhs-relax-dd"
+      ]
+    },
+    {
+      "id": "eq-exchange-fma-error-bound",
+      "symbols": [
+        "h_ex_fma",
+        "h_ex_dd",
+        "d_max",
+        "eps_mach"
+      ],
+      "sources": [
+        "exchange-xyz",
+        "exchange-periodic",
+        "rk-rhs-fast",
+        "rk-rhs-relax-dd"
+      ]
+    },
+    {
+      "id": "eq-dmi-block-reduce-energy",
+      "symbols": [
+        "e_dmi",
+        "n_e",
+        "block_b",
+        "chi_e",
+        "w_dmi",
+        "vol_e"
+      ],
+      "sources": [
+        "rk-dmi-fields",
+        "dmi-kernels",
+        "anisotropy-uniaxial",
+        "anisotropy-cubic",
+        "magnetoelastic-kernels",
+        "thermal-kernels",
+        "field-buffer-alloc",
+        "regional-drive-materialize"
+      ]
+    },
+    {
+      "id": "eq-heff-fused-order",
+      "symbols": [
+        "h_eff",
+        "h_ex",
+        "h_demag",
+        "h_ext",
+        "h_drive",
+        "h_ani",
+        "h_cubic",
+        "h_dmi",
+        "h_bulk",
+        "h_oe",
+        "h_oe_basis",
+        "s_oe",
+        "h_mel",
+        "h_therm"
+      ],
+      "sources": [
+        "heff-fused-kernel",
+        "rk-effective-field",
+        "rk-oersted-prepare",
+        "regional-drive-materialize"
+      ]
+    },
+    {
+      "id": "eq-aos-soa-bijection",
+      "symbols": [
+        "n_nodes",
+        "aos_a",
+        "soa_xyz"
+      ],
+      "sources": [
+        "transfer-unpack",
+        "component-upload-packed",
+        "gpu-state-upload-m-packed",
+        "gpu-state-download-m-packed",
+        "state-io-copy-field",
+        "state-io-upload-m",
+        "stage-compute-visual"
+      ]
+    }
+  ],
+  "symbols": [
+    {
+      "id": "m_i",
+      "latex": "\\mathbf{m}_i",
+      "meaning": "Reduced unit-length magnetization at mesh node $i$",
+      "si_unit": "1"
+    },
+    {
+      "id": "ms_i",
+      "latex": "M_{s,i}",
+      "meaning": "Saturation magnetization at mesh node $i$",
+      "si_unit": "\\mathrm{A\\,m^{-1}}"
+    },
+    {
+      "id": "m_lumped_i",
+      "latex": "M_{\\mathrm{lumped},i}",
+      "meaning": "Lumped finite-element nodal volume at mesh node $i$",
+      "si_unit": "\\mathrm{m^3}"
+    },
+    {
+      "id": "mu0",
+      "latex": "\\mu_0",
+      "meaning": "Vacuum magnetic permeability",
+      "si_unit": "\\mathrm{N\\,A^{-2}}"
+    },
+    {
+      "id": "k_ij",
+      "latex": "K_{ij}",
+      "meaning": "Assembled scalar exchange stiffness entry between nodes $i$ and $j$",
+      "si_unit": "\\mathrm{J}"
+    },
+    {
+      "id": "h_ex",
+      "latex": "\\mathbf{H}_{\\mathrm{ex},i}",
+      "meaning": "Discrete nodal exchange effective field",
+      "si_unit": "\\mathrm{A\\,m^{-1}}"
+    },
+    {
+      "id": "h_ex_fma",
+      "latex": "\\mathbf{H}_{\\mathrm{ex},i}^{\\mathrm{FMA}}",
+      "meaning": "Exchange field evaluated with hardware FP64 FMA (`Compensated = false`)",
+      "si_unit": "\\mathrm{A\\,m^{-1}}"
+    },
+    {
+      "id": "h_ex_dd",
+      "latex": "\\mathbf{H}_{\\mathrm{ex},i}^{\\mathrm{DD}}",
+      "meaning": "Exchange field evaluated with software double-double (`Compensated = true`)",
+      "si_unit": "\\mathrm{A\\,m^{-1}}"
+    },
+    {
+      "id": "d_max",
+      "latex": "d_{\\max}",
+      "meaning": "Maximum nodal adjacency degree in the FEM exchange CSR graph",
+      "si_unit": "1"
+    },
+    {
+      "id": "eps_mach",
+      "latex": "\\varepsilon_{\\mathrm{mach}}",
+      "meaning": "IEEE-754 binary64 machine epsilon ($2^{-52} \\approx 2.22 \\times 10^{-16}$)",
+      "si_unit": "1"
+    },
+    {
+      "id": "n_e",
+      "latex": "N_e",
+      "meaning": "Number of tetrahedral finite elements",
+      "si_unit": "1"
+    },
+    {
+      "id": "block_b",
+      "latex": "B",
+      "meaning": "CUDA thread-block size used by short-range reduction kernels ($256$)",
+      "si_unit": "1"
+    },
+    {
+      "id": "chi_e",
+      "latex": "\\chi_e",
+      "meaning": "Element activity predicate gating DMI assembly prior to collective block reduction",
+      "si_unit": "1"
+    },
+    {
+      "id": "w_dmi",
+      "latex": "w_{\\mathrm{DMI},e}",
+      "meaning": "Element DMI energy density",
+      "si_unit": "\\mathrm{J\\,m^{-3}}"
+    },
+    {
+      "id": "vol_e",
+      "latex": "V_e",
+      "meaning": "Tetrahedral element volume",
+      "si_unit": "\\mathrm{m^3}"
+    },
+    {
+      "id": "e_dmi",
+      "latex": "E_{\\mathrm{DMI}}",
+      "meaning": "Integrated interfacial or bulk DMI energy",
+      "si_unit": "\\mathrm{J}"
+    },
+    {
+      "id": "h_eff",
+      "latex": "\\mathbf{H}_{\\mathrm{eff},i}",
+      "meaning": "Total effective magnetic field at mesh node $i$",
+      "si_unit": "\\mathrm{A\\,m^{-1}}"
+    },
+    {
+      "id": "h_demag",
+      "latex": "\\mathbf{H}_{\\mathrm{demag},i}",
+      "meaning": "Nodal demagnetizing field",
+      "si_unit": "\\mathrm{A\\,m^{-1}}"
+    },
+    {
+      "id": "h_ext",
+      "latex": "\\mathbf{H}_{\\mathrm{ext},i}",
+      "meaning": "Uniform external Zeeman field",
+      "si_unit": "\\mathrm{A\\,m^{-1}}"
+    },
+    {
+      "id": "h_drive",
+      "latex": "\\mathbf{H}_{\\mathrm{drive},i}",
+      "meaning": "Materialized regional time-dependent Zeeman drive field",
+      "si_unit": "\\mathrm{A\\,m^{-1}}"
+    },
+    {
+      "id": "h_ani",
+      "latex": "\\mathbf{H}_{\\mathrm{ani},i}",
+      "meaning": "Uniaxial magnetocrystalline anisotropy field",
+      "si_unit": "\\mathrm{A\\,m^{-1}}"
+    },
+    {
+      "id": "h_cubic",
+      "latex": "\\mathbf{H}_{\\mathrm{cubic},i}",
+      "meaning": "Cubic magnetocrystalline anisotropy field",
+      "si_unit": "\\mathrm{A\\,m^{-1}}"
+    },
+    {
+      "id": "h_dmi",
+      "latex": "\\mathbf{H}_{\\mathrm{dmi},i}",
+      "meaning": "Interfacial (and optional rotated) DMI effective field",
+      "si_unit": "\\mathrm{A\\,m^{-1}}"
+    },
+    {
+      "id": "h_bulk",
+      "latex": "\\mathbf{H}_{\\mathrm{bulk},i}",
+      "meaning": "Bulk DMI effective field",
+      "si_unit": "\\mathrm{A\\,m^{-1}}"
+    },
+    {
+      "id": "h_oe",
+      "latex": "\\mathbf{H}_{\\mathrm{oe},i}",
+      "meaning": "Realized Oersted magnetic field",
+      "si_unit": "\\mathrm{A\\,m^{-1}}"
+    },
+    {
+      "id": "h_oe_basis",
+      "latex": "\\mathbf{H}_{\\mathrm{oe,basis},i}",
+      "meaning": "Per-ampere cylindrical Oersted basis field",
+      "si_unit": "\\mathrm{m^{-1}}"
+    },
+    {
+      "id": "s_oe",
+      "latex": "s_{\\mathrm{oe}}(t_{\\mathrm{eval}})",
+      "meaning": "Time-dependent Oersted current scaling factor at stage evaluation time",
+      "si_unit": "\\mathrm{A}"
+    },
+    {
+      "id": "h_mel",
+      "latex": "\\mathbf{H}_{\\mathrm{mel},i}",
+      "meaning": "Prescribed-strain magnetoelastic effective field",
+      "si_unit": "\\mathrm{A\\,m^{-1}}"
+    },
+    {
+      "id": "h_therm",
+      "latex": "\\mathbf{H}_{\\mathrm{therm},i}",
+      "meaning": "Deterministic Brown stochastic thermal field",
+      "si_unit": "\\mathrm{A\\,m^{-1}}"
+    },
+    {
+      "id": "n_nodes",
+      "latex": "N",
+      "meaning": "Number of mesh nodes",
+      "si_unit": "1"
+    },
+    {
+      "id": "aos_a",
+      "latex": "A_{3i+c}",
+      "meaning": "Interleaved Array-of-Structures vector component $c \\in \\{0,1,2\\}$ at node $i$",
+      "si_unit": "\\mathrm{A\\,m^{-1}}"
+    },
+    {
+      "id": "soa_xyz",
+      "latex": "X_i, Y_i, Z_i",
+      "meaning": "Structure-of-Arrays device vector components at node $i$",
+      "si_unit": "\\mathrm{A\\,m^{-1}}"
+    }
+  ],
+  "sources": [
+    {
+      "id": "rk-dmi-fields",
+      "path": "backends/fem/gpu/cuda/integrators/rk/rk_dmi_fields.cu",
+      "symbol": "gpu_rk_compute_dmi_field_contributions",
+      "responsibility": "Passes energy_block_sums = nullptr for intermediate RK CSR DMI field launches.",
+      "evidence_status": "contract_test"
+    },
+    {
+      "id": "dmi-kernels",
+      "path": "backends/fem/gpu/cuda/interactions/dmi/dmi_kernels.cu",
+      "symbol": "fullmag_cuda_dmi_field_energy",
+      "responsibility": "Dispatches predicated dmi_element_residual_kernel<ComputeEnergy> with deadlock-free cub::BlockReduce.",
+      "evidence_status": "contract_test"
+    },
+    {
+      "id": "anisotropy-uniaxial",
+      "path": "backends/fem/gpu/cuda/interactions/anisotropy/anisotropy_kernels.hpp",
+      "symbol": "fullmag_cuda_uniaxial_anisotropy_field_energy_blocks",
+      "responsibility": "Uniaxial anisotropy field kernel gating energy reduction on block_sums != nullptr.",
+      "evidence_status": "contract_test"
+    },
+    {
+      "id": "anisotropy-cubic",
+      "path": "backends/fem/gpu/cuda/interactions/anisotropy/anisotropy_kernels.hpp",
+      "symbol": "fullmag_cuda_cubic_anisotropy_field_energy_blocks",
+      "responsibility": "Cubic anisotropy field kernel gating energy reduction on block_sums != nullptr.",
+      "evidence_status": "contract_test"
+    },
+    {
+      "id": "magnetoelastic-kernels",
+      "path": "backends/fem/gpu/cuda/interactions/magnetoelastic/magnetoelastic_kernels.hpp",
+      "symbol": "fullmag_cuda_magnetoelastic_field_energy_blocks",
+      "responsibility": "Magnetoelastic field kernel gating energy reduction on block_sums != nullptr.",
+      "evidence_status": "contract_test"
+    },
+    {
+      "id": "thermal-kernels",
+      "path": "backends/fem/gpu/cuda/interactions/thermal/thermal_kernels.hpp",
+      "symbol": "fullmag_cuda_thermal_field_blocks",
+      "responsibility": "Brown thermal field kernel gating max-sigma reduction on block_max_sigma != nullptr.",
+      "evidence_status": "contract_test"
+    },
+    {
+      "id": "field-buffer-alloc",
+      "path": "backends/fem/gpu/cuda/fields/field_buffer_memory.cpp",
+      "symbol": "gpu_field_buffers_allocate",
+      "responsibility": "Allocates device field buffers and initializes h_drive_zeroed = false.",
+      "evidence_status": "contract_test"
+    },
+    {
+      "id": "regional-drive-materialize",
+      "path": "backends/fem/gpu/cuda/interactions/zeeman/regional_field_kernels.cuh",
+      "symbol": "gpu_regional_field_drive_materialize_and_accumulate",
+      "responsibility": "Lazy one-time zeroing of h_drive when regional_drive_count == 0.",
+      "evidence_status": "contract_test"
+    },
+    {
+      "id": "exchange-xyz",
+      "path": "backends/fem/gpu/cuda/exchange/exchange_kernels.hpp",
+      "symbol": "fullmag_cuda_legacy_sparse_exchange_xyz",
+      "responsibility": "Dual-path FP64 FMA vs compensated DD legacy sparse XYZ exchange.",
+      "evidence_status": "contract_test"
+    },
+    {
+      "id": "exchange-periodic",
+      "path": "backends/fem/gpu/cuda/exchange/exchange_kernels.hpp",
+      "symbol": "fullmag_cuda_periodic_reduced_exchange_xyz",
+      "responsibility": "Dual-path FP64 FMA vs compensated DD periodic-reduced XYZ exchange.",
+      "evidence_status": "contract_test"
+    },
+    {
+      "id": "rk-exchange-dispatch",
+      "path": "backends/fem/gpu/cuda/integrators/rk/rk_exchange_dispatch.hpp",
+      "symbol": "gpu_rk_compute_legacy_sparse_exchange",
+      "responsibility": "Dispatches sparse exchange with compensated_accumulation control.",
+      "evidence_status": "contract_test"
+    },
+    {
+      "id": "rk-rhs-fast",
+      "path": "backends/fem/gpu/cuda/integrators/rk/rk_rhs_runtime.cu",
+      "symbol": "gpu_rk_compute_rhs_for_magnetization",
+      "responsibility": "Routes explicit RK RHS exchange stages to fast FP64 FMA (compensated_exchange = false).",
+      "evidence_status": "contract_test"
+    },
+    {
+      "id": "rk-rhs-relax-dd",
+      "path": "backends/fem/gpu/cuda/integrators/rk/rk_rhs_runtime.cu",
+      "symbol": "gpu_rk_compute_effective_field_for_magnetization_fresh_demag",
+      "responsibility": "Preserves compensated DD exchange (compensated_exchange = true) for relaxation consumers.",
+      "evidence_status": "contract_test"
+    },
+    {
+      "id": "heff-fused-kernel",
+      "path": "backends/fem/gpu/cuda/fields/vector_field_kernels.hpp",
+      "symbol": "fullmag_cuda_accumulate_heff_fused_xyz",
+      "responsibility": "Single-launch order-preserving XYZ effective-field accumulation kernel.",
+      "evidence_status": "contract_test"
+    },
+    {
+      "id": "rk-effective-field",
+      "path": "backends/fem/gpu/cuda/integrators/rk/rk_effective_field.cu",
+      "symbol": "gpu_rk_accumulate_effective_field",
+      "responsibility": "Populates FemGpuHeffAccumulateTerms and launches fused H_eff once per stage.",
+      "evidence_status": "contract_test"
+    },
+    {
+      "id": "rk-oersted-prepare",
+      "path": "backends/fem/gpu/cuda/integrators/rk/rk_oersted_field.hpp",
+      "symbol": "gpu_rk_prepare_oersted_heff_term",
+      "responsibility": "Prepares validated Oersted pointers and time scale for fused H_eff.",
+      "evidence_status": "contract_test"
+    },
+    {
+      "id": "transfer-unpack",
+      "path": "backends/fem/gpu/cuda/transfer/transfer_kernels.hpp",
+      "symbol": "fullmag_cuda_unpack_aos_to_soa",
+      "responsibility": "Device AoS-to-SoA unpack kernel on an explicit CUDA stream.",
+      "evidence_status": "contract_test"
+    },
+    {
+      "id": "component-upload-packed",
+      "path": "backends/fem/gpu/cuda/transfer/component_transfer.hpp",
+      "symbol": "gpu_component_upload_aos_packed",
+      "responsibility": "Contiguous cudaMemcpyAsync H2D upload plus device unpack using persistent scratch.",
+      "evidence_status": "contract_test"
+    },
+    {
+      "id": "gpu-state-upload-m-packed",
+      "path": "backends/fem/gpu/cuda/state/gpu_state.hpp",
+      "symbol": "gpu_state_upload_magnetization_aos_packed",
+      "responsibility": "Packed magnetization upload reusing packed_field_download.aos_device.",
+      "evidence_status": "contract_test"
+    },
+    {
+      "id": "gpu-state-download-m-packed",
+      "path": "backends/fem/gpu/cuda/state/gpu_state.hpp",
+      "symbol": "gpu_state_download_magnetization_aos_packed",
+      "responsibility": "Packed magnetization download reusing packed_field_download.aos_device.",
+      "evidence_status": "contract_test"
+    },
+    {
+      "id": "state-io-copy-field",
+      "path": "backends/fem/cpu/mfem/runtime/state_io.cpp",
+      "symbol": "context_copy_field_f64",
+      "responsibility": "Routes GPU observable field copies through packed AoS download on compute_stream.",
+      "evidence_status": "contract_test"
+    },
+    {
+      "id": "state-io-upload-m",
+      "path": "backends/fem/cpu/mfem/runtime/state_io.cpp",
+      "symbol": "context_upload_magnetization_f64",
+      "responsibility": "Routes GPU magnetization uploads through packed AoS upload on compute_stream.",
+      "evidence_status": "contract_test"
+    },
+    {
+      "id": "stage-compute-visual",
+      "path": "backends/fem/gpu/cuda/demag_poisson/stage_compute.cpp",
+      "symbol": "recover_device_demag_visual_field",
+      "responsibility": "Streams visual demag recovery directly into packed AoS download without pre-copy sync.",
+      "evidence_status": "contract_test"
+    },
+    {
+      "id": "study-builder-python",
+      "path": "packages/fullmag-py/src/fullmag/world.py",
+      "symbol": "class StudyBuilder",
+      "responsibility": "Public Python stage-first study builder lowered unchanged to FEM GPU explicit RK.",
+      "evidence_status": "unchanged"
+    }
+  ],
+  "public_api": {
+    "parameters": [
+      {
+        "python": "StudyBuilder.solver.integrator",
+        "type": "str",
+        "default": "None",
+        "si_unit": "1",
+        "validation": "heun, rk4, rk23, or rk45 for explicit RK dynamics",
+        "meaning": "Explicit Runge-Kutta time integrator consuming gated short-range kernels, FMA exchange, and fused H_eff on FEM GPU",
+        "backend_support": "FEM CPU/GPU",
+        "problem_ir": "solver.integrator"
+      },
+      {
+        "python": "StudyBuilder.solver.fix_dt",
+        "type": "float",
+        "default": "None",
+        "si_unit": "\\mathrm{s}",
+        "validation": "positive finite value when fixed stepping is selected",
+        "meaning": "Fixed explicit Runge-Kutta timestep",
+        "backend_support": "FEM CPU/GPU",
+        "problem_ir": "solver.fix_dt"
+      }
+    ]
+  },
+  "validation": {
+    "plan": "Execute fem_cuda_shortrange_kernels_contract, fem_source_facade_cuda_kernels_contract, fem_oersted_contract, fem_gpu_state_runtime_contract, fem_state_io_contract, fem_relaxation_energy_derivative_contract, and Phase 2 RTX 4080 SUPER A/B benchmarks verifying null-reduction bitwise parity, deadlock-free DMI BlockReduce, lazy h_drive zeroing, RK FMA exchange <= 1e-13 parity and >= 2.5x speedup, single-launch fused H_eff memcmp == 0, and packed AoS/SoA transfer >= 5x speedup.",
+    "results": "PASS on RTX 4080 SUPER (SM 89-real, Docker DEV, candidate 311062d617 vs baseline 9ab99132d5; docs/audits/2026-11-26-fem-pgbb-kernels-dr-ab.md): fem_cuda_shortrange_kernels_contract (+ compute-sanitizer memcheck 0 errors), fem_gpu_state_runtime_contract, fem_state_io_contract, fem_oersted_contract, fem_relaxation_energy_derivative_contract PASS; 50-step RK4 E2E 1.80x (277.46 ms vs 498.56 ms, m_rel=4.53e-16, H_eff_rel=1.65e-15), state_io 13.93x (5.28 ms vs 73.62 ms), DMI RK 2.54x (BlockReduce 2.17x), Exchange RK FMA 8.02x, Fused H_eff 17.5x (21->1 launches), packed D2H 40.5x / H2D 6.30x."
+  }
+}

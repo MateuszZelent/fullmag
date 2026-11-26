@@ -40,6 +40,7 @@ __device__ double deterministic_normal(uint64_t seed, uint64_t node, uint64_t co
     return sqrt(-2.0 * log(u1)) * cos(kTwoPi * u2);
 }
 
+template <bool ComputeMaxSigma>
 __global__ void thermal_field_blocks_kernel(
     const double *__restrict__ ms,
     const double *__restrict__ alpha,
@@ -87,11 +88,16 @@ __global__ void thermal_field_blocks_kernel(
         h_therm_z[i] = 0.0;
     }
 
-    typedef cub::BlockReduce<double, 256> BlockReduce;
-    __shared__ typename BlockReduce::TempStorage temp_storage;
-    const double block_max = BlockReduce(temp_storage).Reduce(sigma, cub::Max());
-    if (threadIdx.x == 0 && block_max_sigma != nullptr) {
-        block_max_sigma[blockIdx.x] = block_max;
+    if constexpr (ComputeMaxSigma) {
+        typedef cub::BlockReduce<double, kBlockSize> BlockReduce;
+        __shared__ typename BlockReduce::TempStorage temp_storage;
+        const double block_max = BlockReduce(temp_storage).Reduce(sigma, cub::Max());
+        if (threadIdx.x == 0) {
+            block_max_sigma[blockIdx.x] = block_max;
+        }
+    } else {
+        (void)sigma;
+        (void)block_max_sigma;
     }
 }
 
@@ -114,24 +120,47 @@ void fullmag_cuda_thermal_field_blocks(
     int N,
     cudaStream_t stream)
 {
+    if (N <= 0) {
+        return;
+    }
     const int num_blocks = (N + kBlockSize - 1) / kBlockSize;
-    thermal_field_blocks_kernel<<<num_blocks, kBlockSize, 0, stream>>>(
-        ms,
-        alpha,
-        node_volumes,
-        magnetic_node_mask,
-        h_therm_x,
-        h_therm_y,
-        h_therm_z,
-        block_max_sigma,
-        gamma_red,
-        uniform_alpha,
-        temperature,
-        dt_seconds,
-        seed,
-        step_index,
-        use_alpha_field,
-        N);
+    if (block_max_sigma != nullptr) {
+        thermal_field_blocks_kernel<true><<<num_blocks, kBlockSize, 0, stream>>>(
+            ms,
+            alpha,
+            node_volumes,
+            magnetic_node_mask,
+            h_therm_x,
+            h_therm_y,
+            h_therm_z,
+            block_max_sigma,
+            gamma_red,
+            uniform_alpha,
+            temperature,
+            dt_seconds,
+            seed,
+            step_index,
+            use_alpha_field,
+            N);
+    } else {
+        thermal_field_blocks_kernel<false><<<num_blocks, kBlockSize, 0, stream>>>(
+            ms,
+            alpha,
+            node_volumes,
+            magnetic_node_mask,
+            h_therm_x,
+            h_therm_y,
+            h_therm_z,
+            nullptr,
+            gamma_red,
+            uniform_alpha,
+            temperature,
+            dt_seconds,
+            seed,
+            step_index,
+            use_alpha_field,
+            N);
+    }
 }
 
 } // namespace fullmag::fem

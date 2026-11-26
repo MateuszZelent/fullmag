@@ -805,15 +805,12 @@ bool recover_device_demag_visual_field(
     if (!recover_device_demag_full_domain_field_device(ctx, raw_stream, reason)) {
         return false;
     }
-    cudaStream_t stream = reinterpret_cast<cudaStream_t>(raw_stream);
-    if (!cuda_ok(cudaStreamSynchronize(stream), "synchronize full-domain GPU demag visual recovery", reason)) {
-        return false;
-    }
-    return gpu_state_download_component_aos(
+    return gpu_state_download_component_aos_packed(
         ctx.gpu_state.device,
         ctx.gpu_state.device.demag_poisson.poisson_gradient,
         ctx.demag.h_visual_xyz,
         ctx.transfer_audit.audit,
+        raw_stream,
         "H_demag visual",
         reason);
 #else

@@ -15,6 +15,13 @@
 namespace fullmag::fem {
 
 struct Context;
+struct FemGpuHeffAccumulateTerms;
+
+bool gpu_rk_prepare_oersted_heff_term(
+    Context &ctx,
+    double evaluation_time_s,
+    FemGpuHeffAccumulateTerms &terms,
+    std::string &reason);
 
 bool gpu_rk_accumulate_oersted_field(
     Context &ctx,
