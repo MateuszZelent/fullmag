@@ -900,26 +900,35 @@ void direct_tetra_project_field_single_pass_parity()
             "projected H1 GetVectorValue() diverged from DirectTetraQuadrature::EvaluateField()");
     }
 
-    // Verify 3x single-pass fusion: total source-target pairs and kernel evaluations
-    // are at most 1/3 of legacy 3-component separate quadrature passes.
+    // Verify 3x single-pass fusion: total source-target pairs, kernel evaluations,
+    // and ledger visits match a single EvaluateField pass across all target
+    // quadrature points (exact 1x work vs legacy 3x separate scalar passes).
     const int target_order = std::max(2, opt_w1.base_quadrature_order + 2);
-    const auto npts = static_cast<std::uint64_t>(
-        mfem::IntRules.Get(mfem::Geometry::TETRAHEDRON, target_order).GetNPoints());
+    const auto &target_rule =
+        mfem::IntRules.Get(mfem::Geometry::TETRAHEDRON, target_order);
+    const auto npts = static_cast<std::uint64_t>(target_rule.GetNPoints());
     const auto single_pass_pairs =
         static_cast<std::uint64_t>(source_mesh.GetNE()) *
         static_cast<std::uint64_t>(target_mesh.GetNE()) * npts;
-    const auto low_npts = static_cast<std::uint64_t>(
-        mfem::IntRules.Get(mfem::Geometry::TETRAHEDRON, opt_w1.base_quadrature_order).GetNPoints());
-    const auto high_npts = static_cast<std::uint64_t>(
-        mfem::IntRules.Get(mfem::Geometry::TETRAHEDRON, opt_w1.base_quadrature_order + 2).GetNPoints());
-    const auto exact_single_pass_kernels =
-        (single_pass_pairs + 8u * diag_w1.refined_pairs) * (low_npts + high_npts);
-    const auto legacy_three_pass_kernels = 3u * exact_single_pass_kernels;
-    require(diag_w1.source_target_pairs == single_pass_pairs,
+    std::vector<std::array<double, 3>> all_target_points;
+    all_target_points.reserve(
+        static_cast<std::size_t>(target_mesh.GetNE()) * static_cast<std::size_t>(npts));
+    for (int elem = 0; elem < target_mesh.GetNE(); ++elem) {
+        mfem::ElementTransformation *tr = target_mesh.GetElementTransformation(elem);
+        for (int p = 0; p < target_rule.GetNPoints(); ++p) {
+            tr->Transform(target_rule.IntPoint(p), phys);
+            all_target_points.push_back({phys[0], phys[1], phys[2]});
+        }
+    }
+    const auto single_pass_eval = DirectTetraQuadrature::EvaluateField(
+        source_mesh, current, all_target_points, opt_w1);
+    require(diag_w1.source_target_pairs == single_pass_pairs &&
+            diag_w1.source_target_pairs == single_pass_eval.diagnostics.source_target_pairs,
         "fused H1 projection evaluated more than one pass of source-target pairs");
-    require(diag_w1.kernel_evaluations == exact_single_pass_kernels &&
-            diag_w1.kernel_evaluations <= legacy_three_pass_kernels / 3u,
-        "fused H1 projection did not achieve exact 3x single-pass kernel reduction");
+    require(diag_w1.kernel_evaluations == single_pass_eval.diagnostics.kernel_evaluations &&
+            diag_w1.ledger_leaf_visits == single_pass_eval.diagnostics.ledger_leaf_visits &&
+            diag_w1.refined_pairs == single_pass_eval.diagnostics.refined_pairs,
+        "fused H1 projection did not match exact single-pass (1/3 of legacy 3-pass) work counts");
 
     // Verify ProjectField bypasses pointwise pair cap while retaining shared WorkBudget.
     auto opt_small_pair_cap = opt_w4;
@@ -1219,21 +1228,33 @@ void diagnose_singular_targets_after_failure()
 
 } // namespace
 
-int main()
+int main(int argc, char **argv)
 {
+    bool wave2_only = false;
+    for (int i = 1; i < argc; ++i) {
+        if (std::string(argv[i]) == "--wave2") {
+            wave2_only = true;
+        } else {
+            std::cerr << "fem direct tetrahedral Oersted contract: unknown argument: "
+                      << argv[i] << '\n';
+            return 2;
+        }
+    }
     try {
-        std::cerr << "OE-F1 CASE direct_tetra_signed_current_and_budget_contract\n";
-        direct_tetra_signed_current_and_budget_contract();
-        std::cerr << "OE-F1 CASE direct_tetra_explicit_volume_profile_contract\n";
-        direct_tetra_explicit_volume_profile_contract();
-        std::cerr << "OE-F1 CASE direct_tetra_singular_target_contract\n";
-        direct_tetra_singular_target_contract();
-        std::cerr << "OE-F1 CASE direct_tetra_consistent_h1_projection_contract\n";
-        direct_tetra_consistent_h1_projection_contract();
-        std::cerr << "OE-F1 CASE direct_tetra_h_refinement_contract\n";
-        direct_tetra_h_refinement_contract();
-        std::cerr << "OE-F1 CASE direct_tetra_fdm_midpoint_common_limit_contract\n";
-        direct_tetra_fdm_midpoint_common_limit_contract();
+        if (!wave2_only) {
+            std::cerr << "OE-F1 CASE direct_tetra_signed_current_and_budget_contract\n";
+            direct_tetra_signed_current_and_budget_contract();
+            std::cerr << "OE-F1 CASE direct_tetra_explicit_volume_profile_contract\n";
+            direct_tetra_explicit_volume_profile_contract();
+            std::cerr << "OE-F1 CASE direct_tetra_singular_target_contract\n";
+            direct_tetra_singular_target_contract();
+            std::cerr << "OE-F1 CASE direct_tetra_consistent_h1_projection_contract\n";
+            direct_tetra_consistent_h1_projection_contract();
+            std::cerr << "OE-F1 CASE direct_tetra_h_refinement_contract\n";
+            direct_tetra_h_refinement_contract();
+            std::cerr << "OE-F1 CASE direct_tetra_fdm_midpoint_common_limit_contract\n";
+            direct_tetra_fdm_midpoint_common_limit_contract();
+        }
         std::cerr << "OE-F1 CASE direct_tetra_multithread_is_bit_exact_and_observer_monotonic\n";
         direct_tetra_multithread_is_bit_exact_and_observer_monotonic();
         std::cerr << "OE-F1 CASE direct_tetra_parallel_budget_exceeded_fails_cleanly\n";
@@ -1247,11 +1268,13 @@ int main()
     } catch (const std::exception &error) {
         std::cerr << "fem direct tetrahedral Oersted contract: FAIL: "
                   << error.what() << '\n';
-        try {
-            diagnose_singular_targets_after_failure();
-        } catch (const std::exception &diagnostic_error) {
-            std::cerr << "OE-F1 DIAGNOSTIC SETUP REFUSED exception="
-                      << diagnostic_error.what() << '\n';
+        if (!wave2_only) {
+            try {
+                diagnose_singular_targets_after_failure();
+            } catch (const std::exception &diagnostic_error) {
+                std::cerr << "OE-F1 DIAGNOSTIC SETUP REFUSED exception="
+                          << diagnostic_error.what() << '\n';
+            }
         }
         return 1;
     }

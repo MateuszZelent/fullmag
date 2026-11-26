@@ -674,6 +674,9 @@ if(FULLMAG_USE_MFEM_STACK)
     add_test(
         NAME fem_oersted_direct_tetra_contract
         COMMAND fem_oersted_direct_tetra_contract)
+    add_test(
+        NAME fem_oersted_direct_tetra_parallel_contract
+        COMMAND fem_oersted_direct_tetra_contract --wave2)
 
     add_executable(
         fem_oersted_vector_potential_contract

@@ -9,6 +9,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
+#include <cstring>
 #include <limits>
 #include <memory>
 #include <mutex>
@@ -548,6 +549,7 @@ struct SparseLinearSolver::Impl {
     double *d_values = nullptr;
     double *d_rhs = nullptr;
     double *d_sol = nullptr;
+    double cudss_matrix_scale = 1.0;
 #endif
 
     Impl(const mfem::SparseMatrix &source, const SparseSolveConfig &cfg)
@@ -1045,6 +1047,22 @@ struct SparseLinearSolver::Impl {
         const std::int64_t nnz = static_cast<std::int64_t>(columns.size());
         const std::size_t alloc_nnz = std::max<std::size_t>(1, columns.size());
 
+        // Scalar-normalize uploaded CSR entries by max |A_ij| so extreme physical
+        // scales (e.g., 1e+14 or 1e-21 in nanometer domains) remain well-scaled
+        // for cuDSS pivot selection; solve_gpu_cudss divides RHS by the same scalar.
+        double max_abs_value = 0.0;
+        for (double v : values) {
+            max_abs_value = std::max(max_abs_value, std::abs(v));
+        }
+        cudss_matrix_scale =
+            (std::isfinite(max_abs_value) && max_abs_value > 0.0) ? max_abs_value : 1.0;
+        if (cudss_matrix_scale != 1.0) {
+            const double inv_scale = 1.0 / cudss_matrix_scale;
+            for (double &v : values) {
+                v *= inv_scale;
+            }
+        }
+
         auto fail = [&](const std::string &message) {
             destroy_cudss_objects();
             throw std::runtime_error(message);
@@ -1109,22 +1127,29 @@ struct SparseLinearSolver::Impl {
             fail(err);
         }
 
-        if (config.kind == SparseMatrixKind::SymmetricIndefinite) {
-            // Enable MC64 maximum-diagonal-product matching/scaling and scaled
-            // pivot epsilon so zero-diagonal saddle-point matrices (OE-F2, OE-T0)
-            // factor accurately without silent zero-pivot perturbation.
-            const auto matching_alg = CUDSS_MATCHING_ALG_MAX_DIAG_PRODUCT;
+        if (config.kind == SparseMatrixKind::SymmetricIndefinite ||
+            config.kind == SparseMatrixKind::GeneralNonsymmetric) {
+            // Configure scaled pivot epsilon and device iterative refinement so
+            // zero-diagonal saddle-point and nonsymmetric matrices solve to full
+            // FP64 precision under cuDSS 0.8 static pivoting.
             const auto pivot_eps_alg = CUDSS_PIVOT_EPSILON_ALG_SCALED;
+            const int ir_n_steps = 5;
+            const double ir_tol = 1.0e-15;
             if (!cudss_check(
-                    cudssConfigSet(
-                        cudss_config, CUDSS_CONFIG_MATCHING_ALG,
-                        &matching_alg, sizeof(matching_alg)),
-                    "matching algorithm configuration", err) ||
-                !cudss_check(
                     cudssConfigSet(
                         cudss_config, CUDSS_CONFIG_PIVOT_EPSILON_ALG,
                         &pivot_eps_alg, sizeof(pivot_eps_alg)),
-                    "pivot epsilon algorithm configuration", err)) {
+                    "pivot epsilon algorithm configuration", err) ||
+                !cudss_check(
+                    cudssConfigSet(
+                        cudss_config, CUDSS_CONFIG_IR_N_STEPS,
+                        &ir_n_steps, sizeof(ir_n_steps)),
+                    "iterative refinement step configuration", err) ||
+                !cudss_check(
+                    cudssConfigSet(
+                        cudss_config, CUDSS_CONFIG_IR_TOL,
+                        &ir_tol, sizeof(ir_tol)),
+                    "iterative refinement tolerance configuration", err)) {
                 fail(err);
             }
         }
@@ -1225,6 +1250,67 @@ struct SparseLinearSolver::Impl {
         if (info != 0) {
             fail("SparseLinearSolver cuDSS factorization reported CUDSS_DATA_INFO=" +
                  std::to_string(info) + " (singular or incompatible matrix; no CPU fallback)");
+        }
+
+        std::int64_t npivots_raw = 0;
+        std::size_t npivots_written = 0;
+        if (cudssDataGet(cudss_handle, cudss_data, CUDSS_DATA_NPIVOTS,
+                         &npivots_raw, sizeof(npivots_raw), &npivots_written) ==
+            CUDSS_STATUS_SUCCESS) {
+            std::int64_t npivots = 0;
+            if (npivots_written == sizeof(std::int32_t)) {
+                std::int32_t np32 = 0;
+                std::memcpy(&np32, &npivots_raw, sizeof(np32));
+                npivots = static_cast<std::int64_t>(np32);
+            } else {
+                npivots = npivots_raw;
+            }
+            if (npivots > 0) {
+                // Static pivoting perturbed diagonal entries (expected on zero-diagonal
+                // saddle-point matrices, but also produced for genuinely singular matrices
+                // under CUDSS_MTYPE_GENERAL). Run one deterministic probe solve and verify
+                // the independent unpreconditioned residual against the original CSR matrix.
+                mfem::Vector probe_rhs(n);
+                std::vector<double> scaled_probe_rhs(static_cast<std::size_t>(n), 0.0);
+                const double inv_scale = 1.0 / cudss_matrix_scale;
+                for (int i = 0; i < n; ++i) {
+                    const double v = std::sin(0.73 * static_cast<double>(i + 1));
+                    probe_rhs[i] = v;
+                    scaled_probe_rhs[static_cast<std::size_t>(i)] = v * inv_scale;
+                }
+                mfem::Vector probe_sol(n);
+                if (!cuda_check(cudaMemcpy(d_rhs, scaled_probe_rhs.data(),
+                                           static_cast<std::size_t>(n) * sizeof(double),
+                                           cudaMemcpyHostToDevice),
+                                "probe rhs upload", err) ||
+                    !cudss_check(cudssMatrixSetValues(cudss_rhs, d_rhs),
+                                 "probe rhs binding", err) ||
+                    !cudss_check(cudssMatrixSetValues(cudss_sol, d_sol),
+                                 "probe solution binding", err) ||
+                    !cudss_check(cudssExecute(cudss_handle, CUDSS_PHASE_SOLVE, cudss_config,
+                                              cudss_data, cudss_matrix, cudss_sol, cudss_rhs),
+                                 "probe solve", err) ||
+                    !cuda_check(cudaDeviceSynchronize(), "probe solve synchronize", err) ||
+                    !cuda_check(cudaMemcpy(probe_sol.HostWrite(), d_sol,
+                                           static_cast<std::size_t>(n) * sizeof(double),
+                                           cudaMemcpyDeviceToHost),
+                                "probe solution download", err)) {
+                    fail(err);
+                }
+                long double probe_res = 0.0L;
+                long double probe_rhs_norm = 0.0L;
+                const bool probe_ok = compute_extended_residual(
+                    matrix_copy, probe_sol, probe_rhs, nullptr, probe_res, probe_rhs_norm);
+                const double probe_rel =
+                    probe_ok ? relative_residual_from_norms(probe_res, probe_rhs_norm, 0.0)
+                             : std::numeric_limits<double>::infinity();
+                if (!std::isfinite(probe_rel) || probe_rel > 1.0e-6) {
+                    fail("SparseLinearSolver cuDSS factorization detected singular or "
+                         "numerically unstable matrix after " + std::to_string(npivots) +
+                         " perturbed pivots (probe relative residual=" +
+                         std::to_string(probe_rel) + "; no CPU fallback)");
+                }
+            }
         }
 
         backend = ActiveBackend::GpuCudss;
@@ -1684,8 +1770,17 @@ struct SparseLinearSolver::Impl {
         std::lock_guard<std::mutex> lock(solve_mutex);
         std::string err;
 
+        std::vector<double> scaled_rhs(static_cast<std::size_t>(n), 0.0);
+        const double inv_scale = 1.0 / cudss_matrix_scale;
         auto run_single_solve = [&](const double *rhs_host, double *sol_host) -> void {
-            if (!cuda_check(cudaMemcpy(d_rhs, rhs_host,
+            const double *upload_ptr = rhs_host;
+            if (cudss_matrix_scale != 1.0) {
+                for (int i = 0; i < n; ++i) {
+                    scaled_rhs[static_cast<std::size_t>(i)] = rhs_host[i] * inv_scale;
+                }
+                upload_ptr = scaled_rhs.data();
+            }
+            if (!cuda_check(cudaMemcpy(d_rhs, upload_ptr,
                                        static_cast<std::size_t>(n) * sizeof(double),
                                        cudaMemcpyHostToDevice),
                             "rhs upload", err) ||
