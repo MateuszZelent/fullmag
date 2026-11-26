@@ -10,7 +10,11 @@
  */
 
 #include "cpu/mfem/interactions/demag_fem_bem_operator.hpp"
+#include "gpu/cuda/demag_poisson/cudss_direct_solver.hpp"
+#include "gpu/cuda/demag_poisson/demag_kernels.hpp"
+#include "gpu/cuda/demag_poisson/hypre_stream_interop.hpp"
 #include "gpu/cuda/demag_poisson/operators.hpp"
+#include "gpu/cuda/demag_poisson/poisson.hpp"
 #include "gpu/cuda/state/component_field.hpp"
 
 #include <cstdint>
@@ -45,6 +49,7 @@ struct GpuFemBemLinearSystem {
     std::unique_ptr<mfem::HypreParVector> x_par;
     std::unique_ptr<mfem::HypreParVector> residual;
 #endif
+    std::shared_ptr<GpuDemagCudssDirectSolver> direct_solver;
     uint64_t rows = 0;
     uint64_t solver_setup_count = 0;
     bool solver_setup_complete = false;
@@ -94,8 +99,11 @@ struct GpuDemagFemBemWorkspace {
     HierarchicalDemagBemFarBlock *d_far_blocks = nullptr;
     double *d_far_u = nullptr;
     double *d_far_v = nullptr;
+    HypreStreamInterop stream_interop{};
 #endif
 
+    GpuValidationNormScratch validation_scratch{};
+    GpuDemagCudssResolution cudss_resolution{};
     GpuFemBemLinearSystem u1_system;
     GpuFemBemLinearSystem u2_system;
     uint64_t u1_iterations = 0;
@@ -110,6 +118,18 @@ void gpu_demag_fem_bem_destroy(Context &ctx);
 bool gpu_demag_fem_bem_ready(const Context &ctx);
 uint64_t gpu_demag_fem_bem_device_bytes(const Context &ctx);
 const char *gpu_demag_fem_bem_operator_mode(const Context &ctx);
+
+bool gpu_demag_fem_bem_amg_coarse_relax_type(
+    const Context &ctx,
+    std::int32_t &relax_type,
+    std::string &error);
+
+GpuDemagPoissonLinearSolver gpu_demag_fem_bem_linear_solver(
+    const Context &ctx);
+
+bool gpu_demag_fem_bem_cudss_resolution(
+    const Context &ctx,
+    GpuDemagCudssResolution &resolution);
 
 bool compute_device_demag_fem_bem_for_device_stage(
     Context &ctx,

@@ -4350,12 +4350,22 @@ pub struct FemPoissonDemagProvenance {
     pub preconditioner: String,
     pub rtol: f64,
     pub max_iterations: u32,
-    /// Native FEM GPU `device_hypre_poisson` only: `hypre_krylov` (the policy's
-    /// Krylov solver and preconditioner ran) or `cudss_direct` (factor-once
-    /// direct solve; no Krylov iteration and no preconditioner ran,
-    /// docs/physics/0997). Absent on every other lane.
+    /// Requested GPU linear-solver strategy (`auto`, `cg_amg`, or `cudss`) on
+    /// native FEM GPU demag lanes (docs/physics/0997). Absent on CPU/hybrid lanes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub requested_linear_solver_strategy: Option<String>,
+    /// Native FEM GPU device demag only (`device_hypre_poisson` or
+    /// `device_hypre_fem_bem`): `hypre_krylov` (the policy's Krylov solver and
+    /// preconditioner ran) or `cudss_direct` (factor-once direct solve; no
+    /// Krylov iteration and no preconditioner ran, docs/physics/0997). Absent
+    /// on every other lane.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resolved_linear_solver: Option<String>,
+    /// Explicit fallback reason when `auto` falls back from cuDSS to HYPRE
+    /// Krylov (`cudss_unavailable`, `cudss_factor_exceeds_vram_budget`, or
+    /// `cudss_memory_estimate_unavailable`). Absent when no fallback occurred.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub linear_solver_fallback_reason: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub actual_iterations: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -4391,6 +4401,12 @@ pub struct FemBemDemagProvenance {
     pub operator_build_count: u64,
     pub operator_upload_count: u64,
     pub apply_count: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub requested_linear_solver_strategy: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resolved_linear_solver: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub linear_solver_fallback_reason: Option<String>,
 }
 
 /// Records which engine and device produced a run.
@@ -6335,6 +6351,66 @@ mod tests {
         assert_eq!(provenance.potential_true_dof_count, None);
         assert_eq!(provenance.variational_energy_joules, None);
         assert_eq!(provenance.recovered_field_energy_joules, None);
+        assert_eq!(provenance.requested_linear_solver_strategy, None);
+        assert_eq!(provenance.resolved_linear_solver, None);
+        assert_eq!(provenance.linear_solver_fallback_reason, None);
+
+        let bem_legacy: super::FemBemDemagProvenance = serde_json::from_value(serde_json::json!({
+            "operator_mode": "device_hypre_fem_bem",
+            "operator_fingerprint": "fp",
+            "boundary_node_count": 8,
+            "boundary_triangle_count": 12,
+            "near_block_count": 1,
+            "far_block_count": 0,
+            "near_entry_count": 64,
+            "far_row_count": 0,
+            "max_rank": 0,
+            "relative_error_estimate": 0.0,
+            "resident_bytes": 512,
+            "device_bytes": 1024,
+            "operator_build_count": 1,
+            "operator_upload_count": 1,
+            "apply_count": 3
+        }))
+        .unwrap();
+        assert_eq!(bem_legacy.requested_linear_solver_strategy, None);
+        assert_eq!(bem_legacy.resolved_linear_solver, None);
+        assert_eq!(bem_legacy.linear_solver_fallback_reason, None);
+
+        let bem_fallback: super::FemBemDemagProvenance =
+            serde_json::from_value(serde_json::json!({
+                "operator_mode": "device_hypre_fem_bem",
+                "operator_fingerprint": "fp",
+                "boundary_node_count": 8,
+                "boundary_triangle_count": 12,
+                "near_block_count": 1,
+                "far_block_count": 0,
+                "near_entry_count": 64,
+                "far_row_count": 0,
+                "max_rank": 0,
+                "relative_error_estimate": 0.0,
+                "resident_bytes": 512,
+                "device_bytes": 1024,
+                "operator_build_count": 1,
+                "operator_upload_count": 1,
+                "apply_count": 3,
+                "requested_linear_solver_strategy": "auto",
+                "resolved_linear_solver": "hypre_krylov",
+                "linear_solver_fallback_reason": "cudss_factor_exceeds_vram_budget"
+            }))
+            .unwrap();
+        assert_eq!(
+            bem_fallback.requested_linear_solver_strategy.as_deref(),
+            Some("auto")
+        );
+        assert_eq!(
+            bem_fallback.resolved_linear_solver.as_deref(),
+            Some("hypre_krylov")
+        );
+        assert_eq!(
+            bem_fallback.linear_solver_fallback_reason.as_deref(),
+            Some("cudss_factor_exceeds_vram_budget")
+        );
     }
 }
 

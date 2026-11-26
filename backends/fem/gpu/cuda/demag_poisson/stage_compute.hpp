@@ -41,6 +41,9 @@ struct GpuDemagApplyRequest {
     bool reset_initial_solution = false;
     GpuDemagEvaluationMode evaluation_mode = GpuDemagEvaluationMode::FieldOnly;
     GpuDemagSolvePurpose purpose = GpuDemagSolvePurpose::IntermediateRkStage;
+    bool has_stage_time = false;
+    double stage_time_s = 0.0;
+    double step_dt_s = 0.0;
 };
 
 // Resolve/validate a request at the module boundary so unsupported enum values

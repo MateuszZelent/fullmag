@@ -11,6 +11,8 @@
 #include "gpu/cuda/integrators/rk/rk_final_refresh.hpp"
 
 #include "context.hpp"
+#include "gpu/cuda/demag_poisson/demag_predictor.hpp"
+#include "gpu/cuda/demag_poisson/poisson.hpp"
 #include "gpu/cuda/integrators/llg/llg_rhs_kernels.hpp"
 #include "gpu/cuda/integrators/rk/rk_component_copy.hpp"
 #include "cpu/mfem/integrators/rk_step_failure_injection.hpp"
@@ -69,6 +71,7 @@ bool gpu_rk_finalize_accepted_step(
     const uint64_t endpoint_signature = gpu_rk_fsal_operator_signature(ctx);
     const bool endpoint_rhs_ready =
         reuse_bs23_fsal_rhs &&
+        gpu_rk_allows_endpoint_rhs_shortcut(ctx) &&
         gpu.rk.endpoint_valid &&
         !gpu.rk.endpoint_consumed &&
         gpu.rk.endpoint_time_seconds == endpoint_time &&
@@ -130,7 +133,8 @@ bool gpu_rk_finalize_accepted_step(
     if (!endpoint_rhs_ready) {
         GpuPerformanceCounterDelta final_rhs_delta{};
         final_rhs_delta.rhs_evaluations = 1;
-        if (ctx.poisson_demag.gpu_demag_mode != FULLMAG_FEM_GPU_DEMAG_DEVICE_HYPRE_POISSON) {
+        if (ctx.poisson_demag.gpu_demag_mode != FULLMAG_FEM_GPU_DEMAG_DEVICE_HYPRE_POISSON &&
+            ctx.poisson_demag.gpu_demag_mode != FULLMAG_FEM_GPU_DEMAG_DEVICE_HYPRE_FEM_BEM) {
             final_rhs_delta.demag_solves =
                 ctx.poisson_demag.solves_current_step -
                 demag_solves_before_final_rhs;
@@ -155,19 +159,27 @@ bool gpu_rk_finalize_accepted_step(
                 "cudaMemcpyAsync GPU RK FSAL k0 device copy",
                 reason)) {
             gpu.rk.fsal_valid = false;
+            gpu.rk.fsal_time_seconds = 0.0;
+            gpu.rk.fsal_operator_signature = 0;
             return false;
         }
     }
     if (fsal_method) {
         gpu.rk.fsal_valid = true;
+        gpu.rk.fsal_time_seconds = endpoint_time;
+        gpu.rk.fsal_operator_signature = endpoint_signature;
     } else {
         gpu.rk.fsal_valid = false;
+        gpu.rk.fsal_time_seconds = 0.0;
+        gpu.rk.fsal_operator_signature = 0;
     }
 
     if (gpu.reductions.temp_storage == nullptr ||
         gpu.reductions.temp_storage_bytes == 0) {
         reason = "GPU RK device max requires preallocated CUB reduction temp storage";
         gpu.rk.fsal_valid = false;
+        gpu.rk.fsal_time_seconds = 0.0;
+        gpu.rk.fsal_operator_signature = 0;
         return false;
     }
     if (endpoint_rhs_ready) {
@@ -185,6 +197,8 @@ bool gpu_rk_finalize_accepted_step(
             stream);
         if (!cuda_launch_ok("launch GPU RK endpoint FSAL RHS metric blocks", reason)) {
             gpu.rk.fsal_valid = false;
+            gpu.rk.fsal_time_seconds = 0.0;
+            gpu.rk.fsal_operator_signature = 0;
             return false;
         }
     }
@@ -198,7 +212,31 @@ bool gpu_rk_finalize_accepted_step(
         stream);
     if (!cuda_launch_ok("launch GPU RK device max query", reason)) {
         gpu.rk.fsal_valid = false;
+        gpu.rk.fsal_time_seconds = 0.0;
+        gpu.rk.fsal_operator_signature = 0;
         return false;
+    }
+
+    if (ctx.demag.enabled &&
+        ctx.poisson_demag.gpu_demag_mode == FULLMAG_FEM_GPU_DEMAG_DEVICE_HYPRE_POISSON &&
+        gpu_demag_poisson_linear_solver(ctx) == GpuDemagPoissonLinearSolver::HypreKrylov) {
+        if (gpu_rk_rhs_allows_fsal_k0_reuse(ctx)) {
+            if (!gpu_demag_predictor_commit_accepted_potential(
+                    gpu.demag_poisson.predictor,
+                    gpu.demag_poisson.poisson_solution,
+                    gpu.demag_poisson.scalar_dof_count,
+                    endpoint_time,
+                    endpoint_signature,
+                    stream,
+                    reason)) {
+                gpu.rk.fsal_valid = false;
+                gpu.rk.fsal_time_seconds = 0.0;
+                gpu.rk.fsal_operator_signature = 0;
+                return false;
+            }
+        } else {
+            gpu_demag_predictor_invalidate(gpu.demag_poisson.predictor);
+        }
     }
 
     ctx.state.current_time += active_dt;

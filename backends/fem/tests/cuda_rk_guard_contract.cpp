@@ -289,6 +289,14 @@ void minimal_rk_transaction_restores_only_authoritative_gpu_state()
     ctx.adaptive_dt.prev_error_norm = 6.0;
     ctx.adaptive_dt.has_prev_error_norm = true;
     gpu.rk.fsal_valid = true;
+    gpu.rk.fsal_time_seconds = 2.0;
+    gpu.rk.fsal_operator_signature = 0x123456789abcdef0ULL;
+    gpu.rk.active_step_dt_s = 4.0;
+    gpu.demag_poisson.predictor.history_count = 2u;
+    gpu.demag_poisson.predictor.t_curr = 2.0;
+    gpu.demag_poisson.predictor.t_prev = 1.0;
+    gpu.demag_poisson.predictor.operator_signature = 0x123456789abcdef0ULL;
+    gpu.demag_poisson.predictor.last_solved_stage_time_s = 2.0;
     gpu.residency.source_of_truth = FULLMAG_FEM_RESIDENCY_DEVICE_SOURCE_OF_TRUTH;
     gpu.residency.device_state = fullmag::fem::FemGpuSyncState::DeviceClean;
     gpu.residency.host_state = fullmag::fem::FemGpuSyncState::HostStale;
@@ -318,6 +326,14 @@ void minimal_rk_transaction_restores_only_authoritative_gpu_state()
     ctx.adaptive_dt.current_dt = -5.0;
     ctx.adaptive_dt.prev_error_norm = -6.0;
     gpu.rk.fsal_valid = false;
+    gpu.rk.fsal_time_seconds = -9.0;
+    gpu.rk.fsal_operator_signature = 0xdeadbeefULL;
+    gpu.rk.active_step_dt_s = -1.0;
+    gpu.demag_poisson.predictor.history_count = 0u;
+    gpu.demag_poisson.predictor.t_curr = -3.0;
+    gpu.demag_poisson.predictor.t_prev = -4.0;
+    gpu.demag_poisson.predictor.operator_signature = 0xfeedfaceULL;
+    gpu.demag_poisson.predictor.last_solved_stage_time_s = -5.0;
     gpu.residency.source_of_truth = FULLMAG_FEM_RESIDENCY_HOST_SOURCE_OF_TRUTH;
     ctx.stepper.failure_injection.next =
         fullmag::fem::RkStepFailurePoint::DuringFinalStatistics;
@@ -342,6 +358,30 @@ void minimal_rk_transaction_restores_only_authoritative_gpu_state()
     check(ctx.adaptive_dt.prev_error_norm == 6.0 && ctx.adaptive_dt.has_prev_error_norm,
           "GPU transaction controller-history rollback");
     check(gpu.rk.fsal_valid, "GPU transaction FSAL validity rollback");
+    check(gpu.rk.fsal_time_seconds == 2.0 &&
+              gpu.rk.fsal_operator_signature == 0x123456789abcdef0ULL &&
+              gpu.rk.active_step_dt_s == 4.0,
+          "GPU transaction FSAL time/signature/dt rollback");
+    check(gpu.demag_poisson.predictor.history_count == 2u &&
+              gpu.demag_poisson.predictor.t_curr == 2.0 &&
+              gpu.demag_poisson.predictor.t_prev == 1.0 &&
+              gpu.demag_poisson.predictor.operator_signature == 0x123456789abcdef0ULL &&
+              gpu.demag_poisson.predictor.last_solved_stage_time_s == 2.0,
+          "GPU transaction predictor metadata rollback");
+    // Late rollback after an in-place overwrite of d_phi_curr (same pointers,
+    // bumped commit_generation) must fail closed and invalidate predictor state.
+    {
+        const uint64_t gen_before = gpu.demag_poisson.predictor.commit_generation;
+        fullmag::fem::RkStepTransaction late_tx(ctx);
+        check(late_tx.begin(error), error.c_str());
+        gpu.demag_poisson.predictor.commit_generation = gen_before + 1u;
+        gpu.demag_poisson.predictor.history_count = 1u;
+        gpu.demag_poisson.predictor.t_curr = 9.0;
+        check(late_tx.rollback(error), error.c_str());
+        check(gpu.demag_poisson.predictor.history_count == 0u &&
+                  gpu.demag_poisson.predictor.commit_generation == gen_before + 1u,
+              "late rollback after predictor commit_generation advance must invalidate fail-closed");
+    }
     fullmag::fem::gpu_rk_retain_restored_fsal_on_retry(ctx);
     check(gpu.rk.fsal_valid,
           "adaptive retry must preserve the restored deterministic FSAL derivative");
@@ -431,6 +471,9 @@ void committed_transaction_and_external_upload_update_observable_validity()
           "committed GPU RK transaction must record the accepted step");
 
     const double replacement_m[3] = {0.0, 1.0, 0.0};
+    gpu.demag_poisson.predictor.history_count = 2u;
+    gpu.demag_poisson.predictor.t_curr = 2.0;
+    gpu.rk.fsal_operator_signature = 42u;
     check(
         fullmag::fem::gpu_state_upload_magnetization_aos(
             gpu,
@@ -441,6 +484,9 @@ void committed_transaction_and_external_upload_update_observable_validity()
         error.c_str());
     check(!gpu.fields.accepted_observables_valid,
           "external magnetization upload must invalidate derived observables");
+    check(gpu.demag_poisson.predictor.history_count == 0u &&
+              gpu.rk.fsal_operator_signature == 0u,
+          "external magnetization upload must invalidate predictor and FSAL signature");
     fullmag::fem::gpu_state_destroy(gpu);
 }
 

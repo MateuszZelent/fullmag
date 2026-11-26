@@ -103,12 +103,11 @@ bool gpu_rk_compute_hybrid_cpu_demag_for_device_stage(
 #endif
 }
 
-} // namespace
-
-bool gpu_rk_compute_demag_for_device_stage(
+bool gpu_rk_compute_demag_for_device_stage_with_request(
     Context &ctx,
     const FemGpuComponentField &m,
     cudaStream_t stream,
+    const GpuDemagApplyRequest &stage_request,
     std::string &reason)
 {
     if (!ctx.demag.enabled) {
@@ -133,7 +132,7 @@ bool gpu_rk_compute_demag_for_device_stage(
                 ? gpu_rk_compute_hybrid_cpu_demag_for_device_stage(
                       ctx, m, stream, reason, true)
                 : compute_device_demag_for_device_stage_fresh(
-                      ctx, m, stream, kRkStageDemagRequest, reason);
+                      ctx, m, stream, stage_request, reason);
         if (refreshed) {
             ctx.poisson_demag.fresh_initial_guess_required = false;
         }
@@ -144,7 +143,35 @@ bool gpu_rk_compute_demag_for_device_stage(
             ctx, m, stream, reason, false);
     }
     return compute_device_demag_for_device_stage(
+        ctx, m, stream, stage_request, reason);
+}
+
+} // namespace
+
+bool gpu_rk_compute_demag_for_device_stage(
+    Context &ctx,
+    const FemGpuComponentField &m,
+    cudaStream_t stream,
+    std::string &reason)
+{
+    return gpu_rk_compute_demag_for_device_stage_with_request(
         ctx, m, stream, kRkStageDemagRequest, reason);
+}
+
+bool gpu_rk_compute_demag_for_device_stage(
+    Context &ctx,
+    const FemGpuComponentField &m,
+    cudaStream_t stream,
+    double stage_time_s,
+    double step_dt_s,
+    std::string &reason)
+{
+    GpuDemagApplyRequest stage_request = kRkStageDemagRequest;
+    stage_request.has_stage_time = true;
+    stage_request.stage_time_s = stage_time_s;
+    stage_request.step_dt_s = step_dt_s;
+    return gpu_rk_compute_demag_for_device_stage_with_request(
+        ctx, m, stream, stage_request, reason);
 }
 
 bool gpu_rk_compute_demag_for_device_stage_fresh(

@@ -2621,6 +2621,7 @@ class ProblemApiTests(unittest.TestCase):
                 "rtol": 0.0001,
                 "max_iterations": 500,
                 "print_level": 0,
+                "gpu_strategy": "auto",
             },
         )
         for actual, expected in zip(
@@ -11416,6 +11417,70 @@ class ProblemApiTests(unittest.TestCase):
         self.assertEqual(eigen["sampling"]["outputs"][0]["kind"], "eigen_spectrum")
         self.assertEqual(eigen["sampling"]["outputs"][1]["kind"], "eigen_mode")
         self.assertEqual(eigen["sampling"]["outputs"][1]["indices"], list(range(8)))
+
+    def test_fem_linear_solver_policy_gpu_strategy_roundtrip_and_validation(self) -> None:
+        from fullmag import world as flat_world
+        from fullmag.runtime.script_builder import (
+            _export_fem_demag_solver_policy,
+            _fem_demag_solver_policy_from_value,
+            _render_fem_demag_solver_call,
+        )
+
+        default_policy = fm.FemLinearSolverPolicy()
+        self.assertEqual(default_policy.gpu_strategy, "auto")
+        self.assertEqual(default_policy.to_ir()["gpu_strategy"], "auto")
+
+        for strategy in ("auto", "cg_amg", "cudss"):
+            policy = fm.FemLinearSolverPolicy(
+                solver="CG",
+                preconditioner="AMG",
+                rtol=1e-8,
+                max_iterations=500,
+                print_level=0,
+                gpu_strategy=strategy,
+            )
+            ir = policy.to_ir()
+            self.assertEqual(ir["gpu_strategy"], strategy)
+            parsed = _fem_demag_solver_policy_from_value(ir, context="test.policy")
+            self.assertEqual(parsed, policy)
+            rendered = _render_fem_demag_solver_call(policy, surface="study")
+            self.assertIn(f'gpu_strategy="{strategy}"', rendered)
+
+            fm.reset()
+            study = fm.study(f"fem_gpu_strategy_{strategy}")
+            study.engine("fem")
+            study.device("gpu", precision="double")
+            body = study.geometry(fm.Box(size=(20e-9, 20e-9, 5e-9)), name="film")
+            body.Ms = 800e3
+            body.Aex = 13e-12
+            body.alpha = 0.02
+            body.m = fm.texture.uniform(1.0, 0.0, 0.0)
+            body.mesh(maximum_element_size=5e-9, order=1)
+            study.demag(realization="poisson_robin")
+            study.fem_demag_solver(gpu_strategy=strategy)
+            problem = flat_world._build_problem()
+            self.assertEqual(
+                _export_fem_demag_solver_policy(problem),
+                ir,
+            )
+            problem_ir = problem.to_ir(
+                requested_backend=fm.BackendTarget.FEM,
+                include_geometry_assets=False,
+            )
+            self.assertEqual(
+                problem_ir["backend_policy"]["discretization_hints"]["fem"][
+                    "demag_solver_policy"
+                ]["gpu_strategy"],
+                strategy,
+            )
+
+        with self.assertRaisesRegex(ValueError, "gpu_strategy"):
+            fm.FemLinearSolverPolicy(gpu_strategy="bogus")  # type: ignore[arg-type]
+        with self.assertRaisesRegex(ValueError, "gpu_strategy"):
+            _fem_demag_solver_policy_from_value(
+                {"gpu_strategy": "bogus"}, context="test.policy"
+            )
+        fm.reset()
 
 
 if __name__ == "__main__":

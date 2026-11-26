@@ -208,16 +208,35 @@ fn native_fem_explicit_rk_reports_real_rhs_cost_when_mfem_stack_is_available() {
     }
 
     let cases = [
-        (IntegratorChoice::Heun, 3, 3, false),
-        (IntegratorChoice::Rk4, 5, 5, false),
-        (IntegratorChoice::Rk23, 4, 3, true),
-        (IntegratorChoice::Rk45, 7, 6, true),
+        (IntegratorChoice::Heun, 3u32, 3u32, 2u32, false, true),
+        (IntegratorChoice::Rk4, 5u32, 5u32, 4u32, false, true),
+        (IntegratorChoice::Rk23, 4u32, 3u32, 3u32, true, true),
+        (IntegratorChoice::Rk45, 7u32, 6u32, 6u32, true, true),
     ];
 
-    for (integrator, expected_first_rhs, expected_second_rhs, expected_second_fsal) in cases {
+    for (
+        integrator,
+        expected_first_rhs,
+        expected_second_rhs_cpu,
+        expected_second_rhs_gpu,
+        expected_second_fsal_cpu,
+        expected_second_fsal_gpu,
+    ) in cases
+    {
         let mut plan = make_exchange_only_plan();
         plan.integrator = integrator;
         let mut backend = NativeFemBackend::create(&plan).expect("native fem create");
+        let gpu_lane = backend.device_info().expect("device info").is_gpu_enabled;
+        let expected_second_rhs = if gpu_lane {
+            expected_second_rhs_gpu
+        } else {
+            expected_second_rhs_cpu
+        };
+        let expected_second_fsal = if gpu_lane {
+            expected_second_fsal_gpu
+        } else {
+            expected_second_fsal_cpu
+        };
 
         let first = backend
             .step(plan.fixed_timestep.expect("fixed dt"))
@@ -256,6 +275,89 @@ fn native_fem_explicit_rk_reports_real_rhs_cost_when_mfem_stack_is_available() {
         assert!(
             !second.demag_refreshed,
             "exchange-only should not refresh demag"
+        );
+    }
+}
+
+#[test]
+fn native_fem_cpu_gpu_heun_and_rk4_fsal_five_step_parity_when_available() {
+    if !native_cpu_gpu_parity_available(false) {
+        return;
+    }
+
+    for (integrator, first_rhs, gpu_reused_rhs) in [
+        (IntegratorChoice::Heun, 3u32, 2u32),
+        (IntegratorChoice::Rk4, 5u32, 4u32),
+    ] {
+        let mut plan = make_exchange_only_plan();
+        plan.integrator = integrator;
+        let cpu_plan = native_plan_for_device(&plan, "cpu");
+        let gpu_plan = native_plan_for_device(&plan, "cuda");
+        assert_same_parity_mesh(&cpu_plan, &gpu_plan);
+
+        let dt = plan.fixed_timestep.expect("fixed dt");
+        let node_count = plan.mesh.nodes.len();
+        let mut cpu_backend = NativeFemBackend::create(&cpu_plan).expect("native cpu create");
+        let mut gpu_backend = NativeFemBackend::create(&gpu_plan).expect("native gpu create");
+
+        let mut last_cpu_stats = None;
+        let mut last_gpu_stats = None;
+        for step_index in 0..5 {
+            let cpu_stats = cpu_backend.step(dt).expect("native cpu step");
+            let gpu_stats = gpu_backend.step(dt).expect("native gpu step");
+            assert_eq!(
+                cpu_stats.rhs_evals, first_rhs,
+                "CPU {integrator:?} step {step_index} RHS count"
+            );
+            if step_index == 0 {
+                assert_eq!(
+                    gpu_stats.rhs_evals, first_rhs,
+                    "GPU {integrator:?} step 0 must compute initial k0"
+                );
+                assert!(
+                    !gpu_stats.fsal_reused,
+                    "GPU {integrator:?} step 0 must not reuse FSAL"
+                );
+            } else {
+                assert_eq!(
+                    gpu_stats.rhs_evals, gpu_reused_rhs,
+                    "GPU {integrator:?} step {step_index} must reuse FSAL k0"
+                );
+                assert!(
+                    gpu_stats.fsal_reused,
+                    "GPU {integrator:?} step {step_index} must report fsal_reused"
+                );
+            }
+            last_cpu_stats = Some(cpu_stats);
+            last_gpu_stats = Some(gpu_stats);
+        }
+
+        let cpu_m = cpu_backend.copy_m(node_count).expect("copy cpu m");
+        let gpu_m = gpu_backend.copy_m(node_count).expect("copy gpu m");
+        let cpu_h_eff = cpu_backend.copy_h_eff(node_count).expect("copy cpu H_eff");
+        let gpu_h_eff = gpu_backend.copy_h_eff(node_count).expect("copy gpu H_eff");
+        assert_vector_field_parity(
+            &format!("{integrator:?}.5step.m"),
+            &cpu_m,
+            &gpu_m,
+            5e-8,
+            1e-10,
+        );
+        assert_vector_field_parity(
+            &format!("{integrator:?}.5step.H_eff"),
+            &cpu_h_eff,
+            &gpu_h_eff,
+            5e-8,
+            1e-6,
+        );
+        let cpu_stats = last_cpu_stats.expect("last cpu stats");
+        let gpu_stats = last_gpu_stats.expect("last gpu stats");
+        assert_scalar_close(
+            &format!("{integrator:?}.5step.e_total"),
+            gpu_stats.e_total,
+            cpu_stats.e_total,
+            5e-8,
+            1e-18,
         );
     }
 }

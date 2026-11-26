@@ -8,7 +8,7 @@ use fullmag_ir::FemPlanIR;
 
 use crate::artifact_pipeline::ArtifactRecorder;
 use crate::dispatch::{
-    apply_native_fem_gpu_demag_linear_solver, apply_native_fem_runtime_contract,
+    apply_native_fem_gpu_demag_linear_solver_provenance, apply_native_fem_runtime_contract,
     fem_poisson_demag_provenance, FemEngine,
 };
 use crate::fem::execution_receipt::validate_strict_fem_gpu_execution_receipt;
@@ -396,15 +396,18 @@ pub(crate) fn finalize_native_fem_relaxation(
     // final field refreshes, without changing this scientific state identity.
     let mut final_provenance = artifacts.provenance_snapshot();
     final_provenance.fem_poisson_demag = fem_poisson_demag_provenance(plan, Some(&final_stats));
-    apply_native_fem_gpu_demag_linear_solver(
-        &mut final_provenance,
-        backend.gpu_demag_linear_solver()?,
-    );
     if plan.demag_realization == Some(fullmag_ir::ResolvedFemDemagIR::FredkinKoehler) {
         final_provenance.fem_bem_demag = backend
             .demag_fem_bem_provenance()?
             .map(|value| value.into_provenance());
     }
+    let gpu_demag_provenance = backend.gpu_demag_linear_solver_provenance()?;
+    apply_native_fem_gpu_demag_linear_solver_provenance(
+        &mut final_provenance,
+        Some(gpu_demag_provenance.requested_strategy),
+        gpu_demag_provenance.resolved_linear_solver,
+        gpu_demag_provenance.fallback_reason,
+    );
     let gpu_state_info = backend.gpu_state_info()?;
     let gpu_rk_plan_info = backend.gpu_rk_plan_info()?;
     apply_native_fem_runtime_contract(

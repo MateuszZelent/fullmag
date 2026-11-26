@@ -2979,6 +2979,7 @@ void mixed_p1_gpu_robin_and_dirichlet_device_hypre_match_cpu_one_step() {
               error),
           error, "mixed CUDA/Hypre runtime coefficient upload");
     ctx.poisson_demag.gpu_demag_mode = FULLMAG_FEM_GPU_DEMAG_DEVICE_HYPRE_POISSON;
+    ctx.poisson_demag.gpu_solver_strategy = fullmag::fem::GpuDemagSolverStrategy::CgAmg;
     std::fprintf(stderr, "mixed CUDA/Hypre before device policy: hypre_error=%d bc=%d\n",
                  static_cast<int>(HYPRE_GetError()), realizations[index]);
     const bool gpu_initialized = fullmag::fem::gpu_demag_poisson_initialize(ctx, error);
@@ -3026,9 +3027,10 @@ void mixed_p1_gpu_robin_and_dirichlet_device_hypre_match_cpu_one_step() {
                  static_cast<unsigned long long>(control_bytes),
                  static_cast<unsigned long long>(control_fences));
     // Aggregate counters include the explicitly classified scalar readbacks.
-    // Both solves must independently certify the RHS and residual norms.
-    check(control_fences == 4u && control_bytes == 4u * sizeof(double),
-          "mixed-P1 GPU validation must certify both solves using scalar-only readbacks");
+    // Both solves independently certify RHS and residual norms via one fused
+    // pair-norm readback (1 fence, 16 bytes) per solve.
+    check(control_fences == 2u && control_bytes == 4u * sizeof(double),
+          "mixed-P1 GPU validation must certify both solves using fused scalar-only readbacks");
     check(after.hot_loop_h2d_bytes == before.hot_loop_h2d_bytes &&
               after.hot_loop_d2h_bytes - before.hot_loop_d2h_bytes == control_bytes &&
               after.hot_loop_host_sync_count - before.hot_loop_host_sync_count == control_fences &&

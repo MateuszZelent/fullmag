@@ -24,6 +24,14 @@ bool gpu_rk_compute_demag_for_device_stage(
     cudaStream_t stream,
     std::string &reason);
 
+bool gpu_rk_compute_demag_for_device_stage(
+    Context &ctx,
+    const FemGpuComponentField &m,
+    cudaStream_t stream,
+    double stage_time_s,
+    double step_dt_s,
+    std::string &reason);
+
 bool gpu_rk_compute_demag_for_device_stage_fresh(
     Context &ctx,
     const FemGpuComponentField &m,

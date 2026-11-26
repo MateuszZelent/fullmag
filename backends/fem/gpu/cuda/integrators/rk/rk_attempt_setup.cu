@@ -16,6 +16,7 @@
 #include "gpu/cuda/fields/vector_field_kernels.hpp"
 #include "gpu/cuda/integrators/rk/rk_component_copy.hpp"
 #include "gpu/cuda/integrators/rk/rk_attempt_control_kernels.hpp"
+#include "gpu/cuda/integrators/rk/rk_fsal_policy.hpp"
 #include "gpu/cuda/integrators/rk/rk_rhs_runtime.hpp"
 #include "gpu/cuda/integrators/rk/rk_stage_predictor_kernels.hpp"
 #include "gpu/cuda/state/gpu_state.hpp"
@@ -58,12 +59,13 @@ bool gpu_rk_prepare_stage_attempt(
     std::string &reason)
 {
     auto &gpu = ctx.gpu_state.device;
-    // Periodic projection is applied at the RHS boundary. Until the projected
-    // candidate and the final-stage endpoint have a device identity proof, do
-    // not carry an FSAL token across periodic steps.
-    fsal_reused = fsal_method &&
-        !gpu.mesh_regions.has_periodic_reduced_nodes &&
-        gpu.rk.fsal_valid;
+    gpu.rk.active_step_dt_s = active_dt;
+    gpu.demag_poisson.predictor.last_solved_stage_time_s = ctx.state.current_time;
+    fsal_reused =
+        fsal_method &&
+        gpu.rk.fsal_valid &&
+        gpu.rk.fsal_time_seconds == ctx.state.current_time &&
+        gpu.rk.fsal_operator_signature == gpu_rk_fsal_operator_signature(ctx);
 
     if (!gpu_rk_copy_component_device(
             gpu.magnetization.m,

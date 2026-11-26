@@ -8,9 +8,17 @@
 #include <cub/cub.cuh>
 #include <math_constants.h>
 
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <new>
+
 namespace fullmag::fem {
 
 static constexpr int kBlockSize = 256;
+static_assert(
+    kDemagValidationNormMaxBlocks <= kDemagValidationNormBlockSize,
+    "Finalization block size must cover every partial reduction block");
 
 namespace {
 
@@ -19,11 +27,16 @@ struct ScaledNorm {
     double sum_squares;
 };
 
+struct ScaledNormPair {
+    ScaledNorm rhs;
+    ScaledNorm residual;
+};
+
 struct MergeScaledNorm {
     __device__ ScaledNorm operator()(ScaledNorm a, ScaledNorm b) const
     {
         if (!isfinite(a.scale)) {
-            return a;
+            return isnan(b.scale) ? b : a;
         }
         if (!isfinite(b.scale)) {
             return b;
@@ -40,6 +53,104 @@ struct MergeScaledNorm {
         return a;
     }
 };
+
+struct MergeScaledNormPairOp {
+    __device__ ScaledNormPair operator()(
+        const ScaledNormPair &a, const ScaledNormPair &b) const
+    {
+        const MergeScaledNorm merge;
+        return {merge(a.rhs, b.rhs), merge(a.residual, b.residual)};
+    }
+};
+
+__device__ __forceinline__ ScaledNorm accumulate_scaled_norm(
+    ScaledNorm current, double value, const MergeScaledNorm &merge)
+{
+    const double magnitude = fabs(value);
+    if (!isfinite(magnitude)) {
+        if (isnan(current.scale)) {
+            return current;
+        }
+        return {magnitude, 1.0};
+    }
+    if (magnitude == 0.0) {
+        return current;
+    }
+    return merge(current, {magnitude, 1.0});
+}
+
+__device__ __forceinline__ double finalize_scaled_norm(const ScaledNorm &reduced)
+{
+    if (!isfinite(reduced.scale)) {
+        return reduced.scale;
+    }
+    if (reduced.scale == 0.0) {
+        return 0.0;
+    }
+    return reduced.scale * sqrt(reduced.sum_squares);
+}
+
+bool force_pageable_scalar_readback()
+{
+    const char *value = std::getenv("FULLMAG_FEM_FORCE_PAGEABLE_SCALAR_READBACK");
+    return value != nullptr && std::strcmp(value, "1") == 0;
+}
+
+__global__ void demag_validation_norm_pair_blocks_kernel(
+    const double *__restrict__ rhs_values,
+    const double *__restrict__ residual_values,
+    int rows,
+    ScaledNormPair *__restrict__ block_partials)
+{
+    ScaledNormPair local{{0.0, 0.0}, {0.0, 0.0}};
+    const MergeScaledNorm merge;
+    const int64_t stride =
+        static_cast<int64_t>(gridDim.x) * static_cast<int64_t>(blockDim.x);
+    // Never early-break on a nonfinite value: rhs and residual channels must
+    // accumulate independently so one channel cannot mask or truncate the other.
+    for (int64_t i = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+         i < rows;
+         i += stride) {
+        local.rhs = accumulate_scaled_norm(local.rhs, rhs_values[i], merge);
+        if (residual_values != nullptr) {
+            local.residual =
+                accumulate_scaled_norm(local.residual, residual_values[i], merge);
+        }
+    }
+
+    using BlockReduce =
+        cub::BlockReduce<ScaledNormPair, kDemagValidationNormBlockSize>;
+    __shared__ typename BlockReduce::TempStorage storage;
+    const ScaledNormPair reduced =
+        BlockReduce(storage).Reduce(local, MergeScaledNormPairOp{});
+    if (threadIdx.x == 0) {
+        block_partials[blockIdx.x] = reduced;
+    }
+}
+
+__global__ void demag_validation_norm_pair_finalize_kernel(
+    const ScaledNormPair *__restrict__ block_partials,
+    int num_blocks,
+    bool compute_residual,
+    double *__restrict__ out_norms)
+{
+    ScaledNormPair local{{0.0, 0.0}, {0.0, 0.0}};
+    if (threadIdx.x < num_blocks) {
+        local = block_partials[threadIdx.x];
+    }
+
+    using BlockReduce =
+        cub::BlockReduce<ScaledNormPair, kDemagValidationNormBlockSize>;
+    __shared__ typename BlockReduce::TempStorage storage;
+    const ScaledNormPair reduced =
+        BlockReduce(storage).Reduce(local, MergeScaledNormPairOp{});
+    if (threadIdx.x == 0) {
+        out_norms[0] = finalize_scaled_norm(reduced.rhs);
+        if (compute_residual) {
+            out_norms[1] = finalize_scaled_norm(reduced.residual);
+        }
+    }
+}
 
 __global__ void demag_validation_norm_kernel(
     const double *values, int rows, double *device_scalar)
@@ -67,6 +178,153 @@ __global__ void demag_validation_norm_kernel(
 }
 
 } // namespace
+
+cudaError_t fullmag_cuda_demag_validation_scratch_init(
+    GpuValidationNormScratch &scratch)
+{
+    fullmag_cuda_demag_validation_scratch_destroy(scratch);
+
+    constexpr size_t partials_bytes =
+        static_cast<size_t>(kDemagValidationNormMaxBlocks) * sizeof(ScaledNormPair);
+    cudaError_t status = cudaMalloc(&scratch.d_partials, partials_bytes);
+    if (status != cudaSuccess) {
+        fullmag_cuda_demag_validation_scratch_destroy(scratch);
+        return status;
+    }
+
+    status = cudaMalloc(
+        reinterpret_cast<void **>(&scratch.d_out_norms), 2u * sizeof(double));
+    if (status != cudaSuccess) {
+        fullmag_cuda_demag_validation_scratch_destroy(scratch);
+        return status;
+    }
+
+    const bool forced_pageable = force_pageable_scalar_readback();
+    const cudaError_t host_status = forced_pageable
+        ? cudaErrorMemoryAllocation
+        : cudaHostAlloc(
+              reinterpret_cast<void **>(&scratch.h_norms),
+              2u * sizeof(double),
+              cudaHostAllocDefault);
+    if (host_status == cudaSuccess) {
+        scratch.host_pinned = true;
+        scratch.h_norms[0] = 0.0;
+        scratch.h_norms[1] = 0.0;
+        return cudaSuccess;
+    }
+    if (host_status == cudaErrorMemoryAllocation) {
+        // Mirror reduction_workspace_memory.cpp: fall back deterministically
+        // to fixed pageable staging when pinned host memory is unavailable or
+        // explicitly forced off for qualification.
+        if (!forced_pageable) {
+            (void)cudaGetLastError();
+        }
+        scratch.h_norms = new (std::nothrow) double[2]{0.0, 0.0};
+        if (scratch.h_norms == nullptr) {
+            fullmag_cuda_demag_validation_scratch_destroy(scratch);
+            return cudaErrorMemoryAllocation;
+        }
+        scratch.host_pinned = false;
+        std::fprintf(
+            stderr,
+            "[fullmag_fem][warning] %s; using pageable demag validation norm "
+            "readback fallback; numerical semantics are unchanged, transfer "
+            "overlap is disabled\n",
+            forced_pageable
+                ? "pageable scalar readback was forced for qualification"
+                : "cudaHostAlloc demag validation norm staging returned cudaErrorMemoryAllocation");
+        return cudaSuccess;
+    }
+
+    fullmag_cuda_demag_validation_scratch_destroy(scratch);
+    return host_status;
+}
+
+void fullmag_cuda_demag_validation_scratch_destroy(
+    GpuValidationNormScratch &scratch)
+{
+    if (scratch.h_norms != nullptr) {
+        if (scratch.host_pinned) {
+            cudaFreeHost(scratch.h_norms);
+        } else {
+            delete[] scratch.h_norms;
+        }
+        scratch.h_norms = nullptr;
+    }
+    scratch.host_pinned = false;
+    if (scratch.d_out_norms != nullptr) {
+        cudaFree(scratch.d_out_norms);
+        scratch.d_out_norms = nullptr;
+    }
+    if (scratch.d_partials != nullptr) {
+        cudaFree(scratch.d_partials);
+        scratch.d_partials = nullptr;
+    }
+}
+
+cudaError_t fullmag_cuda_demag_validation_norm_pair(
+    const double *rhs_values,
+    const double *residual_values,
+    int rows,
+    GpuValidationNormScratch &scratch,
+    double &rhs_norm,
+    double &residual_norm,
+    cudaStream_t stream)
+{
+    if (rhs_values == nullptr || rows <= 0 ||
+        scratch.d_partials == nullptr ||
+        scratch.d_out_norms == nullptr ||
+        scratch.h_norms == nullptr) {
+        return cudaErrorInvalidValue;
+    }
+
+    const int64_t blocks_for_rows =
+        (static_cast<int64_t>(rows) + kDemagValidationNormBlockSize - 1) /
+        kDemagValidationNormBlockSize;
+    const int num_blocks = blocks_for_rows < 1
+        ? 1
+        : (blocks_for_rows > kDemagValidationNormMaxBlocks
+               ? kDemagValidationNormMaxBlocks
+               : static_cast<int>(blocks_for_rows));
+    const bool compute_residual = residual_values != nullptr;
+    auto *partials = static_cast<ScaledNormPair *>(scratch.d_partials);
+
+    demag_validation_norm_pair_blocks_kernel<<<
+        num_blocks, kDemagValidationNormBlockSize, 0, stream>>>(
+        rhs_values, residual_values, rows, partials);
+    cudaError_t status = cudaGetLastError();
+    if (status != cudaSuccess) {
+        return status;
+    }
+
+    demag_validation_norm_pair_finalize_kernel<<<
+        1, kDemagValidationNormBlockSize, 0, stream>>>(
+        partials, num_blocks, compute_residual, scratch.d_out_norms);
+    status = cudaGetLastError();
+    if (status != cudaSuccess) {
+        return status;
+    }
+
+    const size_t scalar_count = compute_residual ? 2u : 1u;
+    status = cudaMemcpyAsync(
+        scratch.h_norms,
+        scratch.d_out_norms,
+        scalar_count * sizeof(double),
+        cudaMemcpyDeviceToHost,
+        stream);
+    if (status != cudaSuccess) {
+        return status;
+    }
+
+    status = cudaStreamSynchronize(stream);
+    if (status != cudaSuccess) {
+        return status;
+    }
+
+    rhs_norm = scratch.h_norms[0];
+    residual_norm = compute_residual ? scratch.h_norms[1] : 0.0;
+    return cudaSuccess;
+}
 
 cudaError_t fullmag_cuda_demag_validation_norm(
     const double *values,

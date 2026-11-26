@@ -391,6 +391,13 @@ fn execute_native_fem(
         Some(&gpu_state_info),
         Some(&gpu_rk_plan_info),
     );
+    let gpu_demag_provenance = backend.gpu_demag_linear_solver_provenance()?;
+    crate::dispatch::apply_native_fem_gpu_demag_linear_solver_provenance(
+        &mut provenance,
+        Some(gpu_demag_provenance.requested_strategy),
+        gpu_demag_provenance.resolved_linear_solver,
+        gpu_demag_provenance.fallback_reason,
+    );
     let mut artifacts = if let Some(writer) = artifact_writer {
         ArtifactRecorder::streaming(provenance.clone(), writer)
     } else {

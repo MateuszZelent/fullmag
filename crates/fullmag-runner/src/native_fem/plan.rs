@@ -63,31 +63,24 @@ pub(super) fn native_fem_gpu_demag_mode(plan: &fullmag_ir::FemPlanIR) -> i32 {
 pub(crate) fn resolved_native_fem_demag_solver_policy(
     plan: &fullmag_ir::FemPlanIR,
 ) -> fullmag_ir::FemLinearSolverPolicy {
-    if let Some(policy) = plan.demag_solver_policy.clone() {
-        return policy;
-    }
+    plan.demag_solver_policy.clone().unwrap_or_default()
+}
 
-    let mut policy = fullmag_ir::FemLinearSolverPolicy::default();
-    let non_poisson_demag = plan
-        .demag_realization
-        .is_some_and(|realization| !realization.is_poisson());
-    let projected_gradient_bb = plan.relaxation.as_ref().is_some_and(|control| {
-        matches!(
-            control.algorithm,
-            fullmag_ir::RelaxationAlgorithmIR::ProjectedGradientBb
-        )
-    });
-
-    // Poisson GPU configures a device-resident AMG coarse solve. Preserve the
-    // existing default for other GPU demag realizations.
-    if plan.enable_demag
-        && non_poisson_demag
-        && native_fem_plan_requests_gpu_mfem_device(plan)
-        && !projected_gradient_bb
-    {
-        policy.preconditioner = "JACOBI".to_string();
+#[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
+pub(super) fn native_fem_gpu_demag_solver_strategy(
+    policy: &fullmag_ir::FemLinearSolverPolicy,
+) -> Result<u32, crate::types::RunError> {
+    match policy.gpu_strategy.trim().to_ascii_lowercase().as_str() {
+        "auto" => Ok(ffi::FULLMAG_FEM_GPU_DEMAG_SOLVER_STRATEGY_AUTO),
+        "cg_amg" => Ok(ffi::FULLMAG_FEM_GPU_DEMAG_SOLVER_STRATEGY_CG_AMG),
+        "cudss" => Ok(ffi::FULLMAG_FEM_GPU_DEMAG_SOLVER_STRATEGY_CUDSS),
+        other => Err(crate::types::RunError {
+            message: format!(
+                "native FEM: unsupported demag GPU solver strategy '{other}'; \
+                 supported: auto, cg_amg, cudss"
+            ),
+        }),
     }
-    policy
 }
 
 #[allow(dead_code)]

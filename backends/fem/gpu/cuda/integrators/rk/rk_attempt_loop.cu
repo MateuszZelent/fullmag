@@ -165,9 +165,10 @@ bool gpu_rk_run_accepted_attempt_loop(
         fsal_reused = stage_attempt.fsal_reused;
         GpuPerformanceCounterDelta performance_delta{};
         performance_delta.rhs_evaluations = stage_attempt.rhs_evaluations;
-        if (ctx.poisson_demag.gpu_demag_mode != FULLMAG_FEM_GPU_DEMAG_DEVICE_HYPRE_POISSON) {
-            // Device Poisson reports each solve at its owner; other demag
-            // families retain their existing stage-level accounting.
+        if (ctx.poisson_demag.gpu_demag_mode != FULLMAG_FEM_GPU_DEMAG_DEVICE_HYPRE_POISSON &&
+            ctx.poisson_demag.gpu_demag_mode != FULLMAG_FEM_GPU_DEMAG_DEVICE_HYPRE_FEM_BEM) {
+            // Device Poisson and device FEM/BEM report each solve at their
+            // owner; other demag families retain stage-level accounting.
             performance_delta.demag_solves =
                 ctx.poisson_demag.solves_current_step - demag_solves_before_attempt;
         }

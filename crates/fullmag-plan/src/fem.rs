@@ -4726,6 +4726,16 @@ pub(crate) fn plan_fem(
         );
     }
 
+    if let Some(policy) = fem_hints.demag_solver_policy.as_ref() {
+        let strategy = policy.gpu_strategy.trim().to_ascii_lowercase();
+        if !matches!(strategy.as_str(), "auto" | "cg_amg" | "cudss") {
+            errors.push(format!(
+                "fem.demag_solver_policy.gpu_strategy must be one of 'auto', 'cg_amg', or 'cudss'; got '{}'",
+                policy.gpu_strategy
+            ));
+        }
+    }
+
     let requested_static_pbc = problem
         .pbc
         .as_ref()
@@ -7271,12 +7281,26 @@ pub(crate) fn plan_fem_frequency_response(
         exchange_bc: eigen.exchange_bc,
         demag_realization: eigen.demag_realization,
         air_box_config: eigen.air_box_config,
-        demag_solver_policy: problem
-            .backend_policy
-            .discretization_hints
-            .as_ref()
-            .and_then(|hints| hints.fem.as_ref())
-            .and_then(|fem| fem.demag_solver_policy.clone()),
+        demag_solver_policy: {
+            let policy = problem
+                .backend_policy
+                .discretization_hints
+                .as_ref()
+                .and_then(|hints| hints.fem.as_ref())
+                .and_then(|fem| fem.demag_solver_policy.clone());
+            if let Some(ref p) = policy {
+                let strategy = p.gpu_strategy.trim().to_ascii_lowercase();
+                if !matches!(strategy.as_str(), "auto" | "cg_amg" | "cudss") {
+                    return Err(PlanError {
+                        reasons: vec![format!(
+                            "fem.demag_solver_policy.gpu_strategy must be one of 'auto', 'cg_amg', or 'cudss'; got '{}'",
+                            p.gpu_strategy
+                        )],
+                    });
+                }
+            }
+            policy
+        },
         periodic_constraint_sets: Vec::new(),
         equilibrium_provenance: frequency_response_equilibrium_provenance(problem)?,
     };

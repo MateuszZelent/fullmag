@@ -1,6 +1,7 @@
 #include "cpu/mfem/integrators/rk_step_transaction.hpp"
 
 #include "context.hpp"
+#include "gpu/cuda/demag_poisson/demag_predictor.hpp"
 #include "gpu/cuda/integrators/rk/rk_step_transaction_device.hpp"
 
 #if FULLMAG_HAS_MFEM_STACK
@@ -455,6 +456,21 @@ struct RkStepTransaction::Impl {
         transfer_audit = ctx.transfer_audit.audit;
         gpu_residency = ctx.gpu_state.device.residency;
         gpu_fsal_valid = ctx.gpu_state.device.rk.fsal_valid;
+        gpu_fsal_time_seconds = ctx.gpu_state.device.rk.fsal_time_seconds;
+        gpu_fsal_operator_signature = ctx.gpu_state.device.rk.fsal_operator_signature;
+        gpu_active_step_dt_s = ctx.gpu_state.device.rk.active_step_dt_s;
+        {
+            const auto &predictor = ctx.gpu_state.device.demag_poisson.predictor;
+            gpu_predictor_d_phi_curr = predictor.d_phi_curr;
+            gpu_predictor_d_phi_prev = predictor.d_phi_prev;
+            gpu_predictor_history_count = predictor.history_count;
+            gpu_predictor_t_curr = predictor.t_curr;
+            gpu_predictor_t_prev = predictor.t_prev;
+            gpu_predictor_operator_signature = predictor.operator_signature;
+            gpu_predictor_last_solved_stage_time_s =
+                predictor.last_solved_stage_time_s;
+            gpu_predictor_commit_generation = predictor.commit_generation;
+        }
         gpu_hybrid_stage_m = ctx.gpu_state.device.demag_poisson.hybrid_stage_m_xyz;
         gpu_hybrid_demag = ctx.gpu_state.device.demag_poisson.hybrid_demag_xyz;
         gpu_hybrid_demag_energy =
@@ -652,6 +668,24 @@ struct RkStepTransaction::Impl {
         ctx.transfer_audit.audit = transfer_audit;
         ctx.gpu_state.device.residency = gpu_residency;
         ctx.gpu_state.device.rk.fsal_valid = gpu_fsal_valid;
+        ctx.gpu_state.device.rk.fsal_time_seconds = gpu_fsal_time_seconds;
+        ctx.gpu_state.device.rk.fsal_operator_signature = gpu_fsal_operator_signature;
+        ctx.gpu_state.device.rk.active_step_dt_s = gpu_active_step_dt_s;
+        {
+            auto &predictor = ctx.gpu_state.device.demag_poisson.predictor;
+            if (predictor.d_phi_curr == gpu_predictor_d_phi_curr &&
+                predictor.d_phi_prev == gpu_predictor_d_phi_prev &&
+                predictor.commit_generation == gpu_predictor_commit_generation) {
+                predictor.history_count = gpu_predictor_history_count;
+                predictor.t_curr = gpu_predictor_t_curr;
+                predictor.t_prev = gpu_predictor_t_prev;
+                predictor.operator_signature = gpu_predictor_operator_signature;
+                predictor.last_solved_stage_time_s =
+                    gpu_predictor_last_solved_stage_time_s;
+            } else {
+                gpu_demag_predictor_invalidate(predictor);
+            }
+        }
         // Endpoint tokens are attempt-local and are never valid across a
         // transaction rollback, even when the pre-step FSAL k0 is restored.
         ctx.gpu_state.device.rk.endpoint_valid = false;
@@ -707,6 +741,18 @@ struct RkStepTransaction::Impl {
     TransferAudit transfer_audit;
     FemGpuResidencyDeviceState gpu_residency;
     bool gpu_fsal_valid = false;
+    double gpu_fsal_time_seconds = 0.0;
+    uint64_t gpu_fsal_operator_signature = 0;
+    double gpu_active_step_dt_s = 0.0;
+    const double *gpu_predictor_d_phi_curr = nullptr;
+    const double *gpu_predictor_d_phi_prev = nullptr;
+    uint32_t gpu_predictor_history_count = 0;
+    double gpu_predictor_t_curr = 0.0;
+    double gpu_predictor_t_prev = 0.0;
+    uint64_t gpu_predictor_operator_signature = 0;
+    double gpu_predictor_last_solved_stage_time_s =
+        -std::numeric_limits<double>::infinity();
+    uint64_t gpu_predictor_commit_generation = 0;
     std::vector<double> gpu_hybrid_stage_m;
     std::vector<double> gpu_hybrid_demag;
     double gpu_hybrid_demag_energy = 0.0;
@@ -951,6 +997,7 @@ struct RkAttemptCacheSnapshot::Impl {
     {
         ctx.exchange.mfem.ready = false;
         ctx.demag.cache_valid = false;
+        gpu_demag_predictor_invalidate(ctx.gpu_state.device.demag_poisson.predictor);
 #if FULLMAG_HAS_MFEM_STACK
         ctx.poisson_demag.fresh_initial_guess_required = true;
         if (auto *workspace = demag_fem_bem_workspace(ctx)) {

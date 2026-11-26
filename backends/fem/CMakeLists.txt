@@ -212,6 +212,7 @@ set(FEM_SOURCES
     cpu/frequency_domain/spectral_transform.cpp
     gpu/cuda/demag_poisson/cudss_direct_solver.cpp
     gpu/cuda/demag_poisson/hypre_device_solver.cpp
+    gpu/cuda/demag_poisson/hypre_residual_certification.cpp
     gpu/cuda/demag_poisson/hypre_validation_policy.cpp
     gpu/cuda/runtime/hypre_device_policy.cpp
     gpu/cuda/demag_poisson/operators.cpp
@@ -360,6 +361,7 @@ if(FULLMAG_USE_MFEM_STACK)
             gpu/cuda/interactions/zeeman/zeeman_kernels.cu
             gpu/cuda/interactions/zeeman/regional_field_kernels.cu
             gpu/cuda/demag_poisson/demag_kernels.cu
+            gpu/cuda/demag_poisson/demag_predictor.cu
             gpu/cuda/demag_fem_bem/fem_bem_kernels.cu
             gpu/cuda/observables/observable_kernels.cu
             gpu/cuda/relaxation/pgbb_kernels.cu
@@ -946,6 +948,35 @@ target_include_directories(fem_cuda_rk_guard_contract PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
 add_test(NAME fem_cuda_rk_guard_contract COMMAND fem_cuda_rk_guard_contract)
+
+add_executable(
+    fem_cuda_rk_heun_rk4_fsal_predictor_contract
+    tests/cuda_rk_heun_rk4_fsal_predictor_contract.cpp
+)
+target_link_libraries(fem_cuda_rk_heun_rk4_fsal_predictor_contract PRIVATE fullmag_fem)
+if(FULLMAG_USE_MFEM_STACK)
+    if(TARGET MFEM::mfem)
+        target_link_libraries(fem_cuda_rk_heun_rk4_fsal_predictor_contract PRIVATE MFEM::mfem)
+    else()
+        target_link_libraries(fem_cuda_rk_heun_rk4_fsal_predictor_contract PRIVATE mfem)
+    endif()
+    if(FULLMAG_ENABLE_CUDA)
+        target_link_libraries(fem_cuda_rk_heun_rk4_fsal_predictor_contract PRIVATE CUDA::cudart)
+    endif()
+endif()
+if(FULLMAG_FEM_CUDSS_SHIFT_SUPPORTED)
+    target_compile_definitions(fem_cuda_rk_heun_rk4_fsal_predictor_contract
+        PRIVATE FULLMAG_FEM_CUDSS_POISSON_ENABLED=1)
+endif()
+target_include_directories(fem_cuda_rk_heun_rk4_fsal_predictor_contract PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${CMAKE_SOURCE_DIR}/native/include
+)
+add_test(
+    NAME fem_cuda_rk_heun_rk4_fsal_predictor_contract
+    COMMAND fem_cuda_rk_heun_rk4_fsal_predictor_contract
+)
 
 add_executable(fem_cuda_pgbb_reuse_contract tests/cuda_pgbb_reuse_contract.cpp)
 target_link_libraries(fem_cuda_pgbb_reuse_contract PRIVATE fullmag_fem)
@@ -1859,6 +1890,10 @@ if(FULLMAG_USE_MFEM_STACK)
     else()
         target_link_libraries(fem_gpu_strict_execution_contract PRIVATE mfem)
     endif()
+endif()
+if(FULLMAG_FEM_CUDSS_SHIFT_SUPPORTED)
+    target_compile_definitions(fem_gpu_strict_execution_contract
+        PRIVATE FULLMAG_FEM_CUDSS_POISSON_ENABLED=1)
 endif()
 target_include_directories(fem_gpu_strict_execution_contract PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include

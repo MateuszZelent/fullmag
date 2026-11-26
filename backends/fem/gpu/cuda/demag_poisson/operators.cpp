@@ -1254,6 +1254,7 @@ void destroy_demag_poisson_operators(GpuDemagPoissonWorkspace &workspace)
     // The cuDSS handle is bound to the HYPRE stream; release it first.
     workspace.direct_solver.reset();
 #if FULLMAG_HAS_CUDA_RUNTIME
+    fullmag_cuda_demag_validation_scratch_destroy(workspace.validation_scratch);
     destroy_hypre_stream_interop(workspace.stream_interop);
     destroy_triple(workspace.rhs);
     destroy_scalar(workspace.recovery_x);

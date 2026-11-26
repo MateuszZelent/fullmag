@@ -6860,6 +6860,7 @@ class StudyBuilder:
         atol: float | None = None,
         max_iterations: int = 500,
         print_level: int = 0,
+        gpu_strategy: str = "auto",
     ) -> "StudyBuilder":
         fem_demag_solver(
             solver=solver,
@@ -6868,6 +6869,7 @@ class StudyBuilder:
             atol=atol,
             max_iterations=max_iterations,
             print_level=print_level,
+            gpu_strategy=gpu_strategy,
         )
         return self
 
@@ -7789,6 +7791,7 @@ def fem_demag_solver(
     atol: float | None = None,
     max_iterations: int = 500,
     print_level: int = 0,
+    gpu_strategy: str = "auto",
 ) -> FemLinearSolverPolicy:
     """Set the native FEM demag/Poisson linear-solver policy."""
     policy = FemLinearSolverPolicy(
@@ -7798,6 +7801,7 @@ def fem_demag_solver(
         atol=atol,
         max_iterations=max_iterations,
         print_level=print_level,
+        gpu_strategy=gpu_strategy,
     )
     _state._fem_demag_solver_policy = policy
     return policy

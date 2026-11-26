@@ -80,8 +80,8 @@ pub(crate) use plan::{
 #[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
 pub(crate) use runtime_info::{
     stage_completion_from_ffi, stage_completion_is_representability_stationary,
-    strict_gpu_runtime_build_info, DeviceInfo, NativeFemDataResidency, NativeFemGpuRkPlanInfo,
-    NativeFemGpuStateInfo,
+    strict_gpu_runtime_build_info, DeviceInfo, NativeFemDataResidency,
+    NativeFemGpuDemagLinearSolverProvenance, NativeFemGpuRkPlanInfo, NativeFemGpuStateInfo,
 };
 #[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
 pub(crate) use stage_coupled::StageM2CoupledProvider;
@@ -4363,10 +4363,23 @@ impl NativeFemBackend {
                 .map_or(FALLBACK_POISSON_BOUNDARY_MARKER as u32, |c| c.boundary_marker),
             reserved: 0,
         };
+        let gpu_demag_solver_strategy = if plan.enable_demag {
+            let policy = resolved_native_fem_demag_solver_policy(plan);
+            plan::native_fem_gpu_demag_solver_strategy(&policy)?
+        } else {
+            ffi::FULLMAG_FEM_GPU_DEMAG_SOLVER_STRATEGY_AUTO
+        };
+        let plan_desc_v5 = ffi::fullmag_fem_plan_desc_v5 {
+            abi_version: ffi::FULLMAG_FEM_PLAN_DESC_V5_ABI_VERSION,
+            struct_size: std::mem::size_of::<ffi::fullmag_fem_plan_desc_v5>() as u32,
+            gpu_demag_solver_strategy,
+            reserved: 0,
+            base: plan_desc_v4,
+        };
         let adaptive_ptr = adaptive_cfg
             .as_ref()
             .map_or(std::ptr::null(), |cfg| cfg as *const _);
-        let handle = unsafe { ffi::fullmag_fem_backend_create_v5(&plan_desc_v4, adaptive_ptr) };
+        let handle = unsafe { ffi::fullmag_fem_backend_create_v6(&plan_desc_v5, adaptive_ptr) };
         if handle.is_null() {
             let availability = native_availability();
             return Err(RunError {
@@ -4549,7 +4562,7 @@ impl NativeFemBackend {
         }
     }
 
-    /// Linear-solver realization of the initialized device Poisson workspace:
+    /// Linear-solver realization of the initialized device GPU demag workspace:
     /// `hypre_krylov`, `cudss_direct`, or `None` when there is none.
     pub(crate) fn gpu_demag_linear_solver(&self) -> Result<Option<&'static str>, RunError> {
         let mut linear_solver = ffi::FULLMAG_FEM_GPU_DEMAG_LINEAR_SOLVER_UNAVAILABLE;
@@ -4563,6 +4576,24 @@ impl NativeFemBackend {
             return Err(self.last_error_or("FEM GPU demag linear-solver query failed"));
         }
         runtime_info::gpu_demag_linear_solver_name(linear_solver)
+    }
+
+    /// Full linear-solver strategy, resolution, fallback reason, and VRAM
+    /// budget provenance of the initialized device GPU demag workspace.
+    pub(crate) fn gpu_demag_linear_solver_provenance(
+        &self,
+    ) -> Result<NativeFemGpuDemagLinearSolverProvenance, RunError> {
+        let mut raw = ffi::fullmag_fem_gpu_demag_linear_solver_provenance_v1::default();
+        let rc = unsafe {
+            ffi::fullmag_fem_backend_get_gpu_demag_linear_solver_provenance_v1(
+                self.handle as *const _,
+                &mut raw,
+            )
+        };
+        if rc != ffi::FULLMAG_FEM_OK {
+            return Err(self.last_error_or("FEM GPU demag linear-solver provenance query failed"));
+        }
+        NativeFemGpuDemagLinearSolverProvenance::from_ffi(raw)
     }
 
     pub(crate) fn gpu_state_info(&self) -> Result<NativeFemGpuStateInfo, RunError> {
@@ -10385,16 +10416,35 @@ mod tests {
         }
 
         let cases = [
-            (IntegratorChoice::Heun, 3, 3, false),
-            (IntegratorChoice::Rk4, 5, 5, false),
-            (IntegratorChoice::Rk23, 4, 3, true),
-            (IntegratorChoice::Rk45, 7, 6, true),
+            (IntegratorChoice::Heun, 3u32, 3u32, 2u32, false, true),
+            (IntegratorChoice::Rk4, 5u32, 5u32, 4u32, false, true),
+            (IntegratorChoice::Rk23, 4u32, 3u32, 3u32, true, true),
+            (IntegratorChoice::Rk45, 7u32, 6u32, 6u32, true, true),
         ];
 
-        for (integrator, expected_first_rhs, expected_second_rhs, expected_second_fsal) in cases {
+        for (
+            integrator,
+            expected_first_rhs,
+            expected_second_rhs_cpu,
+            expected_second_rhs_gpu,
+            expected_second_fsal_cpu,
+            expected_second_fsal_gpu,
+        ) in cases
+        {
             let mut plan = make_exchange_only_plan();
             plan.integrator = Some(integrator);
             let mut backend = NativeFemBackend::create(&plan).expect("native fem create");
+            let gpu_lane = backend.device_info().expect("device info").is_gpu_enabled;
+            let expected_second_rhs = if gpu_lane {
+                expected_second_rhs_gpu
+            } else {
+                expected_second_rhs_cpu
+            };
+            let expected_second_fsal = if gpu_lane {
+                expected_second_fsal_gpu
+            } else {
+                expected_second_fsal_cpu
+            };
 
             let first = backend
                 .step(plan.fixed_timestep.expect("fixed dt"))

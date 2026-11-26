@@ -14,6 +14,8 @@
 #include <string>
 #include <vector>
 
+#include "gpu/cuda/demag_poisson/cudss_direct_solver.hpp"
+#include "gpu/cuda/demag_poisson/demag_kernels.hpp"
 #include "gpu/cuda/demag_poisson/hypre_stream_interop.hpp"
 
 #if FULLMAG_HAS_CUDA_RUNTIME
@@ -93,6 +95,7 @@ struct GpuDemagPoissonWorkspace {
     uint32_t *d_ess_tdofs = nullptr;
     HypreStreamInterop stream_interop{};
 #endif
+    GpuValidationNormScratch validation_scratch{};
 #if FULLMAG_HAS_MFEM_STACK && defined(MFEM_USE_MPI)
     HYPRE_BigInt row_starts[2] = {0, 0};
     std::unique_ptr<mfem::HypreParMatrix> A_par;
@@ -102,9 +105,10 @@ struct GpuDemagPoissonWorkspace {
     std::unique_ptr<mfem::HypreParVector> x_par;
     std::unique_ptr<mfem::HypreParVector> residual;
 #endif
-    // Opt-in cuDSS factor (docs/physics/0997); null on the default CG path.
+    // Guarded cuDSS direct factor (docs/physics/0997); null on Krylov paths.
     // shared_ptr keeps the deleter, so the type may stay incomplete here.
     std::shared_ptr<GpuDemagCudssDirectSolver> direct_solver;
+    GpuDemagCudssDirectStats direct_solver_stats{};
     uint64_t device_bytes = 0;
     uint64_t solver_setup_count = 0;
     uint64_t fresh_zero_guess_count = 0;

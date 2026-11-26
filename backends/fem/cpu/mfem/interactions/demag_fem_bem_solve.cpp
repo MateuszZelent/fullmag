@@ -103,7 +103,7 @@ bool context_compute_demag_fem_bem(
     workspace->boundary_operator_apply_count += 1u;
 
     if (!prepare_demag_fem_bem_dirichlet_rhs(
-            workspace->boundary_tdofs,
+            workspace->boundary_tdofs_by_row,
             workspace->boundary_u2,
             *workspace->stiffness_form,
             *workspace->boundary_values_global,

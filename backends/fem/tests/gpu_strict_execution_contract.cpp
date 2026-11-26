@@ -1,5 +1,6 @@
 #include "context.hpp"
 #include "backend_handle.hpp"
+#include "gpu/cuda/demag_poisson/cudss_direct_solver.hpp"
 #include "gpu/cuda/demag_poisson/operators.hpp"
 #include "gpu/cuda/demag_poisson/poisson.hpp"
 #include "gpu/cuda/integrators/rk/rk.hpp"
@@ -8,11 +9,18 @@
 #include "gpu/cuda/runtime/execution_receipt.hpp"
 #include "cpu/mfem/integrators/rk_explicit.hpp"
 
+#if FULLMAG_HAS_CUDA_RUNTIME
+#include <cuda_runtime.h>
+#endif
+
+#include <array>
 #include <cstdio>
 #include <cstdint>
 #include <cstdlib>
 #include <memory>
 #include <string>
+#include <tuple>
+#include <vector>
 
 namespace {
 
@@ -474,6 +482,408 @@ void public_strict_device_resident_remains_executable()
           "strict device preflight alone must not begin an attempt");
 }
 
+#if FULLMAG_HAS_CUDA_RUNTIME && FULLMAG_HAS_MFEM_STACK
+struct PeriodicHexMeshFixture {
+    std::vector<double> nodes_xyz;
+    std::vector<uint32_t> cell_types;
+    std::vector<uint32_t> cell_offsets;
+    std::vector<uint32_t> cell_nodes;
+    std::vector<uint32_t> cell_markers;
+    std::vector<uint64_t> cell_global_ordinals;
+    std::vector<uint32_t> facet_types;
+    std::vector<uint32_t> facet_roles;
+    std::vector<uint32_t> facet_offsets;
+    std::vector<uint32_t> facet_nodes;
+    std::vector<uint32_t> facet_markers;
+    std::vector<uint64_t> facet_global_ordinals;
+    std::vector<uint32_t> periodic_node_pairs;
+    std::vector<uint32_t> periodic_boundary_pair_markers;
+    std::vector<double> initial_m;
+
+    PeriodicHexMeshFixture(bool periodic_x, bool periodic_y)
+    {
+        // 2x2x3 Kuhn TET4 grid (36 nodes): magnetic layer cz==1 (marker 1)
+        // sandwiched between airbox layers cz==0 and cz==2 (marker 0), as
+        // required by periodic demag (validate_periodic_plan_compatibility).
+        // Open z=0/z=3 faces retain singleton interior nodes (1,1,0) and
+        // (1,1,3) outside both X and Y periodic seams so 2D-periodic pure
+        // Neumann has a valid gauge pin.
+        constexpr int nx = 2;
+        constexpr int ny = 2;
+        constexpr int nz = 3;
+        constexpr double h = 8.0e-9;
+        auto node_id = [&](int ix, int iy, int iz) -> uint32_t {
+            return static_cast<uint32_t>((iz * (ny + 1) + iy) * (nx + 1) + ix);
+        };
+        for (int iz = 0; iz <= nz; ++iz) {
+            for (int iy = 0; iy <= ny; ++iy) {
+                for (int ix = 0; ix <= nx; ++ix) {
+                    nodes_xyz.push_back(ix * h);
+                    nodes_xyz.push_back(iy * h);
+                    nodes_xyz.push_back(iz * h);
+                    // Non-uniform, X/Y-periodic unit magnetization so demag RHS
+                    // is non-zero (both div(M) and M.n on z=h, z=2h interfaces).
+                    const double mx = (ix == 1) ? 0.6 : 0.8;
+                    const double mz = (ix == 1) ? 0.8 : 0.6;
+                    initial_m.push_back(mx);
+                    initial_m.push_back(0.0);
+                    initial_m.push_back(mz);
+                }
+            }
+        }
+        cell_offsets.push_back(0u);
+        auto add_tet = [&](uint32_t a, uint32_t b, uint32_t c, uint32_t d, uint32_t marker) {
+            cell_global_ordinals.push_back(cell_types.size());
+            cell_types.push_back(FULLMAG_FEM_CELL_TET4);
+            cell_markers.push_back(marker);
+            cell_nodes.push_back(a);
+            cell_nodes.push_back(b);
+            cell_nodes.push_back(c);
+            cell_nodes.push_back(d);
+            cell_offsets.push_back(static_cast<uint32_t>(cell_nodes.size()));
+        };
+        facet_offsets.push_back(0u);
+        auto add_tri = [&](uint32_t a, uint32_t b, uint32_t c, uint32_t marker, uint32_t role) {
+            facet_global_ordinals.push_back(facet_types.size());
+            facet_types.push_back(FULLMAG_FEM_FACET_TRI3);
+            facet_roles.push_back(role);
+            facet_markers.push_back(marker);
+            facet_nodes.push_back(a);
+            facet_nodes.push_back(b);
+            facet_nodes.push_back(c);
+            facet_offsets.push_back(static_cast<uint32_t>(facet_nodes.size()));
+        };
+        const uint32_t x_min_marker = periodic_x ? 101u : 99u;
+        const uint32_t x_max_marker = periodic_x ? 102u : 99u;
+        const uint32_t x_role = periodic_x
+            ? FULLMAG_FEM_FACET_ROLE_PERIODIC_SEAM
+            : FULLMAG_FEM_FACET_ROLE_EXTERIOR;
+        const uint32_t y_min_marker = periodic_y ? 103u : 99u;
+        const uint32_t y_max_marker = periodic_y ? 104u : 99u;
+        const uint32_t y_role = periodic_y
+            ? FULLMAG_FEM_FACET_ROLE_PERIODIC_SEAM
+            : FULLMAG_FEM_FACET_ROLE_EXTERIOR;
+        for (int cz = 0; cz < nz; ++cz) {
+            const uint32_t cell_marker = (cz == 1) ? 1u : 0u;
+            for (int cy = 0; cy < ny; ++cy) {
+                for (int cx = 0; cx < nx; ++cx) {
+                    const uint32_t p000 = node_id(cx, cy, cz);
+                    const uint32_t p100 = node_id(cx + 1, cy, cz);
+                    const uint32_t p010 = node_id(cx, cy + 1, cz);
+                    const uint32_t p110 = node_id(cx + 1, cy + 1, cz);
+                    const uint32_t p001 = node_id(cx, cy, cz + 1);
+                    const uint32_t p101 = node_id(cx + 1, cy, cz + 1);
+                    const uint32_t p011 = node_id(cx, cy + 1, cz + 1);
+                    const uint32_t p111 = node_id(cx + 1, cy + 1, cz + 1);
+                    // Kuhn 6-tet-per-cube triangulation: positive volume and
+                    // translation-consistent diagonals on all opposite faces.
+                    add_tet(p000, p100, p110, p111, cell_marker);
+                    add_tet(p000, p110, p010, p111, cell_marker);
+                    add_tet(p000, p010, p011, p111, cell_marker);
+                    add_tet(p000, p011, p001, p111, cell_marker);
+                    add_tet(p000, p001, p101, p111, cell_marker);
+                    add_tet(p000, p101, p100, p111, cell_marker);
+
+                    if (cz == 0) {
+                        add_tri(p000, p110, p100, 99u, FULLMAG_FEM_FACET_ROLE_EXTERIOR);
+                        add_tri(p000, p010, p110, 99u, FULLMAG_FEM_FACET_ROLE_EXTERIOR);
+                    }
+                    if (cz + 1 == nz) {
+                        add_tri(p001, p101, p111, 99u, FULLMAG_FEM_FACET_ROLE_EXTERIOR);
+                        add_tri(p001, p111, p011, 99u, FULLMAG_FEM_FACET_ROLE_EXTERIOR);
+                    }
+                    if (cy == 0) {
+                        add_tri(p000, p100, p101, y_min_marker, y_role);
+                        add_tri(p000, p101, p001, y_min_marker, y_role);
+                    }
+                    if (cy + 1 == ny) {
+                        add_tri(p010, p111, p110, y_max_marker, y_role);
+                        add_tri(p010, p011, p111, y_max_marker, y_role);
+                    }
+                    if (cx == 0) {
+                        add_tri(p000, p001, p011, x_min_marker, x_role);
+                        add_tri(p000, p011, p010, x_min_marker, x_role);
+                    }
+                    if (cx + 1 == nx) {
+                        add_tri(p100, p110, p111, x_max_marker, x_role);
+                        add_tri(p100, p111, p101, x_max_marker, x_role);
+                    }
+                }
+            }
+        }
+        if (periodic_x) {
+            periodic_boundary_pair_markers.push_back(101u);
+            periodic_boundary_pair_markers.push_back(102u);
+            for (int iz = 0; iz <= nz; ++iz) {
+                for (int iy = 0; iy <= ny; ++iy) {
+                    periodic_node_pairs.push_back(node_id(0, iy, iz));
+                    periodic_node_pairs.push_back(node_id(nx, iy, iz));
+                }
+            }
+        }
+        if (periodic_y) {
+            periodic_boundary_pair_markers.push_back(103u);
+            periodic_boundary_pair_markers.push_back(104u);
+            for (int iz = 0; iz <= nz; ++iz) {
+                for (int ix = 0; ix <= nx; ++ix) {
+                    periodic_node_pairs.push_back(node_id(ix, 0, iz));
+                    periodic_node_pairs.push_back(node_id(ix, ny, iz));
+                }
+            }
+        }
+    }
+
+    fullmag_fem_plan_desc_v5 make_plan_v5(uint32_t gpu_strategy) const
+    {
+        fullmag_fem_plan_desc p{};
+        p.mesh.abi_version = FULLMAG_FEM_MESH_DESC_ABI_VERSION;
+        p.mesh.struct_size = sizeof(p.mesh);
+        p.mesh.nodes_xyz = nodes_xyz.data();
+        p.mesh.nodes_xyz_len = nodes_xyz.size();
+        p.mesh.cell_types = cell_types.data();
+        p.mesh.cell_types_len = cell_types.size();
+        p.mesh.cell_offsets = cell_offsets.data();
+        p.mesh.cell_offsets_len = cell_offsets.size();
+        p.mesh.cell_nodes = cell_nodes.data();
+        p.mesh.cell_nodes_len = cell_nodes.size();
+        p.mesh.cell_markers = cell_markers.data();
+        p.mesh.cell_markers_len = cell_markers.size();
+        p.mesh.cell_global_ordinals = cell_global_ordinals.data();
+        p.mesh.cell_global_ordinals_len = cell_global_ordinals.size();
+        p.mesh.facet_types = facet_types.data();
+        p.mesh.facet_types_len = facet_types.size();
+        p.mesh.facet_roles = facet_roles.data();
+        p.mesh.facet_roles_len = facet_roles.size();
+        p.mesh.facet_offsets = facet_offsets.data();
+        p.mesh.facet_offsets_len = facet_offsets.size();
+        p.mesh.facet_nodes = facet_nodes.data();
+        p.mesh.facet_nodes_len = facet_nodes.size();
+        p.mesh.facet_markers = facet_markers.data();
+        p.mesh.facet_markers_len = facet_markers.size();
+        p.mesh.facet_global_ordinals = facet_global_ordinals.data();
+        p.mesh.facet_global_ordinals_len = facet_global_ordinals.size();
+        if (!periodic_node_pairs.empty()) {
+            p.mesh.periodic_node_pairs = periodic_node_pairs.data();
+            p.mesh.periodic_node_pairs_len = periodic_node_pairs.size();
+        }
+        if (!periodic_boundary_pair_markers.empty()) {
+            p.mesh.periodic_boundary_pair_markers = periodic_boundary_pair_markers.data();
+            p.mesh.periodic_boundary_pair_markers_len = periodic_boundary_pair_markers.size();
+        }
+        p.material = {8.0e5, 1.3e-11, 0.1, 2.211e5};
+        p.fe_order = 1;
+        p.hmax = 8.0e-9;
+        p.precision = FULLMAG_FEM_PRECISION_DOUBLE;
+        p.integrator = FULLMAG_FEM_INTEGRATOR_HEUN;
+        p.enable_exchange = 1;
+        p.enable_demag = 1;
+        p.demag_realization = FULLMAG_FEM_DEMAG_AIRBOX_ROBIN;
+        p.poisson_boundary_marker = 99;
+        p.robin_beta_mode = 2;
+        p.robin_beta_factor = 2.0;
+        p.initial_magnetization_xyz = initial_m.data();
+        p.initial_magnetization_len = initial_m.size();
+        p.dt_seconds = 1.0e-15;
+        p.eager_initial_effective_field = 1;
+        p.mfem_device_string = "cuda";
+        p.gpu_device_index = 0;
+        p.gpu_demag_mode = FULLMAG_FEM_GPU_DEMAG_DEVICE_HYPRE_POISSON;
+        p.demag_solver.solver = FULLMAG_FEM_LINEAR_SOLVER_CG;
+        p.demag_solver.preconditioner = FULLMAG_FEM_PRECONDITIONER_AMG;
+        p.demag_solver.relative_tolerance = 1.0e-8;
+        p.demag_solver.max_iterations = 1000;
+
+        fullmag_fem_plan_desc_v2 v2{};
+        v2.abi_version = FULLMAG_FEM_PLAN_DESC_V2_ABI_VERSION;
+        v2.struct_size = sizeof(v2);
+        v2.base = p;
+
+        fullmag_fem_plan_desc_v3 v3{};
+        v3.abi_version = FULLMAG_FEM_PLAN_DESC_V3_ABI_VERSION;
+        v3.struct_size = sizeof(v3);
+        v3.base = v2;
+
+        fullmag_fem_plan_desc_v4 v4{};
+        v4.abi_version = FULLMAG_FEM_PLAN_DESC_V4_ABI_VERSION;
+        v4.struct_size = sizeof(v4);
+        v4.base = v3;
+        v4.poisson_boundary_marker = 99u;
+        v4.reserved = 0u;
+
+        fullmag_fem_plan_desc_v5 v5{};
+        v5.abi_version = FULLMAG_FEM_PLAN_DESC_V5_ABI_VERSION;
+        v5.struct_size = sizeof(v5);
+        v5.gpu_demag_solver_strategy = gpu_strategy;
+        v5.reserved = 0u;
+        v5.base = v4;
+        return v5;
+    }
+};
+
+void public_create_v6_strategy_vram_and_pbc_cudss_contract()
+{
+    auto clear_env = []() {
+        check(unsetenv(kDemagGpuDirectSolverEnv) == 0, "unset direct solver env");
+        check(unsetenv(kDemagCudssDeviceBudgetCapEnv) == 0, "unset byte cap env");
+        check(unsetenv(kDemagCudssMaxVramMibEnv) == 0, "unset MiB cap env");
+    };
+    clear_env();
+
+    // 1. ABI validation of create_v6 and provenance_v1 query.
+    check(fullmag_fem_backend_create_v6(nullptr, nullptr) == nullptr,
+          "create_v6 must reject null plan");
+    PeriodicHexMeshFixture open_mesh(false, false);
+    {
+        auto bad = open_mesh.make_plan_v5(FULLMAG_FEM_GPU_DEMAG_SOLVER_STRATEGY_AUTO);
+        bad.abi_version = FULLMAG_FEM_PLAN_DESC_V4_ABI_VERSION;
+        check(fullmag_fem_backend_create_v6(&bad, nullptr) == nullptr,
+              "create_v6 must reject mismatched abi_version");
+        bad = open_mesh.make_plan_v5(FULLMAG_FEM_GPU_DEMAG_SOLVER_STRATEGY_AUTO);
+        bad.struct_size -= 1u;
+        check(fullmag_fem_backend_create_v6(&bad, nullptr) == nullptr,
+              "create_v6 must reject mismatched struct_size");
+        bad = open_mesh.make_plan_v5(FULLMAG_FEM_GPU_DEMAG_SOLVER_STRATEGY_AUTO);
+        bad.reserved = 1u;
+        check(fullmag_fem_backend_create_v6(&bad, nullptr) == nullptr,
+              "create_v6 must reject nonzero reserved");
+        bad = open_mesh.make_plan_v5(99u);
+        check(fullmag_fem_backend_create_v6(&bad, nullptr) == nullptr,
+              "create_v6 must reject unsupported gpu_demag_solver_strategy");
+        bad = open_mesh.make_plan_v5(FULLMAG_FEM_GPU_DEMAG_SOLVER_STRATEGY_AUTO);
+        bad.base.reserved = 1u;
+        check(fullmag_fem_backend_create_v6(&bad, nullptr) == nullptr,
+              "create_v6 must reject nonzero inner v4 reserved");
+    }
+    {
+        fullmag_fem_backend dummy{};
+        fullmag_fem_gpu_demag_linear_solver_provenance_v1 prov{};
+        check(fullmag_fem_backend_get_gpu_demag_linear_solver_provenance_v1(nullptr, &prov) ==
+                  FULLMAG_FEM_ERR_INVALID,
+              "provenance_v1 query must reject null handle");
+        check(fullmag_fem_backend_get_gpu_demag_linear_solver_provenance_v1(&dummy, nullptr) ==
+                  FULLMAG_FEM_ERR_INVALID,
+              "provenance_v1 query must reject null output");
+    }
+
+    int cuda_device_count = 0;
+    if (cudaGetDeviceCount(&cuda_device_count) != cudaSuccess || cuda_device_count <= 0) {
+        return;
+    }
+
+    using Handle = std::unique_ptr<fullmag_fem_backend, decltype(&fullmag_fem_backend_destroy)>;
+    auto run_strict_step_and_check_bit = [](fullmag_fem_backend *handle, uint64_t expected_bit,
+                                            uint64_t excluded_bit) {
+        check(fullmag_fem_backend_set_gpu_execution_request_v1(
+                  handle, FULLMAG_FEM_GPU_EXECUTION_REQUEST_STRICT_DEVICE) == FULLMAG_FEM_OK,
+              "strict GPU execution request must succeed");
+        fullmag_fem_step_stats stats{};
+        check(fullmag_fem_backend_step(handle, 1.0e-15, &stats) == FULLMAG_FEM_OK,
+              "strict GPU step must succeed");
+        fullmag_fem_gpu_execution_receipt_v1 receipt{};
+        receipt.abi_version = FULLMAG_FEM_GPU_EXECUTION_RECEIPT_ABI_V1;
+        receipt.struct_size = sizeof(receipt);
+        check(fullmag_fem_backend_gpu_execution_receipt_v1(handle, &receipt) == FULLMAG_FEM_OK,
+              "strict GPU receipt query must succeed");
+        check((receipt.executed_device_operator_mask & expected_bit) != 0 &&
+                  (receipt.executed_device_operator_mask & excluded_bit) == 0 &&
+                  receipt.executed_host_operator_mask == 0 &&
+                  receipt.fallback_count == 0,
+              "strict GPU receipt must record only the resolved linear-solve operator bit");
+    };
+
+    // 2. CG_AMG passed to create_v6 NEVER factorizes cuDSS during create.
+    {
+        const auto plan = open_mesh.make_plan_v5(FULLMAG_FEM_GPU_DEMAG_SOLVER_STRATEGY_CG_AMG);
+        Handle handle(fullmag_fem_backend_create_v6(&plan, nullptr), fullmag_fem_backend_destroy);
+        check(handle != nullptr, "create_v6 with CG_AMG must succeed");
+        fullmag_fem_gpu_demag_linear_solver_provenance_v1 prov{};
+        check(fullmag_fem_backend_get_gpu_demag_linear_solver_provenance_v1(handle.get(), &prov) ==
+                  FULLMAG_FEM_OK,
+              "provenance query for CG_AMG must succeed");
+        check(prov.requested_strategy == FULLMAG_FEM_GPU_DEMAG_SOLVER_STRATEGY_CG_AMG &&
+                  prov.resolved_linear_solver == FULLMAG_FEM_GPU_DEMAG_LINEAR_SOLVER_HYPRE_KRYLOV &&
+                  prov.fallback_reason == FULLMAG_FEM_GPU_DEMAG_FALLBACK_NONE &&
+                  prov.estimated_device_peak_bytes == 0 && prov.factor_nnz == 0,
+              "CG_AMG at create_v6 must never initialize cuDSS");
+        run_strict_step_and_check_bit(
+            handle.get(), FEM_GPU_OPERATOR_PRECONDITIONER, FEM_GPU_OPERATOR_DIRECT_SOLVE);
+    }
+
+    // 3. Over-budget caps at create_v6: CUDSS fails hard, AUTO falls back cleanly.
+    check(setenv(kDemagCudssDeviceBudgetCapEnv, "1", 1) == 0, "set tight byte cap");
+    check(setenv(kDemagCudssMaxVramMibEnv, "1", 1) == 0, "set MiB cap");
+    {
+        const auto forced = open_mesh.make_plan_v5(FULLMAG_FEM_GPU_DEMAG_SOLVER_STRATEGY_CUDSS);
+        check(fullmag_fem_backend_create_v6(&forced, nullptr) == nullptr,
+              "create_v6 with forced CUDSS over budget must fail hard during create");
+
+        const auto auto_plan = open_mesh.make_plan_v5(FULLMAG_FEM_GPU_DEMAG_SOLVER_STRATEGY_AUTO);
+        Handle handle(fullmag_fem_backend_create_v6(&auto_plan, nullptr),
+                      fullmag_fem_backend_destroy);
+        check(handle != nullptr, "create_v6 with AUTO over budget must fall back cleanly");
+        fullmag_fem_gpu_demag_linear_solver_provenance_v1 prov{};
+        check(fullmag_fem_backend_get_gpu_demag_linear_solver_provenance_v1(handle.get(), &prov) ==
+                  FULLMAG_FEM_OK,
+              "provenance query for AUTO fallback must succeed");
+        check(prov.requested_strategy == FULLMAG_FEM_GPU_DEMAG_SOLVER_STRATEGY_AUTO &&
+                  prov.resolved_linear_solver == FULLMAG_FEM_GPU_DEMAG_LINEAR_SOLVER_HYPRE_KRYLOV &&
+                  prov.factor_nnz == 0,
+              "AUTO over budget must resolve to HYPRE Krylov without factorizing");
+#if FULLMAG_FEM_CUDSS_POISSON_ENABLED
+        check(prov.fallback_reason ==
+                      FULLMAG_FEM_GPU_DEMAG_FALLBACK_CUDSS_FACTOR_EXCEEDS_VRAM_BUDGET &&
+                  prov.device_budget_bytes == 1 && prov.estimated_device_peak_bytes > 1,
+              "AUTO over budget must record CudssFactorExceedsVramBudget with 1-byte cap");
+#else
+        check(prov.fallback_reason == FULLMAG_FEM_GPU_DEMAG_FALLBACK_CUDSS_UNAVAILABLE,
+              "AUTO without cuDSS build must record CudssUnavailable");
+#endif
+        run_strict_step_and_check_bit(
+            handle.get(), FEM_GPU_OPERATOR_PRECONDITIONER, FEM_GPU_OPERATOR_DIRECT_SOLVE);
+    }
+
+    // 4. Malformed MAX_VRAM_MIB fails hard in create_v6 even under AUTO.
+    clear_env();
+    check(setenv(kDemagCudssMaxVramMibEnv, "0", 1) == 0, "set invalid MAX_VRAM_MIB");
+    {
+        const auto auto_plan = open_mesh.make_plan_v5(FULLMAG_FEM_GPU_DEMAG_SOLVER_STRATEGY_AUTO);
+        check(fullmag_fem_backend_create_v6(&auto_plan, nullptr) == nullptr,
+              "malformed MAX_VRAM_MIB must fail hard in create_v6 even under AUTO");
+    }
+    clear_env();
+
+#if FULLMAG_FEM_CUDSS_POISSON_ENABLED
+    // 5. Open, 1D-periodic Robin, and 2D-periodic film (singleton pin) under AUTO
+    //    all resolve cleanly to CUDSS_DIRECT and commit strict GPU receipts.
+    for (const auto &[px, py, label] : std::array<std::tuple<bool, bool, const char *>, 3>{
+             {{false, false, "open_robin"},
+              {true, false, "pbc_1d_robin"},
+              {true, true, "pbc_2d_film_pin"}}}) {
+        PeriodicHexMeshFixture fixture(px, py);
+        const auto plan = fixture.make_plan_v5(FULLMAG_FEM_GPU_DEMAG_SOLVER_STRATEGY_AUTO);
+        Handle handle(fullmag_fem_backend_create_v6(&plan, nullptr), fullmag_fem_backend_destroy);
+        check(handle != nullptr,
+              (std::string("create_v6 AUTO must succeed for ") + label).c_str());
+        if (px && py) {
+            check(handle->context.poisson_demag.robin_effective_beta == 0.0,
+                  "2D-periodic film must use pure Neumann beta=0 with singleton gauge pin");
+        }
+        fullmag_fem_gpu_demag_linear_solver_provenance_v1 prov{};
+        check(fullmag_fem_backend_get_gpu_demag_linear_solver_provenance_v1(handle.get(), &prov) ==
+                  FULLMAG_FEM_OK,
+              "provenance query for AUTO cuDSS must succeed");
+        check(prov.requested_strategy == FULLMAG_FEM_GPU_DEMAG_SOLVER_STRATEGY_AUTO &&
+                  prov.resolved_linear_solver == FULLMAG_FEM_GPU_DEMAG_LINEAR_SOLVER_CUDSS_DIRECT &&
+                  prov.fallback_reason == FULLMAG_FEM_GPU_DEMAG_FALLBACK_NONE &&
+                  prov.factor_nnz > 0,
+              (std::string("AUTO must resolve to CUDSS_DIRECT for ") + label).c_str());
+        run_strict_step_and_check_bit(
+            handle.get(), FEM_GPU_OPERATOR_DIRECT_SOLVE, FEM_GPU_OPERATOR_PRECONDITIONER);
+    }
+#endif
+}
+#endif
+
 } // namespace
 
 int main()
@@ -489,6 +899,7 @@ int main()
     public_strict_hybrid_rejects_before_preflight_attempt();
     public_compatibility_hybrid_remains_executable();
     public_strict_device_resident_remains_executable();
+    public_create_v6_strategy_vram_and_pbc_cudss_contract();
 #endif
     std::printf("FEM GPU strict execution contract PASS\n");
     return 0;

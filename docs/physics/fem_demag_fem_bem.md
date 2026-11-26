@@ -121,6 +121,12 @@ udawać P2 przez ciche obniżenie rzędu.
 | $N_b$ | liczba węzłów granicy BEM | $1$ |
 | $E_\mathrm d$ | energia demagnetyzacji | $\mathrm J$ |
 | $a_R,b_R$ | współczynniki warunku Robin | zależne od normalizacji |
+| $K_{\mathrm{neumann}}, K_{\mathrm{dirichlet}}$ | dyskretne macierze sztywności SPD dla $u_1$ i $u_2$ po eliminacji gauge / brzegu | $\mathrm{m}$ |
+| $C$ | liczba spójnych składowych aktywnej domeny magnetycznej $\Omega_m$ | $1$ |
+| $\hat{M}_{\mathrm{peak},1}, \hat{M}_{\mathrm{peak},2}$ | szczytowe oszacowanie VRAM analizy `cuDSS` dla układów $u_1$ i $u_2$ | $\mathrm{B}$ |
+| $\hat{M}_{\mathrm{stable},1}$ | stały koszt VRAM czynnika `cuDSS` układu $u_1$ po faktoryzacji | $\mathrm{B}$ |
+| $B$ | efektywny budżet VRAM dostępny dla pary czynników `cuDSS` | $\mathrm{B}$ |
+| $\varepsilon_{\mathrm{rtol}}, \varepsilon_{\mathrm{solver}}$ | żądana tolerancja certyfikacji rezyduum oraz wewnętrzny próg solvera Krylowa ($0.1\,\varepsilon_{\mathrm{rtol}}$) | $1$ |
 
 W kodzie długości są przechowywane w metrach. Nie wolno zastępować
 względnych tolerancji geometrycznych stałymi absolutnymi dobranymi dla jednej
@@ -292,12 +298,91 @@ sprawdzane przed alokacją.
 
 `GpuDemagFemBemWorkspace` spłaszcza te same deterministyczne bloki near/far
 oraz fingerprint CPU do buforów CUDA. Setup wykonuje jeden upload operatora;
-kernel liczy near sumy i $U(V^Tx)$ dla far blocks. Dwa układy Hypre rozwiązują
-$u_1$ i $u_2$, a recovery pola i redukcja energii są wykonywane na device.
-W hot loop nie ma pełnego wektora H2D/D2H ani wywołania CPU FK. Receipt
-`device_resident` musi pokrywać wszystkie wymagane maski, mieć zero fallbacków,
-zero host-operatorów i zero transferów/synchronizacji obliczeniowych;
-przeciwny stan oznacza `NOT VERIFIED`.
+kernel liczy near sumy i $U(V^Tx)$ dla far blocks. Oba skalarne układy $u_1$
+(Neumann z eliminacją gauge) oraz $u_2$ (Dirichlet na $\Gamma$) żyją wyłącznie
+na węzłach P1 ciała magnetycznego $\Omega_m$ (`TET4`, bez airboxa).
+
+#### Dowód ścisłej dodatniej określoności (SPD) dla $u_1$ i $u_2$
+
+Bazowa macierz sztywności $K_{ij}=\int_{\Omega_m}\nabla\varphi_i\cdot\nabla\varphi_j\,\mathrm dV$
+jest symetryczna dodatnio półokreślona ($K=K^T\succeq 0$), a wymiar jej jądra
+jest równy liczbie spójnych składowych $C$ ciała magnetycznego:
+
+- Dla $u_1$ funkcja `collect_neumann_gauge_nodes` wyznacza minimalny globalny
+  węzeł $\mathrm{tdof}_c$ w każdej spójnej składowej $c\in\{1,\dots,C\}$, a
+  symetryczne `EliminateRowCol` (`DIAG_ONE`) wymusza $v_{\mathrm{tdof}_c}=0$.
+  Warunek $v^T K_{\mathrm{neumann}} v = 0$ implikuje $\nabla v_h = 0$ oraz
+  $v_{\mathrm{tdof}_c}=0$ na każdej spójnej składowej, skąd $v\equiv 0$, czyli
+  $K_{\mathrm{neumann}}\succ 0$ (ściśle SPD).
+- Dla $u_2$ eliminacja `EliminateRowCol` obejmuje wszystkie unikalne węzły
+  brzegowe $\Gamma=\partial\Omega_m$, dając blokową strukturę
+  $K_{\mathrm{dirichlet}}=\mathrm{diag}(K_{\mathrm{int,int}},I_\Gamma)\succ 0$
+  (ściśle SPD), z prawą stroną nadpisywaną wartościami brzegowymi na $\Gamma$.
+
+```{math}
+:label: eq-fem-bem-spd-operators
+K_{\mathrm{neumann}} = K_{\mathrm{neumann}}^T \succ 0,
+\qquad
+K_{\mathrm{dirichlet}} = K_{\mathrm{dirichlet}}^T \succ 0,
+\qquad
+\dim\ker K = C.
+```
+
+Ścisła dodatnia określoność gwarantuje matematyczną poprawność faktoryzacji
+Cholesky’ego `CUDSS_MTYPE_SPD` dla obu układów.
+
+#### Atomowy preflight VRAM pary `(u1, u2)`, `HypreStreamInterop` i certyfikacja `ScaledNormPair`
+
+Ponieważ recepta wykonania (`execution_receipt.cpp::linear_solve_bits_are_consistent`)
+zabrania mieszania bitów `FEM_GPU_OPERATOR_DIRECT_SOLVE` i
+`FEM_GPU_OPERATOR_PRECONDITIONER`, inicjalizacja GPU FEM/BEM wywołuje
+atomowy rezolwer `try_initialize_fem_bem_cudss_pair`, który analizuje obie
+macierze przed rozpoczęciem faktoryzacji i sprawdza łączny budżet sekwencyjny:
+
+```{math}
+:label: eq-fem-bem-cudss-pair-budget
+\max\!\bigl(\hat{M}_{\mathrm{peak},1},\; \hat{M}_{\mathrm{stable},1} + \hat{M}_{\mathrm{peak},2}\bigr) \le B.
+```
+
+Gdy oszacowanie przekracza budżet $B$, oba uchwyty analityczne są zwalniane
+bez uruchomienia faktoryzacji (`factorization_started = false`): dla jawnego
+żądania `cudss` kończy się to twardym błędem, a dla `auto` oba układy
+przechodzą wspólnie na ścieżkę HYPRE Krylov z preconditionerem AMG
+(`HYPRE_BoomerAMGSetCycleRelaxType(amgraw, 18, 3)` z weryfikacją przez
+`gpu_demag_fem_bem_amg_coarse_relax_type`).
+
+W pętli obliczeniowej (`solve_linear_system`) usunięto oba blokujące wywołania
+`cudaStreamSynchronize` na układ oraz hostowe `Norml2()` — zastępując je
+mostkiem zdarzeń `HypreStreamInterop` (`hypre_wait_for_fullmag` /
+`fullmag_wait_for_hypre`). W trybie `cuDSS` rozwiązanie
+`solve_demag_cudss_direct` jest przypięte bezpośrednio do
+`workspace.stream_interop.hypre_stream`, dzięki czemu następująca po nim
+certyfikacja $r=Ax-b$ wykonuje się w tym samym strumieniu bez dodatkowego
+zdarzenia. Oba tryby (`cuDSS` i HYPRE Krylov) przechodzą przez wspólny
+wieloblokowy certyfikator `certify_gpu_hypre_demag_residual` oparty na
+256-blokowej redukcji CUB `fullmag_cuda_demag_validation_norm_pair`
+(`ScaledNormPair`: skalowanie Blue/LAPACK bez przepełnienia, niezależne kanały
+bez `break;`, deterministyczny fallback stronicowalny pod
+`FULLMAG_FEM_FORCE_PAGEABLE_SCALAR_READBACK=1`, 1× `cudaStreamSynchronize` i
+16 B D2H na układ, tj. 2 bariery / 32 B łącznie dla $u_1$ i $u_2$):
+
+```{math}
+:label: eq-fem-bem-residual-cert
+\frac{\lVert K_{\mathrm{neumann}} u_1 - b_1 \rVert_2}{\lVert b_1 \rVert_2} \le \varepsilon_{\mathrm{rtol}},
+\qquad
+\frac{\lVert K_{\mathrm{dirichlet}} u_2 - b_2 \rVert_2}{\lVert b_2 \rVert_2} \le \varepsilon_{\mathrm{rtol}},
+\qquad
+\varepsilon_{\mathrm{solver}} = 0.1\,\varepsilon_{\mathrm{rtol}}.
+```
+
+Recovery pola i redukcja energii pozostają w ścieżce device. Funkcja
+`compute_device_demag_fem_bem_for_device_stage` emituje wyłącznie bity
+`DEMAG_RHS | DEMAG_SOLVE | DEMAG_RECOVERY`, natomiast bit rodziny solvera
+liniowego (`DIRECT_SOLVE` albo `PRECONDITIONER`) emituje wyłącznie
+`solve_linear_system`. W hot loop nie ma pełnego wektora H2D/D2H ani wywołania
+CPU FK. Receipt `device_resident` musi pokrywać wszystkie wymagane maski, mieć
+zero fallbacków, zero host-operatorów i zero transferów/synchronizacji
+obliczeniowych; przeciwny stan oznacza `NOT VERIFIED`.
 
 (implementation-mapping)=
 ## 9. Mapa implementacji i własność modułów
@@ -414,7 +499,15 @@ na managed CPU i GPU.
 | backends/fem/cpu/mfem/interactions/demag_fem_bem_rhs.cpp | prepare_demag_fem_bem_neumann_rhs | zerowanie gauge w RHS |
 | backends/fem/cpu/mfem/interactions/demag_fem_bem_potential.cpp | combine_demag_fem_bem_total_potential | suma potencjałów u1 i u2 |
 | backends/fem/cpu/mfem/interactions/demag_fem_bem_energy.cpp | demag_fem_bem_energy_from_field | energia demagnetyzacji |
-| backends/fem/tests/demag_fem_bem_contract.cpp | main | wykonywalny kontrakt testowy |
+| backends/fem/gpu/cuda/demag_fem_bem/fem_bem.cpp | gpu_demag_fem_bem_initialize | inicjalizacja GPU FK, `HypreStreamInterop`, `validation_scratch` i atomowy preflight pary `cuDSS` |
+| backends/fem/gpu/cuda/demag_fem_bem/fem_bem.cpp | configure_amg | konfiguracja i weryfikacja `HYPRE_BoomerAMGSetCycleRelaxType(amgraw, 18, 3)` dla $u_1$ i $u_2$ |
+| backends/fem/gpu/cuda/demag_fem_bem/fem_bem.cpp | solve_linear_system | mostek `HypreStreamInterop`, `solve_demag_cudss_direct` na `hypre_stream`, wspólna certyfikacja i warunkowe bity recepty |
+| backends/fem/gpu/cuda/demag_fem_bem/fem_bem.cpp | compute_device_demag_fem_bem_for_device_stage | pełny krok device-resident FK ($u_1 \to \text{BEM} \to u_2 \to \mathbf H_\mathrm{demag}, E_\mathrm d$) bez nadmiarowego bitu `PRECONDITIONER` |
+| backends/fem/gpu/cuda/demag_poisson/cudss_direct_solver.hpp | try_initialize_fem_bem_cudss_pair | atomowy dwuczynnikowy preflight VRAM pary `(u1, u2)` dla macierzy SPD |
+| backends/fem/gpu/cuda/demag_poisson/hypre_residual_certification.cpp | certify_gpu_hypre_demag_residual | wspólna certyfikacja rezyduum $Ax-b$ na `hypre_stream` z zachowaniem sticky błędów HYPRE |
+| backends/fem/gpu/cuda/demag_poisson/demag_kernels.cu | fullmag_cuda_demag_validation_norm_pair | wieloblokowa redukcja pary norm `ScaledNormPair` (256 bloków CUB, 1× sync, 16 B D2H) |
+| backends/fem/tests/demag_fem_bem_contract.cpp | main | wykonywalny kontrakt testowy CPU |
+| backends/fem/tests/demag_fem_bem_gpu_contract.cpp | main | kontrakt źródłowy i bramka runtime GPU FK (AMG `relax_type=18`, 2× sync / 32 B, `cuDSS`/fallback) |
 
 - backends/fem/cpu/mfem/interactions/demag_fem_bem_surface.cpp — rekordy
   ścian, orientacja, mapowanie węzłów i kontrola zamknięcia;

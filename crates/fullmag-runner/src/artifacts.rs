@@ -1268,8 +1268,21 @@ fn demag_runtime_metadata(
                 resolved_policy.map_or(policy.max_iterations, |entry| entry.max_iterations);
             // The realization that ran (docs/physics/0997); the fields above
             // keep the requested policy.
-            let resolved_linear_solver =
-                resolved_policy.and_then(|entry| entry.resolved_linear_solver.clone());
+            let bem_policy = provenance.fem_bem_demag.as_ref();
+            let requested_linear_solver_strategy = resolved_policy
+                .and_then(|entry| entry.requested_linear_solver_strategy.clone())
+                .or_else(|| {
+                    bem_policy.and_then(|entry| entry.requested_linear_solver_strategy.clone())
+                })
+                .or_else(|| requested_policy.map(|entry| entry.gpu_strategy.clone()));
+            let resolved_linear_solver = resolved_policy
+                .and_then(|entry| entry.resolved_linear_solver.clone())
+                .or_else(|| bem_policy.and_then(|entry| entry.resolved_linear_solver.clone()));
+            let linear_solver_fallback_reason = resolved_policy
+                .and_then(|entry| entry.linear_solver_fallback_reason.clone())
+                .or_else(|| {
+                    bem_policy.and_then(|entry| entry.linear_solver_fallback_reason.clone())
+                });
             let direct_solve = resolved_linear_solver.as_deref() == Some("cudss_direct");
             let amg_profile = if direct_solve {
                 serde_json::Value::Null
@@ -1320,7 +1333,9 @@ fn demag_runtime_metadata(
                 },
                 "linear_solver": linear_solver,
                 "preconditioner": preconditioner,
+                "requested_linear_solver_strategy": requested_linear_solver_strategy,
                 "resolved_linear_solver": resolved_linear_solver,
+                "linear_solver_fallback_reason": linear_solver_fallback_reason,
                 "runtime_solver": runtime_solver,
                 "runtime_preconditioner": runtime_preconditioner,
                 "amg_profile": amg_profile,
@@ -7299,6 +7314,9 @@ mod tests {
                 operator_build_count: 1,
                 operator_upload_count: 0,
                 apply_count: 4,
+                requested_linear_solver_strategy: None,
+                resolved_linear_solver: None,
+                linear_solver_fallback_reason: None,
             }),
             ..ExecutionProvenance::default()
         };
@@ -7385,6 +7403,73 @@ mod tests {
         })
         .unwrap();
         assert!(legacy["fem_poisson_demag"].get("resolved_linear_solver").is_none());
+        assert!(legacy["fem_poisson_demag"]
+            .get("requested_linear_solver_strategy")
+            .is_none());
+        assert!(legacy["fem_poisson_demag"]
+            .get("linear_solver_fallback_reason")
+            .is_none());
+
+        // Auto fallback metadata from fem_poisson_demag.
+        let fallback_prov = ExecutionProvenance {
+            execution_engine: "fem_native_gpu".to_string(),
+            fem_demag_operator_mode: Some("device_hypre_poisson".to_string()),
+            fem_poisson_demag: Some(crate::types::FemPoissonDemagProvenance {
+                linear_solver: "CG".to_string(),
+                preconditioner: "AMG".to_string(),
+                requested_linear_solver_strategy: Some("auto".to_string()),
+                resolved_linear_solver: Some("hypre_krylov".to_string()),
+                linear_solver_fallback_reason: Some("cudss_factor_exceeds_vram_budget".to_string()),
+                ..Default::default()
+            }),
+            ..ExecutionProvenance::default()
+        };
+        let fallback_meta = demag_runtime_metadata(&plan, &fallback_prov, &[]);
+        assert_eq!(fallback_meta["requested_linear_solver_strategy"], "auto");
+        assert_eq!(fallback_meta["resolved_linear_solver"], "hypre_krylov");
+        assert_eq!(
+            fallback_meta["linear_solver_fallback_reason"],
+            "cudss_factor_exceeds_vram_budget"
+        );
+
+        // GPU FEM/BEM cuDSS metadata read from fem_bem_demag when fem_poisson_demag is absent.
+        let mut bem_plan = test_fem_execution_plan();
+        if let BackendPlanIR::Fem(bem_fem) = &mut bem_plan.backend_plan {
+            bem_fem.enable_demag = true;
+            bem_fem.demag_realization = Some(fullmag_ir::ResolvedFemDemagIR::FredkinKoehler);
+        }
+        let bem_prov = ExecutionProvenance {
+            execution_engine: "fem_native_gpu".to_string(),
+            fem_demag_operator_mode: Some("device_hypre_fem_bem".to_string()),
+            fem_bem_demag: Some(crate::types::FemBemDemagProvenance {
+                operator_mode: "device_hypre_fem_bem".to_string(),
+                operator_fingerprint: "fp".to_string(),
+                boundary_node_count: 16,
+                boundary_triangle_count: 24,
+                near_block_count: 1,
+                far_block_count: 0,
+                near_entry_count: 64,
+                far_row_count: 0,
+                max_rank: 0,
+                relative_error_estimate: 0.0,
+                resident_bytes: 1024,
+                device_bytes: 2048,
+                operator_build_count: 1,
+                operator_upload_count: 1,
+                apply_count: 2,
+                requested_linear_solver_strategy: Some("auto".to_string()),
+                resolved_linear_solver: Some("cudss_direct".to_string()),
+                linear_solver_fallback_reason: None,
+            }),
+            ..ExecutionProvenance::default()
+        };
+        let bem_meta = demag_runtime_metadata(&bem_plan, &bem_prov, &[]);
+        assert_eq!(bem_meta["requested_linear_solver_strategy"], "auto");
+        assert_eq!(bem_meta["resolved_linear_solver"], "cudss_direct");
+        assert!(bem_meta["linear_solver_fallback_reason"].is_null());
+        assert_eq!(bem_meta["runtime_solver"], "CudssDirect");
+        assert!(bem_meta["runtime_preconditioner"].is_null());
+        assert!(bem_meta["amg_profile"].is_null());
     }
 
     #[test]
@@ -11204,6 +11289,7 @@ mod tests {
                 atol: Some(1.0e-20),
                 max_iterations: 77,
                 print_level: 2,
+                gpu_strategy: "auto".to_string(),
             });
         }
         let mut provenance = ExecutionProvenance::default();
