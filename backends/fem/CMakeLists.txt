@@ -260,6 +260,7 @@ if(FULLMAG_USE_MFEM_STACK)
     endif()
     include("${CMAKE_SOURCE_DIR}/cmake/FindFullmagMfem.cmake")
     fullmag_find_mfem()
+    find_package(Threads REQUIRED)
     if(MFEM_USE_OPENMP)
         find_package(OpenMP REQUIRED COMPONENTS CXX)
     endif()
@@ -274,6 +275,7 @@ if(FULLMAG_USE_MFEM_STACK)
 
     list(APPEND FEM_SOURCES
         src/mfem_bridge.cpp
+        cpu/mfem/common/sparse_linear_solver.cpp
         cpu/mfem/transport/steady_transport.cpp
         cpu/mfem/transport/affine_rt0_element.cpp
         cpu/mfem/workflows/antenna_field_solve/charge_trace_workspace.cpp
@@ -355,6 +357,7 @@ if(FULLMAG_USE_MFEM_STACK)
             gpu/cuda/interactions/dmi/dmi_kernels.cu
             gpu/cuda/interactions/magnetoelastic/magnetoelastic_kernels.cu
             gpu/cuda/interactions/oersted/oersted_kernels.cu
+            gpu/cuda/interactions/oersted/direct_tetra_farfield_kernels.cu
             gpu/cuda/interactions/stt/stt_kernels.cu
             gpu/cuda/interactions/sot/sot_kernels.cu
             gpu/cuda/interactions/thermal/thermal_kernels.cu
@@ -541,6 +544,7 @@ if(FULLMAG_USE_MFEM_STACK)
     else()
         target_link_libraries(fullmag_fem PRIVATE mfem)
     endif()
+    target_link_libraries(fullmag_fem PRIVATE Threads::Threads ${CMAKE_DL_LIBS})
     if(MFEM_USE_OPENMP)
         target_link_libraries(fullmag_fem PRIVATE OpenMP::OpenMP_CXX)
     endif()
@@ -631,6 +635,29 @@ if(FULLMAG_USE_MFEM_STACK)
         COMMAND fem_mesh_space_preparation_contract)
 
     add_executable(
+        fem_sparse_linear_solver_contract
+        tests/sparse_linear_solver_contract.cpp
+    )
+    target_link_libraries(fem_sparse_linear_solver_contract PRIVATE fullmag_fem Threads::Threads)
+    if(TARGET MFEM::mfem)
+        target_link_libraries(fem_sparse_linear_solver_contract PRIVATE MFEM::mfem)
+    else()
+        target_link_libraries(fem_sparse_linear_solver_contract PRIVATE mfem)
+    endif()
+    if(FULLMAG_FEM_CUDSS_SHIFT_SUPPORTED)
+        target_compile_definitions(fem_sparse_linear_solver_contract PRIVATE
+            FULLMAG_FEM_CUDSS_POISSON_ENABLED=1)
+        target_link_libraries(fem_sparse_linear_solver_contract PRIVATE CUDA::cudart)
+    endif()
+    target_include_directories(fem_sparse_linear_solver_contract PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+    )
+    add_test(
+        NAME fem_sparse_linear_solver_contract
+        COMMAND fem_sparse_linear_solver_contract)
+
+    add_executable(
         fem_oersted_direct_tetra_contract
         tests/oersted_direct_tetra_contract.cpp
     )
@@ -647,6 +674,9 @@ if(FULLMAG_USE_MFEM_STACK)
     add_test(
         NAME fem_oersted_direct_tetra_contract
         COMMAND fem_oersted_direct_tetra_contract)
+    add_test(
+        NAME fem_oersted_direct_tetra_parallel_contract
+        COMMAND fem_oersted_direct_tetra_contract --wave2)
 
     add_executable(
         fem_oersted_vector_potential_contract
@@ -684,15 +714,36 @@ if(FULLMAG_USE_MFEM_STACK)
     add_executable(
         fem_steady_transport_contract
         tests/steady_transport_contract.cpp
+        cpu/mfem/common/sparse_linear_solver.cpp
+        core/petsc_slepc_runtime.cpp
+        cpu/mfem/runtime/hypre_host_policy.cpp
         cpu/mfem/transport/steady_transport.cpp
     )
+    target_compile_definitions(fem_steady_transport_contract PRIVATE
+        FULLMAG_HAS_MFEM_STACK=1)
     if(TARGET MFEM::mfem)
-        target_link_libraries(fem_steady_transport_contract PRIVATE MFEM::mfem)
+        target_link_libraries(fem_steady_transport_contract PRIVATE MFEM::mfem Threads::Threads ${CMAKE_DL_LIBS})
     else()
-        target_link_libraries(fem_steady_transport_contract PRIVATE mfem)
+        target_link_libraries(fem_steady_transport_contract PRIVATE mfem Threads::Threads ${CMAKE_DL_LIBS})
+    endif()
+    if(FULLMAG_FEM_WITH_SLEPC)
+        target_link_libraries(fem_steady_transport_contract PRIVATE PETSC::petsc)
+        target_compile_definitions(fem_steady_transport_contract PRIVATE
+            FULLMAG_FEM_WITH_SLEPC=1)
     endif()
     if(FULLMAG_ENABLE_CUDA)
         target_link_libraries(fem_steady_transport_contract PRIVATE CUDA::cusparse)
+    endif()
+    if(FULLMAG_FEM_CUDSS_SHIFT_SUPPORTED)
+        target_sources(fem_steady_transport_contract PRIVATE
+            gpu/cuda/demag_poisson/cudss_direct_solver.cpp)
+        target_include_directories(fem_steady_transport_contract PRIVATE
+            "${FULLMAG_CUDSS_INCLUDE_DIR}")
+        target_link_libraries(fem_steady_transport_contract PRIVATE
+            "${FULLMAG_CUDSS_LIBRARY}" CUDA::cudart)
+        target_compile_definitions(fem_steady_transport_contract PRIVATE
+            FULLMAG_FEM_CUDSS_POISSON_ENABLED=1
+            FULLMAG_HAS_CUDA_RUNTIME=1)
     endif()
     target_include_directories(fem_steady_transport_contract PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}
@@ -734,6 +785,9 @@ if(FULLMAG_USE_MFEM_STACK)
             ${FULLMAG_OET0_PRODUCTION_SOURCES})
         target_sources(fem_conservative_current_view_contract PRIVATE
             ${FULLMAG_OET0_PRODUCTION_SOURCES}
+            cpu/mfem/common/sparse_linear_solver.cpp
+            cpu/mfem/runtime/hypre_host_policy.cpp
+            core/petsc_slepc_runtime.cpp
             cpu/mfem/transport/affine_rt0_element.cpp
             cpu/mfem/workflows/antenna_field_solve/charge_trace_workspace.cpp
             cpu/mfem/workflows/antenna_field_solve/charge_current_response.cpp
@@ -750,10 +804,16 @@ if(FULLMAG_USE_MFEM_STACK)
     find_package(Threads REQUIRED)
     if(TARGET MFEM::mfem)
         target_link_libraries(fem_conservative_current_view_contract PRIVATE
-            MFEM::mfem Threads::Threads)
+            MFEM::mfem Threads::Threads ${CMAKE_DL_LIBS})
     else()
         target_link_libraries(fem_conservative_current_view_contract PRIVATE
-            mfem Threads::Threads)
+            mfem Threads::Threads ${CMAKE_DL_LIBS})
+    endif()
+    if(FULLMAG_FEM_WITH_SLEPC AND NOT FULLMAG_OET0_TSAN)
+        target_link_libraries(fem_conservative_current_view_contract PRIVATE
+            PETSC::petsc)
+        target_compile_definitions(fem_conservative_current_view_contract PRIVATE
+            FULLMAG_FEM_WITH_SLEPC=1)
     endif()
     target_include_directories(fem_conservative_current_view_contract PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}

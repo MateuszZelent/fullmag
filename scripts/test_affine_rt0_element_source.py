@@ -47,12 +47,12 @@ def test_h_prepares_geometry_and_coefficients_before_inner_quadrature():
         assert forbidden not in body
     oersted = (OWNER.parent.parent / "interactions/oersted/direct_tetra_quadrature.cpp").read_text(encoding="utf-8")
     assert "elements.push_back({CurrentElement(rt0_field, element), element_vertices(mesh, element)})" in oersted
-    coefficient = oersted.split("class DirectScalarCoefficient", 1)[1].split("struct Leaf", 1)[0]
-    assert "evaluate_prepared(source_, targets, options_, work_)" in coefficient
-    assert "EvaluateField(" not in coefficient and "prepare_source(" not in coefficient
     projection = oersted.split("DirectTetraQuadrature::ProjectField", 1)[1]
-    assert projection.index("const auto elements = prepare_source") < projection.index("for (int component = 0;")
-    assert "elements, options, component" in projection
+    assert "EvaluateField(" not in projection
+    assert projection.count("prepare_source(") == 1
+    assert projection.count("evaluate_prepared_impl(") == 1
+    assert projection.index("const auto elements = prepare_source") < projection.index("evaluate_prepared_impl(")
+    assert projection.index("evaluate_prepared_impl(") < projection.index("for (int component = 0;")
     public_field = oersted.split("DirectTetraQuadrature::EvaluateField", 1)[1].split(
         "DirectTetraQuadrature::ProjectField", 1)[0]
     assert public_field.index("validate_pair_budget(") < public_field.index("prepare_source(")

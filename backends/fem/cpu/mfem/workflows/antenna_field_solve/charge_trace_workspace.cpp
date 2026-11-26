@@ -80,7 +80,11 @@ private:
     std::vector<int> electrical_roots_;
     std::map<int, int> component_gauge_dof_;
     std::vector<int> full_to_reduced_;
+    std::vector<int> free_index_;
+    int free_count_ = 0;
     std::unique_ptr<mfem::SparseMatrix> matrix_;
+    std::unique_ptr<mfem::SparseMatrix> reduced_matrix_;
+    std::unique_ptr<multiphysics::SparseLinearSolver> reduced_solver_;
 };
 
 ChargeTraceWorkspace::Impl::Impl(const ChargeTraceSolveRequest &request)
@@ -192,6 +196,11 @@ ChargeTraceWorkspace::Impl::Impl(const ChargeTraceSolveRequest &request)
     diffusion.Assemble();
     diffusion.Finalize();
     matrix_ = std::make_unique<mfem::SparseMatrix>(diffusion.SpMat());
+    // Settle MFEM host memory flags on the constructing thread so concurrent
+    // const solve() calls never race on lazy Memory<T> state under TSan.
+    matrix_->HostReadI();
+    matrix_->HostReadJ();
+    matrix_->HostReadData();
     carrier_ = *result;
     original_volume_components_.resize(static_cast<std::size_t>(count));
     for (int dof = 0; dof < count; ++dof) {
@@ -206,6 +215,62 @@ ChargeTraceWorkspace::Impl::Impl(const ChargeTraceSolveRequest &request)
     for (int reduced = 0; reduced < trace.reduced_size; ++reduced) {
         electrical_roots_[static_cast<std::size_t>(reduced)] = electrical.root(reduced);
     }
+
+    // Validate potential anchor DOF bounds before indexing full_to_reduced_,
+    // then eagerly build and factor the invariant quotient operator once.
+    std::set<int> fixed_reduced;
+    std::set<int> anchored_components;
+    for (const auto &anchor : request.potential_anchors) {
+        if (anchor.full_dof < 0 || anchor.full_dof >= count) {
+            throw std::invalid_argument("invalid charge trace potential anchor");
+        }
+        const int reduced = full_to_reduced_[static_cast<std::size_t>(anchor.full_dof)];
+        fixed_reduced.insert(reduced);
+        anchored_components.insert(electrical_roots_[static_cast<std::size_t>(reduced)]);
+    }
+    for (const auto &[component, dof] : component_gauge_dof_) {
+        if (anchored_components.count(component) == 0) {
+            fixed_reduced.insert(full_to_reduced_[static_cast<std::size_t>(dof)]);
+        }
+    }
+    free_index_.assign(static_cast<std::size_t>(trace.reduced_size), -1);
+    free_count_ = 0;
+    for (int reduced = 0; reduced < trace.reduced_size; ++reduced) {
+        if (fixed_reduced.count(reduced) == 0) {
+            free_index_[static_cast<std::size_t>(reduced)] = free_count_++;
+        }
+    }
+    if (free_count_ > 0) {
+        reduced_matrix_ = std::make_unique<mfem::SparseMatrix>(free_count_);
+        mfem::Array<int> columns;
+        mfem::Vector values;
+        for (int row = 0; row < count; ++row) {
+            const int reduced_row = free_index_[static_cast<std::size_t>(
+                full_to_reduced_[static_cast<std::size_t>(row)])];
+            if (reduced_row < 0) continue;
+            matrix_->GetRow(row, columns, values);
+            for (int entry = 0; entry < columns.Size(); ++entry) {
+                const int reduced_column = free_index_[static_cast<std::size_t>(
+                    full_to_reduced_[static_cast<std::size_t>(columns[entry])])];
+                if (reduced_column >= 0) {
+                    reduced_matrix_->Add(reduced_row, reduced_column, values[entry]);
+                }
+            }
+        }
+        reduced_matrix_->Finalize();
+
+        multiphysics::SparseSolveConfig solver_config;
+        solver_config.kind = multiphysics::SparseMatrixKind::Spd;
+        solver_config.execution_target = multiphysics::SparseExecutionTarget::Cpu;
+        solver_config.cpu_backend = request.cpu_backend;
+        solver_config.relative_tolerance = request.algebraic_relative_tolerance;
+        solver_config.absolute_tolerance = 0.0;
+        solver_config.maximum_iterations = request.maximum_iterations;
+        solver_config.max_refinement_sweeps = 2;
+        reduced_solver_ = std::make_unique<multiphysics::SparseLinearSolver>(
+            *reduced_matrix_, solver_config);
+    }
+
     prototype_.mesh = nullptr;
     prototype_.conductivity = nullptr;
 }
@@ -236,7 +301,8 @@ void ChargeTraceWorkspace::Impl::require_control_topology(const ChargeTraceSolve
         request.absolute_jump_tolerance_v == prototype_.absolute_jump_tolerance_v &&
         request.relative_jump_tolerance == prototype_.relative_jump_tolerance &&
         request.algebraic_relative_tolerance == prototype_.algebraic_relative_tolerance &&
-        request.maximum_iterations == prototype_.maximum_iterations;
+        request.maximum_iterations == prototype_.maximum_iterations &&
+        request.cpu_backend == prototype_.cpu_backend;
     if (!same_metadata) throw std::invalid_argument("charge response metadata differs from its owned workspace");
     for (std::size_t index = 0; index < request.trace_relations.size(); ++index) {
         const auto &authored = request.trace_relations[index];
@@ -339,11 +405,8 @@ std::shared_ptr<const ChargeTraceSolution> ChargeTraceWorkspace::Impl::solve(
                 static_cast<std::size_t>(dof_vertices[static_cast<std::size_t>(dof)])]);
         }
     }
-    std::vector<int> free_index(static_cast<std::size_t>(trace.reduced_size), -1);
-    int free_count = 0;
-    for (int reduced = 0; reduced < trace.reduced_size; ++reduced) {
-        if (fixed.count(reduced) == 0) free_index[static_cast<std::size_t>(reduced)] = free_count++;
-    }
+    const auto &free_index = free_index_;
+    const int free_count = free_count_;
     const auto &matrix = *matrix_;
     mfem::Vector potential(count);
     for (int dof = 0; dof < count; ++dof) {
@@ -357,7 +420,7 @@ std::shared_ptr<const ChargeTraceSolution> ChargeTraceWorkspace::Impl::solve(
     mfem::Vector rhs(free_count), solution(free_count);
     rhs = 0.0;
     solution = 0.0;
-    // Diagnostics only: CG's internal norm is not the independent component norm.
+    // Diagnostics only: solver internal norm is not the independent component norm.
     bool cg_was_run = false;
     int cg_iterations = 0;
     int cg_correction_solves = 0;
@@ -365,51 +428,34 @@ std::shared_ptr<const ChargeTraceSolution> ChargeTraceWorkspace::Impl::solve(
     double cg_final_norm = std::numeric_limits<double>::quiet_NaN();
     double global_rhs_l2_a = 0.0;
     if (free_count > 0) {
-        mfem::SparseMatrix reduced_matrix(free_count);
-        mfem::Array<int> columns;
-        mfem::Vector values;
         for (int row = 0; row < count; ++row) {
             const int reduced_row = free_index[static_cast<std::size_t>(trace.full_to_reduced[
                 static_cast<std::size_t>(row)])];
             if (reduced_row < 0) continue;
             rhs[reduced_row] -= action[row];
-            matrix.GetRow(row, columns, values);
-            for (int entry = 0; entry < columns.Size(); ++entry) {
-                const int reduced_column = free_index[static_cast<std::size_t>(trace.full_to_reduced[
-                    static_cast<std::size_t>(columns[entry])])];
-                if (reduced_column >= 0) reduced_matrix.Add(reduced_row, reduced_column, values[entry]);
-            }
         }
-        reduced_matrix.Finalize();
         const double rhs_norm = rhs.Norml2();
         global_rhs_l2_a = rhs_norm;
         if (!std::isfinite(rhs_norm)) {
             throw std::runtime_error("charge trace right-hand-side norm overflow");
         }
         if (rhs_norm != 0.0) {
-            mfem::GSSmoother preconditioner(reduced_matrix);
-            mfem::CGSolver solver;
-            solver.SetOperator(reduced_matrix);
-            solver.SetPreconditioner(preconditioner);
-            solver.SetRelTol(request.algebraic_relative_tolerance);
-            solver.SetAbsTol(0.0);
-            solver.SetMaxIter(request.maximum_iterations);
-            solver.SetPrintLevel(0);
-            solver.iterative_mode = false;
-            solver.Mult(rhs, solution);
+            const auto stats = reduced_solver_->solve(rhs, solution, 0.0);
             cg_was_run = true;
-            cg_iterations = solver.GetNumIterations();
-            cg_initial_norm = solver.GetInitialNorm();
-            cg_final_norm = solver.GetFinalNorm();
-            if (!solver.GetConverged()) throw std::runtime_error("charge trace H1 solve did not converge");
+            cg_iterations = stats.iterations;
+            cg_initial_norm = rhs_norm;
+            cg_final_norm = stats.independent_relative_residual * rhs_norm;
+            if (!stats.converged) throw std::runtime_error("charge trace H1 solve did not converge");
             for (int dof = 0; dof < count; ++dof) {
                 const int index = free_index[static_cast<std::size_t>(trace.full_to_reduced[
                     static_cast<std::size_t>(dof)])];
                 if (index >= 0) potential[dof] += solution[index];
             }
-            // Refine the actual restored potential, not CG's recursive residual.
-            // Keep the original component RHS scales and one total CG budget.
-            while (cg_iterations < request.maximum_iterations) {
+            // Refine the actual restored potential against the independent
+            // component residual gate using the eagerly cached quotient factor.
+            const int max_correction_sweeps = std::min(8, request.maximum_iterations);
+            while (cg_correction_solves < max_correction_sweeps &&
+                   cg_iterations < request.maximum_iterations) {
                 matrix.Mult(potential, action);
                 std::vector<long double> reactions(static_cast<std::size_t>(trace.reduced_size), 0.0L);
                 bool finite = true;
@@ -440,16 +486,15 @@ std::shared_ptr<const ChargeTraceSolution> ChargeTraceWorkspace::Impl::solve(
                     accepted = accepted && relative <= request.algebraic_relative_tolerance;
                 }
                 if (!finite || accepted) break;
-                const int remaining = request.maximum_iterations - cg_iterations;
-                solver.SetMaxIter(remaining);
+                const double corr_rhs_norm = correction_rhs.Norml2();
+                if (!std::isfinite(corr_rhs_norm) || corr_rhs_norm == 0.0) break;
                 correction = 0.0;
-                solver.Mult(correction_rhs, correction);
-                const int iterations = solver.GetNumIterations();
-                if (iterations <= 0 || iterations > remaining) break;
-                cg_iterations += iterations;
+                const auto corr_stats = reduced_solver_->solve(correction_rhs, correction, 0.0);
+                if (corr_stats.iterations <= 0) break;
+                cg_iterations += corr_stats.iterations;
                 ++cg_correction_solves;
-                cg_final_norm = solver.GetFinalNorm();
-                if (!solver.GetConverged()) break;
+                cg_final_norm = corr_stats.independent_relative_residual * corr_rhs_norm;
+                if (!corr_stats.converged) break;
                 bool changed = false;
                 for (int dof = 0; dof < count; ++dof) {
                     const int index = free_index[static_cast<std::size_t>(trace.full_to_reduced[
