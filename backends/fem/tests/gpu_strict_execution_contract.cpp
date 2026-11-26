@@ -528,61 +528,76 @@ struct PeriodicHexMeshFixture {
             }
         }
         cell_offsets.push_back(0u);
-        for (int cz = 0; cz < nz; ++cz) {
-            for (int cy = 0; cy < ny; ++cy) {
-                for (int cx = 0; cx < nx; ++cx) {
-                    cell_global_ordinals.push_back(cell_types.size());
-                    cell_types.push_back(FULLMAG_FEM_CELL_HEX8);
-                    cell_markers.push_back(1u);
-                    const uint32_t verts[8] = {
-                        node_id(cx, cy, cz),         node_id(cx + 1, cy, cz),
-                        node_id(cx + 1, cy + 1, cz), node_id(cx, cy + 1, cz),
-                        node_id(cx, cy, cz + 1),     node_id(cx + 1, cy, cz + 1),
-                        node_id(cx + 1, cy + 1, cz + 1), node_id(cx, cy + 1, cz + 1),
-                    };
-                    cell_nodes.insert(cell_nodes.end(), verts, verts + 8);
-                    cell_offsets.push_back(static_cast<uint32_t>(cell_nodes.size()));
-                }
-            }
-        }
+        auto add_tet = [&](uint32_t a, uint32_t b, uint32_t c, uint32_t d) {
+            cell_global_ordinals.push_back(cell_types.size());
+            cell_types.push_back(FULLMAG_FEM_CELL_TET4);
+            cell_markers.push_back(1u);
+            cell_nodes.push_back(a);
+            cell_nodes.push_back(b);
+            cell_nodes.push_back(c);
+            cell_nodes.push_back(d);
+            cell_offsets.push_back(static_cast<uint32_t>(cell_nodes.size()));
+        };
         facet_offsets.push_back(0u);
-        auto add_quad = [&](uint32_t a, uint32_t b, uint32_t c, uint32_t d, uint32_t marker) {
+        auto add_tri = [&](uint32_t a, uint32_t b, uint32_t c, uint32_t marker) {
             facet_global_ordinals.push_back(facet_types.size());
-            facet_types.push_back(FULLMAG_FEM_FACET_QUAD4);
+            facet_types.push_back(FULLMAG_FEM_FACET_TRI3);
             facet_roles.push_back(FULLMAG_FEM_FACET_ROLE_EXTERIOR);
             facet_markers.push_back(marker);
             facet_nodes.push_back(a);
             facet_nodes.push_back(b);
             facet_nodes.push_back(c);
-            facet_nodes.push_back(d);
             facet_offsets.push_back(static_cast<uint32_t>(facet_nodes.size()));
         };
         const uint32_t x_min_marker = periodic_x ? 101u : 99u;
         const uint32_t x_max_marker = periodic_x ? 102u : 99u;
         const uint32_t y_min_marker = periodic_y ? 103u : 99u;
         const uint32_t y_max_marker = periodic_y ? 104u : 99u;
-        for (int cy = 0; cy < ny; ++cy) {
-            for (int cx = 0; cx < nx; ++cx) {
-                add_quad(node_id(cx, cy, 0), node_id(cx, cy + 1, 0),
-                         node_id(cx + 1, cy + 1, 0), node_id(cx + 1, cy, 0), 99u);
-                add_quad(node_id(cx, cy, nz), node_id(cx + 1, cy, nz),
-                         node_id(cx + 1, cy + 1, nz), node_id(cx, cy + 1, nz), 99u);
-            }
-        }
-        for (int cz = 0; cz < nz; ++cz) {
-            for (int cx = 0; cx < nx; ++cx) {
-                add_quad(node_id(cx, 0, cz), node_id(cx + 1, 0, cz),
-                         node_id(cx + 1, 0, cz + 1), node_id(cx, 0, cz + 1), y_min_marker);
-                add_quad(node_id(cx, ny, cz), node_id(cx, ny, cz + 1),
-                         node_id(cx + 1, ny, cz + 1), node_id(cx + 1, ny, cz), y_max_marker);
-            }
-        }
         for (int cz = 0; cz < nz; ++cz) {
             for (int cy = 0; cy < ny; ++cy) {
-                add_quad(node_id(0, cy, cz), node_id(0, cy, cz + 1),
-                         node_id(0, cy + 1, cz + 1), node_id(0, cy + 1, cz), x_min_marker);
-                add_quad(node_id(nx, cy, cz), node_id(nx, cy + 1, cz),
-                         node_id(nx, cy + 1, cz + 1), node_id(nx, cy, cz + 1), x_max_marker);
+                for (int cx = 0; cx < nx; ++cx) {
+                    const uint32_t p000 = node_id(cx, cy, cz);
+                    const uint32_t p100 = node_id(cx + 1, cy, cz);
+                    const uint32_t p010 = node_id(cx, cy + 1, cz);
+                    const uint32_t p110 = node_id(cx + 1, cy + 1, cz);
+                    const uint32_t p001 = node_id(cx, cy, cz + 1);
+                    const uint32_t p101 = node_id(cx + 1, cy, cz + 1);
+                    const uint32_t p011 = node_id(cx, cy + 1, cz + 1);
+                    const uint32_t p111 = node_id(cx + 1, cy + 1, cz + 1);
+                    // Kuhn 6-tet-per-cube triangulation: positive volume and
+                    // translation-consistent diagonals on all opposite faces.
+                    add_tet(p000, p100, p110, p111);
+                    add_tet(p000, p110, p010, p111);
+                    add_tet(p000, p010, p011, p111);
+                    add_tet(p000, p011, p001, p111);
+                    add_tet(p000, p001, p101, p111);
+                    add_tet(p000, p101, p100, p111);
+
+                    if (cz == 0) {
+                        add_tri(p000, p110, p100, 99u);
+                        add_tri(p000, p010, p110, 99u);
+                    }
+                    if (cz + 1 == nz) {
+                        add_tri(p001, p101, p111, 99u);
+                        add_tri(p001, p111, p011, 99u);
+                    }
+                    if (cy == 0) {
+                        add_tri(p000, p100, p101, y_min_marker);
+                        add_tri(p000, p101, p001, y_min_marker);
+                    }
+                    if (cy + 1 == ny) {
+                        add_tri(p010, p111, p110, y_max_marker);
+                        add_tri(p010, p011, p111, y_max_marker);
+                    }
+                    if (cx == 0) {
+                        add_tri(p000, p001, p011, x_min_marker);
+                        add_tri(p000, p011, p010, x_min_marker);
+                    }
+                    if (cx + 1 == nx) {
+                        add_tri(p100, p110, p111, x_max_marker);
+                        add_tri(p100, p111, p101, x_max_marker);
+                    }
+                }
             }
         }
         if (periodic_x) {

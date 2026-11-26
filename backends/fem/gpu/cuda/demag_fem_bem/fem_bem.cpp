@@ -810,6 +810,12 @@ bool gpu_demag_fem_bem_initialize(Context &ctx, std::string &error)
                 "cudaMalloc/upload Fredkin-Koehler boundary nodes",
                 error) ||
             !upload_array(
+                workspace->d_boundary_tdofs,
+                workspace->boundary_tdofs,
+                device_bytes,
+                "cudaMalloc/upload Fredkin-Koehler boundary true DOFs",
+                error) ||
+            !upload_array(
                 workspace->d_boundary_global_to_row,
                 workspace->boundary_global_to_row,
                 device_bytes,
