@@ -26,7 +26,7 @@ import {
   resolveControlRoomWebSocketUrl,
 } from "./api/apiRuntimeTarget";
 import { normalizeQuantityIdOrDefault } from "./api/quantityIds";
-import { RequestDiagnosticsController } from "./api/RequestDiagnosticsController";
+import { isRequestDiagnosticFailure, RequestDiagnosticsController } from "./api/RequestDiagnosticsController";
 import { GEOMETRY_LIFECYCLE_COMMANDS } from "./authoring/geometryLifecycleCommandContributions";
 import { MAGNETIZATION_TEXTURE_COMMANDS } from "./authoring/magnetization-texture/commands";
 import { REGION_COMMANDS } from "./authoring/regionCommandContributions";
@@ -960,11 +960,7 @@ function SessionErrorConnector({ kernel }: { kernel: KernelApi }) {
 
   useEffect(() => {
     const unsubscribeRequests = kernel.diagnostics.subscribeRecords((entry) => {
-      const isHttpError =
-        entry.outcome === "error" ||
-        entry.outcome === "network-error" ||
-        (entry.status !== null && entry.status >= 400);
-      if (!isHttpError) return;
+      if (!isRequestDiagnosticFailure(entry)) return;
       const statusLabel =
         entry.status !== null ? `HTTP ${entry.status}` : entry.outcome;
       sessionErrorStore.record({
