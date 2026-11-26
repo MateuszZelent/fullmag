@@ -536,6 +536,42 @@ bool test_portable_policy_env_and_scope_contracts()
         CHECK(!req_out.fallback_to_krylov, "Required missing sparse blocks must never fall back");
     }
 
+    // 4b. Periodic-airbox delta_phi output stride mismatch must fail closed with validation_error.
+    {
+        auto req = make_base_request(nodes, freqs, 0.02);
+        req.gpu_direct_policy = DrivenFrequencyResponseGpuDirectPolicy::Auto;
+        req.mfem_validation_problem.descriptor.demag_enabled = true;
+        req.requires_periodic_airbox_dynamic_demag = true;
+        req.periodic_airbox_delta_phi_dof_count = 4u;
+
+        DrivenFrequencyResponseDemagSparseBlocks mismatch_blocks{};
+        mismatch_blocks.is_periodic_reduced = 1u;
+        mismatch_blocks.full_node_count = 6u;
+        mismatch_blocks.phi_dof_count = 3u;
+        req.demag_sparse_blocks = &mismatch_blocks;
+
+        std::vector<double> phi_re(4u, 0.0);
+        std::vector<double> phi_im(4u, 0.0);
+        DrivenResponseCudssOutcome stride_out{};
+        const auto stride_status = solve_driven_response_gpu_cudss(
+            req,
+            drive_re.data(),
+            nullptr,
+            out_re.data(),
+            out_im.data(),
+            nullptr,
+            nullptr,
+            phi_re.data(),
+            phi_im.data(),
+            nullptr,
+            nullptr,
+            &stride_out);
+        CHECK(stride_status == FrequencyDomainStatus::validation_error,
+              "delta_phi stride mismatch must fail closed with validation_error");
+        CHECK(!stride_out.used_cudss && !stride_out.fallback_to_krylov,
+              "delta_phi stride mismatch must never fall back");
+    }
+
 #if !(defined(FULLMAG_FEM_CUDSS_DRIVEN_ENABLED) && FULLMAG_FEM_CUDSS_DRIVEN_ENABLED)
     // 5. Non-cuDSS builds report cudss_unavailable cleanly (Auto fallback / Required hard error).
     {

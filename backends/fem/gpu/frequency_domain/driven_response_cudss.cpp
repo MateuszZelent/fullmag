@@ -1275,6 +1275,24 @@ FrequencyDomainStatus solve_driven_response_gpu_cudss(
                 outcome));
         }
 
+        if (demag_enabled &&
+            request.demag_sparse_blocks != nullptr &&
+            (out_delta_phi_full_real_opt != nullptr || out_delta_phi_full_imag_opt != nullptr) &&
+            (request.requires_periodic_airbox_dynamic_demag ||
+             request.periodic_airbox_delta_phi_dof_count > 0u)) {
+            const std::uint64_t expected_out_phi_stride =
+                request.demag_sparse_blocks->is_periodic_reduced != 0u
+                    ? request.demag_sparse_blocks->full_node_count
+                    : request.demag_sparse_blocks->phi_dof_count;
+            if (expected_out_phi_stride != request.periodic_airbox_delta_phi_dof_count) {
+                outcome.used_cudss = false;
+                outcome.fallback_to_krylov = false;
+                outcome.error_message =
+                    "cuDSS driven response delta_phi output stride does not match periodic_airbox_delta_phi_dof_count";
+                return finish(FrequencyDomainStatus::validation_error);
+            }
+        }
+
 #if !FULLMAG_DRIVEN_CUDSS_ACTIVE
         (void)drive_real;
         (void)drive_imag;
@@ -1597,6 +1615,17 @@ FrequencyDomainStatus solve_driven_response_gpu_cudss(
         const std::uint64_t out_phi_stride = blocks != nullptr
             ? (blocks->is_periodic_reduced != 0u ? blocks->full_node_count : blocks->phi_dof_count)
             : 0u;
+        if (blocks != nullptr &&
+            (out_delta_phi_full_real_opt != nullptr || out_delta_phi_full_imag_opt != nullptr) &&
+            (request.requires_periodic_airbox_dynamic_demag ||
+             request.periodic_airbox_delta_phi_dof_count > 0u) &&
+            out_phi_stride != request.periodic_airbox_delta_phi_dof_count) {
+            outcome.used_cudss = false;
+            outcome.fallback_to_krylov = false;
+            outcome.error_message =
+                "cuDSS driven response delta_phi output stride does not match periodic_airbox_delta_phi_dof_count";
+            return finish(FrequencyDomainStatus::validation_error);
+        }
 
         // Per-frequency sweep loop: zero H2D matrix copies!
         for (std::uint64_t k = 0; k < freq_count; ++k) {

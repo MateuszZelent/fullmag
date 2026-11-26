@@ -6986,7 +6986,10 @@ FrequencyDomainStatus write_mfem_validation_artifacts(
     const char *run_status,
     bool complete,
     char manifest_path[256],
-    char error_message[128]) noexcept
+    char error_message[128],
+    bool gpu_direct_cudss = false,
+    const char *extra_diagnostics_json = nullptr,
+    const char *demag_tangent_operator_source_override = nullptr) noexcept
 {
     if (!has_output_directory(request.output_directory)) {
         manifest_path[0] = '\0';
@@ -7092,33 +7095,57 @@ FrequencyDomainStatus write_mfem_validation_artifacts(
     const bool production_gpu =
         request.execution_lane == DrivenFrequencyResponseExecutionLane::production_gpu;
     const bool production_lane = production_cpu || production_gpu;
+    const bool direct_cudss = production_gpu && gpu_direct_cudss;
+    const char *extra_diagnostics =
+        extra_diagnostics_json != nullptr ? extra_diagnostics_json : "";
     const char *requested_execution_lane = execution_lane_to_string(request.execution_lane);
-    const char *revision = production_cpu ?
-        "production-cpu-matrix-free-v1" :
-        production_gpu ? "production-gpu-matrix-free-v1" : "validation-assembled-v1";
+    const char *revision = direct_cudss ?
+        "production-gpu-cudss-direct-v1" :
+        production_cpu ?
+            "production-cpu-matrix-free-v1" :
+            production_gpu ? "production-gpu-matrix-free-v1" : "validation-assembled-v1";
     const char *stage_id = production_cpu ?
         "frequency-response-production-cpu" :
         production_gpu ? "frequency-response-production-gpu" : "frequency-response-validation";
     const char *engine = production_cpu ?
         "native_fem_mfem_frequency_domain_cpu" :
         production_gpu ? "native_fem_mfem_frequency_domain_gpu" : "runner.dense_block_real_validation";
-    const char *native_backend = production_lane ? "native_mfem_matrix_free" : "runner_validation";
+    const char *native_backend = direct_cudss ?
+        "native_mfem_gpu_cudss_direct" :
+        (production_lane ? "native_mfem_matrix_free" : "runner_validation");
     const char *reference_or_production = production_lane ? "production" : "reference";
-    const char *solver_library = production_lane ? "native_gmres" : "nalgebra";
-    const char *solver_model = production_lane ? "matrix_free_gmres" : "dense_block_real_lu";
-    const char *solver_kind = production_lane ? "matrix_free_krylov_harmonic_response" : "assembled_validation_dense_block_real";
+    const char *solver_library = direct_cudss ?
+        "nvidia_cudss" :
+        (production_lane ? "native_gmres" : "nalgebra");
+    const char *solver_model = direct_cudss ?
+        "gpu_sparse_direct_cudss" :
+        (production_lane ? "matrix_free_gmres" : "dense_block_real_lu");
+    const char *solver_kind = direct_cudss ?
+        "gpu_sparse_direct_cudss_harmonic_response" :
+        (production_lane ? "matrix_free_krylov_harmonic_response" : "assembled_validation_dense_block_real");
     const char *lane_classification = production_cpu ?
         "fem_cpu_production" :
         production_gpu ? "fem_gpu_production" : "fem_cpu_validation";
-    const char *matrix_layout = production_lane ? "matrix_free_block_real" : "dense_block_real";
+    const char *matrix_layout = direct_cudss ?
+        "assembled_sparse_csr_complex" :
+        (production_lane ? "matrix_free_block_real" : "dense_block_real");
     const char *matrix_form =
         (request.requires_periodic_airbox_dynamic_demag ||
          request.requires_floquet_airbox_dynamic_demag) ?
         "coupled_demag_block" :
         "iomega_B_minus_L";
-    const char *residual_source = production_lane ? "matrix_free_gmres" : "dense_block_real";
-    const char *assembled_flag = production_lane ? "false" : "true";
+    const char *residual_source = direct_cudss ?
+        "gpu_sparse_direct_cudss" :
+        (production_lane ? "matrix_free_gmres" : "dense_block_real");
+    const char *assembled_flag = direct_cudss ? "true" : (production_lane ? "false" : "true");
     const char *dense_flag = production_lane ? "false" : "true";
+    const char *matrix_free_flag = (production_lane && !direct_cudss) ? "true" : "false";
+    const char *krylov_solver_name = (production_lane && !direct_cudss) ? "gmres" : "none";
+    const std::string residency_and_extra_diagnostics_json = direct_cudss
+        ? std::string(extra_diagnostics)
+        : (production_lane
+               ? std::string(kHostKrylovResidencyDiagnosticsJson) + extra_diagnostics
+               : std::string(extra_diagnostics));
     const char *production_solver_flag = production_lane ? "true" : "false";
     const char *gpu_operator_solver_field =
         production_gpu ? "\"gpu_operator_solver\":true," : "";
@@ -7163,7 +7190,9 @@ FrequencyDomainStatus write_mfem_validation_artifacts(
                 ? "static_periodic"
                 : "open";
     const char *demag_tangent_operator_source =
-        mfem_demag_tangent_operator_source(request.mfem_validation_problem);
+        demag_tangent_operator_source_override != nullptr
+            ? demag_tangent_operator_source_override
+            : mfem_demag_tangent_operator_source(request.mfem_validation_problem);
     const std::string operator_terms =
         included_operator_terms_json(request.mfem_validation_problem);
     const std::string domain_mesh_mode_field = domain_mesh_mode_json_field(request);
@@ -7939,9 +7968,9 @@ FrequencyDomainStatus write_mfem_validation_artifacts(
         requested_execution_lane,
         requested_execution_lane,
         assembled_flag,
-        production_lane ? "true" : "false",
+        matrix_free_flag,
         gpu_operator_solver_field,
-        production_lane ? kHostKrylovResidencyDiagnosticsJson : "",
+        residency_and_extra_diagnostics_json.c_str(),
         demag_tangent_operator_source,
         validation_result.demag_tangent_linearity_check ? "true" : "false",
         validation_result.demag_tangent_additivity_max_abs_error,
@@ -8197,9 +8226,9 @@ FrequencyDomainStatus write_mfem_validation_artifacts(
         requested_execution_lane,
         assembled_flag,
         dense_flag,
-        production_lane ? "true" : "false",
+        matrix_free_flag,
         gpu_operator_solver_field,
-        production_lane ? kHostKrylovResidencyDiagnosticsJson : "",
+        residency_and_extra_diagnostics_json.c_str(),
         demag_tangent_operator_source,
         validation_result.demag_tangent_linearity_check ? "true" : "false",
         validation_result.demag_tangent_additivity_max_abs_error,
@@ -8207,7 +8236,7 @@ FrequencyDomainStatus write_mfem_validation_artifacts(
         validation_result.demag_tangent_additivity_relative_error,
         validation_result.demag_tangent_homogeneity_relative_error,
         periodic_airbox_diagnostics_json.c_str(),
-        production_lane ? "gmres" : "none",
+        krylov_solver_name,
         validation_result.krylov_preconditioner,
         validation_result.right_preconditioner_applied ? "true" : "false",
         preconditioner_setup_status(validation_result),
@@ -9723,8 +9752,20 @@ FrequencyDomainStatus write_periodic_airbox_coupled_block_artifacts(
     const char *demag_provider_residency =
         frequency_response_demag_provider_residency(production_gpu);
     const char *requested_execution_lane = execution_lane_to_string(request.execution_lane);
-    const char *residual_source = "matrix_free_gmres";
-    const char *sweep_solver_model = "matrix_free_gmres";
+    const bool direct_cudss_solver =
+        solver_kind != nullptr &&
+        (std::strcmp(solver_kind, "gpu_sparse_direct_cudss") == 0 ||
+         std::strcmp(solver_kind, "periodic_airbox_gpu_cudss_direct") == 0);
+    const char *residual_source =
+        direct_cudss_solver ? "gpu_sparse_direct_cudss" : "matrix_free_gmres";
+    const char *sweep_solver_model =
+        direct_cudss_solver ? "gpu_sparse_direct_cudss" : "matrix_free_gmres";
+    const char *sweep_matrix_layout =
+        direct_cudss_solver ? "assembled_sparse_csr_complex" : "matrix_free_block_real";
+    const char *assembled_solver_flag = direct_cudss_solver ? "true" : "false";
+    const char *matrix_free_flag = direct_cudss_solver ? "false" : "true";
+    const char *krylov_solver_name = direct_cudss_solver ? "none" : "gmres";
+    const char *coupled_assembly_flag = direct_cudss_solver ? "true" : "false";
     const char *resolved_execution_solver_model =
         solver_model != nullptr && solver_model[0] != '\0'
             ? solver_model
@@ -9735,8 +9776,9 @@ FrequencyDomainStatus write_periodic_airbox_coupled_block_artifacts(
         production_gpu
             ? "native_fem_mfem_frequency_domain_gpu"
             : "native_fem_mfem_frequency_domain_cpu";
-    const char *native_backend = "native_mfem_matrix_free";
-    const char *solver_library = "native_gmres";
+    const char *native_backend =
+        direct_cudss_solver ? "native_mfem_gpu_cudss_direct" : "native_mfem_matrix_free";
+    const char *solver_library = direct_cudss_solver ? "nvidia_cudss" : "native_gmres";
     const char *preconditioner_kind =
         validation_result.krylov_preconditioner[0] != '\0'
             ? validation_result.krylov_preconditioner
@@ -10293,13 +10335,14 @@ FrequencyDomainStatus write_periodic_airbox_coupled_block_artifacts(
             "\"solver_model\":\"%s\","
             "\"damping_policy\":\"linearized_llg_tangent\","
             "\"lane_classification\":\"%s\","
-            "\"matrix_layout\":\"matrix_free_block_real\","
+            "\"matrix_layout\":\"%s\","
             "\"excitation_kind\":\"uniform_field\","
             "\"si_units\":{\"frequency\":\"Hz\",\"angular_frequency\":\"rad/s\"},"
             "\"point_count\":%llu,"
             "\"points\":%s}",
             sweep_solver_model,
             lane_classification,
+            sweep_matrix_layout,
             static_cast<unsigned long long>(validation_result.completed_frequency_count),
             points_json.c_str()) ||
         !append_format(
@@ -10344,17 +10387,17 @@ FrequencyDomainStatus write_periodic_airbox_coupled_block_artifacts(
             "\"production_solver_requested\":true,"
             "\"production_solver_available\":true,"
             "\"validation_fallback_used\":false,"
-            "\"assembled_mfem_operator_solver\":false,"
+            "\"assembled_mfem_operator_solver\":%s,"
             "\"dense_block_real_solver\":false,"
-            "\"matrix_free_solver\":true,"
-            "\"krylov_solver\":\"gmres\","
+            "\"matrix_free_solver\":%s,"
+            "\"krylov_solver\":\"%s\","
             "\"krylov_preconditioner_kind\":\"%s\","
             "\"krylov_preconditioner_applied\":%s,"
             "\"krylov_preconditioner_setup_status\":\"%s\","
             "\"gmres_relative_residual_history\":%s,"
             "\"coupled_residual_partition_status\":\"%s\","
             "\"periodic_airbox_coupled_block_solver\":true,"
-            "\"mfem_coupled_block_assembly\":false,"
+            "\"mfem_coupled_block_assembly\":%s,"
             "\"dynamic_demag_operator_source\":\"%s\","
             "\"uses_gpu_poisson\":%s,"
             "\"demag_operator_mode\":\"%s\","
@@ -10399,11 +10442,15 @@ FrequencyDomainStatus write_periodic_airbox_coupled_block_artifacts(
             phase_convention_to_string(request.phase_convention),
             requested_execution_lane,
             requested_execution_lane,
+            assembled_solver_flag,
+            matrix_free_flag,
+            krylov_solver_name,
             preconditioner_kind,
             validation_result.right_preconditioner_applied ? "true" : "false",
             preconditioner_setup,
             gmres_history_json.c_str(),
             validation_result.coupled_residual_partition_status,
+            coupled_assembly_flag,
             operator_source,
             uses_gpu_poisson,
             demag_operator_mode,
@@ -10488,7 +10535,7 @@ FrequencyDomainStatus write_periodic_airbox_coupled_block_artifacts(
             "\"requested_execution_lane\":\"%s\","
             "\"resolved_execution_lane\":\"%s\","
             "\"periodic_airbox_coupled_block_solver\":true,"
-            "\"mfem_coupled_block_assembly\":false,"
+            "\"mfem_coupled_block_assembly\":%s,"
             "\"dynamic_demag_operator_source\":\"%s\","
             "\"uses_gpu_poisson\":%s,"
             "\"demag_operator_mode\":\"%s\","
@@ -10547,17 +10594,17 @@ FrequencyDomainStatus write_periodic_airbox_coupled_block_artifacts(
             "\"diagnostics\":{\"requested_execution_lane\":\"%s\","
             "\"resolved_execution_lane\":\"%s\","
             "\"validation_fallback_used\":false,"
-            "\"assembled_mfem_operator_solver\":false,"
+            "\"assembled_mfem_operator_solver\":%s,"
             "\"dense_block_real_solver\":false,"
-            "\"matrix_free_solver\":true,"
-            "\"krylov_solver\":\"gmres\","
+            "\"matrix_free_solver\":%s,"
+            "\"krylov_solver\":\"%s\","
             "\"krylov_preconditioner_kind\":\"%s\","
             "\"krylov_preconditioner_applied\":%s,"
             "\"krylov_preconditioner_setup_status\":\"%s\","
             "\"gmres_relative_residual_history\":%s,"
             "\"coupled_residual_partition_status\":\"%s\","
             "\"periodic_airbox_coupled_block_solver\":true,"
-            "\"mfem_coupled_block_assembly\":false,"
+            "\"mfem_coupled_block_assembly\":%s,"
             "\"dynamic_demag_operator_source\":\"%s\","
             "\"uses_gpu_poisson\":%s,"
             "\"demag_operator_mode\":\"%s\","
@@ -10590,7 +10637,7 @@ FrequencyDomainStatus write_periodic_airbox_coupled_block_artifacts(
             "\"production_native_solver_available\":true,"
             "\"validation_artifact\":false,"
             "\"periodic_airbox_coupled_block_solver\":true,"
-            "\"mfem_coupled_block_assembly\":false,"
+            "\"mfem_coupled_block_assembly\":%s,"
             "\"dynamic_demag_operator_source\":\"%s\","
             "\"uses_gpu_poisson\":%s,"
             "\"demag_operator_mode\":\"%s\","
@@ -10613,6 +10660,7 @@ FrequencyDomainStatus write_periodic_airbox_coupled_block_artifacts(
             lane_classification,
             requested_execution_lane,
             requested_execution_lane,
+            coupled_assembly_flag,
             operator_source,
             uses_gpu_poisson,
             demag_operator_mode,
@@ -10654,11 +10702,15 @@ FrequencyDomainStatus write_periodic_airbox_coupled_block_artifacts(
             field_payload_resources_json.c_str(),
             requested_execution_lane,
             requested_execution_lane,
+            assembled_solver_flag,
+            matrix_free_flag,
+            krylov_solver_name,
             preconditioner_kind,
             validation_result.right_preconditioner_applied ? "true" : "false",
             preconditioner_setup,
             gmres_history_json.c_str(),
             validation_result.coupled_residual_partition_status,
+            coupled_assembly_flag,
             operator_source,
             uses_gpu_poisson,
             demag_operator_mode,
@@ -10688,6 +10740,7 @@ FrequencyDomainStatus write_periodic_airbox_coupled_block_artifacts(
             validation_result.residual_l2_norm,
             validation_result.relative_residual_l2_norm,
             domain_mesh_mode_field.c_str(),
+            coupled_assembly_flag,
             operator_source,
             uses_gpu_poisson,
             demag_operator_mode,
@@ -12363,6 +12416,14 @@ FrequencyDomainStatus solve_mfem_production_gpu_problem(
             artifact_result.residual_l2_norm = max_residual;
             artifact_result.relative_residual_l2_norm = max_rel_residual;
 
+            const std::string operator_terms = included_operator_terms_json(problem);
+            const char *demag_tangent_operator_source =
+                request.demag_sparse_blocks != nullptr
+                    ? "exported_poisson_demag_sparse_blocks"
+                    : mfem_demag_tangent_operator_source(problem);
+            const std::string cudss_fields =
+                build_cudss_success_diagnostics_fields_json(request, cudss_outcome);
+
             char manifest_path[256]{};
             char artifact_error[128]{};
             DrivenFrequencyResponseSolveRequest artifact_request = request;
@@ -12378,7 +12439,10 @@ FrequencyDomainStatus solve_mfem_production_gpu_problem(
                 "ok",
                 true,
                 manifest_path,
-                artifact_error);
+                artifact_error,
+                true,
+                cudss_fields.c_str(),
+                demag_tangent_operator_source);
             if (artifact_status != FrequencyDomainStatus::ok) {
                 result.status = artifact_status;
                 assign_result_strings(
@@ -12392,13 +12456,6 @@ FrequencyDomainStatus solve_mfem_production_gpu_problem(
             const std::uint64_t written_artifacts = has_output_directory(request.output_directory)
                 ? completed
                 : 0u;
-            const std::string operator_terms = included_operator_terms_json(problem);
-            const char *demag_tangent_operator_source =
-                request.demag_sparse_blocks != nullptr
-                    ? "exported_poisson_demag_sparse_blocks"
-                    : mfem_demag_tangent_operator_source(problem);
-            const std::string cudss_fields =
-                build_cudss_success_diagnostics_fields_json(request, cudss_outcome);
 
             char diagnostics_json[4096]{};
             char result_json[2048]{};
@@ -12530,6 +12587,12 @@ FrequencyDomainStatus solve_mfem_production_gpu_problem(
                 DrivenFrequencyResponseSolveRequest artifact_request = request;
                 artifact_request.mfem_validation_problem.drive_real = drive_real;
                 artifact_request.mfem_validation_problem.drive_imag = drive_imag;
+                const char *partial_demag_source =
+                    request.demag_sparse_blocks != nullptr
+                        ? "exported_poisson_demag_sparse_blocks"
+                        : mfem_demag_tangent_operator_source(problem);
+                const std::string partial_cudss_fields =
+                    build_cudss_success_diagnostics_fields_json(request, cudss_outcome);
                 if (write_mfem_validation_artifacts(
                         artifact_request,
                         partial_result,
@@ -12540,7 +12603,10 @@ FrequencyDomainStatus solve_mfem_production_gpu_problem(
                         "interrupted",
                         false,
                         manifest_path,
-                        artifact_error) == FrequencyDomainStatus::ok &&
+                        artifact_error,
+                        true,
+                        partial_cudss_fields.c_str(),
+                        partial_demag_source) == FrequencyDomainStatus::ok &&
                     has_output_directory(request.output_directory)) {
                     written_artifacts = cudss_outcome.completed_frequency_count;
                 }
@@ -12739,6 +12805,8 @@ FrequencyDomainStatus solve_mfem_production_gpu_problem(
     artifact_result.residual_growth_factor =
         production_result.residual_growth_factor;
     copy_production_cpu_preconditioner_diagnostics(production_result, artifact_result);
+    const std::string cudss_fallback_fields =
+        build_cudss_fallback_diagnostics_fields_json(request, cudss_fallback_reason);
     char manifest_path[256]{};
     char artifact_error[128]{};
     DrivenFrequencyResponseSolveRequest artifact_request = request;
@@ -12754,7 +12822,10 @@ FrequencyDomainStatus solve_mfem_production_gpu_problem(
         "ok",
         true,
         manifest_path,
-        artifact_error);
+        artifact_error,
+        false,
+        cudss_fallback_fields.c_str(),
+        nullptr);
     if (artifact_status != FrequencyDomainStatus::ok) {
         result.status = artifact_status;
         assign_result_strings(
@@ -12772,8 +12843,6 @@ FrequencyDomainStatus solve_mfem_production_gpu_problem(
     const std::string operator_terms = included_operator_terms_json(problem);
     const char *demag_tangent_operator_source =
         mfem_demag_tangent_operator_source(problem);
-    const std::string cudss_fallback_fields =
-        build_cudss_fallback_diagnostics_fields_json(request, cudss_fallback_reason);
     char diagnostics_json[4096]{};
     char result_json[2048]{};
     const int diagnostics_written = std::snprintf(
@@ -14035,6 +14104,21 @@ FrequencyDomainStatus solve_periodic_airbox_dynamic_demag_mfem_phi_consistency_s
     std::string cudss_fallback_reason;
     if (production_gpu &&
         request.gpu_direct_policy != DrivenFrequencyResponseGpuDirectPolicy::Disabled) {
+        if (request.demag_sparse_blocks != nullptr) {
+            const std::uint64_t exported_phi_stride =
+                request.demag_sparse_blocks->is_periodic_reduced != 0u
+                    ? request.demag_sparse_blocks->full_node_count
+                    : request.demag_sparse_blocks->phi_dof_count;
+            if (exported_phi_stride != delta_phi_dof_count) {
+                return solve_periodic_airbox_validation_error(
+                    request,
+                    result,
+                    "periodic_airbox_cudss_delta_phi_stride_mismatch",
+                    "periodic-airbox cuDSS exported delta_phi stride does not match periodic_airbox_delta_phi_dof_count",
+                    "not_evaluated",
+                    0.0);
+            }
+        }
         const std::uint64_t freq_count = request.solve_request.frequency_count;
         std::vector<double> cudss_q_real(
             static_cast<std::size_t>(delta_m_tangent_dof_count * freq_count), 0.0);
@@ -14187,8 +14271,8 @@ FrequencyDomainStatus solve_periodic_airbox_dynamic_demag_mfem_phi_consistency_s
                     validation_result,
                     phi_gauge_diagnostics,
                     "periodic-airbox-gpu-cudss-direct-v1",
-                    "periodic_airbox_gpu_cudss_direct",
-                    "periodic_airbox_gpu_cudss_direct",
+                    "gpu_sparse_direct_cudss",
+                    "gpu_sparse_direct_cudss",
                     "gpu_sparse_direct_cudss",
                     operator_source,
                     "ok",
