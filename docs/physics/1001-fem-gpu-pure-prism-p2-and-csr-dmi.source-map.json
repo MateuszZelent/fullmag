@@ -1,0 +1,224 @@
+{
+  "document": {
+    "path": "docs/physics/1001-fem-gpu-pure-prism-p2-and-csr-dmi.md"
+  },
+  "backend_matrix": [
+    {
+      "solver": "FEM",
+      "device": "CPU",
+      "status": "documented",
+      "reason": "Pure-prism P2 shared-domain execution (P1 magnetization + P2 H1_WedgeElement(2) potential) and MFEM CPU DMI are implemented across C++, Rust, and Python; Docker DEV test execution pending."
+    },
+    {
+      "solver": "FEM",
+      "device": "GPU",
+      "status": "documented",
+      "reason": "Pure-prism P2 GPU demag (CG+AMG and cuDSS) and unified preassembled skew-symmetric CSR GPU DMI (tet4, prism6, mixed) are implemented with unit/E2E contract tests; Docker DEV GPU CTest and 300x300x5 nm Aharoni A/B benchmark pending."
+    },
+    {
+      "solver": "FDM",
+      "device": "CPU",
+      "status": "not-applicable",
+      "reason": "FDM uses structured Cartesian grids and does not use prismatic finite-element topology or CSR FEM DMI."
+    },
+    {
+      "solver": "FDM",
+      "device": "GPU",
+      "status": "not-applicable",
+      "reason": "FDM GPU uses structured Cartesian grids and serves only as a cross-discretization reference in the thin-film A/B benchmark."
+    }
+  ],
+  "equations": [
+    {
+      "id": "eq-pure-prism-lateral-size",
+      "symbols": ["h2d", "hAir", "hInplane", "gLat", "dFilm"],
+      "sources": ["pure-prism-mesher", "pure-prism-asset-pipeline"]
+    },
+    {
+      "id": "eq-csr-dmi-edge-gradient",
+      "symbols": ["gij", "Em", "De", "Qe", "wq", "Je", "phiTilde"],
+      "sources": ["dmi-csr-assembler", "dmi-weak-residual"]
+    },
+    {
+      "id": "eq-csr-dmi-edge-vectors",
+      "symbols": ["dij", "gij", "nHat"],
+      "sources": ["dmi-csr-assembler", "dmi-weak-residual"]
+    },
+    {
+      "id": "eq-csr-dmi-residual-field-energy",
+      "symbols": ["Ri", "dij", "mj", "Hdmi", "mu0", "Msi", "Mi", "Edmi"],
+      "sources": ["dmi-csr-kernels", "rk-dmi-fields", "rk-dmi-energy"]
+    },
+    {
+      "id": "eq-csr-dmi-polarized-increment",
+      "symbols": ["Edmi", "si", "dij", "qj"],
+      "sources": ["dmi-csr-kernels", "direct-energy-increment"]
+    },
+    {
+      "id": "eq-csr-dmi-periodic-reduction",
+      "symbols": ["dRed", "dij", "Mred", "Mi"],
+      "sources": ["dmi-csr-assembler", "dmi-csr-kernels"]
+    },
+    {
+      "id": "eq-chebyshev-untangle-lp",
+      "symbols": ["xPos", "rCheb", "uIn", "pFace", "starV"],
+      "sources": ["mixed-tet-untangle", "mixed-tet-chebyshev"]
+    }
+  ],
+  "symbols": [
+    {"id": "h2d", "latex": "h_{\\mathrm{2D}}", "meaning": "graded 2D lateral element target size in outer prism frame", "si_unit": "\\mathrm{m}"},
+    {"id": "hAir", "latex": "h_{\\mathrm{air}}", "meaning": "maximum outer airbox element size", "si_unit": "\\mathrm{m}"},
+    {"id": "hInplane", "latex": "h_{\\mathrm{inplane}}", "meaning": "target in-plane element size on the magnetic film", "si_unit": "\\mathrm{m}"},
+    {"id": "gLat", "latex": "g_{\\mathrm{lat}}", "meaning": "lateral element growth rate", "si_unit": "1"},
+    {"id": "dFilm", "latex": "d_{\\mathrm{film}}", "meaning": "in-plane distance from magnetic film footprint", "si_unit": "\\mathrm{m}"},
+    {"id": "Em", "latex": "\\mathcal E_m", "meaning": "set of magnetic mesh elements", "si_unit": "1"},
+    {"id": "De", "latex": "D_e", "meaning": "element-averaged DMI constant", "si_unit": "\\mathrm{J\\,m^{-2}}"},
+    {"id": "Qe", "latex": "Q_e", "meaning": "element quadrature rule", "si_unit": "1"},
+    {"id": "wq", "latex": "w_q", "meaning": "quadrature weight", "si_unit": "1"},
+    {"id": "Je", "latex": "J_e(q)", "meaning": "element transformation Jacobian weight", "si_unit": "\\mathrm{m^3}"},
+    {"id": "phiTilde", "latex": "\\tilde{\\phi}_{e,i}", "meaning": "oriented scalar P1 basis function", "si_unit": "1"},
+    {"id": "gij", "latex": "\\mathbf g_{ij}", "meaning": "skew-symmetric nodal edge gradient vector", "si_unit": "\\mathrm{J\\,m^{-1}}"},
+    {"id": "dij", "latex": "\\mathbf d_{ij}", "meaning": "assembled skew-symmetric nodal DMI edge vector", "si_unit": "\\mathrm{J\\,m^{-1}}"},
+    {"id": "nHat", "latex": "\\hat{\\mathbf n}", "meaning": "unit interface normal for conventional interfacial DMI", "si_unit": "1"},
+    {"id": "mj", "latex": "\\mathbf m_j", "meaning": "reduced magnetization vector", "si_unit": "1"},
+    {"id": "Ri", "latex": "\\mathbf R_i", "meaning": "nodal DMI weak residual", "si_unit": "\\mathrm{J}"},
+    {"id": "Hdmi", "latex": "\\mathbf H_i^{\\mathrm{DMI}}", "meaning": "projected nodal DMI effective field", "si_unit": "\\mathrm{A\\,m^{-1}}"},
+    {"id": "mu0", "latex": "\\mu_0", "meaning": "vacuum permeability", "si_unit": "\\mathrm{N\\,A^{-2}}"},
+    {"id": "Msi", "latex": "M_{s,i}", "meaning": "nodal saturation magnetization", "si_unit": "\\mathrm{A\\,m^{-1}}"},
+    {"id": "Mi", "latex": "M_i", "meaning": "lumped scalar mass weight", "si_unit": "\\mathrm{m^3}"},
+    {"id": "Edmi", "latex": "E_{\\mathrm{DMI}}", "meaning": "total discrete DMI energy", "si_unit": "\\mathrm{J}"},
+    {"id": "si", "latex": "\\mathbf s_i", "meaning": "chord sum magnetization", "si_unit": "1"},
+    {"id": "qj", "latex": "\\mathbf q_j", "meaning": "chord difference magnetization", "si_unit": "1"},
+    {"id": "dRed", "latex": "\\mathbf d_{c,c'}^{\\mathrm{red}}", "meaning": "periodic class-reduced DMI edge vector", "si_unit": "\\mathrm{J\\,m^{-1}}"},
+    {"id": "Mred", "latex": "M_c^{\\mathrm{red}}", "meaning": "periodic class-summed lumped mass", "si_unit": "\\mathrm{m^3}"},
+    {"id": "xPos", "latex": "\\mathbf x", "meaning": "candidate relocated interior vertex position", "si_unit": "\\mathrm{m}"},
+    {"id": "rCheb", "latex": "r", "meaning": "inscribed Chebyshev margin radius of vertex star", "si_unit": "\\mathrm{m}"},
+    {"id": "uIn", "latex": "\\hat{\\mathbf u}_t^{\\mathrm{in}}", "meaning": "inward unit normal of opposite face of star tetrahedron", "si_unit": "1"},
+    {"id": "pFace", "latex": "\\mathbf p_{a,t}", "meaning": "reference vertex on opposite face of star tetrahedron", "si_unit": "\\mathrm{m}"},
+    {"id": "starV", "latex": "\\mathcal S(v)", "meaning": "tetrahedral star incident to interior vertex", "si_unit": "1"}
+  ],
+  "sources": [
+    {
+      "id": "pure-prism-mesher",
+      "path": "packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py",
+      "symbol": "generate_pure_prism_box_airbox_mesh",
+      "responsibility": "Generate 3-stage extruded 100% prism6 magnetic-plus-air shared-domain meshes and pure_prism_topology_certificate.v1."
+    },
+    {
+      "id": "pure-prism-asset-pipeline",
+      "path": "packages/fullmag-py/src/fullmag/meshing/asset_pipeline.py",
+      "symbol": "_realize_fem_domain_mesh_asset_from_components_impl",
+      "responsibility": "Route transition='pure_prism' single-box thin films into generate_pure_prism_box_airbox_mesh and attach pure_prism_topology_certificate."
+    },
+    {
+      "id": "mixed-tet-untangle",
+      "path": "packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py",
+      "symbol": "_untangle_same_side_mixed_tetrahedra",
+      "responsibility": "Detect and untangle inverted same_side_two_owner_face tet4 cavities and reorient affected tetrahedra in Gmsh."
+    },
+    {
+      "id": "mixed-tet-chebyshev",
+      "path": "packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py",
+      "symbol": "_chebyshev_center_3d",
+      "responsibility": "Solve the 4-variable Chebyshev-center LP (SciPy HiGHS with pure-NumPy fallback) for an interior vertex star."
+    },
+    {
+      "id": "dmi-csr-assembler",
+      "path": "backends/fem/gpu/cuda/interactions/dmi/dmi_csr_operator.cpp",
+      "symbol": "build_gpu_dmi_csr_from_mfem",
+      "responsibility": "Assemble skew-symmetric nodal edge-vector CSR DMI channels (interfacial + rotated, bulk, periodic P^T D P) from MFEM."
+    },
+    {
+      "id": "dmi-csr-kernels",
+      "path": "backends/fem/gpu/cuda/interactions/dmi/dmi_csr_kernels.cu",
+      "symbol": "fullmag_cuda_dmi_csr_field_energy",
+      "responsibility": "Execute deterministic row-wise CSR DMI SpMV field projection, optional CUB block energy reduction, and double-double polarized increments."
+    },
+    {
+      "id": "dmi-weak-residual",
+      "path": "backends/fem/src/dmi_weak_residual.cpp",
+      "symbol": "dmi_accumulate_interfacial_residual",
+      "responsibility": "Canonical weak-residual sign reference for interfacial, rotated interfacial, and bulk DMI."
+    },
+    {
+      "id": "rk-dmi-fields",
+      "path": "backends/fem/gpu/cuda/integrators/rk/rk_dmi_fields.cu",
+      "symbol": "gpu_rk_compute_dmi_field_contributions",
+      "responsibility": "Launch intermediate-stage CSR GPU DMI field evaluations with energy_block_sums = nullptr."
+    },
+    {
+      "id": "rk-dmi-energy",
+      "path": "backends/fem/gpu/cuda/integrators/rk/rk_dmi_energy_reductions.cu",
+      "symbol": "gpu_rk_reduce_final_dmi_energy_terms",
+      "responsibility": "Evaluate final step CSR GPU DMI energies via CUB block reductions without global atomics."
+    },
+    {
+      "id": "direct-energy-increment",
+      "path": "backends/fem/gpu/cuda/relaxation/direct_energy_increment.cpp",
+      "symbol": "direct_difference",
+      "responsibility": "Compute compensated double-double CSR DMI chord energy increments and conservative error scales for PGBB/NCG Armijo line search."
+    },
+    {
+      "id": "fem-mesh-gate",
+      "path": "backends/fem/core/fem_mesh.cpp",
+      "symbol": "validate_supported_physics_topology",
+      "responsibility": "Admit pure_prism_p2 and mixed_p1 on FEM CPU and CUDA including CSR DMI while keeping Zhang-Li STT and FEM/BEM fail-closed."
+    },
+    {
+      "id": "ir-pure-prism-certificate",
+      "path": "crates/fullmag-ir/src/mixed_certificate.rs",
+      "symbol": "validate_pure_prism_topology_certificate_against_mesh",
+      "responsibility": "Re-verify pure_prism_topology_certificate.v1 (v3 fingerprint, prism6-only magnetic/far_air parts, planes, volumes, Jacobians, conformity)."
+    },
+    {
+      "id": "csr-dmi-contract-test",
+      "path": "backends/fem/tests/cuda_csr_dmi_prism_contract.cpp",
+      "symbol": "make_multilayer_prism6_mesh",
+      "responsibility": "Verify CSR GPU DMI field, energy, polarized difference, and periodic parity against CPU MFEM on tet4, prism6, and mixed meshes."
+    },
+    {
+      "id": "pure-prism-gpu-contract-test",
+      "path": "backends/fem/tests/fem_pure_prism_p2_gpu_contract.cpp",
+      "symbol": "build_conforming_pure_prism_shared_domain",
+      "responsibility": "Verify end-to-end pure_prism_p2 GPU RK4 and PGBB parity against CPU MFEM under CG+AMG and cuDSS with interfacial and bulk DMI."
+    }
+  ],
+  "public_api": {
+    "parameters": [
+      {
+        "python": "GeometryMeshHandle.thin_film.transition",
+        "type": "str | None",
+        "default": "None",
+        "si_unit": "1",
+        "validation": "`pyramid_to_tetrahedra` or `pure_prism` for conforming shared-domain prismatic films",
+        "meaning": "Selects mixed pyramid/tetra airbox vs pyramid-free 100% prism6 P2-capable shared domain",
+        "backend_support": "FEM CPU/GPU",
+        "problem_ir": "problem_meta.runtime_metadata.mesh_workflow.per_geometry[].transition_policy"
+      },
+      {
+        "python": "GeometryMeshHandle.thin_film.layers",
+        "type": "int",
+        "default": "1",
+        "si_unit": "1",
+        "validation": "integer `>= 1` for `pure_prism` (`1..=3` for `mixed_p1`)",
+        "meaning": "Exact through-thickness prism6 layers in the magnetic film",
+        "backend_support": "FEM CPU/GPU",
+        "problem_ir": "problem_meta.runtime_metadata.mesh_workflow.per_geometry[].through_thickness_elements"
+      },
+      {
+        "python": "FemLinearSolverPolicy.gpu_strategy",
+        "type": "str",
+        "default": "auto",
+        "si_unit": "1",
+        "validation": "`auto`, `cg_amg`, or `cudss`",
+        "meaning": "GPU Poisson linear solver strategy paired with `pure_prism_p2`",
+        "backend_support": "FEM GPU",
+        "problem_ir": "fem.demag_solver_policy.gpu_strategy"
+      }
+    ]
+  },
+  "validation": {
+    "plan": "Python meshing and preflight tests (test_mixed_element_meshing.py, test_pure_prism_shared_domain_meshing.py, test_mixed_p1_preflight.py, test_script_builder_roundtrip.py); managed Docker DEV non-MFEM build (-DFULLMAG_USE_MFEM_STACK=OFF -DFULLMAG_ENABLE_CUDA=OFF); GPU CTests (fem_cuda_csr_dmi_prism_contract, fem_pure_prism_p2_gpu_contract, fem_mesh_contract, fem_mixed_p1_contract, source-facade and relaxation contracts); Rust cargo test across fullmag-{ir,authoring,api,plan,runner}; and RTX 4080 SUPER 300x300x5 nm Permalloy Aharoni A/B benchmark (scripts/benchmarks/relax_film_compare_case.py with FILM_FEM_MESH=pure_prism).",
+    "results": "docs/audits/2026-11-24-fem-gpu-cudss-film-validation.md"
+  }
+}

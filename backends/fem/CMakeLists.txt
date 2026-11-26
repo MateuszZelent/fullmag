@@ -1742,6 +1742,22 @@ if(FULLMAG_USE_MFEM_STACK AND FULLMAG_ENABLE_CUDA)
         NAME fem_cuda_csr_dmi_prism_contract
         COMMAND fem_cuda_csr_dmi_prism_contract
     )
+
+    add_executable(fem_pure_prism_p2_gpu_contract tests/fem_pure_prism_p2_gpu_contract.cpp)
+    target_link_libraries(fem_pure_prism_p2_gpu_contract PRIVATE fullmag_fem CUDA::cudart)
+    if(TARGET MFEM::mfem)
+        target_link_libraries(fem_pure_prism_p2_gpu_contract PRIVATE MFEM::mfem)
+    else()
+        target_link_libraries(fem_pure_prism_p2_gpu_contract PRIVATE mfem)
+    endif()
+    target_include_directories(fem_pure_prism_p2_gpu_contract PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+    )
+    add_test(
+        NAME fem_pure_prism_p2_gpu_contract
+        COMMAND fem_pure_prism_p2_gpu_contract
+    )
 endif()
 
 add_executable(

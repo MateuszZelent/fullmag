@@ -6145,6 +6145,7 @@ fn problem_ir_validation_accepts_valid_mesh_semantics() {
                 realized_regions_count: None,
                 mixed_layer_topology_certificate: None,
                 mixed_layer_topology_certificate_v2: None,
+                pure_prism_topology_certificate: None,
                 mixed_topology_provenance: None,
                 mesh_statistics: None,
             }),

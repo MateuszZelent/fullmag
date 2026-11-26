@@ -12,6 +12,8 @@
   - `docs/physics/0101-swept-mesh-through-thickness.md`
   - `docs/physics/0104-thin-film-shared-domain-meshing.md`
   - `docs/physics/0105-fem-meshing-production-acceptance.md`
+  - `docs/physics/0431-fem-demag-mixed-order-potential.md`
+  - `docs/physics/1001-fem-gpu-pure-prism-p2-and-csr-dmi.md`
   - `docs/physics/fem_demag_poisson.md`
   - `docs/physics/0900-native-fem-operator-contracts-and-validation.md`
 
@@ -44,11 +46,16 @@ strict execution, and PG-BB, NCG, or overdamped LLG relaxation. Within that
 target, local interactions are lane-specific:
 
 - FEM CPU accepts uniform or nodal-P1 uniaxial and cubic anisotropy, plus
-  interfacial and bulk DMI, with status `implemented` and source/contract
-  evidence only.
-- FEM GPU accepts uniform or nodal-P1 uniaxial and cubic anisotropy, while DMI
-  fails closed with `gpu_dmi_kernel_not_mixed_p1`; the accepted anisotropy
-  slice has status `implemented` with source/contract evidence only.
+  interfacial, rotated interfacial, and bulk DMI, with status `implemented`
+  and source/contract evidence only.
+- FEM GPU accepts uniform or nodal-P1 uniaxial and cubic anisotropy, plus
+  interfacial, rotated interfacial, and bulk DMI through the unified
+  preassembled CSR GPU DMI operator (`docs/physics/1001-fem-gpu-pure-prism-p2-and-csr-dmi.md`),
+  with status `implemented` and source/contract evidence only; managed Docker
+  DEV GPU runtime qualification remains separate.
+- For `layers >= 2`, the mixed-tetrahedral repair stage includes deterministic
+  Chebyshev-center untangling (`_untangle_same_side_mixed_tetrahedra`) of
+  inverted same-side `tet4` cavities before certificate extraction.
 
 These statuses describe checked-in source, planner, and contract evidence only;
 they do not assert runtime qualification. Device `auto`, single/extended/hybrid
@@ -218,9 +225,11 @@ scale; production certificates apply the SI tolerances below after realization.
 - `Ms` and `Aex` are uniform in the bounded workload. `Ku1`/`Ku2` and
   `Kc1`/`Kc2`/`Kc3` may be uniform or nodal-P1 fields; the uniaxial and cubic
   axes remain authored normalized material vectors.
-- Interfacial and bulk DMI are admitted only on FEM CPU in this mixed-P1
-  contract. FEM GPU rejects any DMI before native startup with
-  `gpu_dmi_kernel_not_mixed_p1`.
+- Interfacial, rotated interfacial, and bulk DMI are admitted on both FEM CPU
+  (topology-aware MFEM weak residual) and FEM GPU (unified preassembled CSR DMI
+  operator, `docs/physics/1001-fem-gpu-pure-prism-p2-and-csr-dmi.md`) without
+  requiring flat tetrahedral GPU `mesh_geometry`. Zhang-Li STT remains
+  tetrahedral-only and fails closed.
 - The magnetic domain contains only `prism6`; `pyramid5` and `tet4` are air
   cells and must never carry a magnetic material marker.
 - The first supported facets are `tri3 | quad4` and the polynomial/order
@@ -528,8 +537,8 @@ The local-interaction admission is deliberately separate by device:
 
 | FEM lane | Mixed-P1 local-interaction contract | Stable source boundary |
 |---|---|---|
-| CPU | Uniform or nodal-P1 uniaxial and cubic anisotropy; interfacial and bulk DMI; `implemented`, source/contract evidence only | `packages/fullmag-py/src/fullmag/model/problem.py::_validate_authored_mixed_p1_scope`, `crates/fullmag-plan/src/mesh.rs::validate_mixed_p1_execution_scope`, `backends/fem/core/fem_mesh.cpp::validate_supported_physics_topology` |
-| GPU | Uniform or nodal-P1 uniaxial and cubic anisotropy; DMI rejected fail-closed as `gpu_dmi_kernel_not_mixed_p1`; accepted anisotropy slice `implemented`, source/contract evidence only | `packages/fullmag-py/src/fullmag/model/problem.py::_validate_authored_mixed_p1_scope`, `crates/fullmag-plan/src/mesh.rs::mixed_p1_scope_failed_predicates`, `backends/fem/core/fem_mesh.cpp::validate_supported_physics_topology` |
+| CPU | Uniform or nodal-P1 uniaxial and cubic anisotropy; interfacial, rotated interfacial, and bulk DMI; `implemented`, source/contract evidence only | `packages/fullmag-py/src/fullmag/model/problem.py::_validate_authored_mixed_p1_scope`, `crates/fullmag-plan/src/mesh.rs::validate_mixed_p1_execution_scope`, `backends/fem/core/fem_mesh.cpp::validate_supported_physics_topology` |
+| GPU | Uniform or nodal-P1 uniaxial and cubic anisotropy; interfacial, rotated interfacial, and bulk DMI via unified preassembled CSR DMI (`docs/physics/1001-fem-gpu-pure-prism-p2-and-csr-dmi.md`); `implemented`, source/contract evidence only | `packages/fullmag-py/src/fullmag/model/problem.py::_validate_authored_mixed_p1_scope`, `crates/fullmag-plan/src/mesh.rs::mixed_p1_scope_failed_predicates`, `backends/fem/core/fem_mesh.cpp::validate_supported_physics_topology`, `backends/fem/gpu/cuda/interactions/dmi/dmi_csr_operator.cpp::build_gpu_dmi_csr_from_mfem` |
 
 The lane table records source/contract admission, not a managed runtime result.
 
@@ -1159,7 +1168,7 @@ example below are:
 | `GeometryMeshHandle.thin_film.layers` | `int` | `1` | $1$ | exact mixed-P1 execution accepts only `1`, `2`, or `3`; other positive values remain authorable only outside this lane and are rejected by its capability gate | prism-cell layers through the same physical film | FEM CPU/GPU only | `problem_meta.runtime_metadata.mesh_workflow.per_geometry[].through_thickness_elements` |
 | `GeometryMeshHandle.thin_film.topology` | `"tetrahedral" \| "prismatic" \| None` | `None` | $1$ | mixed-P1 requires `"prismatic"` | requested cell topology family | FEM CPU/GPU only | `problem_meta.runtime_metadata.mesh_workflow.per_geometry[].topology` |
 | `GeometryMeshHandle.thin_film.exact_layers` | `bool \| None` | `None` | $1$ | strict prismatic execution resolves `None` to `True` and rejects `False` | require requested and realized layer equality | FEM CPU/GPU only | `problem_meta.runtime_metadata.mesh_workflow.per_geometry[].exact_layer_count` |
-| `GeometryMeshHandle.thin_film.transition` | `"pyramid_to_tetrahedra" \| "reject" \| None` | `None` | $1$ | mixed shared-domain execution requires `"pyramid_to_tetrahedra"` | conforming air transition policy | FEM CPU/GPU only | `problem_meta.runtime_metadata.mesh_workflow.per_geometry[].transition_policy` |
+| `GeometryMeshHandle.thin_film.transition` | `"pyramid_to_tetrahedra" \| "pure_prism" \| "reject" \| None` | `None` | $1$ | mixed-P1 requires `"pyramid_to_tetrahedra"`; pyramid-free P2 prism domains select `"pure_prism"` (`docs/physics/1001-fem-gpu-pure-prism-p2-and-csr-dmi.md`) | conforming air transition policy | FEM CPU/GPU only | `problem_meta.runtime_metadata.mesh_workflow.per_geometry[].transition_policy` |
 | `GeometryMeshHandle.thin_film.order` | `int \| None` | `None` | $1$ | prismatic execution accepts only `None` or `1` and resolves to P1 | finite-element order | FEM CPU/GPU only | `problem_meta.runtime_metadata.mesh_workflow.per_geometry[].order` |
 
 #### 4.1.1 Exact multi-material source mapping (implemented source-contract; runtime unverified)
@@ -1713,6 +1722,8 @@ No lower level implies a higher one.
 | Production mixed-tetrahedral repair policy | `packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py` | `_STRICT_MIXED_TET_REPAIR_POLICY` | freezes candidate algorithm ID `fullmag.mixed-tet-repair.v1`, bounded local pre-pass, and `Relocate3D`/one-iteration fallback | FEM CPU/GPU shared meshing contract | focused source/contract tests and one exact stage diagnosis; candidate N=10 and managed receipt pending |
 | Mixed-tetrahedral repair policy validation | `packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py` | `_validate_mixed_tet_repair_policy` | fail-closed validation owner for the source-mapped production constant `_STRICT_MIXED_TET_REPAIR_POLICY` | FEM CPU/GPU shared meshing contract | focused valid/invalid private-policy tests |
 | Mixed-tetrahedral repair execution | `packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py` | `_repair_mixed_tetrahedra` | validates the private policy and invokes the non-overridable fail-closed policy executor before extraction and certification | FEM CPU/GPU shared meshing contract | focused selector/probe integration, strict created/left degeneracy tests, and Netgen certificate-boundary tests; candidate N=10 pending |
+| Mixed-tetrahedral same-side untangler (`mixed-tet-untangle`) | `packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py` | `_untangle_same_side_mixed_tetrahedra` | detects and deterministically untangles inverted `same_side_two_owner_face` `tet4` cavities for `layers >= 2` via interior-node Chebyshev centering and local reorientation | FEM CPU/GPU shared meshing contract | unit tests + 300×300×5 nm `layers=1..3` and SP4 `layers=1..3` conforming certificate tests |
+| Unified CSR GPU DMI operator (`dmi-csr-gpu`) | `backends/fem/gpu/cuda/interactions/dmi/dmi_csr_operator.cpp` | `build_gpu_dmi_csr_from_mfem` | assembles skew-symmetric nodal edge-vector CSR DMI operators across `tet4`, `prism6`, and mixed H1 P1 meshes for GPU execution (`1001`) | FEM GPU | unit/contract tests in `cuda_csr_dmi_prism_contract.cpp`; Docker DEV GPU run pending |
 | Certificate generation, current Python oracle | `packages/fullmag-py/src/fullmag/meshing/_gmsh_airbox.py` | `_attach_mixed_layer_topology_certificate` | recomputes and binds realized topology evidence during meshing; artifact persistence independently revalidates the claimed certificate natively | FEM CPU/GPU | current Python source/contract evidence; Rust engine, host bridge, and artifact caller are host-tested; managed runtime remains not verified |
 | Current Python evidence oracle | `packages/fullmag-py/src/fullmag/meshing/_gmsh_types.py` | `_recompute_mixed_certificate_evidence` | computes the readable reference evidence and preserves current equations, ordering, and tolerances | backend-neutral reference consumed by FEM CPU/GPU | current source/contract oracle |
 | Canonical typed certificate schema | `crates/fullmag-ir/src/mesh_assets.rs` | `MixedLayerTopologyCertificateV1IR` | owns the complete certificate field set and rejects unknown fields before a certificate can contribute to the bridge digest or canonical validation | backend-neutral `fullmag-ir`; consumed by FEM CPU/GPU | full `fullmag-ir` suite: 372 passing tests; production caller/runtime not verified |
@@ -1741,7 +1752,7 @@ No lower level implies a higher one.
 | FMMT v2 byte layout | `apps/control-room/src/kernel/api/codecs/topologyCodec.ts` | `topologyByteLayout` | computes aligned optional cell/facet ordinal ranges for legacy, cell-only, facet-only, and combined v2 payloads | unified control room | direct four-variant layout tests |
 | FMMT v2 range loading | `apps/control-room/src/kernel/api/ControlRoomApi.ts` | `loadTopologySectionsByRange` | range-fetches every declared topology section into its exact typed-array representation | unified control room | chunked facade tests with exact `u64` identities |
 | Mixed topology render index | `apps/control-room/src/modules/viewport-3d/viewport3dTopologyIndexModel.ts` | `buildViewport3DTopologyIndexBundle` | derives render topology while retaining local owner indices and exact global cell ordinals | unified control room | mixed-cell, semantic-face-deduplication, and byte-accounting tests |
-| Mixed topology surface selection | `apps/control-room/src/modules/viewport-3d/layers/MeshPartLayer.tsx` | `resolveMeshPartSurfacePickIdentity` | returns exact decimal global cell identity only for complete aligned maps and preserves boundary-only legacy picks only when every identity map is absent | unified control room | exact-identity, partial-map, misalignment, and legacy tests |
+| Mixed topology surface selection | `apps/control-room/src/modules/viewport-3d/layers/MeshPartLayer.model.ts` | `resolveMeshPartSurfacePickIdentity` | returns exact decimal global cell identity only for complete aligned maps and preserves boundary-only legacy picks only when every identity map is absent | unified control room | exact-identity, partial-map, misalignment, and legacy tests |
 | Step-0 field authoring | `packages/fullmag-py/src/fullmag/model/study.py` | `class StageAutosave` | carries the three scheduled field autosaves without changing the physical model | FEM CPU/GPU shared contract | canonical SP4 scenario source contract |
 | Native step-0 dispatch | `crates/fullmag-runner/src/dispatch.rs` | `record_native_fem_initial_field_snapshots` | records requested native field snapshots before direct minimization and advances their schedules | FEM CPU/GPU | runner source and artifact-schedule contracts |
 | Native current-state statistics | `backends/fem/cpu/mfem/runtime/snapshot.cpp` | `context_snapshot_stats_mfem` | evaluates current-state fields, energies, and maximum torque without a solver step | FEM CPU/GPU | native runtime contracts; managed proof pending |

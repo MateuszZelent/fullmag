@@ -6,8 +6,8 @@
   Full SP4 trajectories and a full CUDA activity profile remain pending.
   Small CPU/GPU contract fixtures and short runs do not qualify full trajectories.
 - Owners: Fullmag FEM demagnetization
-- Last updated: 2026-11-04
-- Related physics: `docs/physics/0430-fem-dipolar-demag-mfem-gpu-foundations.md`
+- Last updated: 2026-11-26
+- Related physics: `docs/physics/0430-fem-dipolar-demag-mfem-gpu-foundations.md`, `docs/physics/1001-fem-gpu-pure-prism-p2-and-csr-dmi.md`
 - Related validation: `docs/physics/0980-mumag-standard-problem-4-fem-application-validation.md`
 - Related specs: `docs/specs/capability-matrix-v0.md`
 - Related implementation plan: `docs/superpowers/plans/2026-11-04-sp4-cpu-fixed-coupling.md`
@@ -585,8 +585,14 @@ implementation/runtime gates; neither is established by this A/B result.
 ## 11. Limitations
 
 - The Robin airbox remains a finite-domain approximation to free space.
-- The current P2 prototype evidence covers tetrahedra; mixed
-  prism/pyramid/tetra production evidence remains required.
+- The current P2 prototype evidence covers tetrahedra; pyramid-containing mixed
+  (`prism6+pyramid5+tet4`) meshes retain P1 potential because MFEM pyramids
+  force order 1 (`demag_poisson_lifecycle.cpp`), whereas pyramid-free
+  extruded pure-prism shared domains (`transition="pure_prism"`,
+  `docs/physics/1001-fem-gpu-pure-prism-p2-and-csr-dmi.md`) resolve conforming
+  P2 `H1_WedgeElement(2)` potential on both FEM CPU and FEM GPU (`cg_amg` and
+  `cuDSS`, source/contract implemented; Docker DEV GPU A/B qualification
+  tracked in `1001`).
 - Static periodic-airbox P2 equivalence classes are outside this realization
   until independently implemented and qualified.
 - Dense FEM/BEM is a validation-scale alternative and is not substituted for
