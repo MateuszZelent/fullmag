@@ -367,13 +367,14 @@ void native_physics_gate_accepts_only_qualified_explicit_cpu_or_cuda_mixed_p1_op
     auto cuda_dmi = cpu_dmi;
     cuda_dmi.mfem_device_string = "cuda";
     error.clear();
-    check(!fullmag::fem::validate_supported_physics_topology(ctx, cuda_dmi, error),
-          "CUDA mixed-P1 DMI must remain rejected before the tetrahedral-only kernel");
-    check(error.find("fallback=none") != std::string::npos, error.c_str());
-
-    check(error.find("failed_predicates=[gpu_dmi_kernel_not_mixed_p1]") !=
-              std::string::npos,
+    check(fullmag::fem::validate_supported_physics_topology(ctx, cuda_dmi, error),
           error.c_str());
+
+    ctx.dmi.rotated_interfacial_enabled = true;
+    error.clear();
+    check(fullmag::fem::validate_supported_physics_topology(ctx, cuda_dmi, error),
+          error.c_str());
+    ctx.dmi.rotated_interfacial_enabled = false;
     struct Case {
         const char *name;
         void (*mutate)(fullmag_fem_plan_desc &, MeshBuffers &);
@@ -662,9 +663,63 @@ void native_physics_gate_accepts_bounded_cpu_pure_prism_p2_shared_domain() {
     auto cuda = plan;
     cuda.mfem_device_string = "cuda";
     error.clear();
-    check(!fullmag::fem::validate_supported_physics_topology(ctx, cuda, error),
-          "pure prism P2 must remain CPU-only until CUDA is qualified");
-    check(error.find("pure_prism_p2_cpu_only") != std::string::npos, error.c_str());
+    check(fullmag::fem::validate_supported_physics_topology(ctx, cuda, error), error.c_str());
+
+    const size_t dmi_node_count = source.nodes_xyz.size() / 3u;
+    std::vector<double> dind(dmi_node_count, 2.0e-3);
+    std::vector<double> dbulk(dmi_node_count, 3.0e-3);
+    auto cuda_dmi = cuda;
+    cuda_dmi.has_interfacial_dmi = 1;
+    cuda_dmi.has_bulk_dmi = 1;
+    cuda_dmi.dind_field = dind.data();
+    cuda_dmi.dind_field_len = dind.size();
+    cuda_dmi.dbulk_field = dbulk.data();
+    cuda_dmi.dbulk_field_len = dbulk.size();
+    for (const char *device : {"cpu", "cuda"}) {
+        cuda_dmi.mfem_device_string = device;
+        error.clear();
+        check(fullmag::fem::validate_supported_physics_topology(ctx, cuda_dmi, error),
+              error.c_str());
+        ctx.dmi.rotated_interfacial_enabled = true;
+        error.clear();
+        check(fullmag::fem::validate_supported_physics_topology(ctx, cuda_dmi, error),
+              error.c_str());
+        ctx.dmi.rotated_interfacial_enabled = false;
+    }
+
+    auto invalid_device = plan;
+    invalid_device.mfem_device_string = "auto";
+    error.clear();
+    check(!fullmag::fem::validate_supported_physics_topology(ctx, invalid_device, error),
+          "pure prism P2 must require explicit cpu or cuda device");
+    check(error.find("explicit_cpu_or_cuda_device") != std::string::npos, error.c_str());
+    check(error.find("fallback=none") != std::string::npos, error.c_str());
+
+    auto cuda_stt = cuda;
+    cuda_stt.has_zhang_li_stt = 1;
+    error.clear();
+    check(!fullmag::fem::validate_supported_physics_topology(ctx, cuda_stt, error),
+          "pure prism P2 CUDA Zhang-Li STT must fail closed");
+    check(error.find("unrelated_extended_physics_scope") != std::string::npos, error.c_str());
+    check(error.find("fallback=none") != std::string::npos, error.c_str());
+
+    auto cuda_fem_bem = cuda;
+    cuda_fem_bem.demag_realization = FULLMAG_FEM_DEMAG_FREDKIN_KOEHLER;
+    error.clear();
+    check(!fullmag::fem::validate_supported_physics_topology(ctx, cuda_fem_bem, error),
+          "pure prism P2 FEM-BEM must fail closed");
+    check(error.find("poisson_robin_or_dirichlet") != std::string::npos, error.c_str());
+    check(error.find("fallback=none") != std::string::npos, error.c_str());
+
+    MeshBuffers periodic_prism = source;
+    periodic_prism.periodic_node_pairs = {0u, 1u};
+    auto periodic_plan = qualified_mixed_operator_plan(periodic_prism);
+    periodic_plan.mfem_device_string = "cuda";
+    error.clear();
+    check(!fullmag::fem::validate_supported_physics_topology(ctx, periodic_plan, error),
+          "pure prism P2 periodic pairs must fail closed");
+    check(error.find("plan_topology_matches_import_no_periodic") != std::string::npos,
+          error.c_str());
     check(error.find("fallback=none") != std::string::npos, error.c_str());
 
     MeshBuffers missing_air = source;
@@ -682,6 +737,7 @@ void native_physics_gate_accepts_bounded_cpu_pure_prism_p2_shared_domain() {
     check(error.find("prism_shared_domain_magnetic_air_markers") !=
               std::string::npos,
           error.c_str());
+    check(error.find("fallback=none") != std::string::npos, error.c_str());
 }
 
 void typed_mesh_import_accepts_empty_optional_buffers() {

@@ -15746,6 +15746,7 @@ fn fem_domain_mesh_asset_accepts_optional_build_report() {
             rejected_element_types: Vec::new(),
             mixed_layer_topology_certificate: None,
             mixed_layer_topology_certificate_v2: None,
+            pure_prism_topology_certificate: None,
             mixed_topology_provenance: None,
             mesh_statistics: None,
         }),
@@ -17267,6 +17268,7 @@ fn valid_mixed_certificate_asset_for_version(
             realized_regions_count: Some(1),
             mixed_layer_topology_certificate: Some(certificate),
             mixed_layer_topology_certificate_v2: None,
+            pure_prism_topology_certificate: None,
             mixed_topology_provenance: None,
             mesh_statistics: None,
         }),
@@ -17326,6 +17328,7 @@ fn python_mixed_certificate_asset_for_layers(layer_count: u32) -> fullmag_ir::Fe
             realized_regions_count: Some(1),
             mixed_layer_topology_certificate: Some(certificate),
             mixed_layer_topology_certificate_v2: None,
+            pure_prism_topology_certificate: None,
             mixed_topology_provenance: None,
             mesh_statistics: None,
         }),
@@ -17703,7 +17706,7 @@ fn fem_planner_accepts_cpu_dmi_terms_and_nodal_d_fields_on_certified_mixed_p1() 
 }
 
 #[test]
-fn fem_planner_rejects_gpu_dmi_with_stable_mixed_p1_predicate() {
+fn fem_planner_accepts_gpu_dmi_on_certified_mixed_p1() {
     let mut ir = mixed_cpu_relaxation_ir(
         fullmag_ir::RelaxationAlgorithmIR::ProjectedGradientBb,
         fullmag_ir::RequestedFemDemagIR::Auto,
@@ -17712,18 +17715,454 @@ fn fem_planner_rejects_gpu_dmi_with_stable_mixed_p1_predicate() {
         "runtime_selection".to_string(),
         serde_json::json!({"device": "gpu", "precision": "double"}),
     );
-    ir.energy_terms
-        .push(fullmag_ir::EnergyTermIR::BulkDmi { d: 3.0e-3 });
+    ir.energy_terms.extend([
+        fullmag_ir::EnergyTermIR::InterfacialDmi {
+            d: 2.0e-3,
+            interface_normal: None,
+        },
+        fullmag_ir::EnergyTermIR::RotatedInterfacialDmi {
+            d: 1.5e-3,
+            object_ids: None,
+        },
+        fullmag_ir::EnergyTermIR::BulkDmi { d: 3.0e-3 },
+    ]);
 
-    let reason = plan(&ir)
-        .expect_err("mixed P1 GPU DMI must reject before CUDA startup")
+    let planned = plan(&ir).expect("mixed P1 GPU DMI must plan via unified CSR DMI");
+    let BackendPlanIR::Fem(fem) = planned.backend_plan else {
+        panic!("mixed P1 GPU DMI must resolve to FEM")
+    };
+    assert_eq!(fem.interfacial_dmi, Some(2.0e-3));
+    assert_eq!(fem.rotated_interfacial_dmi, Some(1.5e-3));
+    assert_eq!(fem.bulk_dmi, Some(3.0e-3));
+}
+
+fn valid_pure_prism_certificate_asset_for_layers(
+    layer_count: u32,
+) -> fullmag_ir::FemDomainMeshAssetIR {
+    let base_xy = [
+        [-1.0_f64, -1.0],
+        [1.0, -1.0],
+        [1.0, 1.0],
+        [-1.0, 1.0],
+        [-2.0, -2.0],
+        [2.0, -2.0],
+        [2.0, 2.0],
+        [-2.0, 2.0],
+    ];
+    let mut z_planes = Vec::with_capacity(layer_count as usize + 3);
+    z_planes.push(-2.0_f64);
+    let mut magnetic_planes = Vec::with_capacity(layer_count as usize + 1);
+    for k in 0..=layer_count {
+        let z = -1.0 + 2.0 * (k as f64) / (layer_count as f64);
+        magnetic_planes.push(z);
+        z_planes.push(z);
+    }
+    z_planes.push(2.0_f64);
+
+    let mut nodes = Vec::with_capacity(z_planes.len() * 8);
+    for &z in &z_planes {
+        for xy in &base_xy {
+            nodes.push([xy[0], xy[1], z]);
+        }
+    }
+    let inner_tris: [[u32; 3]; 2] = [[0, 1, 2], [0, 2, 3]];
+    let outer_tris: [[u32; 3]; 8] = [
+        [4, 5, 1],
+        [4, 1, 0],
+        [5, 6, 2],
+        [5, 2, 1],
+        [6, 7, 3],
+        [6, 3, 2],
+        [7, 4, 0],
+        [7, 0, 3],
+    ];
+    let mut cell_types = Vec::new();
+    let mut cell_offsets = vec![0u32];
+    let mut cell_nodes = Vec::new();
+    let mut cell_parts = Vec::new();
+    let mut element_markers = Vec::new();
+    let total_layers = layer_count as usize + 2;
+    for layer in 0..total_layers {
+        let lo = (layer * 8) as u32;
+        let hi = ((layer + 1) * 8) as u32;
+        let is_mag = layer >= 1 && layer <= layer_count as usize;
+        for [a, b, c] in inner_tris {
+            cell_types.push(fullmag_ir::FemCellTypeIR::Prism6);
+            cell_nodes.extend([lo + a, lo + b, lo + c, hi + a, hi + b, hi + c]);
+            cell_offsets.push(cell_nodes.len() as u32);
+            cell_parts.push(if is_mag {
+                fullmag_ir::FemCellMeshPartIR::Magnetic
+            } else {
+                fullmag_ir::FemCellMeshPartIR::FarAir
+            });
+            element_markers.push(if is_mag { 1 } else { 0 });
+        }
+        for [a, b, c] in outer_tris {
+            cell_types.push(fullmag_ir::FemCellTypeIR::Prism6);
+            cell_nodes.extend([lo + a, lo + b, lo + c, hi + a, hi + b, hi + c]);
+            cell_offsets.push(cell_nodes.len() as u32);
+            cell_parts.push(fullmag_ir::FemCellMeshPartIR::FarAir);
+            element_markers.push(0);
+        }
+    }
+
+    let mut facet_types = Vec::new();
+    let mut facet_roles = Vec::new();
+    let mut facet_offsets = vec![0u32];
+    let mut facet_nodes = Vec::new();
+    let mut boundary_markers = Vec::new();
+    let mut push_tri = |role: fullmag_ir::FemFacetRoleIR, marker: u32, tri: [u32; 3]| {
+        facet_types.push(fullmag_ir::FemFacetTypeIR::Tri3);
+        facet_roles.push(role);
+        facet_nodes.extend(tri);
+        facet_offsets.push(facet_nodes.len() as u32);
+        boundary_markers.push(marker);
+    };
+    let mut push_quad = |role: fullmag_ir::FemFacetRoleIR, marker: u32, quad: [u32; 4]| {
+        facet_types.push(fullmag_ir::FemFacetTypeIR::Quad4);
+        facet_roles.push(role);
+        facet_nodes.extend(quad);
+        facet_offsets.push(facet_nodes.len() as u32);
+        boundary_markers.push(marker);
+    };
+    let top_off = (total_layers * 8) as u32;
+    for [a, b, c] in inner_tris.iter().chain(outer_tris.iter()).copied() {
+        push_tri(fullmag_ir::FemFacetRoleIR::Exterior, 3, [a, c, b]);
+        push_tri(
+            fullmag_ir::FemFacetRoleIR::Exterior,
+            3,
+            [top_off + a, top_off + b, top_off + c],
+        );
+    }
+    for layer in 0..total_layers {
+        let lo = (layer * 8) as u32;
+        let hi = ((layer + 1) * 8) as u32;
+        for [a, b] in [[4u32, 5], [5, 6], [6, 7], [7, 4]] {
+            push_quad(
+                fullmag_ir::FemFacetRoleIR::Exterior,
+                3,
+                [lo + a, lo + b, hi + b, hi + a],
+            );
+        }
+    }
+    let mag_bot_off = 8u32;
+    let mag_top_off = ((layer_count as usize + 1) * 8) as u32;
+    for [a, b, c] in inner_tris {
+        push_tri(
+            fullmag_ir::FemFacetRoleIR::MaterialInterface,
+            2,
+            [mag_bot_off + a, mag_bot_off + b, mag_bot_off + c],
+        );
+        push_tri(
+            fullmag_ir::FemFacetRoleIR::MaterialInterface,
+            2,
+            [mag_top_off + a, mag_top_off + b, mag_top_off + c],
+        );
+    }
+    for layer in 1..=layer_count as usize {
+        let lo = (layer * 8) as u32;
+        let hi = ((layer + 1) * 8) as u32;
+        for [a, b] in [[0u32, 1], [1, 2], [2, 3], [3, 0]] {
+            push_quad(
+                fullmag_ir::FemFacetRoleIR::MaterialInterface,
+                2,
+                [lo + a, lo + b, hi + b, hi + a],
+            );
+        }
+    }
+
+    let cell_count = cell_types.len();
+    let facet_count = facet_types.len();
+    let mesh = fullmag_ir::MeshIR {
+        mesh_name: format!("pure-prism-plan-l{layer_count}"),
+        nodes,
+        cells: fullmag_ir::FemConnectivityIR {
+            types: cell_types,
+            offsets: cell_offsets,
+            nodes: cell_nodes,
+            global_ordinals: (0..cell_count as u64).collect(),
+            mesh_parts: cell_parts,
+        },
+        element_markers,
+        facets: fullmag_ir::FemFacetConnectivityIR {
+            types: facet_types,
+            roles: facet_roles,
+            offsets: facet_offsets,
+            nodes: facet_nodes,
+            global_ordinals: (0..facet_count as u64).collect(),
+        },
+        boundary_markers,
+        periodic_boundary_pairs: Vec::new(),
+        periodic_node_pairs: Vec::new(),
+        per_domain_quality: std::collections::HashMap::new(),
+    };
+    let mag_cells = 2u64 * u64::from(layer_count);
+    let air_cells = 20u64 + 8u64 * u64::from(layer_count);
+    let jac_min = 1.0_f64.min(2.0 / f64::from(layer_count));
+    let scaled_min = 1.0 / 10.0_f64.sqrt();
+    let certificate = fullmag_ir::PurePrismTopologyCertificateV1IR {
+        schema_version: "pure_prism_topology_certificate.v1".to_string(),
+        certificate_status: "accepted".to_string(),
+        requested_sweep_direction: "z".to_string(),
+        resolved_sweep_direction: "z".to_string(),
+        requested_layer_count: layer_count,
+        realized_layer_count: layer_count,
+        lower_air_layer_count: 1,
+        upper_air_layer_count: 1,
+        magnetic_plane_coordinates_m: magnetic_planes,
+        plane_tolerance_m: 2.0e-8,
+        interface_marker: 2,
+        outer_boundary_marker: 3,
+        magnetic_bounds_min_m: [-1.0, -1.0, -1.0],
+        magnetic_bounds_max_m: [1.0, 1.0, 1.0],
+        airbox_bounds_min_m: [-2.0, -2.0, -2.0],
+        airbox_bounds_max_m: [2.0, 2.0, 2.0],
+        magnetic_bounds_relative_error: 0.0,
+        airbox_bounds_relative_error: 0.0,
+        cell_family_counts_by_marker: std::collections::BTreeMap::from([
+            (
+                "0".to_string(),
+                std::collections::BTreeMap::from([("prism6".to_string(), air_cells)]),
+            ),
+            (
+                "1".to_string(),
+                std::collections::BTreeMap::from([("prism6".to_string(), mag_cells)]),
+            ),
+        ]),
+        cell_family_counts_by_part: std::collections::BTreeMap::from([
+            (
+                "far_air".to_string(),
+                std::collections::BTreeMap::from([("prism6".to_string(), air_cells)]),
+            ),
+            (
+                "magnetic".to_string(),
+                std::collections::BTreeMap::from([("prism6".to_string(), mag_cells)]),
+            ),
+        ]),
+        facet_family_counts_by_role_marker: std::collections::BTreeMap::from([
+            (
+                "exterior:3".to_string(),
+                std::collections::BTreeMap::from([
+                    ("quad4".to_string(), 4u64 * (u64::from(layer_count) + 2)),
+                    ("tri3".to_string(), 20u64),
+                ]),
+            ),
+            (
+                "material_interface:2".to_string(),
+                std::collections::BTreeMap::from([
+                    ("quad4".to_string(), 4u64 * u64::from(layer_count)),
+                    ("tri3".to_string(), 4u64),
+                ]),
+            ),
+        ]),
+        jacobian_minima_m3_by_family: std::collections::BTreeMap::from([(
+            "prism6".to_string(),
+            jac_min,
+        )]),
+        quality_metric: "mixed_topology_scaled_jacobian.v1".to_string(),
+        scaled_jacobian_minima_by_family: std::collections::BTreeMap::from([(
+            "prism6".to_string(),
+            scaled_min,
+        )]),
+        scaled_jacobian_p05_by_family: std::collections::BTreeMap::from([(
+            "prism6".to_string(),
+            scaled_min,
+        )]),
+        magnetic_volume_m3: 8.0,
+        expected_magnetic_volume_m3: 8.0,
+        magnetic_relative_volume_error: 0.0,
+        air_volume_m3: 56.0,
+        shared_domain_volume_m3: 64.0,
+        expected_shared_domain_volume_m3: 64.0,
+        shared_domain_relative_volume_error: 0.0,
+        marker_coverage_complete: true,
+        nonconforming_face_count: 0,
+        orphan_face_count: 0,
+        nonmanifold_face_count: 0,
+        coincident_interface_face_count: 0,
+        topology_fingerprint_version: "v3".to_string(),
+        topology_fingerprint: mesh.mixed_topology_fingerprint_v3().unwrap(),
+        gmsh_version: "4.15.2".to_string(),
+        strategy: "pure_prism_extruded_shared_domain".to_string(),
+        effective_gmsh_thread_count: 1,
+        deterministic_inputs: serde_json::from_value(serde_json::json!({
+            "algorithm_2d": 6,
+            "element_order": 1,
+            "gmsh_version": "4.15.2",
+            "random_factor": 0.0,
+            "thread_count": 1,
+            "extrusion_stages": 3,
+            "lateral_grading": "math_eval_distance_linear",
+            "airbox_growth_rate": 1.9,
+            "scaled_jacobian_p05_min": 0.1
+        }))
+        .unwrap(),
+        fallbacks_triggered: Vec::new(),
+    };
+    let region_markers = vec![fullmag_ir::FemDomainRegionMarkerIR {
+        geometry_name: "strip".to_string(),
+        marker: 1,
+    }];
+    fullmag_ir::FemDomainMeshAssetIR {
+        mesh_source: None,
+        mesh: Some(mesh),
+        region_markers: region_markers.clone(),
+        object_region_markers: Vec::new(),
+        build_report: Some(fullmag_ir::FemSharedDomainBuildReportIR {
+            build_mode: "pure_prism_extruded_shared_domain".to_string(),
+            fallbacks_triggered: Some(Vec::new()),
+            effective_airbox_target: None,
+            effective_airbox_hmax: None,
+            effective_per_object_targets: std::collections::HashMap::new(),
+            region_markers,
+            object_region_markers: Vec::new(),
+            used_size_field_kinds: Vec::new(),
+            size_fields_realized: Vec::new(),
+            operation_statuses: Vec::new(),
+            thin_film_diagnostics: Vec::new(),
+            magnetic_submesh_signatures: Vec::new(),
+            selector_resolution: Vec::new(),
+            orphan_entities: Vec::new(),
+            rejected_element_types: Vec::new(),
+            degraded: false,
+            authored_regions_count: Some(1),
+            realized_regions_count: Some(1),
+            mixed_layer_topology_certificate: None,
+            mixed_layer_topology_certificate_v2: None,
+            pure_prism_topology_certificate: Some(certificate),
+            mixed_topology_provenance: None,
+            mesh_statistics: None,
+        }),
+    }
+}
+
+#[test]
+fn fem_planner_accepts_certified_pure_prism_p2_cpu_and_gpu_with_dmi_and_rebinds_certificate() {
+    for device in ["cpu", "gpu"] {
+        for layer_count in [1u32, 4u32] {
+            let mut ir = mixed_cpu_relaxation_ir(
+                fullmag_ir::RelaxationAlgorithmIR::ProjectedGradientBb,
+                fullmag_ir::RequestedFemDemagIR::PoissonRobin,
+            );
+            ir.problem_meta.runtime_metadata.insert(
+                "runtime_selection".to_string(),
+                serde_json::json!({"device": device, "precision": "double"}),
+            );
+            ir.energy_terms.extend([
+                fullmag_ir::EnergyTermIR::InterfacialDmi {
+                    d: 2.0e-3,
+                    interface_normal: None,
+                },
+                fullmag_ir::EnergyTermIR::RotatedInterfacialDmi {
+            d: 1.5e-3,
+            object_ids: None,
+        },
+                fullmag_ir::EnergyTermIR::BulkDmi { d: 3.0e-3 },
+            ]);
+            let asset = valid_pure_prism_certificate_asset_for_layers(layer_count);
+            asset
+                .validate()
+                .expect("pure prism fixture asset must validate");
+            ir.geometry_assets
+                .as_mut()
+                .expect("geometry assets")
+                .fem_domain_mesh_asset = Some(asset);
+
+            let planned = plan(&ir).unwrap_or_else(|error| {
+                panic!(
+                    "pure_prism_p2 {device} L={layer_count} with DMI must plan: {error:?}"
+                )
+            });
+            let BackendPlanIR::Fem(fem) = planned.backend_plan else {
+                panic!("pure_prism_p2 must resolve to FEM");
+            };
+            let report = fem
+                .mesh_build_report
+                .as_ref()
+                .expect("pure_prism_p2 plan must retain build report");
+            let certificate = report
+                .pure_prism_topology_certificate
+                .as_ref()
+                .expect("pure_prism_p2 plan must retain rebound certificate");
+            assert_eq!(certificate.requested_layer_count, layer_count);
+            assert_eq!(certificate.topology_fingerprint_version, "v3");
+            let packed_fp = fem.mesh.mixed_topology_fingerprint_v3().unwrap();
+            assert_eq!(certificate.topology_fingerprint, packed_fp);
+            fullmag_ir::validate_pure_prism_topology_certificate_against_mesh(
+                &fem.mesh,
+                certificate,
+            )
+            .expect("rebound pure prism certificate must validate against packed mesh");
+            let provenance = report
+                .mixed_topology_provenance
+                .as_ref()
+                .expect("pure_prism_p2 plan must bind provenance");
+            assert_eq!(
+                provenance.requested_topology,
+                fullmag_ir::FemMeshTopologyFamilyIR::PurePrismP2
+            );
+            assert_eq!(
+                provenance.resolved_topology,
+                fullmag_ir::FemMeshTopologyFamilyIR::PurePrismP2
+            );
+            assert_eq!(provenance.accepted_certificate_fingerprint, packed_fp);
+            assert_eq!(
+                provenance.capability_status,
+                fullmag_ir::FemMixedTopologyCapabilityStatusIR::Implemented
+            );
+        }
+    }
+}
+
+#[test]
+fn fem_planner_rejects_pure_prism_p2_missing_certificate_or_unqualified_physics_fail_closed() {
+    // Missing certificate must fail closed.
+    let mut missing = mixed_cpu_relaxation_ir(
+        fullmag_ir::RelaxationAlgorithmIR::ProjectedGradientBb,
+        fullmag_ir::RequestedFemDemagIR::PoissonRobin,
+    );
+    let mut missing_asset = valid_pure_prism_certificate_asset_for_layers(2);
+    missing_asset
+        .build_report
+        .as_mut()
+        .unwrap()
+        .pure_prism_topology_certificate = None;
+    missing.geometry_assets.as_mut().unwrap().fem_domain_mesh_asset = Some(missing_asset);
+    let reason = plan(&missing)
+        .expect_err("pure prism mesh without certificate must fail closed")
         .reasons
         .join("\n");
     assert!(
-        reason.contains("failed_predicates=[gpu_dmi_kernel_not_mixed_p1]"),
+        reason.contains("fem_pure_prism_p2_certificate_required"),
         "{reason}"
     );
-    assert!(reason.contains("gpu_dmi_kernel_not_mixed_p1"), "{reason}");
+    assert!(reason.contains("fallback=none"), "{reason}");
+
+    // Zhang-Li STT must fail closed on pure_prism_p2.
+    let mut stt = mixed_cpu_relaxation_ir(
+        fullmag_ir::RelaxationAlgorithmIR::ProjectedGradientBb,
+        fullmag_ir::RequestedFemDemagIR::PoissonRobin,
+    );
+    stt.problem_meta.runtime_metadata.insert(
+        "runtime_selection".to_string(),
+        serde_json::json!({"device": "gpu", "precision": "double"}),
+    );
+    stt.current_density = Some([1.0e11, 0.0, 0.0]);
+    stt.stt_degree = Some(0.5);
+    stt.geometry_assets.as_mut().unwrap().fem_domain_mesh_asset =
+        Some(valid_pure_prism_certificate_asset_for_layers(2));
+    let reason = plan(&stt)
+        .expect_err("pure prism GPU Zhang-Li STT must fail closed")
+        .reasons
+        .join("\n");
+    assert!(
+        reason.contains("fem_pure_prism_p2_scope_rejected"),
+        "{reason}"
+    );
+    assert!(
+        reason.contains("unsupported_extended_module"),
+        "{reason}"
+    );
     assert!(reason.contains("fallback=none"), "{reason}");
 }
 

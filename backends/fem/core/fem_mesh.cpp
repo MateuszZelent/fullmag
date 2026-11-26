@@ -868,7 +868,7 @@ bool validate_supported_physics_topology(
         plan.has_interfacial_dmi != 0 || plan.has_bulk_dmi != 0 ||
         ctx.dmi.rotated_interfacial_enabled || plan.dind_field_len != 0u ||
         plan.dbulk_field_len != 0u;
-    const bool dmi_supported = !has_dmi || mfem_device == "cpu";
+    const bool dmi_supported = !has_dmi || explicit_cpu_or_cuda_device;
     // Mixed bodies use body-owned nodal P1 material fields. The field
     // importer performs definitive extent/value validation; this admission
     // predicate only distinguishes those fields from unsupported element-DG0
@@ -896,12 +896,14 @@ bool validate_supported_physics_topology(
         exact_cell_families && exact_facet_families && markers_match_scope;
     // A conforming shared domain made entirely from prism6 cells does not
     // need the pyramid transition that forces the Poisson potential to P1.
-    // Keep this first qualification lane deliberately CPU-only and bounded to
-    // the SP4 exchange+Poisson scope until independent CUDA and extended-
-    // physics evidence exists.
+    // Both explicit CPU and CUDA devices are qualified with P2 Poisson demag
+    // and unified CSR DMI; unrelated extended physics (Zhang-Li/Slonczewski
+    // STT, Oersted, thermal, magnetoelastic, DG0 Ms, periodic, FEM-BEM)
+    // remains fail-closed via common_scope.
     const bool qualified_pure_prism_p2 =
         pure_prism_cell_family && pure_prism_facet_families &&
-        pure_prism_markers_cover_magnetic_and_air && mfem_device == "cpu" && !has_dmi;
+        pure_prism_markers_cover_magnetic_and_air &&
+        explicit_cpu_or_cuda_device;
     const bool qualified = common_scope &&
         (qualified_mixed_p1 || qualified_pure_prism_p2);
     if (!qualified) {
@@ -918,7 +920,7 @@ bool validate_supported_physics_topology(
                 add_failed("prism_shared_domain_magnetic_air_markers");
             }
             if (!exact_plan_topology) add_failed("plan_topology_matches_import_no_periodic");
-            if (mfem_device != "cpu") add_failed("pure_prism_p2_cpu_only");
+            if (!explicit_cpu_or_cuda_device) add_failed("explicit_cpu_or_cuda_device");
             if (plan.fe_order != 1u) add_failed("p1_magnetization_state");
             if (plan.precision != FULLMAG_FEM_PRECISION_DOUBLE) add_failed("double_precision");
             if (plan.enable_exchange == 0) add_failed("exchange");
@@ -927,12 +929,12 @@ bool validate_supported_physics_topology(
                  plan.demag_realization != FULLMAG_FEM_DEMAG_AIRBOX_DIRICHLET)) {
                 add_failed("poisson_robin_or_dirichlet");
             }
-            if (has_dmi) add_failed("pure_prism_p2_dmi_not_qualified");
             if (!no_other_extended_physics) add_failed("unrelated_extended_physics_scope");
             error =
-                "native FEM pure prism P2 scope rejected: required=explicit_cpu+double+"
+                "native FEM pure prism P2 scope rejected: required=explicit_cpu_or_gpu+double+"
                 "P1_magnetization_state+prism6_shared_magnetic_air+tri3_quad4+no_periodic+"
-                "exchange+poisson_robin_or_dirichlet+uniform_or_body_owned_nodal_P1_Ms_A_alpha+no_DMI; "
+                "exchange+poisson_robin_or_dirichlet+uniform_or_body_owned_nodal_P1_Ms_A_alpha+"
+                "local_anisotropy_cpu_or_cuda+dmi_cpu_or_cuda; "
                 "failed_predicates=[" + failed_predicates + "]; fallback=none";
             return false;
         }
@@ -956,17 +958,12 @@ bool validate_supported_physics_topology(
              plan.demag_realization != FULLMAG_FEM_DEMAG_AIRBOX_DIRICHLET)) {
             add_failed("poisson_robin_or_dirichlet");
         }
-        if (!dmi_supported) {
-            add_failed(mfem_device == "cuda"
-                    ? "gpu_dmi_kernel_not_mixed_p1"
-                    : "dmi_requires_explicit_cpu");
-        }
         if (!no_other_extended_physics) add_failed("unrelated_extended_physics_scope");
         error =
             "native FEM mixed P1 scope rejected: required=explicit_cpu_or_gpu+double+P1+"
             "prism6_or_tet4_magnetic+pyramid5_tet4_air+tri3_quad4+exchange+"
             "poisson_robin_or_dirichlet+uniform_or_body_owned_nodal_P1_Ms_A_alpha+local_anisotropy_cpu_or_cuda+"
-            "dmi_cpu_only; failed_predicates=[" + failed_predicates + "]; fallback=none";
+            "dmi_cpu_or_cuda; failed_predicates=[" + failed_predicates + "]; fallback=none";
         return false;
     }
     return true;

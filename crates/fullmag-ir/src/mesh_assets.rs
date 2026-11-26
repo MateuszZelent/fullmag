@@ -1,4 +1,7 @@
-use crate::mixed_certificate::validate_mixed_layer_topology_certificate_against_mesh;
+use crate::mixed_certificate::{
+    validate_mixed_layer_topology_certificate_against_mesh,
+    validate_pure_prism_topology_certificate_against_mesh,
+};
 #[cfg(test)]
 use crate::mixed_certificate::{
     dimensionless_float_close, mixed_conformity_counts, mixed_coordinate_key,
@@ -1150,6 +1153,385 @@ mod mesh_asset_validation_tests {
             .iter()
             .any(|error| error.contains("negative tetra orientation")));
     }
+
+    fn qualified_pure_prism_mesh_and_certificate(
+        layer_count: u32,
+    ) -> (MeshIR, PurePrismTopologyCertificateV1IR) {
+        let base_xy = [
+            [-1.0_f64, -1.0],
+            [1.0, -1.0],
+            [1.0, 1.0],
+            [-1.0, 1.0],
+            [-2.0, -2.0],
+            [2.0, -2.0],
+            [2.0, 2.0],
+            [-2.0, 2.0],
+        ];
+        let mut z_planes = Vec::with_capacity(layer_count as usize + 3);
+        z_planes.push(-2.0_f64);
+        let mut magnetic_planes = Vec::with_capacity(layer_count as usize + 1);
+        for k in 0..=layer_count {
+            let z = -1.0 + 2.0 * (k as f64) / (layer_count as f64);
+            magnetic_planes.push(z);
+            z_planes.push(z);
+        }
+        z_planes.push(2.0_f64);
+
+        let mut nodes = Vec::with_capacity(z_planes.len() * 8);
+        for &z in &z_planes {
+            for xy in &base_xy {
+                nodes.push([xy[0], xy[1], z]);
+            }
+        }
+        let inner_tris: [[u32; 3]; 2] = [[0, 1, 2], [0, 2, 3]];
+        let outer_tris: [[u32; 3]; 8] = [
+            [4, 5, 1],
+            [4, 1, 0],
+            [5, 6, 2],
+            [5, 2, 1],
+            [6, 7, 3],
+            [6, 3, 2],
+            [7, 4, 0],
+            [7, 0, 3],
+        ];
+        let mut cell_types = Vec::new();
+        let mut cell_offsets = vec![0u32];
+        let mut cell_nodes = Vec::new();
+        let mut cell_parts = Vec::new();
+        let mut element_markers = Vec::new();
+        let total_layers = layer_count as usize + 2;
+        for layer in 0..total_layers {
+            let lo = (layer * 8) as u32;
+            let hi = ((layer + 1) * 8) as u32;
+            let is_mag = layer >= 1 && layer <= layer_count as usize;
+            for [a, b, c] in inner_tris {
+                cell_types.push(crate::FemCellTypeIR::Prism6);
+                cell_nodes.extend([lo + a, lo + b, lo + c, hi + a, hi + b, hi + c]);
+                cell_offsets.push(cell_nodes.len() as u32);
+                cell_parts.push(if is_mag {
+                    crate::FemCellMeshPartIR::Magnetic
+                } else {
+                    crate::FemCellMeshPartIR::FarAir
+                });
+                element_markers.push(if is_mag { 1 } else { 0 });
+            }
+            for [a, b, c] in outer_tris {
+                cell_types.push(crate::FemCellTypeIR::Prism6);
+                cell_nodes.extend([lo + a, lo + b, lo + c, hi + a, hi + b, hi + c]);
+                cell_offsets.push(cell_nodes.len() as u32);
+                cell_parts.push(crate::FemCellMeshPartIR::FarAir);
+                element_markers.push(0);
+            }
+        }
+
+        let mut facet_types = Vec::new();
+        let mut facet_roles = Vec::new();
+        let mut facet_offsets = vec![0u32];
+        let mut facet_nodes = Vec::new();
+        let mut boundary_markers = Vec::new();
+        let mut push_tri = |role: crate::FemFacetRoleIR, marker: u32, tri: [u32; 3]| {
+            facet_types.push(crate::FemFacetTypeIR::Tri3);
+            facet_roles.push(role);
+            facet_nodes.extend(tri);
+            facet_offsets.push(facet_nodes.len() as u32);
+            boundary_markers.push(marker);
+        };
+        let mut push_quad = |role: crate::FemFacetRoleIR, marker: u32, quad: [u32; 4]| {
+            facet_types.push(crate::FemFacetTypeIR::Quad4);
+            facet_roles.push(role);
+            facet_nodes.extend(quad);
+            facet_offsets.push(facet_nodes.len() as u32);
+            boundary_markers.push(marker);
+        };
+
+        // Bottom & top exterior tri3 facets (marker 3).
+        let top_off = (total_layers * 8) as u32;
+        for [a, b, c] in inner_tris.iter().chain(outer_tris.iter()).copied() {
+            push_tri(crate::FemFacetRoleIR::Exterior, 3, [a, c, b]);
+            push_tri(
+                crate::FemFacetRoleIR::Exterior,
+                3,
+                [top_off + a, top_off + b, top_off + c],
+            );
+        }
+        // Outer lateral exterior quad4 facets (marker 3).
+        for layer in 0..total_layers {
+            let lo = (layer * 8) as u32;
+            let hi = ((layer + 1) * 8) as u32;
+            for [a, b] in [[4u32, 5], [5, 6], [6, 7], [7, 4]] {
+                push_quad(
+                    crate::FemFacetRoleIR::Exterior,
+                    3,
+                    [lo + a, lo + b, hi + b, hi + a],
+                );
+            }
+        }
+        // Magnetic bottom & top material-interface tri3 facets (marker 2).
+        let mag_bot_off = 8u32;
+        let mag_top_off = ((layer_count as usize + 1) * 8) as u32;
+        for [a, b, c] in inner_tris {
+            push_tri(
+                crate::FemFacetRoleIR::MaterialInterface,
+                2,
+                [mag_bot_off + a, mag_bot_off + b, mag_bot_off + c],
+            );
+            push_tri(
+                crate::FemFacetRoleIR::MaterialInterface,
+                2,
+                [mag_top_off + a, mag_top_off + b, mag_top_off + c],
+            );
+        }
+        // Magnetic lateral material-interface quad4 facets (marker 2).
+        for layer in 1..=layer_count as usize {
+            let lo = (layer * 8) as u32;
+            let hi = ((layer + 1) * 8) as u32;
+            for [a, b] in [[0u32, 1], [1, 2], [2, 3], [3, 0]] {
+                push_quad(
+                    crate::FemFacetRoleIR::MaterialInterface,
+                    2,
+                    [lo + a, lo + b, hi + b, hi + a],
+                );
+            }
+        }
+
+        let cell_count = cell_types.len();
+        let facet_count = facet_types.len();
+        let mesh = MeshIR {
+            mesh_name: format!("pure-prism-l{layer_count}"),
+            nodes,
+            cells: crate::FemConnectivityIR {
+                types: cell_types,
+                offsets: cell_offsets,
+                nodes: cell_nodes,
+                global_ordinals: (0..cell_count as u64).collect(),
+                mesh_parts: cell_parts,
+            },
+            element_markers,
+            facets: crate::FemFacetConnectivityIR {
+                types: facet_types,
+                roles: facet_roles,
+                offsets: facet_offsets,
+                nodes: facet_nodes,
+                global_ordinals: (0..facet_count as u64).collect(),
+            },
+            boundary_markers,
+            periodic_boundary_pairs: Vec::new(),
+            periodic_node_pairs: Vec::new(),
+            per_domain_quality: HashMap::new(),
+        };
+
+        let mut jac_samples = Vec::new();
+        let mut scaled_samples = Vec::new();
+        for ordinal in 0..mesh.cells.types.len() {
+            let ids = mesh.cells.item_nodes(ordinal).unwrap();
+            let pts: Vec<[f64; 3]> = ids.iter().map(|id| mesh.nodes[*id as usize]).collect();
+            jac_samples.extend(crate::mesh_hints::cell_jacobian_determinants(
+                crate::FemCellTypeIR::Prism6,
+                &pts,
+            ));
+            scaled_samples.extend(crate::mesh_hints::cell_scaled_jacobians(
+                crate::FemCellTypeIR::Prism6,
+                &pts,
+            ));
+        }
+        let jac_min = jac_samples.iter().copied().min_by(f64::total_cmp).unwrap();
+        scaled_samples.sort_by(f64::total_cmp);
+        let scaled_min = scaled_samples[0];
+        let pos = (scaled_samples.len() - 1) as f64 * 0.05;
+        let lo = pos.floor() as usize;
+        let hi = pos.ceil() as usize;
+        let w = pos - lo as f64;
+        let scaled_p05 = scaled_samples[lo] * (1.0 - w) + scaled_samples[hi] * w;
+
+        let mag_cells = 2u64 * u64::from(layer_count);
+        let air_cells = 20u64 + 8u64 * u64::from(layer_count);
+        let certificate = PurePrismTopologyCertificateV1IR {
+            schema_version: "pure_prism_topology_certificate.v1".to_string(),
+            certificate_status: "accepted".to_string(),
+            requested_sweep_direction: "z".to_string(),
+            resolved_sweep_direction: "z".to_string(),
+            requested_layer_count: layer_count,
+            realized_layer_count: layer_count,
+            lower_air_layer_count: 1,
+            upper_air_layer_count: 1,
+            magnetic_plane_coordinates_m: magnetic_planes,
+            plane_tolerance_m: 2.0e-8,
+            interface_marker: 2,
+            outer_boundary_marker: 3,
+            magnetic_bounds_min_m: [-1.0, -1.0, -1.0],
+            magnetic_bounds_max_m: [1.0, 1.0, 1.0],
+            airbox_bounds_min_m: [-2.0, -2.0, -2.0],
+            airbox_bounds_max_m: [2.0, 2.0, 2.0],
+            magnetic_bounds_relative_error: 0.0,
+            airbox_bounds_relative_error: 0.0,
+            cell_family_counts_by_marker: BTreeMap::from([
+                ("0".to_string(), BTreeMap::from([("prism6".to_string(), air_cells)])),
+                ("1".to_string(), BTreeMap::from([("prism6".to_string(), mag_cells)])),
+            ]),
+            cell_family_counts_by_part: BTreeMap::from([
+                ("far_air".to_string(), BTreeMap::from([("prism6".to_string(), air_cells)])),
+                ("magnetic".to_string(), BTreeMap::from([("prism6".to_string(), mag_cells)])),
+            ]),
+            facet_family_counts_by_role_marker: BTreeMap::from([
+                (
+                    "exterior:3".to_string(),
+                    BTreeMap::from([
+                        ("quad4".to_string(), 4u64 * (u64::from(layer_count) + 2)),
+                        ("tri3".to_string(), 20u64),
+                    ]),
+                ),
+                (
+                    "material_interface:2".to_string(),
+                    BTreeMap::from([
+                        ("quad4".to_string(), 4u64 * u64::from(layer_count)),
+                        ("tri3".to_string(), 4u64),
+                    ]),
+                ),
+            ]),
+            jacobian_minima_m3_by_family: BTreeMap::from([("prism6".to_string(), jac_min)]),
+            quality_metric: "mixed_topology_scaled_jacobian.v1".to_string(),
+            scaled_jacobian_minima_by_family: BTreeMap::from([("prism6".to_string(), scaled_min)]),
+            scaled_jacobian_p05_by_family: BTreeMap::from([("prism6".to_string(), scaled_p05)]),
+            magnetic_volume_m3: 8.0,
+            expected_magnetic_volume_m3: 8.0,
+            magnetic_relative_volume_error: 0.0,
+            air_volume_m3: 56.0,
+            shared_domain_volume_m3: 64.0,
+            expected_shared_domain_volume_m3: 64.0,
+            shared_domain_relative_volume_error: 0.0,
+            marker_coverage_complete: true,
+            nonconforming_face_count: 0,
+            orphan_face_count: 0,
+            nonmanifold_face_count: 0,
+            coincident_interface_face_count: 0,
+            topology_fingerprint_version: "v3".to_string(),
+            topology_fingerprint: mesh.mixed_topology_fingerprint_v3().unwrap(),
+            gmsh_version: "4.15.2".to_string(),
+            strategy: "pure_prism_extruded_shared_domain".to_string(),
+            effective_gmsh_thread_count: 1,
+            deterministic_inputs: serde_json::from_value(serde_json::json!({
+                "algorithm_2d": 6,
+                "element_order": 1,
+                "gmsh_version": "4.15.2",
+                "random_factor": 0.0,
+                "thread_count": 1,
+                "extrusion_stages": 3,
+                "lateral_grading": "math_eval_distance_linear",
+                "airbox_growth_rate": 1.9,
+                "scaled_jacobian_p05_min": 0.1
+            }))
+            .unwrap(),
+            fallbacks_triggered: Vec::new(),
+        };
+        (mesh, certificate)
+    }
+
+    #[test]
+    fn pure_prism_topology_certificate_validates_and_rejects_mutations_fail_closed() {
+        for layer_count in [1u32, 4u32] {
+            let (mesh, certificate) = qualified_pure_prism_mesh_and_certificate(layer_count);
+            validate_pure_prism_topology_certificate_against_mesh(&mesh, &certificate)
+                .unwrap_or_else(|errors| {
+                    panic!("pure prism L={layer_count} certificate must validate: {errors:?}")
+                });
+
+            let mut asset_payload = serde_json::json!({
+                "mesh": mesh,
+                "build_report": {
+                    "build_mode": "pure_prism_extruded_shared_domain",
+                    "fallbacks_triggered": [],
+                    "degraded": false,
+                    "pure_prism_topology_certificate": certificate,
+                    "mixed_topology_provenance": {
+                        "requested_topology": "pure_prism_p2",
+                        "resolved_topology": "pure_prism_p2",
+                        "accepted_certificate_fingerprint": certificate.topology_fingerprint,
+                        "requested_device": "gpu",
+                        "precision": "double",
+                        "capability_status": "implemented"
+                    }
+                }
+            });
+            asset_payload["mesh"]["pure_prism_topology_certificate"] =
+                asset_payload["build_report"]["pure_prism_topology_certificate"].clone();
+            let asset: FemDomainMeshAssetIR = serde_json::from_value(asset_payload).unwrap();
+            asset
+                .validate()
+                .expect("pure prism domain mesh asset with PurePrismP2 provenance must validate");
+        }
+
+        let (mesh, certificate) = qualified_pure_prism_mesh_and_certificate(2);
+
+        // Forged v3 fingerprint must fail closed.
+        let mut forged = certificate.clone();
+        forged.topology_fingerprint = format!("sha256:{}", "0".repeat(64));
+        assert!(
+            validate_pure_prism_topology_certificate_against_mesh(&mesh, &forged).is_err(),
+            "forged v3 fingerprint must fail closed"
+        );
+
+        // Missing air layer count must fail closed.
+        let mut no_air = certificate.clone();
+        no_air.lower_air_layer_count = 0;
+        assert!(
+            validate_pure_prism_topology_certificate_against_mesh(&mesh, &no_air).is_err(),
+            "lower_air_layer_count == 0 must fail closed"
+        );
+
+        // Nonconforming face count > 0 must fail closed.
+        let mut nonconforming = certificate.clone();
+        nonconforming.nonconforming_face_count = 1;
+        assert!(
+            validate_pure_prism_topology_certificate_against_mesh(&mesh, &nonconforming).is_err(),
+            "nonconforming_face_count > 0 must fail closed"
+        );
+
+        // Injected pyramid cell must fail closed.
+        let mut with_pyramid = mesh.clone();
+        with_pyramid.cells.types.push(crate::FemCellTypeIR::Pyramid5);
+        with_pyramid.cells.nodes.extend([0, 1, 2, 3, 8]);
+        with_pyramid
+            .cells
+            .offsets
+            .push(with_pyramid.cells.nodes.len() as u32);
+        with_pyramid
+            .cells
+            .global_ordinals
+            .push(with_pyramid.cells.global_ordinals.len() as u64);
+        with_pyramid
+            .cells
+            .mesh_parts
+            .push(crate::FemCellMeshPartIR::FarAir);
+        with_pyramid.element_markers.push(0);
+        let mut pyramid_cert = certificate.clone();
+        pyramid_cert.topology_fingerprint = with_pyramid.mixed_topology_fingerprint_v3().unwrap();
+        assert!(
+            validate_pure_prism_topology_certificate_against_mesh(&with_pyramid, &pyramid_cert)
+                .is_err(),
+            "injected pyramid5 cell must fail closed"
+        );
+
+        // Mutual exclusivity: V1 + pure_prism together must fail closed.
+        let v1_fixture = mixed_certificate_asset_value();
+        let combined_payload = serde_json::json!({
+            "mesh": mesh,
+            "build_report": {
+                "build_mode": "pure_prism_extruded_shared_domain",
+                "fallbacks_triggered": [],
+                "degraded": false,
+                "mixed_layer_topology_certificate": v1_fixture["build_report"]["mixed_layer_topology_certificate"],
+                "pure_prism_topology_certificate": certificate
+            }
+        });
+        let combined: FemDomainMeshAssetIR = serde_json::from_value(combined_payload).unwrap();
+        let errors = combined
+            .validate()
+            .expect_err("V1 and pure_prism certificates together must fail closed");
+        assert!(
+            errors.join("; ").contains("mutually exclusive"),
+            "{errors:?}"
+        );
+    }
 }
 
 fn normalized_bounds_pair(bounds_min: ([f64; 3], [f64; 3])) -> Option<([f64; 3], [f64; 3])> {
@@ -2170,6 +2552,363 @@ impl MixedLayerTopologyCertificateV1IR {
     }
 }
 
+/// Fail-closed evidence for the qualified pure-prism (`prism6` P1 `m` + P2 `phi`)
+/// shared-domain FEM route.
+///
+/// This is deliberately a separate wire type from
+/// [`MixedLayerTopologyCertificateV1IR`] and [`MixedLayerTopologyCertificateV2IR`].
+/// Every cell in the magnetic and air regions is a conforming `prism6` (zero
+/// pyramids, zero tetrahedra), with `tri3` and `quad4` interface/exterior facets.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct PurePrismTopologyCertificateV1IR {
+    pub schema_version: String,
+    pub certificate_status: String,
+    pub requested_sweep_direction: String,
+    pub resolved_sweep_direction: String,
+    pub requested_layer_count: u32,
+    pub realized_layer_count: u32,
+    pub lower_air_layer_count: u32,
+    pub upper_air_layer_count: u32,
+    pub magnetic_plane_coordinates_m: Vec<f64>,
+    pub plane_tolerance_m: f64,
+    pub interface_marker: u32,
+    pub outer_boundary_marker: u32,
+    pub magnetic_bounds_min_m: [f64; 3],
+    pub magnetic_bounds_max_m: [f64; 3],
+    pub airbox_bounds_min_m: [f64; 3],
+    pub airbox_bounds_max_m: [f64; 3],
+    pub magnetic_bounds_relative_error: f64,
+    pub airbox_bounds_relative_error: f64,
+    pub cell_family_counts_by_marker: BTreeMap<String, BTreeMap<String, u64>>,
+    pub cell_family_counts_by_part: BTreeMap<String, BTreeMap<String, u64>>,
+    pub facet_family_counts_by_role_marker: BTreeMap<String, BTreeMap<String, u64>>,
+    pub jacobian_minima_m3_by_family: BTreeMap<String, f64>,
+    pub quality_metric: String,
+    pub scaled_jacobian_minima_by_family: BTreeMap<String, f64>,
+    pub scaled_jacobian_p05_by_family: BTreeMap<String, f64>,
+    pub magnetic_volume_m3: f64,
+    pub expected_magnetic_volume_m3: f64,
+    pub magnetic_relative_volume_error: f64,
+    pub air_volume_m3: f64,
+    pub shared_domain_volume_m3: f64,
+    pub expected_shared_domain_volume_m3: f64,
+    pub shared_domain_relative_volume_error: f64,
+    pub marker_coverage_complete: bool,
+    pub nonconforming_face_count: u64,
+    pub orphan_face_count: u64,
+    pub nonmanifold_face_count: u64,
+    pub coincident_interface_face_count: u64,
+    pub topology_fingerprint_version: String,
+    pub topology_fingerprint: String,
+    pub gmsh_version: String,
+    pub strategy: String,
+    pub effective_gmsh_thread_count: u32,
+    pub deterministic_inputs: BTreeMap<String, Value>,
+    #[serde(default)]
+    pub fallbacks_triggered: Vec<String>,
+}
+
+impl PurePrismTopologyCertificateV1IR {
+    pub fn validate(&self) -> Result<(), Vec<String>> {
+        let mut errors = Vec::new();
+        if self.schema_version != "pure_prism_topology_certificate.v1" {
+            errors.push(
+                "pure prism topology certificate schema_version must be pure_prism_topology_certificate.v1"
+                    .to_string(),
+            );
+        }
+        if self.certificate_status != "accepted" {
+            errors.push("pure prism topology certificate status must be accepted".to_string());
+        }
+        if !matches!(
+            self.requested_sweep_direction.as_str(),
+            "auto" | "x" | "y" | "z"
+        ) || !matches!(self.resolved_sweep_direction.as_str(), "x" | "y" | "z")
+            || (self.requested_sweep_direction != "auto"
+                && self.requested_sweep_direction != self.resolved_sweep_direction)
+        {
+            errors.push(
+                "pure prism topology certificate sweep direction is invalid or changed".to_string(),
+            );
+        }
+        if self.requested_layer_count == 0
+            || self.requested_layer_count != self.realized_layer_count
+            || self.magnetic_plane_coordinates_m.len() != self.realized_layer_count as usize + 1
+        {
+            errors.push(
+                "pure prism topology certificate layer count or planes are invalid".to_string(),
+            );
+        }
+        if self.lower_air_layer_count == 0 || self.upper_air_layer_count == 0 {
+            errors.push(
+                "pure prism topology certificate requires at least one lower and one upper air layer"
+                    .to_string(),
+            );
+        }
+        if self
+            .magnetic_plane_coordinates_m
+            .iter()
+            .any(|value| !value.is_finite())
+            || self
+                .magnetic_plane_coordinates_m
+                .windows(2)
+                .any(|pair| pair[1] <= pair[0])
+        {
+            errors.push(
+                "pure prism topology certificate magnetic planes must be finite and increasing"
+                    .to_string(),
+            );
+        }
+        for (name, value) in [
+            ("plane_tolerance_m", self.plane_tolerance_m),
+            ("magnetic_volume_m3", self.magnetic_volume_m3),
+            (
+                "expected_magnetic_volume_m3",
+                self.expected_magnetic_volume_m3,
+            ),
+            ("air_volume_m3", self.air_volume_m3),
+            ("shared_domain_volume_m3", self.shared_domain_volume_m3),
+            (
+                "expected_shared_domain_volume_m3",
+                self.expected_shared_domain_volume_m3,
+            ),
+        ] {
+            if !value.is_finite() || value <= 0.0 {
+                errors.push(format!(
+                    "pure prism topology certificate {name} must be finite and positive"
+                ));
+            }
+        }
+        let relative_error = |actual: f64, expected: f64| {
+            if actual.is_finite() && expected.is_finite() && expected > 0.0 {
+                ((actual - expected) / expected).abs()
+            } else {
+                f64::INFINITY
+            }
+        };
+        if relative_error(self.magnetic_volume_m3, self.expected_magnetic_volume_m3)
+            > self.magnetic_relative_volume_error + 1.0e-15
+            || relative_error(
+                self.shared_domain_volume_m3,
+                self.expected_shared_domain_volume_m3,
+            ) > self.shared_domain_relative_volume_error + 1.0e-15
+            || relative_error(
+                self.magnetic_volume_m3 + self.air_volume_m3,
+                self.shared_domain_volume_m3,
+            ) > 1.0e-8
+        {
+            errors.push(
+                "pure prism topology certificate volume evidence is internally inconsistent"
+                    .to_string(),
+            );
+        }
+        if self.interface_marker == 0
+            || self.outer_boundary_marker == 0
+            || self.interface_marker == self.outer_boundary_marker
+        {
+            errors.push(
+                "pure prism topology certificate interface and outer boundary markers are invalid"
+                    .to_string(),
+            );
+        }
+        for (name, minimum, maximum) in [
+            (
+                "magnetic",
+                self.magnetic_bounds_min_m,
+                self.magnetic_bounds_max_m,
+            ),
+            ("airbox", self.airbox_bounds_min_m, self.airbox_bounds_max_m),
+        ] {
+            if minimum
+                .iter()
+                .chain(maximum.iter())
+                .any(|value| !value.is_finite())
+                || minimum
+                    .iter()
+                    .zip(maximum.iter())
+                    .any(|(left, right)| right <= left)
+            {
+                errors.push(format!(
+                    "pure prism topology certificate {name} bounds must be finite and increasing"
+                ));
+            }
+        }
+        if (0..3).any(|axis| {
+            self.airbox_bounds_min_m[axis] >= self.magnetic_bounds_min_m[axis]
+                || self.magnetic_bounds_max_m[axis] >= self.airbox_bounds_max_m[axis]
+        }) {
+            errors.push(
+                "pure prism topology certificate airbox must strictly contain the magnetic box"
+                    .to_string(),
+            );
+        }
+        for (name, value) in [
+            (
+                "magnetic_bounds_relative_error",
+                self.magnetic_bounds_relative_error,
+            ),
+            (
+                "airbox_bounds_relative_error",
+                self.airbox_bounds_relative_error,
+            ),
+            (
+                "magnetic_relative_volume_error",
+                self.magnetic_relative_volume_error,
+            ),
+            (
+                "shared_domain_relative_volume_error",
+                self.shared_domain_relative_volume_error,
+            ),
+        ] {
+            if !value.is_finite() || !(0.0..=1.0e-8).contains(&value) {
+                errors.push(format!(
+                    "pure prism topology certificate {name} must be finite and <= 1e-8"
+                ));
+            }
+        }
+        if !self.marker_coverage_complete
+            || self.nonconforming_face_count != 0
+            || self.orphan_face_count != 0
+            || self.nonmanifold_face_count != 0
+            || self.coincident_interface_face_count != 0
+        {
+            errors.push(
+                "pure prism topology certificate conformity or marker coverage is invalid"
+                    .to_string(),
+            );
+        }
+        if self.topology_fingerprint_version != "v3"
+            || !is_sha256_fingerprint(&self.topology_fingerprint)
+        {
+            errors.push(
+                "pure prism topology certificate requires a valid v3 sha256 fingerprint"
+                    .to_string(),
+            );
+        }
+        if self.quality_metric != "mixed_topology_scaled_jacobian.v1" {
+            errors.push("pure prism topology certificate quality metric is unqualified".to_string());
+        }
+        if self.strategy != "pure_prism_extruded_shared_domain" {
+            errors.push("pure prism topology certificate strategy is unqualified".to_string());
+        }
+        if self.gmsh_version.trim().is_empty() {
+            errors.push("pure prism topology certificate Gmsh version is empty".to_string());
+        }
+        if self.effective_gmsh_thread_count != 1 {
+            errors.push(
+                "pure prism topology certificate requires one effective Gmsh thread".to_string(),
+            );
+        }
+        if !self.fallbacks_triggered.is_empty() {
+            errors.push("pure prism topology certificate must not contain fallbacks".to_string());
+        }
+        if self.deterministic_inputs.is_empty()
+            || self
+                .deterministic_inputs
+                .get("element_order")
+                .is_some_and(|value| value.as_u64() != Some(1))
+            || self
+                .deterministic_inputs
+                .get("random_factor")
+                .is_some_and(|value| value.as_f64() != Some(0.0))
+            || self
+                .deterministic_inputs
+                .get("thread_count")
+                .is_some_and(|value| value.as_u64() != Some(1))
+            || self
+                .deterministic_inputs
+                .get("scaled_jacobian_p05_min")
+                .is_some_and(|value| value.as_f64().is_none_or(|v| (v - 0.1).abs() > 1.0e-12))
+        {
+            errors.push(
+                "pure prism topology certificate deterministic inputs are missing or unqualified"
+                    .to_string(),
+            );
+        }
+
+        let magnetic = self.cell_family_counts_by_part.get("magnetic");
+        let far = self.cell_family_counts_by_part.get("far_air");
+        if self.cell_family_counts_by_part.len() != 2
+            || magnetic.is_none_or(|counts| {
+                counts.len() != 1 || counts.get("prism6").copied().unwrap_or(0) == 0
+            })
+            || far.is_none_or(|counts| {
+                counts.len() != 1 || counts.get("prism6").copied().unwrap_or(0) == 0
+            })
+        {
+            errors.push(
+                "pure prism topology certificate cell families by part must contain only prism6 in magnetic and far_air"
+                    .to_string(),
+            );
+        }
+        if let (Some(magnetic), Some(far)) = (magnetic, far) {
+            if self.cell_family_counts_by_marker.len() != 2
+                || self.cell_family_counts_by_marker.get("1") != Some(magnetic)
+                || self.cell_family_counts_by_marker.get("0") != Some(far)
+            {
+                errors.push(
+                    "pure prism topology certificate marker and part cell counts disagree"
+                        .to_string(),
+                );
+            }
+        }
+        let families = BTreeSet::from(["prism6".to_string()]);
+        for (name, values, minimum) in [
+            (
+                "jacobian_minima_m3_by_family",
+                &self.jacobian_minima_m3_by_family,
+                0.0,
+            ),
+            (
+                "scaled_jacobian_minima_by_family",
+                &self.scaled_jacobian_minima_by_family,
+                0.0,
+            ),
+            (
+                "scaled_jacobian_p05_by_family",
+                &self.scaled_jacobian_p05_by_family,
+                0.1,
+            ),
+        ] {
+            if values.keys().cloned().collect::<BTreeSet<_>>() != families
+                || values.values().any(|value| {
+                    !value.is_finite() || *value < minimum || (minimum == 0.0 && *value == 0.0)
+                })
+            {
+                errors.push(format!(
+                    "pure prism topology certificate {name} is incomplete or unqualified"
+                ));
+            }
+        }
+        let interface_key = format!("material_interface:{}", self.interface_marker);
+        let outer_key = format!("exterior:{}", self.outer_boundary_marker);
+        let valid_facet_counts = |counts: Option<&BTreeMap<String, u64>>| {
+            counts.is_some_and(|counts| {
+                counts.get("tri3").copied().unwrap_or(0) > 0
+                    && counts.get("quad4").copied().unwrap_or(0) > 0
+                    && counts
+                        .keys()
+                        .all(|family| matches!(family.as_str(), "tri3" | "quad4"))
+            })
+        };
+        if self.facet_family_counts_by_role_marker.len() != 2
+            || !valid_facet_counts(self.facet_family_counts_by_role_marker.get(&interface_key))
+            || !valid_facet_counts(self.facet_family_counts_by_role_marker.get(&outer_key))
+        {
+            errors.push(
+                "pure prism topology certificate facet family evidence must provide tri3 and quad4 on material_interface and exterior"
+                    .to_string(),
+            );
+        }
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(errors)
+        }
+    }
+}
+
 fn is_sha256_fingerprint(value: &str) -> bool {
     value.strip_prefix("sha256:").is_some_and(|digest| {
         digest.len() == 64
@@ -2241,6 +2980,8 @@ pub struct FemSharedDomainBuildReportIR {
     pub mixed_layer_topology_certificate: Option<MixedLayerTopologyCertificateV1IR>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mixed_layer_topology_certificate_v2: Option<MixedLayerTopologyCertificateV2IR>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pure_prism_topology_certificate: Option<PurePrismTopologyCertificateV1IR>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mixed_topology_provenance: Option<crate::FemMixedTopologyProvenanceIR>,
     /// Rich computed mesh-quality and geometric statistics retained from the
@@ -2322,6 +3063,15 @@ impl<'de> Deserialize<'de> for FemDomainMeshAssetIR {
                 "mesh-level mixed certificate has an unsupported schema_version",
             ));
         }
+        let mesh_level_pure_prism: Option<PurePrismTopologyCertificateV1IR> = wire
+            .mesh
+            .as_ref()
+            .and_then(|mesh| mesh.get("pure_prism_topology_certificate"))
+            .filter(|value| !value.is_null())
+            .cloned()
+            .map(serde_json::from_value)
+            .transpose()
+            .map_err(serde::de::Error::custom)?;
         let mesh = wire
             .mesh
             .map(serde_json::from_value)
@@ -2358,6 +3108,22 @@ impl<'de> Deserialize<'de> for FemDomainMeshAssetIR {
                 }
                 Some(_) => {}
                 None => report.mixed_layer_topology_certificate_v2 = Some(mesh_certificate),
+            }
+        }
+        if let Some(mesh_certificate) = mesh_level_pure_prism {
+            let report = build_report.as_mut().ok_or_else(|| {
+                serde::de::Error::custom(
+                    "mesh-level pure prism certificate requires a shared-domain build report",
+                )
+            })?;
+            match report.pure_prism_topology_certificate.as_ref() {
+                Some(report_certificate) if report_certificate != &mesh_certificate => {
+                    return Err(serde::de::Error::custom(
+                        "mesh-level and build-report pure prism certificates conflict",
+                    ));
+                }
+                Some(_) => {}
+                None => report.pure_prism_topology_certificate = Some(mesh_certificate),
             }
         }
         Ok(Self {
@@ -2434,6 +3200,45 @@ impl FemDomainMeshAssetIR {
                 }
             }
         }
+        if let Some(report) = self.build_report.as_ref() {
+            let certificate_count = usize::from(report.mixed_layer_topology_certificate.is_some())
+                + usize::from(report.mixed_layer_topology_certificate_v2.is_some())
+                + usize::from(report.pure_prism_topology_certificate.is_some());
+            if certificate_count > 1 {
+                errors.push(
+                    "fem_domain_mesh_asset.build_report cannot carry multiple topology certificates (v1, v2, and pure_prism are mutually exclusive)"
+                        .to_string(),
+                );
+            }
+        }
+        if let Some(certificate) = self
+            .build_report
+            .as_ref()
+            .and_then(|report| report.pure_prism_topology_certificate.as_ref())
+        {
+            match &self.mesh {
+                Some(mesh) => {
+                    if let Err(certificate_errors) =
+                        validate_pure_prism_topology_certificate_against_mesh(mesh, certificate)
+                    {
+                        errors.extend(certificate_errors.into_iter().map(|error| {
+                            format!("fem_domain_mesh_asset.build_report.{error}")
+                        }));
+                    }
+                }
+                None => {
+                    if let Err(certificate_errors) = certificate.validate() {
+                        errors.extend(certificate_errors.into_iter().map(|error| {
+                            format!("fem_domain_mesh_asset.build_report.{error}")
+                        }));
+                    }
+                    errors.push(
+                        "fem_domain_mesh_asset pure prism topology certificate requires an inline mesh for fingerprint binding"
+                            .to_string(),
+                    );
+                }
+            }
+        }
         if let Some(provenance) = self
             .build_report
             .as_ref()
@@ -2443,28 +3248,43 @@ impl FemDomainMeshAssetIR {
                 match (
                     report.mixed_layer_topology_certificate.as_ref(),
                     report.mixed_layer_topology_certificate_v2.as_ref(),
+                    report.pure_prism_topology_certificate.as_ref(),
                 ) {
-                    (Some(_), Some(_)) => {
+                    (Some(_), Some(_), None) => {
                         errors.push(
                             "fem_domain_mesh_asset mixed topology provenance cannot bind both v1 and v2 certificates"
                                 .to_string(),
                         );
                         None
                     }
-                    (Some(certificate), None) => Some((
+                    (Some(certificate), None, None) => Some((
                         certificate.topology_fingerprint.as_str(),
                         certificate.topology_fingerprint_version.as_str(),
+                        crate::FemMeshTopologyFamilyIR::MixedP1,
                     )),
-                    (None, Some(certificate)) => Some((
+                    (None, Some(certificate), None) => Some((
                         certificate.topology_fingerprint.as_str(),
                         certificate.topology_fingerprint_version.as_str(),
+                        crate::FemMeshTopologyFamilyIR::MixedP1,
                     )),
-                    (None, None) => None,
+                    (None, None, Some(certificate)) => Some((
+                        certificate.topology_fingerprint.as_str(),
+                        certificate.topology_fingerprint_version.as_str(),
+                        crate::FemMeshTopologyFamilyIR::PurePrismP2,
+                    )),
+                    (None, None, None) => None,
+                    _ => {
+                        errors.push(
+                            "fem_domain_mesh_asset mixed topology provenance cannot bind multiple certificates"
+                                .to_string(),
+                        );
+                        None
+                    }
                 }
             });
             let mut accepted_fingerprint_is_stale = false;
             match certificate_binding {
-                Some((fingerprint, _))
+                Some((fingerprint, _, _))
                     if provenance.accepted_certificate_fingerprint != fingerprint =>
                 {
                     accepted_fingerprint_is_stale = true;
@@ -2483,7 +3303,7 @@ impl FemDomainMeshAssetIR {
                                 .to_string(),
                         );
                     }
-                    if let Some((_, fingerprint_version)) = certificate_binding {
+                    if let Some((_, fingerprint_version, _)) = certificate_binding {
                         match mesh.mixed_topology_fingerprint_for_version(
                             fingerprint_version,
                         ) {
@@ -2508,13 +3328,22 @@ impl FemDomainMeshAssetIR {
                         .to_string(),
                 );
             }
-            if provenance.requested_topology != crate::FemMeshTopologyFamilyIR::MixedP1
-                || provenance.resolved_topology != crate::FemMeshTopologyFamilyIR::MixedP1
+            let expected_topology = certificate_binding
+                .map(|(_, _, family)| family)
+                .unwrap_or(crate::FemMeshTopologyFamilyIR::MixedP1);
+            if provenance.requested_topology != expected_topology
+                || provenance.resolved_topology != expected_topology
             {
-                errors.push(
-                    "fem_domain_mesh_asset mixed topology provenance requested and resolved topology must be mixed_p1"
-                        .to_string(),
-                );
+                errors.push(match expected_topology {
+                    crate::FemMeshTopologyFamilyIR::MixedP1 => {
+                        "fem_domain_mesh_asset mixed topology provenance requested and resolved topology must be mixed_p1"
+                            .to_string()
+                    }
+                    crate::FemMeshTopologyFamilyIR::PurePrismP2 => {
+                        "fem_domain_mesh_asset mixed topology provenance requested and resolved topology must be pure_prism_p2"
+                            .to_string()
+                    }
+                });
             }
             if !matches!(
                 provenance.capability_status,

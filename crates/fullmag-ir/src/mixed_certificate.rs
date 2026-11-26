@@ -1,6 +1,6 @@
 use crate::{
     FemCellMeshPartIR, FemCellTypeIR, FemFacetRoleIR, FemFacetTypeIR, MeshIR, MeshValidationPolicy,
-    MixedLayerTopologyCertificateV1IR,
+    MixedLayerTopologyCertificateV1IR, PurePrismTopologyCertificateV1IR,
 };
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -1422,4 +1422,461 @@ pub fn validate_mixed_layer_topology_certificate_against_mesh(
     certificate: &MixedLayerTopologyCertificateV1IR,
 ) -> Result<(), MeshValidationError> {
     validate_mixed_layer_topology_certificate_and_compute_evidence(mesh, certificate).map(drop)
+}
+
+fn build_pure_prism_cell_record(mesh: &MeshIR, ordinal: usize) -> Result<CellEvidenceRecord, String> {
+    let cell_type = mesh.cells.types[ordinal];
+    let mesh_part = mesh.cells.mesh_parts[ordinal];
+    let marker = *mesh
+        .element_markers
+        .get(ordinal)
+        .ok_or_else(|| format!("pure prism certificate cell {ordinal} is missing a marker"))?;
+    let legal = matches!(
+        (mesh_part, cell_type, marker),
+        (FemCellMeshPartIR::Magnetic, FemCellTypeIR::Prism6, 1)
+            | (FemCellMeshPartIR::FarAir, FemCellTypeIR::Prism6, 0)
+    );
+    let node_ids = mesh
+        .cells
+        .item_nodes(ordinal)
+        .ok_or_else(|| format!("pure prism certificate cell {ordinal} has invalid CSR"))?;
+    let points = node_ids
+        .iter()
+        .map(|node| {
+            mesh.nodes.get(*node as usize).copied().ok_or_else(|| {
+                format!("pure prism certificate cell {ordinal} references missing node {node}")
+            })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let (signed_volume_m3, absolute_volume_m3, scaled_jacobian_samples) = if legal {
+        let (signed, absolute) = mixed_cell_volumes(cell_type, &points)?;
+        (
+            signed,
+            absolute,
+            crate::mesh_hints::cell_scaled_jacobians(cell_type, &points)
+                .into_iter()
+                .collect(),
+        )
+    } else {
+        (0.0, 0.0, SmallVec::new())
+    };
+    let global_ordinal = *mesh.cells.global_ordinals.get(ordinal).ok_or_else(|| {
+        format!("pure prism certificate cell {ordinal} is missing a global ordinal")
+    })?;
+    let faces = mixed_local_facets(cell_type)
+        .iter()
+        .map(|local_face| {
+            let mut sorted_global_node_ids = local_face
+                .iter()
+                .map(|index| node_ids[*index])
+                .collect::<SmallVec<[u32; 4]>>();
+            sorted_global_node_ids.sort_unstable();
+            FaceRecord {
+                sorted_global_node_ids,
+                cell_storage_ordinal: ordinal,
+                marker,
+            }
+        })
+        .collect();
+    Ok(CellEvidenceRecord {
+        global_ordinal,
+        storage_ordinal: ordinal,
+        topology_family: cell_family(cell_type),
+        mesh_part,
+        marker,
+        signed_volume_m3,
+        absolute_volume_m3,
+        jacobian_samples_m3: crate::mesh_hints::cell_jacobian_determinants(cell_type, &points)
+            .into_iter()
+            .collect(),
+        scaled_jacobian_samples,
+        faces,
+        semantic_error: (!legal).then(|| {
+            format!(
+                "pure prism certificate cell {ordinal} has invalid mesh part/family/marker ({:?}, {:?}, {marker})",
+                mesh_part, cell_type
+            )
+        }),
+    })
+}
+
+fn validated_parallel_pure_prism_cell_records(
+    mesh: &MeshIR,
+) -> Result<Vec<CellEvidenceRecord>, String> {
+    let results = mesh
+        .cells
+        .types
+        .par_iter()
+        .enumerate()
+        .map(|(ordinal, _)| build_pure_prism_cell_record(mesh, ordinal))
+        .collect::<Vec<_>>();
+    let mut records = Vec::with_capacity(results.len());
+    for result in results {
+        records.push(result?);
+    }
+    crate::mesh_hints::validate_mesh_geometry_from_jacobian_samples(
+        &mesh.nodes,
+        records.iter().map(|record| {
+            (
+                record.global_ordinal,
+                mesh.cells.types[record.storage_ordinal],
+                record.jacobian_samples_m3.as_slice(),
+            )
+        }),
+        &MeshValidationPolicy::default(),
+    )
+    .map_err(|errors| executable_mesh_error(errors.into_errors()))?;
+    if let Some(error) = records
+        .iter()
+        .find_map(|record| record.semantic_error.as_ref())
+    {
+        return Err(error.clone());
+    }
+    records.sort_by_key(|record| record.global_ordinal);
+    Ok(records)
+}
+
+fn validate_pure_prism_evidence_against_mesh(
+    certificate: &PurePrismTopologyCertificateV1IR,
+    mesh: &MeshIR,
+    mut records: Vec<CellEvidenceRecord>,
+) -> Result<(), Vec<String>> {
+    let sweep_axis = match certificate.resolved_sweep_direction.as_str() {
+        "x" => 0,
+        "y" => 1,
+        "z" => 2,
+        _ => return Err(vec!["pure prism certificate sweep direction is invalid".to_string()]),
+    };
+    let (
+        cell_family_counts_by_marker,
+        cell_family_counts_by_part,
+        facet_family_counts_by_role_marker,
+    ) = count_evidence(mesh, &records);
+    if certificate.cell_family_counts_by_marker != cell_family_counts_by_marker
+        || certificate.cell_family_counts_by_part != cell_family_counts_by_part
+        || certificate.facet_family_counts_by_role_marker != facet_family_counts_by_role_marker
+    {
+        return Err(vec![
+            "pure prism certificate cell/facet counts disagree with the mesh".to_string(),
+        ]);
+    }
+    let mut magnetic_nodes = BTreeSet::new();
+    let mut jacobians = BTreeMap::<String, Vec<f64>>::new();
+    let mut scaled = BTreeMap::<String, Vec<f64>>::new();
+    for record in &records {
+        let node_ids = mesh
+            .cells
+            .item_nodes(record.storage_ordinal)
+            .expect("structural preflight guarantees valid cell CSR");
+        if record.mesh_part == FemCellMeshPartIR::Magnetic {
+            magnetic_nodes.extend(node_ids.iter().copied());
+        }
+        jacobians
+            .entry(record.topology_family.to_string())
+            .or_default()
+            .extend(record.jacobian_samples_m3.iter().copied());
+        scaled
+            .entry(record.topology_family.to_string())
+            .or_default()
+            .extend(record.scaled_jacobian_samples.iter().copied());
+    }
+
+    let magnetic_bounds = bounds_for_nodes(mesh, &magnetic_nodes).map_err(|error| vec![error])?;
+    let outer_bounds =
+        bounds_for_nodes(mesh, &(0..mesh.nodes.len() as u32).collect()).map_err(|error| vec![error])?;
+    let magnetic_bounds_relative_error = bounds_relative_error(
+        magnetic_bounds,
+        (
+            certificate.magnetic_bounds_min_m,
+            certificate.magnetic_bounds_max_m,
+        ),
+    );
+    let airbox_bounds_relative_error = bounds_relative_error(
+        outer_bounds,
+        (
+            certificate.airbox_bounds_min_m,
+            certificate.airbox_bounds_max_m,
+        ),
+    );
+    if magnetic_bounds_relative_error > 1.0e-8 || airbox_bounds_relative_error > 1.0e-8 {
+        return Err(vec![
+            "pure prism certificate realized bounds do not match authored CAD bounds".to_string(),
+        ]);
+    }
+
+    let mut mag_coordinates = magnetic_nodes
+        .iter()
+        .map(|node| mesh.nodes[*node as usize][sweep_axis])
+        .collect::<Vec<_>>();
+    mag_coordinates.sort_by(f64::total_cmp);
+    let thickness = mag_coordinates.last().unwrap() - mag_coordinates.first().unwrap();
+    let plane_tolerance_m = 1.0e-15_f64.max(1.0e-8 * thickness);
+    let mut magnetic_plane_coordinates_m = Vec::<f64>::new();
+    for value in mag_coordinates {
+        if magnetic_plane_coordinates_m
+            .last()
+            .is_none_or(|prior| (value - prior).abs() > plane_tolerance_m)
+        {
+            magnetic_plane_coordinates_m.push(value);
+        }
+    }
+
+    let mut all_axis_coords = mesh
+        .nodes
+        .iter()
+        .map(|point| point[sweep_axis])
+        .collect::<Vec<_>>();
+    all_axis_coords.sort_by(f64::total_cmp);
+    let airbox_thickness = all_axis_coords.last().copied().unwrap_or(0.0)
+        - all_axis_coords.first().copied().unwrap_or(0.0);
+    let air_plane_tolerance = plane_tolerance_m.max(1.0e-12 * airbox_thickness.abs());
+    let mut all_planes = Vec::<f64>::new();
+    for value in all_axis_coords {
+        if all_planes
+            .last()
+            .is_none_or(|prior| (value - prior).abs() > air_plane_tolerance)
+        {
+            all_planes.push(value);
+        }
+    }
+    let mag_min_plane = *magnetic_plane_coordinates_m
+        .first()
+        .ok_or_else(|| vec!["pure prism certificate requires magnetic layer planes".to_string()])?;
+    let mag_max_plane = *magnetic_plane_coordinates_m
+        .last()
+        .ok_or_else(|| vec!["pure prism certificate requires magnetic layer planes".to_string()])?;
+    let realized_lower_air_layer_count = all_planes
+        .iter()
+        .filter(|value| **value < mag_min_plane - air_plane_tolerance)
+        .count() as u32;
+    let realized_upper_air_layer_count = all_planes
+        .iter()
+        .filter(|value| **value > mag_max_plane + air_plane_tolerance)
+        .count() as u32;
+
+    let adjacency = adjacency_from_records(&mut records);
+    let jacobian_minima_m3_by_family: BTreeMap<String, f64> = jacobians
+        .into_iter()
+        .map(|(family, values)| (family, values.into_iter().min_by(f64::total_cmp).unwrap()))
+        .collect();
+    let mut scaled_jacobian_minima_by_family = BTreeMap::new();
+    let mut scaled_jacobian_p05_by_family = BTreeMap::new();
+    for (family, mut values) in scaled {
+        scaled_jacobian_minima_by_family.insert(
+            family.clone(),
+            values.iter().copied().min_by(f64::total_cmp).unwrap(),
+        );
+        scaled_jacobian_p05_by_family.insert(
+            family,
+            percentile_05(&mut values).ok_or_else(|| {
+                vec!["pure prism certificate scaled Jacobian samples must be finite".to_string()]
+            })?,
+        );
+    }
+
+    let magnetic_volume_m3 = fixed_order_compensated_sum(
+        records
+            .iter()
+            .filter(|record| record.mesh_part == FemCellMeshPartIR::Magnetic)
+            .map(|record| record.absolute_volume_m3),
+    );
+    let shared_domain_volume_m3 =
+        fixed_order_compensated_sum(records.iter().map(|record| record.absolute_volume_m3));
+    let expected_magnetic_volume_m3 = (0..3)
+        .map(|axis| certificate.magnetic_bounds_max_m[axis] - certificate.magnetic_bounds_min_m[axis])
+        .product::<f64>();
+    let expected_shared_domain_volume_m3 = (0..3)
+        .map(|axis| certificate.airbox_bounds_max_m[axis] - certificate.airbox_bounds_min_m[axis])
+        .product::<f64>();
+    let air_volume_m3 = shared_domain_volume_m3 - magnetic_volume_m3;
+    let magnetic_relative_volume_error =
+        ((magnetic_volume_m3 - expected_magnetic_volume_m3) / expected_magnetic_volume_m3).abs();
+    let shared_domain_relative_volume_error = ((shared_domain_volume_m3
+        - expected_shared_domain_volume_m3)
+        / expected_shared_domain_volume_m3)
+        .abs();
+
+    let (
+        nonconforming_face_count,
+        orphan_face_count,
+        nonmanifold_face_count,
+        coincident_interface_face_count,
+    ) = mixed_conformity_counts_fast(
+        mesh,
+        &adjacency,
+        plane_tolerance_m,
+        certificate.interface_marker,
+        certificate.outer_boundary_marker,
+    )
+    .map_err(|error| vec![error])?;
+
+    let mut stale = Vec::new();
+    let plane_tolerance = certificate.plane_tolerance_m.max(plane_tolerance_m);
+    if certificate.magnetic_plane_coordinates_m.len() != magnetic_plane_coordinates_m.len()
+        || !certificate
+            .magnetic_plane_coordinates_m
+            .iter()
+            .zip(&magnetic_plane_coordinates_m)
+            .all(|(claimed, actual)| (claimed - actual).abs() <= plane_tolerance)
+    {
+        stale.push("magnetic_plane_coordinates_m");
+    }
+    if certificate.lower_air_layer_count != realized_lower_air_layer_count {
+        stale.push("lower_air_layer_count");
+    }
+    if certificate.upper_air_layer_count != realized_upper_air_layer_count {
+        stale.push("upper_air_layer_count");
+    }
+    if !float_close(
+        certificate.plane_tolerance_m,
+        plane_tolerance_m,
+        1.0e-12,
+        1.0e-30,
+    ) {
+        stale.push("plane_tolerance_m");
+    }
+    if !float_map_close(
+        &certificate.jacobian_minima_m3_by_family,
+        &jacobian_minima_m3_by_family,
+    ) {
+        stale.push("jacobian_minima_m3_by_family");
+    }
+    if !dimensionless_float_map_close(
+        &certificate.scaled_jacobian_minima_by_family,
+        &scaled_jacobian_minima_by_family,
+    ) {
+        stale.push("scaled_jacobian_minima_by_family");
+    }
+    if !dimensionless_float_map_close(
+        &certificate.scaled_jacobian_p05_by_family,
+        &scaled_jacobian_p05_by_family,
+    ) {
+        stale.push("scaled_jacobian_p05_by_family");
+    }
+    if scaled_jacobian_p05_by_family
+        .get("prism6")
+        .is_none_or(|value| !value.is_finite() || *value < 0.1)
+    {
+        stale.push("scaled_jacobian_p05_prism6_below_minimum");
+    }
+    if !float_close(
+        certificate.magnetic_volume_m3,
+        magnetic_volume_m3,
+        1.0e-12,
+        1.0e-30,
+    ) {
+        stale.push("magnetic_volume_m3");
+    }
+    if !float_close(
+        certificate.expected_magnetic_volume_m3,
+        expected_magnetic_volume_m3,
+        1.0e-12,
+        1.0e-30,
+    ) {
+        stale.push("expected_magnetic_volume_m3");
+    }
+    if !dimensionless_float_close(
+        certificate.magnetic_relative_volume_error,
+        magnetic_relative_volume_error,
+    ) || magnetic_relative_volume_error > 1.0e-8
+    {
+        stale.push("magnetic_relative_volume_error");
+    }
+    if !float_close(certificate.air_volume_m3, air_volume_m3, 1.0e-12, 1.0e-30) {
+        stale.push("air_volume_m3");
+    }
+    if !float_close(
+        certificate.shared_domain_volume_m3,
+        shared_domain_volume_m3,
+        1.0e-12,
+        1.0e-30,
+    ) {
+        stale.push("shared_domain_volume_m3");
+    }
+    if !float_close(
+        certificate.expected_shared_domain_volume_m3,
+        expected_shared_domain_volume_m3,
+        1.0e-12,
+        1.0e-30,
+    ) {
+        stale.push("expected_shared_domain_volume_m3");
+    }
+    if !dimensionless_float_close(
+        certificate.shared_domain_relative_volume_error,
+        shared_domain_relative_volume_error,
+    ) || shared_domain_relative_volume_error > 1.0e-8
+    {
+        stale.push("shared_domain_relative_volume_error");
+    }
+    if !float_close(
+        certificate.magnetic_bounds_relative_error,
+        magnetic_bounds_relative_error,
+        1.0e-12,
+        1.0e-30,
+    ) {
+        stale.push("magnetic_bounds_relative_error");
+    }
+    if !float_close(
+        certificate.airbox_bounds_relative_error,
+        airbox_bounds_relative_error,
+        1.0e-12,
+        1.0e-30,
+    ) {
+        stale.push("airbox_bounds_relative_error");
+    }
+    if certificate.nonconforming_face_count != nonconforming_face_count
+        || nonconforming_face_count != 0
+    {
+        stale.push("nonconforming_face_count");
+    }
+    if certificate.orphan_face_count != orphan_face_count || orphan_face_count != 0 {
+        stale.push("orphan_face_count");
+    }
+    if certificate.nonmanifold_face_count != nonmanifold_face_count || nonmanifold_face_count != 0 {
+        stale.push("nonmanifold_face_count");
+    }
+    if certificate.coincident_interface_face_count != coincident_interface_face_count
+        || coincident_interface_face_count != 0
+    {
+        stale.push("coincident_interface_face_count");
+    }
+
+    if stale.is_empty() {
+        Ok(())
+    } else {
+        Err(vec![format!(
+            "pure prism topology certificate recomputed evidence is stale: {}",
+            stale.join(", ")
+        )])
+    }
+}
+
+/// Validate an accepted pure-prism topology certificate against its exact mesh.
+pub fn validate_pure_prism_topology_certificate_against_mesh(
+    mesh: &MeshIR,
+    certificate: &PurePrismTopologyCertificateV1IR,
+) -> Result<(), MeshValidationError> {
+    structural_preflight(mesh).map_err(|error| vec![error])?;
+    let records = validated_parallel_pure_prism_cell_records(mesh).map_err(|error| vec![error])?;
+    let mut errors = certificate.validate().err().unwrap_or_default();
+    if certificate.topology_fingerprint_version == "v3" {
+        match mesh.mixed_topology_fingerprint_v3() {
+            Ok(fingerprint) if certificate.topology_fingerprint != fingerprint => {
+                errors.push("pure prism topology certificate fingerprint is stale".to_string());
+            }
+            Ok(_) => {
+                if let Err(evidence_errors) =
+                    validate_pure_prism_evidence_against_mesh(certificate, mesh, records)
+                {
+                    errors.extend(evidence_errors);
+                }
+            }
+            Err(error) => errors.push(error),
+        }
+    }
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(errors)
+    }
 }
