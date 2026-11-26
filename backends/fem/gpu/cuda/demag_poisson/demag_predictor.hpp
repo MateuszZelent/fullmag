@@ -14,7 +14,19 @@
 #include <string>
 
 #if FULLMAG_HAS_CUDA_RUNTIME
+#if defined(__has_include)
+#if __has_include(<cuda_runtime.h>)
+#define FULLMAG_DEMAG_PREDICTOR_HAS_CUDA_HEADER 1
 #include <cuda_runtime.h>
+#else
+#define FULLMAG_DEMAG_PREDICTOR_HAS_CUDA_HEADER 0
+#endif
+#else
+#define FULLMAG_DEMAG_PREDICTOR_HAS_CUDA_HEADER 1
+#include <cuda_runtime.h>
+#endif
+#else
+#define FULLMAG_DEMAG_PREDICTOR_HAS_CUDA_HEADER 0
 #endif
 
 namespace fullmag::fem {
@@ -47,6 +59,8 @@ inline void gpu_demag_predictor_invalidate(
 /// Idempotently frees device buffers and invalidates predictor metadata.
 void gpu_demag_predictor_destroy(GpuDemagLinearPredictorState &state);
 
+#if FULLMAG_DEMAG_PREDICTOR_HAS_CUDA_HEADER
+
 /// Writes phi^(0)(stage_time_s) = phi_n + alpha * (phi_n - phi_{n-1}) into
 /// `d_solution` when all history, monotonic stage-time, dt_ratio <= 2.0, and
 /// operator-signature guards pass; otherwise leaves `d_solution` untouched.
@@ -71,6 +85,8 @@ bool gpu_demag_predictor_commit_accepted_potential(
     uint64_t operator_signature,
     cudaStream_t stream,
     std::string &reason);
+
+#endif
 
 #endif
 

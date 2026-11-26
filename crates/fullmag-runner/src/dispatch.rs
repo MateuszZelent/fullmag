@@ -3915,7 +3915,7 @@ fn execute_native_fem(
 /// workspace resolved (`resolved_linear_solver == None`).
 #[cfg(any(test, feature = "fem-gpu", feature = "fem-native"))]
 pub(crate) fn apply_native_fem_gpu_demag_linear_solver_provenance(
-    provenance: &mut ExecutionProvenance,
+    provenance: &mut crate::types::ExecutionProvenance,
     requested_strategy: Option<&str>,
     resolved_linear_solver: Option<&str>,
     fallback_reason: Option<&str>,
@@ -5238,8 +5238,8 @@ mod tests {
 
     #[test]
     fn apply_native_fem_gpu_demag_linear_solver_provenance_updates_poisson_and_bem() {
-        let mut provenance = ExecutionProvenance {
-            fem_poisson_demag: Some(FemPoissonDemagProvenance::default()),
+        let mut provenance = crate::types::ExecutionProvenance {
+            fem_poisson_demag: Some(crate::types::FemPoissonDemagProvenance::default()),
             fem_bem_demag: Some(crate::types::FemBemDemagProvenance {
                 operator_mode: "device_hypre_fem_bem".to_string(),
                 operator_fingerprint: "fp".to_string(),
@@ -5260,7 +5260,7 @@ mod tests {
                 resolved_linear_solver: None,
                 linear_solver_fallback_reason: None,
             }),
-            ..ExecutionProvenance::default()
+            ..crate::types::ExecutionProvenance::default()
         };
 
         apply_native_fem_gpu_demag_linear_solver_provenance(

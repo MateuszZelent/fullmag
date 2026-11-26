@@ -12,8 +12,11 @@
 #include <cstdint>
 #include <string>
 
-#if FULLMAG_HAS_CUDA_RUNTIME && FULLMAG_HAS_MFEM_STACK && defined(MFEM_USE_MPI)
+#if FULLMAG_HAS_CUDA_RUNTIME
 #include <cuda_runtime.h>
+#endif
+
+#if FULLMAG_HAS_MFEM_STACK
 #include <mfem.hpp>
 #endif
 

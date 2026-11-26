@@ -497,7 +497,7 @@ struct PeriodicHexMeshFixture {
     std::vector<uint32_t> facet_markers;
     std::vector<uint64_t> facet_global_ordinals;
     std::vector<uint32_t> periodic_node_pairs;
-    std::vector<uint32_t> periodic_boundary_markers;
+    std::vector<uint32_t> periodic_boundary_pair_markers;
     std::vector<double> initial_m;
 
     PeriodicHexMeshFixture(bool periodic_x, bool periodic_y)
@@ -557,8 +557,10 @@ struct PeriodicHexMeshFixture {
             facet_nodes.push_back(d);
             facet_offsets.push_back(static_cast<uint32_t>(facet_nodes.size()));
         };
-        const uint32_t x_marker = periodic_x ? 101u : 99u;
-        const uint32_t y_marker = periodic_y ? 102u : 99u;
+        const uint32_t x_min_marker = periodic_x ? 101u : 99u;
+        const uint32_t x_max_marker = periodic_x ? 102u : 99u;
+        const uint32_t y_min_marker = periodic_y ? 103u : 99u;
+        const uint32_t y_max_marker = periodic_y ? 104u : 99u;
         for (int cy = 0; cy < ny; ++cy) {
             for (int cx = 0; cx < nx; ++cx) {
                 add_quad(node_id(cx, cy, 0), node_id(cx, cy + 1, 0),
@@ -570,21 +572,22 @@ struct PeriodicHexMeshFixture {
         for (int cz = 0; cz < nz; ++cz) {
             for (int cx = 0; cx < nx; ++cx) {
                 add_quad(node_id(cx, 0, cz), node_id(cx + 1, 0, cz),
-                         node_id(cx + 1, 0, cz + 1), node_id(cx, 0, cz + 1), y_marker);
+                         node_id(cx + 1, 0, cz + 1), node_id(cx, 0, cz + 1), y_min_marker);
                 add_quad(node_id(cx, ny, cz), node_id(cx, ny, cz + 1),
-                         node_id(cx + 1, ny, cz + 1), node_id(cx + 1, ny, cz), y_marker);
+                         node_id(cx + 1, ny, cz + 1), node_id(cx + 1, ny, cz), y_max_marker);
             }
         }
         for (int cz = 0; cz < nz; ++cz) {
             for (int cy = 0; cy < ny; ++cy) {
                 add_quad(node_id(0, cy, cz), node_id(0, cy, cz + 1),
-                         node_id(0, cy + 1, cz + 1), node_id(0, cy + 1, cz), x_marker);
+                         node_id(0, cy + 1, cz + 1), node_id(0, cy + 1, cz), x_min_marker);
                 add_quad(node_id(nx, cy, cz), node_id(nx, cy + 1, cz),
-                         node_id(nx, cy + 1, cz + 1), node_id(nx, cy, cz + 1), x_marker);
+                         node_id(nx, cy + 1, cz + 1), node_id(nx, cy, cz + 1), x_max_marker);
             }
         }
         if (periodic_x) {
-            periodic_boundary_markers.push_back(101u);
+            periodic_boundary_pair_markers.push_back(101u);
+            periodic_boundary_pair_markers.push_back(102u);
             for (int iz = 0; iz <= nz; ++iz) {
                 for (int iy = 0; iy <= ny; ++iy) {
                     periodic_node_pairs.push_back(node_id(0, iy, iz));
@@ -593,7 +596,8 @@ struct PeriodicHexMeshFixture {
             }
         }
         if (periodic_y) {
-            periodic_boundary_markers.push_back(102u);
+            periodic_boundary_pair_markers.push_back(103u);
+            periodic_boundary_pair_markers.push_back(104u);
             for (int iz = 0; iz <= nz; ++iz) {
                 for (int ix = 0; ix <= nx; ++ix) {
                     periodic_node_pairs.push_back(node_id(ix, 0, iz));
@@ -636,9 +640,9 @@ struct PeriodicHexMeshFixture {
             p.mesh.periodic_node_pairs = periodic_node_pairs.data();
             p.mesh.periodic_node_pairs_len = periodic_node_pairs.size();
         }
-        if (!periodic_boundary_markers.empty()) {
-            p.mesh.periodic_boundary_markers = periodic_boundary_markers.data();
-            p.mesh.periodic_boundary_markers_len = periodic_boundary_markers.size();
+        if (!periodic_boundary_pair_markers.empty()) {
+            p.mesh.periodic_boundary_pair_markers = periodic_boundary_pair_markers.data();
+            p.mesh.periodic_boundary_pair_markers_len = periodic_boundary_pair_markers.size();
         }
         p.material = {8.0e5, 1.3e-11, 0.1, 2.211e5};
         p.fe_order = 1;
