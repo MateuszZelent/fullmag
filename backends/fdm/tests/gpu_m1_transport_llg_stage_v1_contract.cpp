@@ -51,6 +51,7 @@ struct ControlledOperator {
     std::vector<double> stage_times;
     std::vector<uint64_t> attempt_ids;
     std::vector<uint64_t> stage_ids;
+    std::vector<fullmag::fdm::GpuTransportStageRole> stage_roles;
     uint64_t fail_stage = 0;
 };
 
@@ -78,6 +79,7 @@ bool controlled_transport_rhs(
     double t_stage,
     uint64_t attempt_id,
     uint64_t stage_id,
+    fullmag::fdm::GpuTransportStageRole role,
     DeviceVectorField &torque_view)
 {
     if (active_operator == nullptr || active_operator->torque == nullptr) return false;
@@ -119,6 +121,7 @@ bool controlled_transport_rhs(
     active_operator->stage_times.push_back(t_stage);
     active_operator->attempt_ids.push_back(attempt_id);
     active_operator->stage_ids.push_back(stage_id);
+    active_operator->stage_roles.push_back(role);
     ++active_operator->evaluations;
     if (stage_id == active_operator->fail_stage) return false;
     torque_view.x = active_operator->torque;
@@ -293,6 +296,7 @@ struct IntegratorObservation {
     std::vector<double> stage_times;
     std::vector<uint64_t> attempt_ids;
     std::vector<uint64_t> stage_ids;
+    std::vector<fullmag::fdm::GpuTransportStageRole> stage_roles;
 };
 
 IntegratorObservation run_integrator(
@@ -312,6 +316,7 @@ IntegratorObservation run_integrator(
         op.stage_times,
         op.attempt_ids,
         op.stage_ids,
+        op.stage_roles,
     };
     check_cuda(cudaFree(op.torque), "free controlled torque");
     fullmag_fdm_backend_destroy(handle);
@@ -345,13 +350,19 @@ void verify_integrator(fullmag_fdm_integrator integrator, uint64_t expected_stag
               "later stage reused frozen m(t_n) instead of current m_stage");
         check(attempt_ids.size() == expected_stages &&
                   stage_ids.size() == expected_stages &&
-                  stage_times.size() == expected_stages,
+                  stage_times.size() == expected_stages &&
+                  observation->stage_roles.size() == expected_stages,
               "transport stage diagnostics have inconsistent lengths");
         for (uint64_t stage = 0; stage < expected_stages; ++stage) {
             check(attempt_ids[stage] == 1,
                   "transport callback received an inconsistent attempt id");
             check(stage_ids[stage] == stage + 1,
                   "transport callback received an inconsistent stage id");
+            const auto expected_role = stage + 1 == expected_stages
+                ? fullmag::fdm::GpuTransportStageRole::EndpointCandidate
+                : fullmag::fdm::GpuTransportStageRole::Rhs;
+            check(observation->stage_roles[stage] == expected_role,
+                  "only the final transport callback may pin an endpoint candidate");
         }
         check(stage_times.front() == 0.0,
               "first transport callback received the wrong stage time");

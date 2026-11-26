@@ -117,12 +117,15 @@ struct AsyncPreviewSnapshotPool {
 
 struct Context;
 
+enum class GpuTransportStageRole { Rhs, EndpointCandidate };
+
 using GpuTransportRhsEvaluator = bool (*)(
     Context &ctx,
     const DeviceVectorField &m_stage,
     double t_stage,
     uint64_t attempt_id,
     uint64_t stage_id,
+    GpuTransportStageRole role,
     DeviceVectorField &torque_view);
 
 struct GpuTransportRhsBinding {
@@ -1709,7 +1712,8 @@ bool context_evaluate_gpu_transport_rhs(
     const DeviceVectorField &m_stage,
     double t_stage,
     uint64_t attempt_id,
-    uint64_t stage_id);
+    uint64_t stage_id,
+    GpuTransportStageRole role = GpuTransportStageRole::Rhs);
 bool context_complete_gpu_transport_rhs(Context &ctx);
 bool context_begin_gpu_transport_step(Context &ctx, uint64_t attempt_id);
 bool context_retry_gpu_transport_step(Context &ctx);

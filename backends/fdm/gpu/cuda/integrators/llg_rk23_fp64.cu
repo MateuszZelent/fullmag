@@ -281,9 +281,11 @@ static bool compute_rhs_into(Context &ctx, DeviceVectorField &rhs_out,
             ctx.last_error = "adaptive_device_loop_gpu_transport_unsupported";
             return false;
         }
+        const auto role = stage_id == 4
+            ? GpuTransportStageRole::EndpointCandidate : GpuTransportStageRole::Rhs;
         if (!context_evaluate_gpu_transport_rhs(
                 ctx, ctx.m, evaluation_time,
-                ctx.gpu_transport_active_attempt_id, stage_id) ||
+                ctx.gpu_transport_active_attempt_id, stage_id, role) ||
             !launch_add_gpu_transport_torque_fp64(ctx, ctx.m, rhs_out)) {
             return false;
         }
