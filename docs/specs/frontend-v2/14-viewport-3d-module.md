@@ -109,7 +109,10 @@ Idle workspace must show zero viewport frames after settling. Status ticks, logs
 
 FDM cell hover picking is active only in Inspect mode. A displayed carrier of
 5,000 or more instances samples once after the pointer stays still for one
-second. Dragging, leaving the canvas, or changing the displayed topology
+second. For large regular grids, voxel traversal visits the ray's crossed
+grid cells and tests only the rendered cuboids in those cells. Displaced
+topography uses the rendered mesh for picking.
+Dragging, leaving the canvas, or changing the displayed topology
 cancels a pending sample. Click selection remains available separately.
 
 ## 6. Resource Lifecycle

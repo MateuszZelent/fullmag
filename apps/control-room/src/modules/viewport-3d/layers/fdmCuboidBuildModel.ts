@@ -24,12 +24,19 @@ const FDM_VECTOR_SEGMENT_STRIDE = 7;
 const CELL_VISUAL_FILL = 0.92;
 const FDM_VECTOR_SPACING_FILL = 0.75;
 
+export interface FdmCuboidPickingGrid {
+  origin: readonly [number, number, number];
+  spacing: readonly [number, number, number];
+}
+
 export interface FdmCuboidInstanceModel {
   cellSize: [number, number, number];
   cellIndices: Uint32Array;
   centers: Float32Array;
   count: number;
   gridShape: [number, number, number];
+  /** Present when rendered cuboids remain within their regular lattice cells. */
+  pickingGrid?: FdmCuboidPickingGrid;
   /** Three.js column-major instance matrices prepared with the model. */
   matrices: Float32Array;
   /** Stable checksum of the exact transform payload, computed in the worker. */
@@ -957,6 +964,9 @@ export function buildFdmCuboidInstanceModel(
     centers,
     count,
     gridShape: [nx, ny, nz],
+    pickingGrid: !topography.enabled && cellSize.every((size, axis) => size <= domain.spacing[axis])
+      ? { origin: domain.origin, spacing: domain.spacing }
+      : undefined,
     matrices,
     matrixContentRevision: resolveFdmCuboidMatrixContentRevision(matrices),
     membershipRevision: resolveFdmCuboidMembershipRevision(cellIndices),
@@ -1047,6 +1057,9 @@ export function buildFdmMaskedNativeLayerInstanceModel(
     centers,
     count: cellIndices.length,
     gridShape: [nx, ny, nz],
+    pickingGrid: cellSize.every((size, axis) => size <= domain.spacing[axis])
+      ? { origin: domain.origin, spacing: domain.spacing }
+      : undefined,
     matrices,
     matrixContentRevision: resolveFdmCuboidMatrixContentRevision(matrices),
     membershipRevision: resolveFdmCuboidMembershipRevision(cellIndices),
