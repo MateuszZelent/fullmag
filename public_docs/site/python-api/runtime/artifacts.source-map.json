@@ -39,6 +39,18 @@
       "path": "packages/fullmag-py/src/fullmag/init/state_io.py",
       "symbol": "save_magnetization",
       "responsibility": "Magnetization artifact serialization."
+    },
+    {
+      "id": "source-3",
+      "path": "packages/fullmag-py/src/fullmag/init/state_io.py",
+      "symbol": "load_magnetization",
+      "responsibility": "Magnetization state loading for m.loadfile, including Zarr grid layouts."
+    },
+    {
+      "id": "source-4",
+      "path": "packages/fullmag-py/src/fullmag/init/zarr_layouts.py",
+      "symbol": "read_structured_zarr_state",
+      "responsibility": "Decoding of MuMax3 and fullmag field-series Zarr grids into the x-fastest cell order."
     }
   ],
   "public_api": {

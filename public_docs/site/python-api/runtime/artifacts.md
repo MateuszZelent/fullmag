@@ -28,6 +28,16 @@ by the corresponding observables.
 State formats are validated against the supported set (`json`, `zarr`, `h5`); format is inferred
 from the path extension when `"auto"` is requested.
 
+Loading accepts more than saving writes. `load_magnetization`, `load_field_state` and a magnet's
+`m.loadfile(...)` also read `ovf`, `npz` and `npy`. A Zarr store may hold fullmag's row arrays
+($[N, 3]$, $[T, N, 3]$ or flat), a MuMax3 grid $[t, z, y, x, c]$ or one frame $[z, y, x, c]$ with
+the mesh in the store attributes `Nx Ny Nz`, `dx dy dz` and `Tx Ty Tz`, or a fullmag field series
+`fields/<quantity>.zarr` stored as $[\text{sample}, \text{component}, \text{cell}]$. The path may be
+the store or the array itself; `dataset=` names the array when the store holds several. Grids are
+flattened with x fastest, then y, then z, which is the OVF order and the FDM cell order, and
+`sample=` selects the frame (the last one by default). The stage-autosave arrays under `stages/` in
+a run's Zarr output are rejected, because they record neither their component order nor their grid.
+
 (python-api-runtime-artifacts-python-api)=
 ## Python API
 | Python | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR |
@@ -81,7 +91,10 @@ State serialization lives in `packages/fullmag-py/src/fullmag/init/state_io.py` 
 (python-api-runtime-artifacts-implementation-mapping)=
 ## Implementation mapping
 Anchors: `packages/fullmag-py/src/fullmag/runtime/simulation.py` (`Result.save_state`) and
-`packages/fullmag-py/src/fullmag/init/state_io.py` (`save_magnetization`).
+`packages/fullmag-py/src/fullmag/init/state_io.py` (`save_magnetization`). Loading goes through
+`packages/fullmag-py/src/fullmag/init/state_io.py` (`load_magnetization`, `load_field_state`); the
+Zarr grid layouts are decoded in `packages/fullmag-py/src/fullmag/init/zarr_layouts.py`
+(`read_structured_zarr_state`).
 
 (python-api-runtime-artifacts-validation)=
 ## Validation

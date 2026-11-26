@@ -1,8 +1,8 @@
-# 0535 — OVF 1.0/2.0 and NPZ field-state import, domain-overlap validation, and masked trilinear resampling with antipodal fallback
+# 0535 — OVF 1.0/2.0, NPZ and Zarr field-state import, domain-overlap validation, and masked trilinear resampling with antipodal fallback
 
 - Status: accepted_contract_not_production_qualified
 - Owners: Fullmag physics and runtime
-- Last updated: 2026-11-22
+- Last updated: 2026-11-24
 - Related ADRs: docs/adr/0011-resource-first-api.md
 - Related specs: docs/physics/0532-fem-fdm-magnetization-state-transfer.md, docs/specs/magnetization-init-policy-v0.md
 
@@ -144,6 +144,40 @@ Pola skalarne (`valuedim = 1`) mogą być ładowane i inspekcjonowane przez
 mieć kanoniczny układ `[Nz, Ny, Nx, C]`; tablica `[Nx, Ny, Nz, C]` z `grid_shape = [Nx, Ny, Nz]`
 ($N_x \neq N_z$) bez jawnego `axis_order = "xyz"` jest odrzucana zamiast cichej transpozycji.
 
+(zarr-input-layouts)=
+### 4.1 Zarr input layouts
+
+`load_magnetization` (used by `m.loadfile(...)`) and `load_field_state` read Zarr through one
+shared reader, so both accept the same layouts and the same grid semantics as OVF:
+
+- fullmag row arrays written by `save_magnetization` / `save_field_state`: $[N, C]$, $[T, N, C]$
+  or flat, unchanged;
+- MuMax3 (the Zarr fork, and fullmag's `fullmag.output_store.v1`): $[t, n_z, n_y, n_x, C]$ or one
+  frame $[n_z, n_y, n_x, C]$ with $C \in \{1, 3\}$. The frame is flattened in C order, which gives
+  $k = i_x + n_x(i_y + n_y i_z)$, the OVF order and the FDM cell order. The store attributes
+  `Nx Ny Nz` must equal the array extents, the spacing $\mathbf h$ comes from `dx dy dz` (or
+  `Tx/Nx`, `Ty/Ny`, `Tz/Nz`), and `Tx` must equal `Nx * dx` within a relative $10^{-6}$; any
+  disagreement is an error, because it means the axes are not $[\ldots, z, y, x, c]$;
+- fullmag field series `artifacts/fields/<q>.zarr`: $[\text{sample}, C, N]$ stored component-major,
+  transposed to $[N, C]$; for FDM the `layout` attribute supplies $(n_x, n_y, n_z)$, $\mathbf h$ and
+  the lower corner `origin_m` as an explicit $\mathbf o$.
+
+`sample` selects the frame on the time/sample axis; a negative value selects the last frame, and
+a single-frame $[n_z, n_y, n_x, C]$ array accepts only $-1$ or $0$. The path may be the store root
+(`dataset=` names the array; otherwise `m` or another preferred name, then the only grid array,
+is used, and several grid arrays require `dataset=`) or the array directory itself. The origin
+$\mathbf o$ is the lower grid corner from `grid_origin` or `origin` when recorded; MuMax3 stores do
+not record it, so $\mathbf o = \mathbf 0$ with `origin_explicit = False`, the same as an OVF
+header without `xmin/ymin/zmin` (MuMax3 OVF files always write `xmin: 0`, so the same state loaded
+from OVF has the same $\mathbf o$ with `origin_explicit = True`). `source_origin` overrides it.
+
+fullmag's stage-autosave arrays `stages/stage_*/fields/<q>` ($[\text{sample}, \text{value}]$)
+are rejected: host snapshots store the values interleaved per cell, native GPU/FEM snapshots store
+them component-major, and neither the order nor the grid is recorded. Stage tables are never
+taken for a state. The Control Room import (`POST /v2/sessions/current/persistence/field-states/imports`)
+reads Zarr through the same Python reader (`fullmag.init.field_state_cli`), so it receives the
+same values and grid metadata.
+
 (python-api)=
 ## 5. Python API
 
@@ -197,6 +231,8 @@ study.stages.add_relax(stage_id="relax", dt=1e-13, max_steps=50)
 | Python | Typ | Domyślna | Jednostka SI | Walidacja | Znaczenie | Obsługa backendu | ProblemIR |
 |---|---|---|---|---|---|---|---|
 | load_field_state.format | str | auto | $1$ | auto, ovf, npz, npy, zarr, h5, or json | format pliku wejściowego stanu pola | FDM/FEM CPU/GPU | magnets[].initial_magnetization[kind=sampled_field] |
+| load_field_state.dataset | str or None | None | $1$ | array path inside the store, or None to find it | array to read from a multi-array Zarr/HDF5/NPZ store | FDM/FEM CPU/GPU | magnets[].initial_magnetization[kind=sampled_field] |
+| load_field_state.sample | int | -1 | $1$ | integer; negative selects the last frame | time/sample frame of a series | FDM/FEM CPU/GPU | magnets[].initial_magnetization[kind=sampled_field] |
 | load_field_state.source_origin | Sequence[float] | None | $\mathrm{m}$ | finite 3-vector or None | jawne nadpisanie początku siatki źródłowej | FDM/FEM CPU/GPU | runtime resampling coordinate transform |
 | save_ovf.encoding | str | binary4 | $1$ | binary4, binary8, or text | kodowanie bloku danych OVF 2.0 | export utility | artifact file encoding |
 | resample_imported_field.interpolation | str | trilinear | $1$ | exact, nearest, or trilinear | metoda interpolacji przestrzennej | FDM/FEM CPU/GPU | session field-state import / sampled_field |
@@ -262,6 +298,7 @@ siatki `fem_mesh`, pozostawiając $[0,0,0]$ na węzłach domeny powietrznej (air
 ## 9. Mapa implementacji
 
 - Python OVF/NPZ I/O & resampler: `packages/fullmag-py/src/fullmag/init/state_io.py` (`parse_ovf_bytes`, `save_ovf`, `_load_numpy_field_values`, `_nearest_nonzero_cell`, `resample_imported_field`).
+- Python Zarr reader shared by `load_magnetization` and `load_field_state`: `packages/fullmag-py/src/fullmag/init/state_io.py` (`_read_zarr_state`); layout decoding and dataset discovery: `packages/fullmag-py/src/fullmag/init/zarr_layouts.py` (`read_structured_zarr_state`, `find_zarr_state_dataset`).
 - Python CLI bridge: `packages/fullmag-py/src/fullmag/init/field_state_cli.py` (`_read`).
 - Rust API v2 OVF parser & session resampler: `crates/fullmag-api/src/session_persistence.rs` (`parse_ovf_bytes`, `check_source_target_bbox_overlap`, `nearest_nonzero_grid_vector`, `sample_field_state_at_point`, `resample_field_state_to_snapshot_domain`).
 
@@ -274,6 +311,15 @@ Zestaw `test_field_state_import_formats.py` weryfikuje round-trip OVF 2.0 (`bina
 antypodalny w środku ściany domenowej $[0,0,1]/[0,0,-1]$, ekspansję powłokową
 `_nearest_nonzero_cell` poza otoczenie $3\times 3\times 3$, odrzucanie rozłącznych
 obwiedni oraz zachowanie `valuedim` i `normalize`.
+
+`test_zarr_state_layouts.py` covers the Zarr layouts of §4.1: a MuMax3-style store (zarr v2,
+float32, zstd) loads to the same values as `save_ovf` binary output of the same field (text OVF
+within $10^{-15}$, its 16-digit rounding), `dataset`/`sample` selection, array paths, the
+`Nx`/`Tx` consistency errors, the exact-mode grid mismatch error, fullmag field series, the
+rejection of stage-autosave arrays, the CLI payload used by the API, and a study whose
+`m.loadfile(...)` of a MuMax3 store lowers to `sampled_field`. On the real MuMax3 relaxed film
+state (120 x 120 x 2 cells) the Zarr and OVF-text loads differ by at most $5\times10^{-10}$, the
+9-significant-digit text rounding, and are identical after rounding both to float32.
 
 (limitations)=
 ## 11. Ograniczenia i odroczone prace
@@ -297,6 +343,9 @@ dla znormalizowanych pól kierunkowych.
 | Python OVF 1.0/2.0 parser | packages/fullmag-py/src/fullmag/init/state_io.py | parse_ovf_bytes | test_ovf2_binary4_and_npz_roundtrip | all |
 | Python OVF 2.0 writer | packages/fullmag-py/src/fullmag/init/state_io.py | save_ovf | test_ovf2_binary4_and_npz_roundtrip | all |
 | Python NPZ 4D axis-order loader | packages/fullmag-py/src/fullmag/init/state_io.py | _load_numpy_field_values | test_valuedim_normalize_and_npz_4d_axis_order_validation | all |
+| Python shared Zarr state reader | packages/fullmag-py/src/fullmag/init/state_io.py | _read_zarr_state | test_mumax3_store_matches_ovf_of_the_same_field | all |
+| Python Zarr MuMax3 / field-series decoder | packages/fullmag-py/src/fullmag/init/zarr_layouts.py | read_structured_zarr_state | test_mumax3_dataset_and_sample_selection | all |
+| Python Zarr dataset discovery | packages/fullmag-py/src/fullmag/init/zarr_layouts.py | find_zarr_state_dataset | test_fullmag_stage_autosave_array_is_rejected_not_guessed | all |
 | Python shell-expanding nearest cell | packages/fullmag-py/src/fullmag/init/state_io.py | _nearest_nonzero_cell | test_nearest_nonzero_cell_expands_beyond_3x3x3_and_never_returns_zero | all |
 | Python masked trilinear resampler | packages/fullmag-py/src/fullmag/init/state_io.py | resample_imported_field | test_trilinear_antipodal_wall_midpoint_falls_back_to_unit_nearest | all |
 | Rust OVF 1.0/2.0 parser | crates/fullmag-api/src/session_persistence.rs | parse_ovf_bytes | session field-state import contract | FDM/FEM |
