@@ -8103,6 +8103,29 @@ export function useViewport3DSceneModel({
     },
     [buildDiagnosticsSnapshotVersion],
   );
+  const adoptedFdmFieldBuffer =
+    fdmTargetViews.find(
+      (view) =>
+        view.settings.visible &&
+        view.fieldBuffer !== null &&
+        (view.surfaceColors !== null || view.vectorSegments !== null),
+    )?.fieldBuffer ?? fdmAirboxFieldBuffer;
+  const scopedFdmFieldResource = fdmObjectFieldsActive && targetQuantityFieldRequests.size > 0
+    ? targetQuantityFieldVectors
+    : null;
+  const reportedFieldResource = scopedFdmFieldResource ?? fieldVector;
+  const reportedFieldDisplayedRevision = scopedFdmFieldResource
+    ? adoptedFdmFieldBuffer?.fieldRevision ?? null
+    : fieldVectorDisplayedRevision;
+  const reportedFieldReceivedRevision = scopedFdmFieldResource
+    ? scopedFdmFieldResource.payloadRevision
+    : fieldVectorPayloadRevisionString;
+  const reportedFieldRequestedRevision = scopedFdmFieldResource
+    ? scopedFdmFieldResource.revision?.toString() ?? null
+    : fieldVectorRevisionString;
+  const reportedFieldPreparedRevision = scopedFdmFieldResource
+    ? reportedFieldDisplayedRevision
+    : fieldVectorPreparedRevision;
   const diagnostics = buildViewport3DDiagnostics(savedSelectionActive ? {
     airboxPartCount: 0,
     buildFallbacks: buildFallbackDiagnostics,
@@ -8121,12 +8144,12 @@ export function useViewport3DSceneModel({
     buildFallbacks: buildFallbackDiagnostics,
     cache: getCacheStats(),
     dataPlaneIssues,
-    displayedRevision: fieldVectorDisplayedRevision,
+    displayedRevision: reportedFieldDisplayedRevision,
     fieldDemandDiagnostics,
-    fieldPayloadRevision: fieldVector.payloadRevision ?? null,
-    fieldRevision: fieldVector.payloadRevision ?? fieldVector.revision,
-    fieldRequestedRevision: fieldVector.revision,
-    fieldStatus: fieldVector.status,
+    fieldPayloadRevision: reportedFieldResource.payloadRevision ?? null,
+    fieldRevision: reportedFieldResource.payloadRevision ?? reportedFieldResource.revision,
+    fieldRequestedRevision: reportedFieldResource.revision,
+    fieldStatus: reportedFieldResource.status,
     manifestCarrierDegradedCount:
       femDomain.renderCarrierDiagnostics?.degradedCarrierCount,
     manifestCarrierKind: femDomain.renderCarrierDiagnostics?.kind,
@@ -8136,10 +8159,10 @@ export function useViewport3DSceneModel({
       ? fdmTargetViews.length
       : femDomain.objectPartIds.size,
     pipelineDiagnostics: buildPipelineDiagnostics,
-    preparedRevision: fieldVectorPreparedRevision,
+    preparedRevision: reportedFieldPreparedRevision,
     quantityId: primaryFieldQuantityId,
-    receivedRevision: fieldVectorPayloadRevisionString,
-    requestedRevision: fieldVectorRevisionString,
+    receivedRevision: reportedFieldReceivedRevision,
+    requestedRevision: reportedFieldRequestedRevision,
     surfaceColorStatus: chunkedScalarColors.status,
     targetDiagnostics: fieldRenderModel?.targetDiagnostics,
     topologyRevision: topology.revision,
@@ -8153,16 +8176,16 @@ export function useViewport3DSceneModel({
   });
   useEffect(() => {
     publishViewport3DLiveRefreshRevisions({
-      displayed: fieldVectorDisplayedRevision,
-      prepared: fieldVectorPreparedRevision,
-      received: fieldVectorPayloadRevisionString,
-      requested: fieldVectorRevisionString,
+      displayed: reportedFieldDisplayedRevision,
+      prepared: reportedFieldPreparedRevision,
+      received: reportedFieldReceivedRevision,
+      requested: reportedFieldRequestedRevision,
     });
   }, [
-    fieldVectorDisplayedRevision,
-    fieldVectorPayloadRevisionString,
-    fieldVectorPreparedRevision,
-    fieldVectorRevisionString,
+    reportedFieldDisplayedRevision,
+    reportedFieldReceivedRevision,
+    reportedFieldPreparedRevision,
+    reportedFieldRequestedRevision,
   ]);
   const hslReferenceVisible = resolveHslReferenceVisible(
     commandState.widgets.hslReferenceMode,
@@ -8347,13 +8370,6 @@ export function useViewport3DSceneModel({
       status: "ready",
     },
   ]);
-  const adoptedFdmFieldBuffer =
-    fdmTargetViews.find(
-      (view) =>
-        view.settings.visible &&
-        view.fieldBuffer !== null &&
-        (view.surfaceColors !== null || view.vectorSegments !== null),
-    )?.fieldBuffer ?? fdmAirboxFieldBuffer;
   const visualizationDebugSource = {
     airboxFieldVectorPartStates: savedSelectionActive
       ? EMPTY_VIEWPORT_FDM_PART_STATES
@@ -8397,10 +8413,10 @@ export function useViewport3DSceneModel({
   const femPartTargetFieldBuffers =
     globalFieldRenderOptionsWithPrimaryTargetBuffers.partTargetFieldBuffers;
   const fieldPresentationFreshness = resolveViewport3DFieldPresentationFreshness({
-    dataAvailable: Boolean(fieldVector.data),
-    error: fieldVector.error?.message,
-    materializationState: primaryMagnitudeFieldMeta.data?.state ?? null,
-    status: fieldVector.status,
+    dataAvailable: Boolean(reportedFieldResource.data),
+    error: reportedFieldResource.error?.message,
+    materializationState: scopedFdmFieldResource ? null : primaryMagnitudeFieldMeta.data?.state ?? null,
+    status: reportedFieldResource.status,
   });
   const { refetch: refreshDomainMeta } = domainMeta;
   const { refetch: refreshDomainManifest } = sharedDomainManifest;
@@ -8591,7 +8607,9 @@ export function useViewport3DSceneModel({
         }[previewAvailability]
     ) : null,
     fieldPresentationFreshness:
-      savedSelectionActive || !fieldVectorEnabled ? null : fieldPresentationFreshness,
+      savedSelectionActive || (!fieldVectorEnabled && !scopedFdmFieldResource)
+        ? null
+        : fieldPresentationFreshness,
     fieldRefresh: savedSelectionActive
       ? {
           enabled: false,
