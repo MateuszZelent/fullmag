@@ -9,6 +9,8 @@
 
 namespace fullmag::fdm::gpu::transport::charge {
 
+inline constexpr uint32_t kMaxAmgLevels = 16;
+
 struct CudaFailurePolicy {
     uint32_t requested_boundary = 0;
     uint32_t failed_boundary = 0;
@@ -32,6 +34,17 @@ struct Buffers {
     uint64_t interface_count = 0;
 };
 
+struct CoarseLevel {
+    uint64_t nx = 0;
+    uint64_t ny = 0;
+    uint64_t nz = 0;
+    uint64_t cells = 0;
+    double *diag = nullptr;
+    double *gx = nullptr;
+    double *gy = nullptr;
+    double *gz = nullptr;
+};
+
 struct HierarchyCache {
     uint8_t *active = nullptr;
     double *conductivity = nullptr;
@@ -48,6 +61,27 @@ struct HierarchyCache {
     void *hierarchy_info = nullptr;
     double *warm_potential = nullptr;
     double *warm_potential_staging = nullptr;
+    // Multi-level geometric RAP hierarchy:
+    // levels[0] aliases fine diag/gx/gy/gz;
+    // levels[1] aliases coarse_diag and owns level-1 structured gx/gy/gz;
+    // levels[2..level_count-1] own diag/gx/gy/gz.
+    CoarseLevel levels[kMaxAmgLevels]{};
+    uint32_t level_count = 0;
+    uint64_t level1_edge_count = 0;
+    // Cached connected-component topology & static gauge summary.
+    uint64_t *component_labels = nullptr;
+    uint8_t *component_anchored = nullptr;
+    uint32_t *component_pin_cell = nullptr;
+    uint32_t *free_component_ids = nullptr;
+    uint64_t *free_component_sizes = nullptr;
+    uint32_t *device_component_count = nullptr;
+    uint32_t *device_free_component_count = nullptr;
+    uint32_t *device_has_unanchored = nullptr;
+    uint32_t *device_has_unbalanced_free = nullptr;
+    // Opt-in cuDSS direct Cholesky realization (lazily constructed per cache).
+    void *cudss_solver = nullptr;
+    uint8_t *pinned_mask = nullptr;
+    uint64_t cached_bytes = 0;
     uint64_t cells = 0;
     uint64_t coarse_cells = 0;
     uint64_t warm_descriptor_revision = 0;

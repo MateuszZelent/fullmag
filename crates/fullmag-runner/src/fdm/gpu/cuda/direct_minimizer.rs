@@ -3,23 +3,33 @@
 //! The CUDA FDM backend owns field transfer and observable refresh. This module
 //! owns the runner-side direct-minimizer loop for the FDM CUDA lane so
 //! `dispatch.rs` can stay focused on backend selection and finalization.
+//!
+//! Single-layer `projected_gradient_bb` runs fully device-resident (both FP64
+//! and FP32): only compact control scalar reductions cross D2H inside the hot
+//! loop, and magnetization is downloaded only on demanded live snapshots or
+//! terminal finalization.
 
-use fullmag_ir::FdmPlanIR;
+use fullmag_ir::{ExecutionPrecision, FdmPlanIR, RelaxationControlIR};
 
 use crate::artifact_pipeline::ArtifactRecorder;
 use crate::fdm::gpu::cuda::live_observations::FdmLiveObservationScheduler;
-use crate::fdm::gpu::cuda::native::NativeFdmBackend;
+use crate::fdm::gpu::cuda::native::{
+    NativeFdmBackend, SINGLE_LAYER_BB_OP_CAPTURE, SINGLE_LAYER_BB_OP_EVALUATE,
+    SINGLE_LAYER_BB_OP_RESTORE, SINGLE_LAYER_BB_OP_TRIAL, SINGLE_LAYER_BB_SCALAR_COUNT,
+};
 use crate::interactive_runtime::{display_is_global_scalar, display_refresh_due};
 use crate::relaxation::direct_minimizer::{
-    apply_direct_minimizer_step_metrics, direct_minimizer_energy_tolerance_j,
+    apply_direct_minimizer_step_metrics, backtracked_step_size,
+    direct_minimizer_backtrack_exhausted, direct_minimizer_energy_tolerance_j,
     direct_minimizer_gradient_degenerate, direct_minimizer_gradient_invalid,
-    direct_minimizer_within_runtime_budget, energy_metric_dot, format_line_search_failure_message,
-    mask_vectors_to_active_domain, nonlinear_cg_descent_direction_dot,
-    nonlinear_cg_initial_step_size, nonlinear_cg_line_search_with_tolerance,
-    nonlinear_cg_next_direction, projected_gradient_line_search_with_tolerance,
-    projected_gradient_step_size_update, snapshot_trial_evaluation_counts,
-    DirectMinimizerAlgorithm, DirectMinimizerControl, DirectMinimizerLineSearchFailure,
-    DirectMinimizerState, DirectMinimizerTrialEvaluation, NONLINEAR_CG_MAX_BACKTRACK,
+    direct_minimizer_step_budget, direct_minimizer_within_runtime_budget, energy_metric_dot,
+    format_line_search_failure_message, mask_vectors_to_active_domain,
+    nonlinear_cg_descent_direction_dot, nonlinear_cg_initial_step_size,
+    nonlinear_cg_line_search_with_tolerance, nonlinear_cg_next_direction,
+    projected_gradient_armijo_accepts_with_tolerance, projected_gradient_step_size_from_products,
+    snapshot_trial_evaluation_counts, DirectMinimizerAlgorithm, DirectMinimizerControl,
+    DirectMinimizerLineSearchFailure, DirectMinimizerState, DirectMinimizerTrialEvaluation,
+    DEFAULT_STEP_SIZE, MAX_STEP_SIZE, MIN_STEP_SIZE, NONLINEAR_CG_MAX_BACKTRACK,
     PROJECTED_GRADIENT_MAX_BACKTRACK,
 };
 use crate::relaxation::vector_math::tangent_gradient_from_field;
@@ -28,11 +38,38 @@ use crate::scalar_metrics::single_object_scalars;
 use crate::types::{LiveStepConsumer, RunError, StepAction, StepStats, StepUpdate};
 use std::time::Instant;
 
+const EVAL_SCALAR_D2H_BYTES: u64 = (SINGLE_LAYER_BB_SCALAR_COUNT * std::mem::size_of::<f64>()) as u64;
+const TRIAL_SCALAR_D2H_BYTES: u64 = (2 * std::mem::size_of::<f64>()) as u64;
+
 pub(crate) struct CudaDirectMinimizerOutcome {
     pub(crate) latest_stats: Option<StepStats>,
     pub(crate) cancelled: bool,
     pub(crate) torque_confirmed: bool,
     pub(crate) numerical_stagnation: bool,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct ResidentSingleLayerBbEval {
+    e_ex: f64,
+    e_demag: f64,
+    e_ext: f64,
+    e_ani_uniaxial: f64,
+    e_ani_cubic: f64,
+    e_dmi_aggregate: f64,
+    e_total: f64,
+    max_torque_apm: f64,
+    max_h_eff: f64,
+    max_h_demag: f64,
+    max_grad_apm: f64,
+    mx: f64,
+    my: f64,
+    mz: f64,
+    weighted_g_norm_sq: f64,
+    chord_increment_j: f64,
+    s_dot_s: f64,
+    s_dot_y: f64,
+    y_dot_y: f64,
+    changed_count: f64,
 }
 
 fn flatten_vectors(values: &[[f64; 3]]) -> Vec<f64> {
@@ -43,6 +80,10 @@ fn ensure_single_object_scalars(stats: &mut StepStats, object_id: &str) {
     if stats.per_object_scalars.is_empty() {
         stats.per_object_scalars = single_object_scalars(object_id, stats);
     }
+}
+
+fn elapsed_ns(started: Instant) -> u64 {
+    started.elapsed().as_nanos().min(u64::MAX as u128) as u64
 }
 
 fn line_search_failure_diagnostics(
@@ -87,6 +128,33 @@ fn line_search_failure_diagnostics(
     )
 }
 
+fn plan_domain_diagnostics(plan: &FdmPlanIR, cell_count: usize) -> (usize, f64, f64, f64) {
+    let cell_volume_m3 = plan.cell_size.iter().product::<f64>();
+    let active_mask = plan.active_mask.as_deref();
+    let ms_field = plan.material.ms_field.as_deref();
+    let uniform_ms = plan.material.saturation_magnetisation;
+    let mut active_cell_count = 0usize;
+    let mut ms_min_apm = f64::INFINITY;
+    let mut ms_max_apm = f64::NEG_INFINITY;
+    for index in 0..cell_count {
+        let active = active_mask.is_none_or(|mask| mask.get(index).copied().unwrap_or(false));
+        if !active {
+            continue;
+        }
+        active_cell_count += 1;
+        let ms = ms_field
+            .and_then(|field| field.get(index).copied())
+            .unwrap_or(uniform_ms);
+        ms_min_apm = ms_min_apm.min(ms);
+        ms_max_apm = ms_max_apm.max(ms);
+    }
+    if active_cell_count == 0 {
+        ms_min_apm = 0.0;
+        ms_max_apm = 0.0;
+    }
+    (active_cell_count, cell_volume_m3, ms_min_apm, ms_max_apm)
+}
+
 fn restore_previous_state_after_failed_line_search(
     backend: &mut NativeFdmBackend,
     magnetization: &[[f64; 3]],
@@ -104,6 +172,560 @@ fn restore_previous_state_after_failed_line_search(
     })
 }
 
+fn evaluate_resident_bb(
+    backend: &mut NativeFdmBackend,
+    packed: &mut [f64; SINGLE_LAYER_BB_SCALAR_COUNT],
+) -> Result<ResidentSingleLayerBbEval, RunError> {
+    backend.single_layer_bb_op(SINGLE_LAYER_BB_OP_EVALUATE, 0.0, packed)?;
+    if packed.iter().any(|x| !x.is_finite()) || packed[21] != 0.0 {
+        return Err(RunError {
+            message: "resident single-layer BB returned nonfinite/unnormalized state".to_string(),
+        });
+    }
+    let e_ex = packed[0];
+    let e_demag = packed[1];
+    let e_ext = packed[2];
+    let e_ani_uniaxial = packed[3];
+    let e_ani_cubic = packed[4];
+    let e_dmi_aggregate = packed[5];
+    let e_mel = packed[6];
+    let e_total = e_ex + e_demag + e_ext + e_ani_uniaxial + e_ani_cubic + e_dmi_aggregate + e_mel;
+    let weight_sum = packed[14];
+    let (mx, my, mz) = if weight_sum.is_finite() && weight_sum > 0.0 {
+        (
+            packed[11] / weight_sum,
+            packed[12] / weight_sum,
+            packed[13] / weight_sum,
+        )
+    } else {
+        (0.0, 0.0, 0.0)
+    };
+    Ok(ResidentSingleLayerBbEval {
+        e_ex,
+        e_demag,
+        e_ext,
+        e_ani_uniaxial,
+        e_ani_cubic,
+        e_dmi_aggregate,
+        e_total,
+        max_torque_apm: packed[7],
+        max_h_eff: packed[8],
+        max_h_demag: packed[9],
+        max_grad_apm: packed[10],
+        mx,
+        my,
+        mz,
+        weighted_g_norm_sq: packed[15],
+        chord_increment_j: packed[16],
+        s_dot_s: packed[17],
+        s_dot_y: packed[18],
+        y_dot_y: packed[19],
+        changed_count: packed[20],
+    })
+}
+
+fn restore_resident_state(
+    backend: &mut NativeFdmBackend,
+    packed: &mut [f64; SINGLE_LAYER_BB_SCALAR_COUNT],
+) -> Result<ResidentSingleLayerBbEval, RunError> {
+    backend.single_layer_bb_op(SINGLE_LAYER_BB_OP_RESTORE, 0.0, packed)?;
+    evaluate_resident_bb(backend, packed)
+}
+
+fn restore_resident_state_on_error(
+    primary: RunError,
+    backend: &mut NativeFdmBackend,
+    packed: &mut [f64; SINGLE_LAYER_BB_SCALAR_COUNT],
+) -> RunError {
+    match restore_resident_state(backend, packed) {
+        Ok(_) => primary,
+        Err(restore_err) => RunError {
+            message: format!(
+                "{}; accepted-state restore failed: {}",
+                primary.message, restore_err.message
+            ),
+        },
+    }
+}
+
+fn build_resident_step_stats(
+    backend: &NativeFdmBackend,
+    eval: &ResidentSingleLayerBbEval,
+    accepted_step: u64,
+    accepted_step_size: f64,
+    wall_time_ns: u64,
+    line_search_backtracks: u32,
+    energy_evaluations: u32,
+    scalar_d2h_bytes: u64,
+    scalar_host_syncs: u64,
+) -> StepStats {
+    let (e_dmi, e_rotated_dmi) = backend.split_dmi_energy_components(eval.e_dmi_aggregate);
+    let mut stats = StepStats {
+        step: accepted_step,
+        time: 0.0,
+        dt: 0.0,
+        pseudo_time_s: None,
+        e_ex: eval.e_ex,
+        e_demag: eval.e_demag,
+        e_ext: eval.e_ext,
+        e_ani: eval.e_ani_uniaxial + eval.e_ani_cubic,
+        e_dmi,
+        e_rotated_dmi,
+        e_total: eval.e_total,
+        mx: eval.mx,
+        my: eval.my,
+        mz: eval.mz,
+        max_dm_dt: 0.0,
+        max_rhs_norm_per_s: 0.0,
+        max_h_eff: eval.max_h_eff,
+        max_h_demag: eval.max_h_demag,
+        max_torque_Apm: eval.max_torque_apm,
+        max_torque_T: eval.max_torque_apm * crate::MU0,
+        wall_time_ns,
+        rejected_attempts: line_search_backtracks,
+        relaxation_energy_rejected_attempts: u64::from(line_search_backtracks),
+        hot_loop_d2h_bytes: scalar_d2h_bytes,
+        hot_loop_host_sync_count: scalar_host_syncs,
+        hot_loop_control_scalar_d2h_bytes: scalar_d2h_bytes,
+        hot_loop_control_scalar_host_sync_count: scalar_host_syncs,
+        ..StepStats::default()
+    };
+    ensure_single_object_scalars(&mut stats, "free");
+    let evaluation_counts = snapshot_trial_evaluation_counts(energy_evaluations);
+    let scalar_metrics = stats
+        .per_object_scalars
+        .entry("free".to_string())
+        .or_default();
+    scalar_metrics.insert("accepted_step_m_per_A".to_string(), accepted_step_size);
+    scalar_metrics.insert(
+        "line_search_backtracks".to_string(),
+        f64::from(line_search_backtracks),
+    );
+    scalar_metrics.insert(
+        "energy_evaluations".to_string(),
+        f64::from(evaluation_counts.energy),
+    );
+    scalar_metrics.insert(
+        "field_evaluations".to_string(),
+        f64::from(evaluation_counts.field),
+    );
+    scalar_metrics.insert(
+        "rhs_evaluations".to_string(),
+        f64::from(evaluation_counts.rhs),
+    );
+    scalar_metrics.insert("accepted_steps".to_string(), accepted_step as f64);
+    stats
+}
+
+fn execute_resident_projected_gradient_bb(
+    backend: &mut NativeFdmBackend,
+    plan: &FdmPlanIR,
+    cell_count: usize,
+    control: &RelaxationControlIR,
+    mut current_stats: StepStats,
+    mut live: Option<&mut LiveStepConsumer<'_>>,
+    artifacts: &mut ArtifactRecorder,
+    steps: &mut Vec<StepStats>,
+    energy_plateau: &mut RelaxationEnergyPlateauWindow,
+    mut last_preview_revision: Option<u64>,
+    mut live_observations: Option<&mut FdmLiveObservationScheduler>,
+) -> Result<CudaDirectMinimizerOutcome, RunError> {
+    let mut latest_stats = Some(current_stats.clone());
+    let mut cancelled = false;
+    let mut torque_confirmed = false;
+    let mut numerical_stagnation = false;
+    let mut torque_confirmation = RelaxationTorqueConfirmation::default();
+
+    let mut packed = [0.0_f64; SINGLE_LAYER_BB_SCALAR_COUNT];
+    let mut current_eval = evaluate_resident_bb(backend, &mut packed)?;
+    backend.single_layer_bb_op(SINGLE_LAYER_BB_OP_CAPTURE, 0.0, &mut packed)?;
+
+    let mut step_size = DEFAULT_STEP_SIZE;
+    let mut use_bb1 = true;
+    let mut reset_consecutive = 0u64;
+    let mut accepted_steps = 0u64;
+    let step_budget = direct_minimizer_step_budget(control);
+
+    while accepted_steps < step_budget {
+        if let Some(live) = live.as_mut() {
+            let display_selection = live.display_selection.map(|get| get());
+            let preview_due = display_selection
+                .as_ref()
+                .is_some_and(|selection| {
+                    display_refresh_due(last_preview_revision, selection, current_stats.step)
+                });
+            let preview_targets_global_scalar = display_selection
+                .as_ref()
+                .is_some_and(display_is_global_scalar);
+            let heavy_payload_due = current_stats.step > 0
+                && live.field_cadence.heavy_payload_due(current_stats.step);
+            let full_fields_due =
+                heavy_payload_due && live.field_cadence.publishes_full_catalog();
+            if display_selection.is_some() || heavy_payload_due {
+                let mut observation_publication = display_selection.as_ref().and_then(|selection| {
+                    live_observations.as_mut().map(|scheduler| {
+                        scheduler.observe(
+                            backend,
+                            selection,
+                            current_stats.step,
+                            current_stats.time,
+                            current_stats.dt,
+                        )
+                    })
+                });
+                let (preview_field, scheduler_cached_preview_fields) =
+                    if let Some(publication) = observation_publication.as_mut() {
+                        publication.apply_to_stats(&mut current_stats);
+                        (
+                            publication.preview_field.take(),
+                            publication.cached_preview_fields.take(),
+                        )
+                    } else {
+                        (None, None)
+                    };
+                let config_revision = display_selection
+                    .as_ref()
+                    .map(|selection| selection.revision)
+                    .unwrap_or(0);
+                let cached_preview_fields = if full_fields_due {
+                    let capture_started = Instant::now();
+                    match super::execute::capture_full_active_cuda_fields(
+                        backend,
+                        plan,
+                        live.grid,
+                        current_stats.step,
+                        current_stats.time,
+                        config_revision,
+                        None,
+                    ) {
+                        Ok(mut fields) => {
+                            super::execute::mark_full_fields_materialized(
+                                &mut current_stats,
+                                &fields,
+                            );
+                            if let Some(mut scheduler_fields) = scheduler_cached_preview_fields {
+                                scheduler_fields.retain(|scheduled| {
+                                    !fields
+                                        .iter()
+                                        .any(|full| full.quantity == scheduled.quantity)
+                                });
+                                fields.extend(scheduler_fields);
+                            }
+                            current_stats.cached_preview_wall_time_ns = current_stats
+                                .cached_preview_wall_time_ns
+                                .saturating_add(elapsed_ns(capture_started));
+                            Some(fields)
+                        }
+                        Err(error) => {
+                            let source_step = current_stats.step;
+                            super::execute::mark_full_fields_materialization_error(
+                                &mut current_stats,
+                                plan,
+                                source_step,
+                                config_revision,
+                                &error.message,
+                            );
+                            current_stats.cached_preview_wall_time_ns = current_stats
+                                .cached_preview_wall_time_ns
+                                .saturating_add(elapsed_ns(capture_started));
+                            None
+                        }
+                    }
+                } else {
+                    scheduler_cached_preview_fields
+                };
+                let magnetization = if heavy_payload_due {
+                    Some(flatten_vectors(&backend.copy_m(cell_count)?))
+                } else {
+                    None
+                };
+                let action = (live.on_step)(StepUpdate {
+                    coupled_checkpoint: None,
+                    stats: current_stats.clone(),
+                    grid: live.grid,
+                    fem_mesh_generation_id: None,
+                    magnetization,
+                    preview_field,
+                    cached_preview_fields,
+                    hysteresis_field_m_t: None,
+                    hysteresis_point_index: None,
+                    hysteresis_settle_step_index: None,
+                    hysteresis_settle_step_kind: None,
+                    hysteresis_settle_step_method: None,
+                    scalar_row_due: preview_due && preview_targets_global_scalar,
+                    terminal_field_snapshot: false,
+                    finished: false,
+                    magnetization_carrier: None,
+                });
+                if preview_due {
+                    last_preview_revision = display_selection
+                        .as_ref()
+                        .map(|selection| selection.revision);
+                }
+                if action == StepAction::Stop {
+                    cancelled = true;
+                    break;
+                }
+            }
+        }
+        if cancelled {
+            break;
+        }
+
+        let weighted_gradient_norm_sq = current_eval.weighted_g_norm_sq;
+        if direct_minimizer_gradient_invalid(weighted_gradient_norm_sq) {
+            return Err(RunError {
+                message: "FDM CUDA direct-minimizer gradient metric is invalid".to_string(),
+            });
+        }
+        let current_torque_apm = current_eval.max_torque_apm;
+        if torque_confirmation.observe_at_accepted_step(
+            control,
+            energy_plateau.range(),
+            current_torque_apm,
+            accepted_steps,
+        ) {
+            torque_confirmed = true;
+            break;
+        }
+        if direct_minimizer_gradient_degenerate(weighted_gradient_norm_sq) {
+            if control.stop.torque_tolerance_apm.is_some_and(|threshold| {
+                current_torque_apm.is_finite() && current_torque_apm <= threshold
+            }) && control.stop.energy_tolerance_j.is_none()
+            {
+                for _ in 0..2 {
+                    let fresh = evaluate_resident_bb(backend, &mut packed)?;
+                    current_eval = fresh;
+                    if torque_confirmation.observe(
+                        control,
+                        energy_plateau.range(),
+                        fresh.max_torque_apm,
+                    ) {
+                        torque_confirmed = true;
+                        break;
+                    }
+                }
+                if !torque_confirmed {
+                    numerical_stagnation = true;
+                }
+                break;
+            }
+            numerical_stagnation = true;
+            break;
+        }
+
+        let step_started = Instant::now();
+        let direction_dot_gradient_j_per_step = -weighted_gradient_norm_sq;
+        let initial_trial_step_size = step_size;
+        let energy_tolerance_j =
+            direct_minimizer_energy_tolerance_j(plan.precision, current_eval.e_total);
+        let mut trial_lambda = initial_trial_step_size;
+        let mut backtracks = 0u32;
+        let mut trial_evaluations = 0u32;
+        let mut last_trial_energy_j = f64::NAN;
+        let mut last_trial_step_size = initial_trial_step_size;
+        let mut step_scalar_bytes = 0u64;
+        let mut step_scalar_syncs = 0u64;
+        let mut fp32_step_bumped = false;
+        let mut unrepresentable = false;
+        let mut accepted_trial: Option<ResidentSingleLayerBbEval> = None;
+
+        loop {
+            if let Err(primary) =
+                backend.single_layer_bb_op(SINGLE_LAYER_BB_OP_TRIAL, trial_lambda, &mut packed)
+            {
+                return Err(restore_resident_state_on_error(
+                    primary,
+                    backend,
+                    &mut packed,
+                ));
+            }
+            step_scalar_bytes = step_scalar_bytes.saturating_add(TRIAL_SCALAR_D2H_BYTES);
+            step_scalar_syncs = step_scalar_syncs.saturating_add(1);
+
+            let changed_count = packed[20];
+            let invalid_count = packed[21];
+            if invalid_count != 0.0 {
+                if direct_minimizer_backtrack_exhausted(
+                    DirectMinimizerAlgorithm::ProjectedGradientBb,
+                    backtracks,
+                ) {
+                    break;
+                }
+                trial_lambda = backtracked_step_size(trial_lambda);
+                backtracks = backtracks.saturating_add(1);
+                continue;
+            }
+            if changed_count == 0.0 {
+                if plan.precision == ExecutionPrecision::Single
+                    && backtracks == 0
+                    && !fp32_step_bumped
+                    && current_eval.max_grad_apm > 0.0
+                {
+                    let min_f32_lambda =
+                        (5.0e-7 / current_eval.max_grad_apm).clamp(MIN_STEP_SIZE, MAX_STEP_SIZE);
+                    if min_f32_lambda > trial_lambda {
+                        trial_lambda = min_f32_lambda;
+                        fp32_step_bumped = true;
+                        continue;
+                    }
+                }
+                unrepresentable = true;
+                break;
+            }
+
+            let trial_eval = match evaluate_resident_bb(backend, &mut packed) {
+                Ok(eval) => eval,
+                Err(primary) => {
+                    return Err(restore_resident_state_on_error(
+                        primary,
+                        backend,
+                        &mut packed,
+                    ));
+                }
+            };
+            step_scalar_bytes = step_scalar_bytes.saturating_add(EVAL_SCALAR_D2H_BYTES);
+            step_scalar_syncs = step_scalar_syncs.saturating_add(1);
+            trial_evaluations = trial_evaluations.saturating_add(1);
+            last_trial_energy_j = trial_eval.e_total;
+            last_trial_step_size = trial_lambda;
+
+            if trial_eval.changed_count == 0.0 {
+                unrepresentable = true;
+                break;
+            }
+
+            if direction_dot_gradient_j_per_step.is_finite()
+                && direction_dot_gradient_j_per_step < 0.0
+                && projected_gradient_armijo_accepts_with_tolerance(
+                    current_eval.e_total,
+                    trial_eval.e_total,
+                    trial_eval.chord_increment_j,
+                    energy_tolerance_j,
+                )
+            {
+                accepted_trial = Some(trial_eval);
+                break;
+            }
+            if direct_minimizer_backtrack_exhausted(
+                DirectMinimizerAlgorithm::ProjectedGradientBb,
+                backtracks,
+            ) {
+                break;
+            }
+            trial_lambda = backtracked_step_size(trial_lambda);
+            backtracks = backtracks.saturating_add(1);
+        }
+
+        let Some(trial_eval) = accepted_trial else {
+            current_eval = restore_resident_state(backend, &mut packed)?;
+            if unrepresentable {
+                if control.stop.torque_tolerance_apm.is_some_and(|threshold| {
+                    current_eval.max_torque_apm.is_finite()
+                        && current_eval.max_torque_apm <= threshold
+                }) && control.stop.energy_tolerance_j.is_none()
+                {
+                    for _ in 0..2 {
+                        let fresh = evaluate_resident_bb(backend, &mut packed)?;
+                        current_eval = fresh;
+                        if torque_confirmation.observe(
+                            control,
+                            energy_plateau.range(),
+                            fresh.max_torque_apm,
+                        ) {
+                            torque_confirmed = true;
+                            break;
+                        }
+                    }
+                    if !torque_confirmed {
+                        numerical_stagnation = true;
+                    }
+                    break;
+                }
+                numerical_stagnation = true;
+                break;
+            }
+            let (active_cell_count, cell_volume_m3, ms_min_apm, ms_max_apm) =
+                plan_domain_diagnostics(plan, cell_count);
+            return Err(RunError {
+                message: format!(
+                    "{}; previous magnetization was restored",
+                    format_line_search_failure_message(
+                        "projected-gradient BB",
+                        PROJECTED_GRADIENT_MAX_BACKTRACK,
+                        DirectMinimizerLineSearchFailure {
+                            previous_energy_j: current_eval.e_total,
+                            last_trial_energy_j,
+                            initial_step_size_m_per_a: initial_trial_step_size,
+                            last_trial_step_size_m_per_a: last_trial_step_size,
+                            direction_dot_gradient_j_per_step,
+                            energy_tolerance_j,
+                            evaluations: trial_evaluations,
+                            gradient_max_apm: current_eval.max_grad_apm,
+                            active_gradient_max_apm: current_eval.max_grad_apm,
+                            active_cell_count,
+                            cell_volume_m3,
+                            ms_min_apm,
+                            ms_max_apm,
+                        },
+                    )
+                ),
+            });
+        };
+
+        let step_size_update = projected_gradient_step_size_from_products(
+            trial_eval.s_dot_s,
+            trial_eval.s_dot_y,
+            trial_eval.y_dot_y,
+            use_bb1,
+            reset_consecutive,
+        );
+        step_size = step_size_update.step_size;
+        use_bb1 = step_size_update.use_bb1;
+        reset_consecutive = step_size_update.reset_consecutive;
+
+        backend.single_layer_bb_op(SINGLE_LAYER_BB_OP_CAPTURE, 0.0, &mut packed)?;
+        current_eval = trial_eval;
+        accepted_steps = accepted_steps.saturating_add(1);
+
+        let accepted_stats = build_resident_step_stats(
+            backend,
+            &current_eval,
+            accepted_steps,
+            trial_lambda,
+            elapsed_ns(step_started),
+            backtracks,
+            backtracks.saturating_add(1),
+            step_scalar_bytes,
+            step_scalar_syncs,
+        );
+
+        artifacts.observe_energy_evaluation();
+        artifacts.record_scalar(&accepted_stats)?;
+        steps.push(accepted_stats.clone());
+        latest_stats = Some(accepted_stats.clone());
+        current_stats = accepted_stats;
+
+        let energy_plateau_range = energy_plateau.record(current_eval.e_total);
+        if torque_confirmation.observe_at_accepted_step(
+            control,
+            energy_plateau_range,
+            current_eval.max_torque_apm,
+            accepted_steps,
+        ) {
+            torque_confirmed = true;
+            break;
+        }
+    }
+
+    Ok(CudaDirectMinimizerOutcome {
+        latest_stats,
+        cancelled,
+        torque_confirmed,
+        numerical_stagnation,
+    })
+}
+
 pub(crate) fn execute_direct_minimizer(
     backend: &mut NativeFdmBackend,
     plan: &FdmPlanIR,
@@ -117,6 +739,22 @@ pub(crate) fn execute_direct_minimizer(
     mut last_preview_revision: Option<u64>,
     mut live_observations: Option<&mut FdmLiveObservationScheduler>,
 ) -> Result<CudaDirectMinimizerOutcome, RunError> {
+    if direct_minimizer.algorithm == DirectMinimizerAlgorithm::ProjectedGradientBb {
+        return execute_resident_projected_gradient_bb(
+            backend,
+            plan,
+            cell_count,
+            direct_minimizer.control,
+            current_stats,
+            live,
+            artifacts,
+            steps,
+            energy_plateau,
+            last_preview_revision,
+            live_observations,
+        );
+    }
+
     let control = direct_minimizer.control;
     let mut latest_stats = Some(current_stats.clone());
     let mut cancelled = false;
@@ -220,7 +858,7 @@ pub(crate) fn execute_direct_minimizer(
                             }
                             current_stats.cached_preview_wall_time_ns = current_stats
                                 .cached_preview_wall_time_ns
-                                .saturating_add(capture_started.elapsed().as_nanos() as u64);
+                                .saturating_add(elapsed_ns(capture_started));
                             Some(fields)
                         }
                         Err(error) => {
@@ -234,7 +872,7 @@ pub(crate) fn execute_direct_minimizer(
                             );
                             current_stats.cached_preview_wall_time_ns = current_stats
                                 .cached_preview_wall_time_ns
-                                .saturating_add(capture_started.elapsed().as_nanos() as u64);
+                                .saturating_add(elapsed_ns(capture_started));
                             None
                         }
                     }
@@ -326,206 +964,94 @@ pub(crate) fn execute_direct_minimizer(
             break;
         }
 
-        let mut trial_lambda = state.step_size;
         let energy_tolerance_j =
             direct_minimizer_energy_tolerance_j(plan.precision, state.energy_j);
-        let (trial_stats, m_trial, line_search_backtracks, energy_evaluations) =
-            match direct_minimizer.algorithm {
-                DirectMinimizerAlgorithm::ProjectedGradientBb => {
-                    let direction_dot_gradient_j_per_step = -weighted_gradient_norm_sq;
-                    let initial_trial_step_size = trial_lambda;
-                    let mut trial_evaluations = 0u32;
-                    let mut last_trial_energy_j = f64::NAN;
-                    let mut last_trial_step_size = initial_trial_step_size;
-                    let Some(accepted_trial) = projected_gradient_line_search_with_tolerance(
-                        state.energy_j,
-                        direction_dot_gradient_j_per_step,
-                        &state.magnetization,
-                        &state.gradient,
-                        &state.h_eff,
-                        trial_lambda,
-                        energy_tolerance_j,
-                        &ms_apm,
-                        &volumes_m3,
-                        plan.active_mask.as_deref(),
-                        |trial| {
-                            let step_size =
-                                initial_trial_step_size * 0.5_f64.powi(trial_evaluations as i32);
-                            trial_evaluations = trial_evaluations.saturating_add(1);
-                            backend.upload_magnetization(trial)?;
-                            let mut stats = backend.snapshot_step_stats(plan.grid.cells)?;
-                            ensure_single_object_scalars(&mut stats, "free");
-                            last_trial_energy_j = stats.e_total;
-                            last_trial_step_size = step_size;
-                            Ok::<_, RunError>(DirectMinimizerTrialEvaluation {
-                                energy_j: stats.e_total,
-                                stats,
-                            })
-                        },
-                    )?
-                    else {
-                        let diagnostics = line_search_failure_diagnostics(
-                            &state,
-                            &ms_apm,
-                            &volumes_m3,
-                            cell_volume_m3,
-                        );
-                        return Err(restore_previous_state_after_failed_line_search(
-                            backend,
-                            &state.magnetization,
-                            "projected-gradient BB",
-                            PROJECTED_GRADIENT_MAX_BACKTRACK,
-                            DirectMinimizerLineSearchFailure {
-                                previous_energy_j: state.energy_j,
-                                last_trial_energy_j,
-                                initial_step_size_m_per_a: initial_trial_step_size,
-                                last_trial_step_size_m_per_a: last_trial_step_size,
-                                direction_dot_gradient_j_per_step,
-                                energy_tolerance_j,
-                                evaluations: trial_evaluations,
-                                gradient_max_apm: diagnostics.0,
-                                active_gradient_max_apm: diagnostics.1,
-                                active_cell_count: diagnostics.2,
-                                cell_volume_m3: diagnostics.3,
-                                ms_min_apm: diagnostics.4,
-                                ms_max_apm: diagnostics.5,
-                            },
-                        )?);
-                    };
-                    trial_lambda = accepted_trial.step_size;
-                    let line_search_backtracks = accepted_trial.backtracks;
-                    let energy_evaluations = accepted_trial.energy_evaluations;
-                    let trial_stats = accepted_trial.stats;
+        let p_dot_g = nonlinear_cg_descent_direction_dot(
+            &mut state.search_direction,
+            &state.gradient,
+            &ms_apm,
+            &volumes_m3,
+        );
+        let mut trial_lambda = nonlinear_cg_initial_step_size(&state.search_direction);
+        let initial_trial_step_size = trial_lambda;
+        let mut trial_evaluations = 0u32;
+        let mut last_trial_energy_j = f64::NAN;
+        let mut last_trial_step_size = initial_trial_step_size;
 
-                    let mut m_trial = accepted_trial.magnetization;
-                    mask_vectors_to_active_domain(&mut m_trial, active_mask);
-                    let mut h_eff_new = backend.copy_h_eff(cell_count)?;
-                    mask_vectors_to_active_domain(&mut h_eff_new, active_mask);
-                    let mut g_new = tangent_gradient_from_field(&m_trial, &h_eff_new);
-                    mask_vectors_to_active_domain(&mut g_new, active_mask);
+        let Some(accepted_trial) = nonlinear_cg_line_search_with_tolerance(
+            state.energy_j,
+            p_dot_g,
+            &state.magnetization,
+            &state.h_eff,
+            &state.search_direction,
+            trial_lambda,
+            energy_tolerance_j,
+            &ms_apm,
+            &volumes_m3,
+            plan.active_mask.as_deref(),
+            |trial| {
+                let step_size =
+                    initial_trial_step_size * 0.5_f64.powi(trial_evaluations as i32);
+                trial_evaluations = trial_evaluations.saturating_add(1);
+                backend.upload_magnetization(trial)?;
+                let mut stats = backend.snapshot_step_stats(plan.grid.cells)?;
+                ensure_single_object_scalars(&mut stats, "free");
+                last_trial_energy_j = stats.e_total;
+                last_trial_step_size = step_size;
+                Ok::<_, RunError>(DirectMinimizerTrialEvaluation {
+                    energy_j: stats.e_total,
+                    stats,
+                })
+            },
+        )?
+        else {
+            let diagnostics =
+                line_search_failure_diagnostics(&state, &ms_apm, &volumes_m3, cell_volume_m3);
+            return Err(restore_previous_state_after_failed_line_search(
+                backend,
+                &state.magnetization,
+                "nonlinear-CG",
+                NONLINEAR_CG_MAX_BACKTRACK,
+                DirectMinimizerLineSearchFailure {
+                    previous_energy_j: state.energy_j,
+                    last_trial_energy_j,
+                    initial_step_size_m_per_a: initial_trial_step_size,
+                    last_trial_step_size_m_per_a: last_trial_step_size,
+                    direction_dot_gradient_j_per_step: p_dot_g,
+                    energy_tolerance_j,
+                    evaluations: trial_evaluations,
+                    gradient_max_apm: diagnostics.0,
+                    active_gradient_max_apm: diagnostics.1,
+                    active_cell_count: diagnostics.2,
+                    cell_volume_m3: diagnostics.3,
+                    ms_min_apm: diagnostics.4,
+                    ms_max_apm: diagnostics.5,
+                },
+            )?);
+        };
+        trial_lambda = accepted_trial.step_size;
+        let line_search_backtracks = accepted_trial.backtracks;
+        let energy_evaluations = accepted_trial.energy_evaluations;
+        let trial_stats = accepted_trial.stats;
+        let mut m_trial = accepted_trial.magnetization;
+        mask_vectors_to_active_domain(&mut m_trial, active_mask);
 
-                    let step_size_update = projected_gradient_step_size_update(
-                        &state.magnetization,
-                        &m_trial,
-                        &state.gradient,
-                        &g_new,
-                        &ms_apm,
-                        &volumes_m3,
-                        state.use_bb1,
-                        state.reset_consecutive,
-                    );
-                    state.step_size = step_size_update.step_size;
-                    state.use_bb1 = step_size_update.use_bb1;
-                    state.reset_consecutive = step_size_update.reset_consecutive;
-
-                    state.h_eff = h_eff_new;
-                    state.gradient = g_new;
-                    (
-                        trial_stats,
-                        m_trial,
-                        line_search_backtracks,
-                        energy_evaluations,
-                    )
-                }
-                DirectMinimizerAlgorithm::NonlinearCg => {
-                    let p_dot_g = nonlinear_cg_descent_direction_dot(
-                        &mut state.search_direction,
-                        &state.gradient,
-                        &ms_apm,
-                        &volumes_m3,
-                    );
-                    trial_lambda = nonlinear_cg_initial_step_size(&state.search_direction);
-                    let initial_trial_step_size = trial_lambda;
-                    let mut trial_evaluations = 0u32;
-                    let mut last_trial_energy_j = f64::NAN;
-                    let mut last_trial_step_size = initial_trial_step_size;
-
-                    let Some(accepted_trial) = nonlinear_cg_line_search_with_tolerance(
-                        state.energy_j,
-                        p_dot_g,
-                        &state.magnetization,
-                        &state.h_eff,
-                        &state.search_direction,
-                        trial_lambda,
-                        energy_tolerance_j,
-                        &ms_apm,
-                        &volumes_m3,
-                        plan.active_mask.as_deref(),
-                        |trial| {
-                            let step_size =
-                                initial_trial_step_size * 0.5_f64.powi(trial_evaluations as i32);
-                            trial_evaluations = trial_evaluations.saturating_add(1);
-                            backend.upload_magnetization(trial)?;
-                            let mut stats = backend.snapshot_step_stats(plan.grid.cells)?;
-                            ensure_single_object_scalars(&mut stats, "free");
-                            last_trial_energy_j = stats.e_total;
-                            last_trial_step_size = step_size;
-                            Ok::<_, RunError>(DirectMinimizerTrialEvaluation {
-                                energy_j: stats.e_total,
-                                stats,
-                            })
-                        },
-                    )?
-                    else {
-                        let diagnostics = line_search_failure_diagnostics(
-                            &state,
-                            &ms_apm,
-                            &volumes_m3,
-                            cell_volume_m3,
-                        );
-                        return Err(restore_previous_state_after_failed_line_search(
-                            backend,
-                            &state.magnetization,
-                            "nonlinear-CG",
-                            NONLINEAR_CG_MAX_BACKTRACK,
-                            DirectMinimizerLineSearchFailure {
-                                previous_energy_j: state.energy_j,
-                                last_trial_energy_j,
-                                initial_step_size_m_per_a: initial_trial_step_size,
-                                last_trial_step_size_m_per_a: last_trial_step_size,
-                                direction_dot_gradient_j_per_step: p_dot_g,
-                                energy_tolerance_j,
-                                evaluations: trial_evaluations,
-                                gradient_max_apm: diagnostics.0,
-                                active_gradient_max_apm: diagnostics.1,
-                                active_cell_count: diagnostics.2,
-                                cell_volume_m3: diagnostics.3,
-                                ms_min_apm: diagnostics.4,
-                                ms_max_apm: diagnostics.5,
-                            },
-                        )?);
-                    };
-                    trial_lambda = accepted_trial.step_size;
-                    let line_search_backtracks = accepted_trial.backtracks;
-                    let energy_evaluations = accepted_trial.energy_evaluations;
-                    let trial_stats = accepted_trial.stats;
-                    let mut m_trial = accepted_trial.magnetization;
-                    mask_vectors_to_active_domain(&mut m_trial, active_mask);
-
-                    let mut h_eff_new = backend.copy_h_eff(cell_count)?;
-                    mask_vectors_to_active_domain(&mut h_eff_new, active_mask);
-                    let mut g_new = tangent_gradient_from_field(&m_trial, &h_eff_new);
-                    mask_vectors_to_active_domain(&mut g_new, active_mask);
-                    state.search_direction = nonlinear_cg_next_direction(
-                        &m_trial,
-                        &state.gradient,
-                        &g_new,
-                        &state.search_direction,
-                        &ms_apm,
-                        &volumes_m3,
-                        state.accepted_steps + 1,
-                    );
-                    state.h_eff = h_eff_new;
-                    state.gradient = g_new;
-                    state.step_size = trial_lambda;
-                    (
-                        trial_stats,
-                        m_trial,
-                        line_search_backtracks,
-                        energy_evaluations,
-                    )
-                }
-            };
+        let mut h_eff_new = backend.copy_h_eff(cell_count)?;
+        mask_vectors_to_active_domain(&mut h_eff_new, active_mask);
+        let mut g_new = tangent_gradient_from_field(&m_trial, &h_eff_new);
+        mask_vectors_to_active_domain(&mut g_new, active_mask);
+        state.search_direction = nonlinear_cg_next_direction(
+            &m_trial,
+            &state.gradient,
+            &g_new,
+            &state.search_direction,
+            &ms_apm,
+            &volumes_m3,
+            state.accepted_steps + 1,
+        );
+        state.h_eff = h_eff_new;
+        state.gradient = g_new;
+        state.step_size = trial_lambda;
 
         state.magnetization = m_trial;
         state.energy_j = trial_stats.e_total;

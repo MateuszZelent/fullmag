@@ -689,7 +689,7 @@ fn validate_direct_minimizer_realization(
             ))
         }
         BackendPlanIR::Fdm(_) if resolved_device == "gpu" => {
-            Some(crate::relaxation::CUDA_FDM_HOST_DIRECT_MINIMIZER_REALIZATION)
+            crate::relaxation::cuda_fdm_direct_minimizer_realization(control.algorithm)
         }
         BackendPlanIR::Fem(_) => {
             crate::relaxation::native_direct_minimizer_realization(
@@ -10165,6 +10165,52 @@ mod tests {
             provenance("native_cuda_nonlinear_cg"),
         )
         .expect_err("CUDA FDM metadata must reject the FEM GPU native realization ID");
+        assert!(error.to_string().contains("realization mismatch"));
+    }
+
+    #[test]
+    fn final_metadata_requires_native_cuda_pgbb_realization_for_single_layer_fdm() {
+        let problem = fdm_execution_problem("gpu", ExecutionMode::Strict);
+        let mut plan = test_execution_plan(None);
+        if let BackendPlanIR::Fdm(fdm) = &mut plan.backend_plan {
+            fdm.relaxation = Some(fullmag_ir::RelaxationControlIR {
+                algorithm: fullmag_ir::RelaxationAlgorithmIR::ProjectedGradientBb,
+                stop: fullmag_ir::RelaxStopIR {
+                    torque_tolerance_apm: Some(1.0e-3),
+                    energy_tolerance_j: None,
+                    max_steps: Some(1),
+                    max_relaxation_time_s: None,
+                },
+            });
+        }
+        let provenance = |realization: &str| ExecutionProvenance {
+            execution_engine: "cuda_fdm".to_string(),
+            precision: "double".to_string(),
+            requested_energy_minimizer: Some("projected_gradient_bb".to_string()),
+            resolved_energy_minimizer: Some("projected_gradient_bb".to_string()),
+            energy_minimizer_realization: Some(realization.to_string()),
+            ..ExecutionProvenance::default()
+        };
+
+        let metadata = write_final_execution_test_metadata_without_fem_policy(
+            "cuda-fdm-pgbb-realization",
+            &problem,
+            &plan,
+            provenance("native_cuda_pgbb"),
+        )
+        .expect("CUDA FDM PG-BB metadata should accept the device-resident realization");
+        assert_eq!(
+            metadata["execution_provenance"]["energy_minimizer_realization"],
+            "native_cuda_pgbb"
+        );
+
+        let error = write_final_execution_test_metadata_without_fem_policy(
+            "cuda-fdm-pgbb-host-realization",
+            &problem,
+            &plan,
+            provenance(crate::relaxation::CUDA_FDM_HOST_DIRECT_MINIMIZER_REALIZATION),
+        )
+        .expect_err("CUDA FDM PG-BB metadata must reject the host-orchestrated realization ID");
         assert!(error.to_string().contains("realization mismatch"));
     }
 

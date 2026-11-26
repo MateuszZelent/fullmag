@@ -26,8 +26,10 @@ pub(crate) use direct_minimizer_reference::{
 #[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
 pub(crate) use provenance::apply_fem_direct_minimizer_policy_provenance;
 pub(crate) use provenance::NATIVE_LLG_TIME_INTEGRATOR_REALIZATION;
+#[cfg(test)]
+pub(crate) use provenance::CUDA_FDM_HOST_DIRECT_MINIMIZER_REALIZATION;
 pub(crate) use provenance::{
     apply_energy_minimizer_provenance, cpu_direct_minimizer_realization,
-    expected_cpu_direct_minimizer_realization, native_direct_minimizer_realization,
-    CUDA_FDM_HOST_DIRECT_MINIMIZER_REALIZATION,
+    cuda_fdm_direct_minimizer_realization, expected_cpu_direct_minimizer_realization,
+    native_direct_minimizer_realization,
 };

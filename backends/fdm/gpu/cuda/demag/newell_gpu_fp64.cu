@@ -15,12 +15,14 @@
 #include "context.hpp"
 
 #include <cuda_runtime.h>
+#include <cufft.h>
 #include <cmath>
 
 namespace fullmag {
 namespace fdm {
 
 extern void set_cuda_error(Context &ctx, const char *operation, cudaError_t err);
+extern void set_cufft_error(Context &ctx, const char *operation, cufftResult err);
 
 namespace {
 
@@ -260,9 +262,6 @@ __global__ void newell_stencil_and_place_kernel(
     int j = rem / nx;
     int i = rem - j * nx;
 
-    int flen_slab = fsx * fsy;
-    int flen = flen_slab * (min(nz, ASYMPTOTIC_DISTANCE) + 2);
-
     double nxx, nyy, nzz, nxy, nxz, nyz;
 
     int dist2 = i*i + j*j + k*k;
@@ -363,6 +362,11 @@ __global__ void newell_stencil_and_place_kernel(
     for (int xi = 0; xi < n_xs; ++xi) {
         for (int yi = 0; yi < n_ys; ++yi) {
             for (int zi = 0; zi < n_zs; ++zi) {
+                if (xs[xi] < 0 || xs[xi] >= px ||
+                    ys[yi] < 0 || ys[yi] >= py ||
+                    zs[zi] < 0 || zs[zi] >= pz) {
+                    continue;
+                }
                 int p = pidx(xs[xi], ys[yi], zs[zi]);
                 double sx = sx_arr[xi], sy = sy_arr[yi], sz = sz_arr[zi];
                 n_xx[p] = nxx;
@@ -379,18 +383,28 @@ __global__ void newell_stencil_and_place_kernel(
 } // namespace
 
 // ---------------------------------------------------------------------------
-// Public API: compute Newell tensor on GPU
+// Public API: compute Newell tensor Hermitian half-spectra on GPU via D2Z
 // ---------------------------------------------------------------------------
 
 void launch_newell_compute_spectra_fp64(Context &ctx) {
     int nx = static_cast<int>(ctx.nx);
     int ny = static_cast<int>(ctx.ny);
     int nz = static_cast<int>(ctx.nz);
-    int px = 2 * nx;
-    int py = 2 * ny;
-    int pz = 2 * nz;
+    int px = ctx.fft_nx > 0 ? static_cast<int>(ctx.fft_nx) : 2 * nx;
+    int py = ctx.fft_ny > 0 ? static_cast<int>(ctx.fft_ny) : 2 * ny;
+    int pz = ctx.fft_nz > 0
+        ? static_cast<int>(ctx.fft_nz)
+        : (ctx.thin_film_2d_demag ? 1 : 2 * nz);
+    int sx = px / 2 + 1;
     int padded_len = px * py * pz;
+    int half_len = sx * py * pz;
     double dx = ctx.dx, dy = ctx.dy, dz = ctx.dz;
+
+    if (!ctx.demag_kernel.xx || !ctx.demag_kernel.yy || !ctx.demag_kernel.zz ||
+        !ctx.demag_kernel.xy || !ctx.demag_kernel.xz || !ctx.demag_kernel.yz) {
+        ctx.last_error = "newell: demag kernel device buffers are not allocated";
+        return;
+    }
 
     // Extended grid dimensions
     int nx_dist = min(nx, ASYMPTOTIC_DISTANCE);
@@ -403,24 +417,25 @@ void launch_newell_compute_spectra_fp64(Context &ctx) {
 
     // Allocate device memory for f/g values
     double *d_fg = nullptr;
+    double *d_nxx = nullptr, *d_nyy = nullptr, *d_nzz = nullptr;
+    double *d_nxy = nullptr, *d_nxz = nullptr, *d_nyz = nullptr;
+    void *d_fft_work = nullptr;
+    cufftHandle d2z_plan = 0;
+    bool plan_created = false;
+    size_t padded_bytes = static_cast<size_t>(padded_len) * sizeof(double);
+
     cudaError_t err = context_gpu_workspace_cuda_malloc(
         ctx, &d_fg, static_cast<size_t>(flen) * 6 * sizeof(double));
     if (err != cudaSuccess) { set_cuda_error(ctx, "newell: cudaMalloc(fg)", err); return; }
 
-    // Allocate temporary device arrays for the 6 kernel components
-    // (these will become the demag_kernel spectra after FFT)
-    double *d_nxx = nullptr, *d_nyy = nullptr, *d_nzz = nullptr;
-    double *d_nxy = nullptr, *d_nxz = nullptr, *d_nyz = nullptr;
-    size_t padded_bytes = static_cast<size_t>(padded_len) * sizeof(double);
+    err = context_gpu_workspace_cuda_malloc(ctx, &d_nxx, padded_bytes); if (err != cudaSuccess) { set_cuda_error(ctx, "newell: cudaMalloc(nxx)", err); goto cleanup; }
+    err = context_gpu_workspace_cuda_malloc(ctx, &d_nyy, padded_bytes); if (err != cudaSuccess) { set_cuda_error(ctx, "newell: cudaMalloc(nyy)", err); goto cleanup; }
+    err = context_gpu_workspace_cuda_malloc(ctx, &d_nzz, padded_bytes); if (err != cudaSuccess) { set_cuda_error(ctx, "newell: cudaMalloc(nzz)", err); goto cleanup; }
+    err = context_gpu_workspace_cuda_malloc(ctx, &d_nxy, padded_bytes); if (err != cudaSuccess) { set_cuda_error(ctx, "newell: cudaMalloc(nxy)", err); goto cleanup; }
+    err = context_gpu_workspace_cuda_malloc(ctx, &d_nxz, padded_bytes); if (err != cudaSuccess) { set_cuda_error(ctx, "newell: cudaMalloc(nxz)", err); goto cleanup; }
+    err = context_gpu_workspace_cuda_malloc(ctx, &d_nyz, padded_bytes); if (err != cudaSuccess) { set_cuda_error(ctx, "newell: cudaMalloc(nyz)", err); goto cleanup; }
 
-    err = context_gpu_workspace_cuda_malloc(ctx, &d_nxx, padded_bytes); if (err != cudaSuccess) { goto cleanup; }
-    err = context_gpu_workspace_cuda_malloc(ctx, &d_nyy, padded_bytes); if (err != cudaSuccess) { goto cleanup; }
-    err = context_gpu_workspace_cuda_malloc(ctx, &d_nzz, padded_bytes); if (err != cudaSuccess) { goto cleanup; }
-    err = context_gpu_workspace_cuda_malloc(ctx, &d_nxy, padded_bytes); if (err != cudaSuccess) { goto cleanup; }
-    err = context_gpu_workspace_cuda_malloc(ctx, &d_nxz, padded_bytes); if (err != cudaSuccess) { goto cleanup; }
-    err = context_gpu_workspace_cuda_malloc(ctx, &d_nyz, padded_bytes); if (err != cudaSuccess) { goto cleanup; }
-
-    // Zero the output arrays
+    // Zero the real-space kernel arrays
     cudaMemset(d_nxx, 0, padded_bytes);
     cudaMemset(d_nyy, 0, padded_bytes);
     cudaMemset(d_nzz, 0, padded_bytes);
@@ -444,42 +459,91 @@ void launch_newell_compute_spectra_fp64(Context &ctx) {
             nx, ny, nz, px, py, pz, fsx, fsy, dx, dy, dz);
         err = cudaGetLastError();
         if (err != cudaSuccess) { set_cuda_error(ctx, "newell: stencil kernel", err); goto cleanup; }
-
-        cudaDeviceSynchronize();
     }
 
-    // FFT the real-space kernel to get spectra, then upload to ctx.demag_kernel
-    // For now, download to host, run host-side FFT + upload as interleaved complex.
-    // A full GPU-native path would use cuFFT D2Z here.
+    // Pass 3: GPU-native real-to-complex D2Z transform directly into ctx.demag_kernel
+    // Hermitian half-spectrum buffers (no D2H/H2D round-trip).
     {
-        // Download real-space kernels to host
-        std::vector<double> h_nxx(padded_len), h_nyy(padded_len), h_nzz(padded_len);
-        std::vector<double> h_nxy(padded_len), h_nxz(padded_len), h_nyz(padded_len);
+        const bool is_2d = (pz == 1);
+        const int rank = is_2d ? 2 : 3;
+        int dims[3] = {};
+        int inembed[3] = {};
+        int onembed[3] = {};
+        if (is_2d) {
+            dims[0] = py; dims[1] = px;
+            inembed[0] = py; inembed[1] = px;
+            onembed[0] = py; onembed[1] = sx;
+        } else {
+            dims[0] = pz; dims[1] = py; dims[2] = px;
+            inembed[0] = pz; inembed[1] = py; inembed[2] = px;
+            onembed[0] = pz; onembed[1] = py; onembed[2] = sx;
+        }
 
-        fullmag_fdm_receipt_cuda_memcpy(
-            ctx, h_nxx.data(), d_nxx, padded_bytes, cudaMemcpyDeviceToHost);
-        fullmag_fdm_receipt_cuda_memcpy(
-            ctx, h_nyy.data(), d_nyy, padded_bytes, cudaMemcpyDeviceToHost);
-        fullmag_fdm_receipt_cuda_memcpy(
-            ctx, h_nzz.data(), d_nzz, padded_bytes, cudaMemcpyDeviceToHost);
-        fullmag_fdm_receipt_cuda_memcpy(
-            ctx, h_nxy.data(), d_nxy, padded_bytes, cudaMemcpyDeviceToHost);
-        fullmag_fdm_receipt_cuda_memcpy(
-            ctx, h_nxz.data(), d_nxz, padded_bytes, cudaMemcpyDeviceToHost);
-        fullmag_fdm_receipt_cuda_memcpy(
-            ctx, h_nyz.data(), d_nyz, padded_bytes, cudaMemcpyDeviceToHost);
+        cufftResult fft_err = context_gpu_workspace_cufft_create(ctx, &d2z_plan);
+        if (fft_err != CUFFT_SUCCESS) {
+            set_cufft_error(ctx, "newell: cufftCreate(D2Z)", fft_err);
+            goto cleanup;
+        }
+        plan_created = true;
 
-        // TODO: Replace this D→H→FFT→H→D round-trip with cuFFT D2Z in-place.
-        // For now, the host-side FFT path is used via Rust after downloading.
-        // The GPU computation of f/g + stencil is the expensive part;
-        // the FFT of the kernel is O(N log N) and only done once.
+        fft_err = cufftSetAutoAllocation(d2z_plan, 0);
+        if (fft_err != CUFFT_SUCCESS) {
+            set_cufft_error(ctx, "newell: cufftSetAutoAllocation(D2Z)", fft_err);
+            goto cleanup;
+        }
 
-        // Store the real-space kernels back for the Rust layer to FFT + upload
-        // This temporary buffer is freed by the caller
-        ctx.last_error = "";  // success
+        size_t work_bytes = 0;
+        fft_err = cufftMakePlanMany(
+            d2z_plan, rank, dims,
+            inembed, 1, padded_len,
+            onembed, 1, half_len,
+            CUFFT_D2Z, 1, &work_bytes);
+        if (fft_err != CUFFT_SUCCESS) {
+            set_cufft_error(ctx, "newell: cufftMakePlanMany(D2Z)", fft_err);
+            goto cleanup;
+        }
+
+        if (work_bytes > 0) {
+            err = context_gpu_workspace_cuda_malloc(ctx, &d_fft_work, work_bytes);
+            if (err != cudaSuccess) {
+                set_cuda_error(ctx, "newell: cudaMalloc(fft_work)", err);
+                goto cleanup;
+            }
+        }
+        fft_err = cufftSetWorkArea(d2z_plan, d_fft_work);
+        if (fft_err != CUFFT_SUCCESS) {
+            set_cufft_error(ctx, "newell: cufftSetWorkArea(D2Z)", fft_err);
+            goto cleanup;
+        }
+
+        double *src_components[6] = {d_nxx, d_nyy, d_nzz, d_nxy, d_nxz, d_nyz};
+        void *dst_components[6] = {
+            ctx.demag_kernel.xx, ctx.demag_kernel.yy, ctx.demag_kernel.zz,
+            ctx.demag_kernel.xy, ctx.demag_kernel.xz, ctx.demag_kernel.yz
+        };
+        for (int c = 0; c < 6; ++c) {
+            fft_err = cufftExecD2Z(
+                d2z_plan,
+                static_cast<cufftDoubleReal*>(src_components[c]),
+                static_cast<cufftDoubleComplex*>(dst_components[c]));
+            if (fft_err != CUFFT_SUCCESS) {
+                set_cufft_error(ctx, "newell: cufftExecD2Z", fft_err);
+                goto cleanup;
+            }
+        }
+
+        err = cudaDeviceSynchronize();
+        if (err != cudaSuccess) {
+            set_cuda_error(ctx, "newell: cudaDeviceSynchronize", err);
+            goto cleanup;
+        }
+        ctx.has_demag_tensor_kernel = true;
+        ctx.last_error = "";
     }
 
 cleanup:
+    if (plan_created) cufftDestroy(d2z_plan);
+    if (d_fft_work) context_gpu_workspace_cuda_free(ctx, d_fft_work);
     if (d_fg) context_gpu_workspace_cuda_free(ctx, d_fg);
     if (d_nxx) context_gpu_workspace_cuda_free(ctx, d_nxx);
     if (d_nyy) context_gpu_workspace_cuda_free(ctx, d_nyy);

@@ -812,7 +812,10 @@ struct Context {
     uint32_t fft_nx = 0;
     uint32_t fft_ny = 0;
     uint32_t fft_nz = 0;
-    uint64_t fft_cell_count = 0;
+    uint32_t fft_half_nx = 0;          // fft_nx / 2 + 1 (Hermitian half-spectrum X dim)
+    uint64_t fft_cell_count = 0;       // fft_nx * fft_ny * fft_nz (logical transform size)
+    uint64_t fft_half_cell_count = 0;  // fft_half_nx * fft_ny * fft_nz (complex elements per component)
+    uint64_t fft_real_stride = 0;      // 2 * fft_half_cell_count (real elements per component, pitch = 2 * fft_half_nx)
     uint64_t fft_component_stride = 0;
     void *fft_x = nullptr;
     void *fft_y = nullptr;
@@ -821,11 +824,14 @@ struct Context {
     uint64_t fft_work_area_bytes = 0;
     DeviceDemagKernel demag_kernel;
 #if FULLMAG_HAS_CUDA
-    cufftHandle fft_plan = 0;
+    cufftHandle fft_plan = 0;          // Forward plan (D2Z / R2C single-layer; Z2Z / C2C when bound to multilayer)
+    cufftHandle fft_plan_inv = 0;      // Inverse plan (Z2D / C2R single-layer)
 #else
     void *fft_plan = nullptr;
+    void *fft_plan_inv = nullptr;
 #endif
     bool fft_plan_valid = false;
+    bool fft_plan_inv_valid = false;
     bool fft_components_share_allocation = false;
     bool fft_workspace_bound_to_multilayer_cache = false;
     std::vector<DeviceMultilayerFftWorkspace> multilayer_fft_workspaces;
@@ -871,6 +877,12 @@ struct Context {
     double *multilayer_bb_partials = nullptr;
     double *multilayer_bb_scalars = nullptr;
     uint64_t multilayer_bb_partial_capacity = 0;
+    // Lazily allocated once for single-layer PG-BB scalar reductions.
+    bool single_layer_bb_history_valid = false;
+    bool single_layer_bb_evaluation_valid = false;
+    double *single_layer_bb_partials = nullptr;
+    double *single_layer_bb_scalars = nullptr;
+    uint64_t single_layer_bb_partial_capacity = 0;
     std::vector<DeviceMultilayerLayer> multilayer_layers;
     std::vector<DeviceMultilayerTensorKernel> multilayer_kernels;
 
@@ -1876,6 +1888,8 @@ inline void context_reset_integrator_history(Context &ctx) {
     ++ctx.accepted_state_revision;
     ctx.abm_startup = 0;
     ctx.abm_last_dt = 0.0;
+    ctx.single_layer_bb_history_valid = false;
+    ctx.single_layer_bb_evaluation_valid = false;
 }
 
 inline bool fullmag_fdm_should_fill_step_stats_for_step(const Context &ctx, uint64_t step) {
@@ -2472,7 +2486,7 @@ inline bool context_get_gpu_workspace_telemetry_v1(
         ctx.gpu_workspace_step_fft_plan_creation_count;
     result.prepared_fft_workspace_count = ctx.has_multilayer_plan_v2
         ? static_cast<uint64_t>(ctx.multilayer_fft_workspaces.size())
-        : ctx.fft_plan_valid ? 1U : 0U;
+        : (ctx.fft_plan_valid && ctx.fft_plan_inv_valid) ? 1U : 0U;
     result.workspace_bytes = ctx.gpu_workspace_current_device_bytes;
     result.peak_vram_bytes = ctx.gpu_workspace_peak_device_bytes;
     result.observed_step_count = ctx.gpu_workspace_observed_step_count;
@@ -2993,6 +3007,9 @@ bool context_download_scalar_f32(
 // FP64 PG-BB: op 0 evaluates, 1 captures accepted m/g/H, 2 retracts a
 // trial from accepted state, 3 restores accepted m. Scalars are layer-major.
 bool context_multilayer_bb(Context &, uint32_t, double, double *, uint64_t);
+// Single-layer PG-BB: op 0 evaluates, 1 captures accepted m/g/H, 2 retracts a
+// trial from accepted state, 3 restores accepted m.
+bool context_single_layer_bb(Context &, uint32_t, double, double *, uint64_t);
 
 /// Download a v2 multilayer layer field observable from device to host as f64 AoS.
 bool context_download_layer_field_f64(

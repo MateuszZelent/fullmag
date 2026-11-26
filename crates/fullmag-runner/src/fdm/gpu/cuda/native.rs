@@ -1048,6 +1048,18 @@ fn native_regional_field_drive_payload(
     }))
 }
 
+#[cfg(feature = "cuda")]
+pub(crate) const SINGLE_LAYER_BB_OP_EVALUATE: u32 = ffi::FULLMAG_FDM_SINGLE_LAYER_BB_OP_EVALUATE;
+#[cfg(feature = "cuda")]
+pub(crate) const SINGLE_LAYER_BB_OP_CAPTURE: u32 = ffi::FULLMAG_FDM_SINGLE_LAYER_BB_OP_CAPTURE;
+#[cfg(feature = "cuda")]
+pub(crate) const SINGLE_LAYER_BB_OP_TRIAL: u32 = ffi::FULLMAG_FDM_SINGLE_LAYER_BB_OP_TRIAL;
+#[cfg(feature = "cuda")]
+pub(crate) const SINGLE_LAYER_BB_OP_RESTORE: u32 = ffi::FULLMAG_FDM_SINGLE_LAYER_BB_OP_RESTORE;
+#[cfg(feature = "cuda")]
+pub(crate) const SINGLE_LAYER_BB_SCALAR_COUNT: usize =
+    ffi::FULLMAG_FDM_SINGLE_LAYER_BB_SCALAR_COUNT_V1 as usize;
+
 /// Safe wrapper around the native FDM backend handle.
 #[cfg(feature = "cuda")]
 pub(crate) struct NativeFdmBackend {
@@ -2537,6 +2549,10 @@ impl NativeFdmBackend {
         crate::types::split_rotated_only_dmi_energy(self.rotated_dmi_only, aggregate_dmi_energy)
     }
 
+    pub(crate) fn split_dmi_energy_components(&self, aggregate_dmi_energy: f64) -> (f64, f64) {
+        self.split_dmi_energy(aggregate_dmi_energy)
+    }
+
     pub(crate) fn stats_policy(&self) -> NativeStatsPolicy {
         self.stats_policy
     }
@@ -3781,6 +3797,28 @@ impl NativeFdmBackend {
             self.handle, op, lambda, scalars.as_mut_ptr().cast(), (scalars.len() * 20) as u64,
         ) };
         if rc != ffi::FULLMAG_FDM_OK { return Err(self.last_error_or("resident multilayer BB failed")); }
+        Ok(())
+    }
+
+    /// Resident single-layer PG-BB operation (FP64 & FP32); only packed control scalars cross D2H.
+    pub(crate) fn single_layer_bb_op(
+        &mut self,
+        op: u32,
+        lambda: f64,
+        scalars: &mut [f64; SINGLE_LAYER_BB_SCALAR_COUNT],
+    ) -> Result<(), RunError> {
+        let rc = unsafe {
+            ffi::fullmag_fdm_backend_single_layer_bb_v1(
+                self.handle,
+                op,
+                lambda,
+                scalars.as_mut_ptr(),
+                SINGLE_LAYER_BB_SCALAR_COUNT as u64,
+            )
+        };
+        if rc != ffi::FULLMAG_FDM_OK {
+            return Err(self.last_error_or("resident single-layer BB failed"));
+        }
         Ok(())
     }
 

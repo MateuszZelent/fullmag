@@ -257,8 +257,20 @@ bool context_preflight_single_grid_workspace(
             return overflow();
         }
         const uint64_t fft_cell_count = fft_nx * fft_ny * fft_nz;
+        const uint64_t fft_half_nx = fft_nx / 2u + 1u;
+        if (fft_half_nx > maximum / fft_ny ||
+            fft_half_nx * fft_ny > maximum / fft_nz) {
+            return overflow();
+        }
+        const uint64_t fft_half_cell_count = fft_half_nx * fft_ny * fft_nz;
+        if (fft_half_cell_count > maximum / 2u) {
+            return overflow();
+        }
+        const uint64_t fft_real_stride = uint64_t{2} * fft_half_cell_count;
         if (fft_cell_count >
-            static_cast<uint64_t>(std::numeric_limits<int>::max())) {
+                static_cast<uint64_t>(std::numeric_limits<int>::max()) ||
+            fft_real_stride >
+                static_cast<uint64_t>(std::numeric_limits<int>::max())) {
             ctx.last_error =
                 "demag FFT component stride exceeds cuFFT PlanMany limit";
             return false;
@@ -270,9 +282,9 @@ bool context_preflight_single_grid_workspace(
         const uint64_t complex_bytes =
             ctx.precision == FULLMAG_FDM_PRECISION_DOUBLE
                 ? sizeof(cufftDoubleComplex) : sizeof(cufftComplex);
-        if (fft_cell_count > maximum / 6 ||
-            !add_product(uint64_t{3} * fft_cell_count, complex_bytes) ||
-            !add_product(uint64_t{6} * fft_cell_count, complex_bytes)) {
+        if (fft_half_cell_count > maximum / 6 ||
+            !add_product(uint64_t{3} * fft_half_cell_count, complex_bytes) ||
+            !add_product(uint64_t{6} * fft_half_cell_count, complex_bytes)) {
             return false;
         }
     }
@@ -943,7 +955,11 @@ static bool alloc_demag_kernel(Context &ctx) {
     if (!ctx.enable_demag) {
         return true;
     }
-    size_t bytes = ctx.fft_cell_count * complex_size(ctx.precision);
+    if (ctx.fft_half_cell_count == 0) {
+        ctx.last_error = "demag FFT half-spectrum dimensions uninitialized";
+        return false;
+    }
+    size_t bytes = ctx.fft_half_cell_count * complex_size(ctx.precision);
     cudaError_t err = cudaMalloc(&ctx.demag_kernel.xx, bytes);
     if (err != cudaSuccess) { set_cuda_error(ctx, "cudaMalloc(kern_xx)", err); return false; }
     err = cudaMalloc(&ctx.demag_kernel.yy, bytes);
@@ -1197,7 +1213,10 @@ static void unbind_multilayer_fft_workspace(Context &ctx) {
     ctx.fft_nx = 0;
     ctx.fft_ny = 0;
     ctx.fft_nz = 0;
+    ctx.fft_half_nx = 0;
     ctx.fft_cell_count = 0;
+    ctx.fft_half_cell_count = 0;
+    ctx.fft_real_stride = 0;
     ctx.fft_component_stride = 0;
     ctx.fft_x = nullptr;
     ctx.fft_y = nullptr;
@@ -1205,7 +1224,9 @@ static void unbind_multilayer_fft_workspace(Context &ctx) {
     ctx.fft_work_area = nullptr;
     ctx.fft_work_area_bytes = 0;
     ctx.fft_plan = 0;
+    ctx.fft_plan_inv = 0;
     ctx.fft_plan_valid = false;
+    ctx.fft_plan_inv_valid = false;
     ctx.fft_components_share_allocation = false;
     ctx.fft_workspace_bound_to_multilayer_cache = false;
 }
@@ -2755,59 +2776,124 @@ __global__ void downsample_field_preview_kernel(
 }
 
 static bool prepare_single_grid_fft_plan(Context &ctx) {
-    ctx.fft_cell_count = static_cast<uint64_t>(ctx.fft_nx) * ctx.fft_ny * ctx.fft_nz;
-    const int component_stride = static_cast<int>(ctx.fft_cell_count);
+    ctx.fft_half_nx = ctx.fft_nx / 2u + 1u;
+    ctx.fft_cell_count =
+        static_cast<uint64_t>(ctx.fft_nx) * ctx.fft_ny * ctx.fft_nz;
+    ctx.fft_half_cell_count =
+        static_cast<uint64_t>(ctx.fft_half_nx) * ctx.fft_ny * ctx.fft_nz;
+    ctx.fft_real_stride = uint64_t{2} * ctx.fft_half_cell_count;
+
     const int rank = ctx.thin_film_2d_demag ? 2 : 3;
     int dims[3] = {};
+    int real_nembed[3] = {};
+    int complex_nembed[3] = {};
+    const int real_pitch_x = static_cast<int>(uint64_t{2} * ctx.fft_half_nx);
+    const int complex_pitch_x = static_cast<int>(ctx.fft_half_nx);
     if (ctx.thin_film_2d_demag) {
         dims[0] = static_cast<int>(ctx.fft_ny);
         dims[1] = static_cast<int>(ctx.fft_nx);
+        real_nembed[0] = static_cast<int>(ctx.fft_ny);
+        real_nembed[1] = real_pitch_x;
+        complex_nembed[0] = static_cast<int>(ctx.fft_ny);
+        complex_nembed[1] = complex_pitch_x;
     } else {
         dims[0] = static_cast<int>(ctx.fft_nz);
         dims[1] = static_cast<int>(ctx.fft_ny);
         dims[2] = static_cast<int>(ctx.fft_nx);
+        real_nembed[0] = static_cast<int>(ctx.fft_nz);
+        real_nembed[1] = static_cast<int>(ctx.fft_ny);
+        real_nembed[2] = real_pitch_x;
+        complex_nembed[0] = static_cast<int>(ctx.fft_nz);
+        complex_nembed[1] = static_cast<int>(ctx.fft_ny);
+        complex_nembed[2] = complex_pitch_x;
     }
-    int inembed[3] = {dims[0], dims[1], dims[2]};
-    int onembed[3] = {dims[0], dims[1], dims[2]};
-    const cufftType transform = ctx.precision == FULLMAG_FDM_PRECISION_DOUBLE
-        ? CUFFT_Z2Z : CUFFT_C2C;
+    const int real_component_stride = static_cast<int>(ctx.fft_real_stride);
+    const int complex_component_stride = static_cast<int>(ctx.fft_half_cell_count);
+    const cufftType forward_transform = ctx.precision == FULLMAG_FDM_PRECISION_DOUBLE
+        ? CUFFT_D2Z : CUFFT_R2C;
+    const cufftType inverse_transform = ctx.precision == FULLMAG_FDM_PRECISION_DOUBLE
+        ? CUFFT_Z2D : CUFFT_C2R;
 
     cufftResult status = cufftCreate(&ctx.fft_plan);
     if (status != CUFFT_SUCCESS) {
-        set_cufft_error(ctx, "cufftCreate(single-grid demag)", status);
+        set_cufft_error(ctx, "cufftCreate(single-grid demag forward)", status);
         return false;
     }
     ctx.fft_plan_valid = true;
     status = cufftSetAutoAllocation(ctx.fft_plan, 0);
     if (status != CUFFT_SUCCESS) {
-        set_cufft_error(ctx, "cufftSetAutoAllocation(single-grid demag)", status);
+        set_cufft_error(ctx, "cufftSetAutoAllocation(single-grid demag forward)", status);
         free_fft_workspace(ctx);
         return false;
     }
-    size_t work_area_bytes = 0;
+    size_t fwd_work_area_bytes = 0;
     status = cufftMakePlanMany(
-        ctx.fft_plan, rank, dims, inembed, 1, component_stride,
-        onembed, 1, component_stride, transform, 3, &work_area_bytes);
+        ctx.fft_plan,
+        rank,
+        dims,
+        real_nembed,
+        1,
+        real_component_stride,
+        complex_nembed,
+        1,
+        complex_component_stride,
+        forward_transform,
+        3,
+        &fwd_work_area_bytes);
     if (status != CUFFT_SUCCESS) {
-        set_cufft_error(ctx, "cufftMakePlanMany(single-grid demag, batch=3)", status);
+        set_cufft_error(ctx, "cufftMakePlanMany(single-grid demag forward, batch=3)", status);
         free_fft_workspace(ctx);
         return false;
     }
 
-    ctx.fft_work_area_bytes = work_area_bytes;
+    status = cufftCreate(&ctx.fft_plan_inv);
+    if (status != CUFFT_SUCCESS) {
+        set_cufft_error(ctx, "cufftCreate(single-grid demag inverse)", status);
+        free_fft_workspace(ctx);
+        return false;
+    }
+    ctx.fft_plan_inv_valid = true;
+    status = cufftSetAutoAllocation(ctx.fft_plan_inv, 0);
+    if (status != CUFFT_SUCCESS) {
+        set_cufft_error(ctx, "cufftSetAutoAllocation(single-grid demag inverse)", status);
+        free_fft_workspace(ctx);
+        return false;
+    }
+    size_t inv_work_area_bytes = 0;
+    status = cufftMakePlanMany(
+        ctx.fft_plan_inv,
+        rank,
+        dims,
+        complex_nembed,
+        1,
+        complex_component_stride,
+        real_nembed,
+        1,
+        real_component_stride,
+        inverse_transform,
+        3,
+        &inv_work_area_bytes);
+    if (status != CUFFT_SUCCESS) {
+        set_cufft_error(ctx, "cufftMakePlanMany(single-grid demag inverse, batch=3)", status);
+        free_fft_workspace(ctx);
+        return false;
+    }
+
+    ctx.fft_work_area_bytes = static_cast<uint64_t>(
+        std::max(fwd_work_area_bytes, inv_work_area_bytes));
     return true;
 }
 
 static bool alloc_fft_workspace(Context &ctx) {
     if (!ctx.enable_demag) return true;
-    if (!ctx.fft_plan_valid) {
-        ctx.last_error = "single-grid demag FFT plan was not prepared during workspace preflight";
+    if (!ctx.fft_plan_valid || !ctx.fft_plan_inv_valid) {
+        ctx.last_error = "single-grid demag FFT plans were not prepared during workspace preflight";
         return false;
     }
 
     const size_t complex_bytes = ctx.precision == FULLMAG_FDM_PRECISION_DOUBLE
         ? sizeof(cufftDoubleComplex) : sizeof(cufftComplex);
-    const size_t component_bytes = ctx.fft_cell_count * complex_bytes;
+    const size_t component_bytes = ctx.fft_half_cell_count * complex_bytes;
     cudaError_t status = cudaMalloc(&ctx.fft_x, 3 * component_bytes);
     if (status != cudaSuccess) {
         set_cuda_error(ctx, "cudaMalloc(fft_xyz)", status);
@@ -2816,7 +2902,7 @@ static bool alloc_fft_workspace(Context &ctx) {
     auto *base = static_cast<unsigned char *>(ctx.fft_x);
     ctx.fft_y = base + component_bytes;
     ctx.fft_z = base + 2 * component_bytes;
-    ctx.fft_component_stride = ctx.fft_cell_count;
+    ctx.fft_component_stride = ctx.fft_half_cell_count;
     ctx.fft_components_share_allocation = true;
 
     if (ctx.fft_work_area_bytes > 0) {
@@ -2828,12 +2914,22 @@ static bool alloc_fft_workspace(Context &ctx) {
     }
     cufftResult fft_status = cufftSetWorkArea(ctx.fft_plan, ctx.fft_work_area);
     if (fft_status != CUFFT_SUCCESS) {
-        set_cufft_error(ctx, "cufftSetWorkArea(single-grid demag)", fft_status);
+        set_cufft_error(ctx, "cufftSetWorkArea(single-grid demag forward)", fft_status);
+        return false;
+    }
+    fft_status = cufftSetWorkArea(ctx.fft_plan_inv, ctx.fft_work_area);
+    if (fft_status != CUFFT_SUCCESS) {
+        set_cufft_error(ctx, "cufftSetWorkArea(single-grid demag inverse)", fft_status);
         return false;
     }
     fft_status = cufftSetStream(ctx.fft_plan, context_compute_stream(ctx));
     if (fft_status != CUFFT_SUCCESS) {
-        set_cufft_error(ctx, "cufftSetStream(single-grid demag)", fft_status);
+        set_cufft_error(ctx, "cufftSetStream(single-grid demag forward)", fft_status);
+        return false;
+    }
+    fft_status = cufftSetStream(ctx.fft_plan_inv, context_compute_stream(ctx));
+    if (fft_status != CUFFT_SUCCESS) {
+        set_cufft_error(ctx, "cufftSetStream(single-grid demag inverse)", fft_status);
         return false;
     }
     return true;
@@ -2848,6 +2944,11 @@ static void free_fft_workspace(Context &ctx) {
         cufftDestroy(ctx.fft_plan);
         ctx.fft_plan = 0;
         ctx.fft_plan_valid = false;
+    }
+    if (ctx.fft_plan_inv_valid) {
+        cufftDestroy(ctx.fft_plan_inv);
+        ctx.fft_plan_inv = 0;
+        ctx.fft_plan_inv_valid = false;
     }
     if (ctx.fft_work_area) {
         cudaFree(ctx.fft_work_area);
@@ -2864,7 +2965,10 @@ static void free_fft_workspace(Context &ctx) {
         if (ctx.fft_y) { cudaFree(ctx.fft_y); ctx.fft_y = nullptr; }
         if (ctx.fft_z) { cudaFree(ctx.fft_z); ctx.fft_z = nullptr; }
     }
+    ctx.fft_half_nx = 0;
     ctx.fft_cell_count = 0;
+    ctx.fft_half_cell_count = 0;
+    ctx.fft_real_stride = 0;
     ctx.fft_component_stride = 0;
     ctx.fft_components_share_allocation = false;
 }
@@ -2891,7 +2995,10 @@ static void bind_multilayer_fft_workspace(
     ctx.fft_nx = workspace.fft_grid.nx;
     ctx.fft_ny = workspace.fft_grid.ny;
     ctx.fft_nz = workspace.fft_grid.nz;
+    ctx.fft_half_nx = 0;
     ctx.fft_cell_count = workspace.cell_count;
+    ctx.fft_half_cell_count = 0;
+    ctx.fft_real_stride = 0;
     ctx.fft_component_stride = workspace.component_stride;
     ctx.fft_x = workspace.fft_x;
     ctx.fft_y = workspace.fft_y;
@@ -2899,7 +3006,9 @@ static void bind_multilayer_fft_workspace(
     ctx.fft_work_area = workspace.work_area;
     ctx.fft_work_area_bytes = workspace.work_area_bytes;
     ctx.fft_plan = workspace.plan;
+    ctx.fft_plan_inv = 0;
     ctx.fft_plan_valid = workspace.plan_valid;
+    ctx.fft_plan_inv_valid = false;
     ctx.fft_components_share_allocation = workspace.components_share_allocation;
     ctx.thin_film_2d_demag = workspace.fft_grid.nz == 1;
     ctx.fft_workspace_bound_to_multilayer_cache = true;
@@ -3065,6 +3174,7 @@ static DeviceMultilayerFftWorkspace *ensure_multilayer_fft_workspace(
 
     if (!ctx.fft_workspace_bound_to_multilayer_cache &&
         (ctx.fft_plan_valid ||
+            ctx.fft_plan_inv_valid ||
             ctx.fft_x != nullptr ||
             ctx.fft_y != nullptr ||
             ctx.fft_z != nullptr ||
@@ -3531,6 +3641,13 @@ void context_free_device(Context &ctx) {
     destroy_async_field_snapshot_pool(ctx);
     context_destroy_compute_stream(ctx);
     (void)free_multilayer_plan_v2(ctx);
+    if (ctx.single_layer_bb_partials) cudaFree(ctx.single_layer_bb_partials);
+    if (ctx.single_layer_bb_scalars) cudaFree(ctx.single_layer_bb_scalars);
+    ctx.single_layer_bb_history_valid = false;
+    ctx.single_layer_bb_evaluation_valid = false;
+    ctx.single_layer_bb_partials = nullptr;
+    ctx.single_layer_bb_scalars = nullptr;
+    ctx.single_layer_bb_partial_capacity = 0;
     free_vector_field(ctx.m);
     free_vector_field(ctx.h_ex);
     free_vector_field(ctx.h_demag);
@@ -3782,8 +3899,33 @@ bool context_upload_demag_kernel_spectra(
         return false;
     }
 
+    const uint64_t px = ctx.fft_nx;
+    const uint64_t py = ctx.fft_ny;
+    const uint64_t pz = ctx.fft_nz;
+    const uint64_t sx = ctx.fft_half_nx;
+    const uint64_t half_len = ctx.fft_half_cell_count * 2u;
+    if (sx == 0 || half_len == 0 || sx > px) {
+        ctx.last_error = "demag FFT half-spectrum dimensions uninitialized";
+        return false;
+    }
+    // Extract the Hermitian half-spectrum (0 <= kx < px/2 + 1) from the full
+    // complex spectrum supplied over the public C ABI.
+    len = half_len;
+
     if (ctx.precision == FULLMAG_FDM_PRECISION_DOUBLE) {
-        auto upload = [&](void *dst, const double *src, const char *label) -> bool {
+        std::vector<double> half_spectrum(len);
+        auto upload = [&](void *dst, const double *full_src, const char *label) -> bool {
+            for (uint64_t z = 0; z < pz; ++z) {
+                for (uint64_t y = 0; y < py; ++y) {
+                    const uint64_t src_row = (z * py + y) * px * 2u;
+                    const uint64_t dst_row = (z * py + y) * sx * 2u;
+                    std::memcpy(
+                        half_spectrum.data() + dst_row,
+                        full_src + src_row,
+                        static_cast<size_t>(sx * 2u) * sizeof(double));
+                }
+            }
+            const double *src = half_spectrum.data();
             cudaError_t err = cudaMemcpy(
                 dst,
                 src,
@@ -3803,10 +3945,16 @@ bool context_upload_demag_kernel_spectra(
             && upload(ctx.demag_kernel.yz, kyz, "cudaMemcpy(kern_yz)");
     }
 
-    auto convert_and_upload = [&](void *dst, const double *src, const char *label) -> bool {
-        std::vector<float> converted(len);
-        for (uint64_t i = 0; i < len; i++) {
-            converted[i] = static_cast<float>(src[i]);
+    std::vector<float> converted(len);
+    auto convert_and_upload = [&](void *dst, const double *full_src, const char *label) -> bool {
+        for (uint64_t z = 0; z < pz; ++z) {
+            for (uint64_t y = 0; y < py; ++y) {
+                const uint64_t src_row = (z * py + y) * px * 2u;
+                const uint64_t dst_row = (z * py + y) * sx * 2u;
+                for (uint64_t i = 0; i < sx * 2u; ++i) {
+                    converted[dst_row + i] = static_cast<float>(full_src[src_row + i]);
+                }
+            }
         }
         cudaError_t err = cudaMemcpy(
             dst,

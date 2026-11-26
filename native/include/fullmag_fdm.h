@@ -1924,6 +1924,27 @@ int fullmag_fdm_backend_multilayer_bb(
     fullmag_fdm_backend *handle, uint32_t op, double lambda,
     double *layer_scalars, uint64_t scalar_count);
 
+#define FULLMAG_FDM_SINGLE_LAYER_BB_OP_EVALUATE 0u
+#define FULLMAG_FDM_SINGLE_LAYER_BB_OP_CAPTURE  1u
+#define FULLMAG_FDM_SINGLE_LAYER_BB_OP_TRIAL    2u
+#define FULLMAG_FDM_SINGLE_LAYER_BB_OP_RESTORE  3u
+#define FULLMAG_FDM_SINGLE_LAYER_BB_SCALAR_COUNT_V1 22u
+
+/** Resident single-layer PG-BB scalar/vector operation (FP64 and FP32).
+ * Packed output holds FULLMAG_FDM_SINGLE_LAYER_BB_SCALAR_COUNT_V1 (22) doubles:
+ *   [0..6]   e_ex, e_demag, e_ext, e_ani_uniaxial, e_ani_cubic, e_dmi, e_mel
+ *   [7..10]  max_torque, max_h_eff, max_h_demag, max_grad
+ *   [11..14] m_sum_x, m_sum_y, m_sum_z, m_weight_sum
+ *   [15..19] weighted_g_norm_sq, chord_increment, s_dot_s, s_dot_y, y_dot_y
+ *   [20..21] changed_count, invalid_count
+ * op: 0 refresh/evaluate, 1 capture accepted m/g/H, 2 normalized trial, 3 restore.
+ * op 2 writes changed/invalid cell counts in slots 20/21 (others zero).
+ * No operation advances physical time or publishes an accepted LLG step.
+ */
+int fullmag_fdm_backend_single_layer_bb_v1(
+    fullmag_fdm_backend *handle, uint32_t op, double lambda,
+    double *out_scalars, uint64_t scalar_count);
+
 /**
  * Recompute staged v2 multilayer H_DEMAG without taking a time step.
  *

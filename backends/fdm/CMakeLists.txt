@@ -22,6 +22,7 @@ if(FULLMAG_ENABLE_CUDA)
     list(APPEND FDM_SOURCES
         gpu/cuda/transport/context.cu
         gpu/cuda/transport/charge/device_solver.cu
+        gpu/cuda/transport/charge/cudss_solver.cpp
         gpu/cuda/transport/spin/device_solver.cu
         gpu/cuda/transport/spin/sparse_solver.cu
         gpu/cuda/runtime/context.cu
@@ -32,6 +33,7 @@ if(FULLMAG_ENABLE_CUDA)
         gpu/cuda/runtime/streams.cu
         gpu/cuda/runtime/adaptive_graph.cu
         gpu/cuda/runtime/multilayer_bb.cu
+        gpu/cuda/runtime/single_layer_bb.cu
         gpu/cuda/runtime/reductions_fp64.cu
         gpu/cuda/interactions/exchange_fp64.cu
         gpu/cuda/interactions/exchange_fp32.cu
@@ -76,6 +78,21 @@ endif()
 file(SHA256 "${CMAKE_CURRENT_SOURCE_DIR}/gpu/cuda/transport/context.cu" FDM_GPU_CONTEXT_SHA256)
 file(SHA256 "${CMAKE_CURRENT_SOURCE_DIR}/gpu/cuda/transport/charge/device_solver.cu" FDM_GPU_CHARGE_SOLVER_SHA256)
 file(SHA256 "${CMAKE_CURRENT_SOURCE_DIR}/gpu/cuda/transport/charge/device_solver.hpp" FDM_GPU_CHARGE_SOLVER_HEADER_SHA256)
+file(SHA256 "${CMAKE_CURRENT_SOURCE_DIR}/gpu/cuda/transport/charge/cudss_solver.cpp" FDM_GPU_CHARGE_CUDSS_SOLVER_SHA256)
+file(SHA256 "${CMAKE_CURRENT_SOURCE_DIR}/gpu/cuda/transport/charge/cudss_solver.hpp" FDM_GPU_CHARGE_CUDSS_SOLVER_HEADER_SHA256)
+
+set(FULLMAG_CUDSS_ROOT "$ENV{FULLMAG_CUDSS_ROOT}" CACHE PATH
+    "Optional private CUDA 12 cuDSS SDK root")
+set(FULLMAG_FDM_CUDSS_SUPPORTED FALSE)
+if(UNIX AND NOT APPLE AND FULLMAG_ENABLE_CUDA AND FULLMAG_CUDSS_ROOT)
+    find_path(FULLMAG_FDM_CUDSS_INCLUDE_DIR cudss.h
+        PATHS "${FULLMAG_CUDSS_ROOT}/include" NO_DEFAULT_PATH)
+    find_library(FULLMAG_FDM_CUDSS_LIBRARY cudss
+        PATHS "${FULLMAG_CUDSS_ROOT}/lib" NO_DEFAULT_PATH)
+    if(FULLMAG_FDM_CUDSS_INCLUDE_DIR AND FULLMAG_FDM_CUDSS_LIBRARY)
+        set(FULLMAG_FDM_CUDSS_SUPPORTED TRUE)
+    endif()
+endif()
 file(SHA256 "${CMAKE_CURRENT_SOURCE_DIR}/gpu/cuda/transport/spin/device_solver.cu" FDM_GPU_SPIN_SOLVER_SHA256)
 file(SHA256 "${CMAKE_CURRENT_SOURCE_DIR}/gpu/cuda/transport/spin/device_solver.hpp" FDM_GPU_SPIN_SOLVER_HEADER_SHA256)
 file(SHA256 "${CMAKE_CURRENT_SOURCE_DIR}/gpu/cuda/transport/spin/sparse_solver.cu" FDM_GPU_SPIN_SPARSE_SOLVER_SHA256)
@@ -105,7 +122,7 @@ set(FDM_GPU_BUILD_FLAGS_IDENTITY
 )
 string(REPLACE ";" "," FDM_GPU_BUILD_FLAGS_IDENTITY "${FDM_GPU_BUILD_FLAGS_IDENTITY}")
 string(SHA256 FDM_GPU_TRANSPORT_BUILD_DIGEST
-    "${FDM_GPU_CONTEXT_SHA256};${FDM_GPU_CHARGE_SOLVER_SHA256};${FDM_GPU_CHARGE_SOLVER_HEADER_SHA256};${FDM_GPU_SPIN_SOLVER_SHA256};${FDM_GPU_SPIN_SOLVER_HEADER_SHA256};${FDM_GPU_SPIN_SPARSE_SOLVER_SHA256};${FDM_GPU_SPIN_SPARSE_SOLVER_HEADER_SHA256};${FDM_GPU_SPIN_MEMORY_POLICY_SHA256};${FDM_GPU_SPIN_MEMORY_POLICY_HEADER_SHA256};${FDM_GPU_CHARGE_CHECKPOINT_SHA256};${FDM_GPU_CHARGE_CHECKPOINT_HEADER_SHA256};${FDM_GPU_SPIN_CHECKPOINT_SHA256};${FDM_GPU_SPIN_CHECKPOINT_HEADER_SHA256};${FDM_GPU_LAYOUT_SHA256};${FDM_GPU_CHECKPOINT_SHA256};${FDM_GPU_HEADER_SHA256};${FDM_GPU_BUILD_FLAGS_IDENTITY}"
+    "${FDM_GPU_CONTEXT_SHA256};${FDM_GPU_CHARGE_SOLVER_SHA256};${FDM_GPU_CHARGE_SOLVER_HEADER_SHA256};${FDM_GPU_SPIN_SOLVER_SHA256};${FDM_GPU_SPIN_SOLVER_HEADER_SHA256};${FDM_GPU_SPIN_SPARSE_SOLVER_SHA256};${FDM_GPU_SPIN_SPARSE_SOLVER_HEADER_SHA256};${FDM_GPU_SPIN_MEMORY_POLICY_SHA256};${FDM_GPU_SPIN_MEMORY_POLICY_HEADER_SHA256};${FDM_GPU_CHARGE_CHECKPOINT_SHA256};${FDM_GPU_CHARGE_CHECKPOINT_HEADER_SHA256};${FDM_GPU_SPIN_CHECKPOINT_SHA256};${FDM_GPU_SPIN_CHECKPOINT_HEADER_SHA256};${FDM_GPU_LAYOUT_SHA256};${FDM_GPU_CHECKPOINT_SHA256};${FDM_GPU_HEADER_SHA256};${FDM_GPU_BUILD_FLAGS_IDENTITY};${FDM_GPU_CHARGE_CUDSS_SOLVER_SHA256};${FDM_GPU_CHARGE_CUDSS_SOLVER_HEADER_SHA256};cudss=${FULLMAG_FDM_CUDSS_SUPPORTED}"
 )
 # Only context.cu consumes the transport build identity. Applying this value
 # to the entire target recompiles every CUDA unit whenever its digest changes.
@@ -199,6 +216,13 @@ if(FULLMAG_ENABLE_CUDA)
         CUDA::cudart
         CUDA::cufft
     )
+    if(FULLMAG_FDM_CUDSS_SUPPORTED)
+        target_include_directories(fullmag_fdm PRIVATE "${FULLMAG_FDM_CUDSS_INCLUDE_DIR}")
+        target_link_libraries(fullmag_fdm PRIVATE "${FULLMAG_FDM_CUDSS_LIBRARY}")
+        target_compile_definitions(fullmag_fdm PRIVATE FULLMAG_FDM_CUDSS_ENABLED=1)
+    else()
+        target_compile_definitions(fullmag_fdm PRIVATE FULLMAG_FDM_CUDSS_ENABLED=0)
+    endif()
 else()
     target_compile_definitions(fullmag_fdm PRIVATE FULLMAG_HAS_CUDA=0)
 endif()

@@ -69,40 +69,40 @@ __global__ void pack_magnetization_fft_fp32_kernel(
     const float * __restrict__ my,
     const float * __restrict__ mz,
     const uint8_t * __restrict__ active_mask,
-    cufftComplex * __restrict__ fx,
-    cufftComplex * __restrict__ fy,
-    cufftComplex * __restrict__ fz,
+    float * __restrict__ fx,
+    float * __restrict__ fy,
+    float * __restrict__ fz,
     int nx, int ny, int nz,
-    int px, int py, int pz,
+    int real_pitch_x, int py, int pz,
     int has_active_mask,
     float ms_scalar,
     const double * __restrict__ ms_field)
 {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
-    int total = px * py * pz;
+    int total = real_pitch_x * py * pz;
     if (idx >= total) return;
 
-    int z = idx / (py * px);
-    int rem = idx - z * py * px;
-    int y = rem / px;
-    int x = rem - y * px;
+    int z = (pz == 1) ? 0 : (idx / (py * real_pitch_x));
+    int rem = idx - z * py * real_pitch_x;
+    int y = rem / real_pitch_x;
+    int x = rem - y * real_pitch_x;
 
     if (x < nx && y < ny && z < nz) {
         int src = z * ny * nx + y * nx + x;
         const float ms = ms_field ? static_cast<float>(ms_field[src]) : ms_scalar;
         if (!has_active_mask || active_mask[src] != 0) {
-            fx[idx] = make_cuFloatComplex(ms * mx[src], 0.0f);
-            fy[idx] = make_cuFloatComplex(ms * my[src], 0.0f);
-            fz[idx] = make_cuFloatComplex(ms * mz[src], 0.0f);
+            fx[idx] = ms * mx[src];
+            fy[idx] = ms * my[src];
+            fz[idx] = ms * mz[src];
         } else {
-            fx[idx] = make_cuFloatComplex(0.0f, 0.0f);
-            fy[idx] = make_cuFloatComplex(0.0f, 0.0f);
-            fz[idx] = make_cuFloatComplex(0.0f, 0.0f);
+            fx[idx] = 0.0f;
+            fy[idx] = 0.0f;
+            fz[idx] = 0.0f;
         }
     } else {
-        fx[idx] = make_cuFloatComplex(0.0f, 0.0f);
-        fy[idx] = make_cuFloatComplex(0.0f, 0.0f);
-        fz[idx] = make_cuFloatComplex(0.0f, 0.0f);
+        fx[idx] = 0.0f;
+        fy[idx] = 0.0f;
+        fz[idx] = 0.0f;
     }
 }
 
@@ -111,16 +111,17 @@ __global__ void spectral_projection_fp32_kernel(
     cufftComplex * __restrict__ fy,
     cufftComplex * __restrict__ fz,
     int px, int py, int pz,
+    int sx,
     float dx, float dy, float dz)
 {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
-    int total = px * py * pz;
+    int total = sx * py * pz;
     if (idx >= total) return;
 
-    int z = idx / (py * px);
-    int rem = idx - z * py * px;
-    int y = rem / px;
-    int x = rem - y * px;
+    int z = (pz == 1) ? 0 : (idx / (py * sx));
+    int rem = idx - z * py * sx;
+    int y = rem / sx;
+    int x = rem - y * sx;
 
     float lx = px * dx;
     float ly = py * dy;
@@ -145,13 +146,13 @@ __global__ void spectral_projection_fp32_kernel(
         kx * mx.x + ky * my.x + kz * mz.x,
         kx * mx.y + ky * my.y + kz * mz.y);
 
-    float sx = -kx / k2;
-    float sy = -ky / k2;
-    float sz = -kz / k2;
+    float sx_f = -kx / k2;
+    float sy_f = -ky / k2;
+    float sz_f = -kz / k2;
 
-    fx[idx] = make_cuFloatComplex(kdotm.x * sx, kdotm.y * sx);
-    fy[idx] = make_cuFloatComplex(kdotm.x * sy, kdotm.y * sy);
-    fz[idx] = make_cuFloatComplex(kdotm.x * sz, kdotm.y * sz);
+    fx[idx] = make_cuFloatComplex(kdotm.x * sx_f, kdotm.y * sx_f);
+    fy[idx] = make_cuFloatComplex(kdotm.x * sy_f, kdotm.y * sy_f);
+    fz[idx] = make_cuFloatComplex(kdotm.x * sz_f, kdotm.y * sz_f);
 }
 
 __global__ void tensor_convolution_fp32_kernel(
@@ -183,9 +184,9 @@ __global__ void tensor_convolution_fp32_kernel(
 }
 
 __global__ void unpack_demag_fft_fp32_kernel(
-    const cufftComplex * __restrict__ fx,
-    const cufftComplex * __restrict__ fy,
-    const cufftComplex * __restrict__ fz,
+    const float * __restrict__ fx,
+    const float * __restrict__ fy,
+    const float * __restrict__ fz,
     const uint8_t * __restrict__ active_mask,
     float * __restrict__ hx,
     float * __restrict__ hy,
@@ -194,7 +195,7 @@ __global__ void unpack_demag_fft_fp32_kernel(
     float * __restrict__ hy_visual,
     float * __restrict__ hz_visual,
     int nx, int ny, int nz,
-    int px, int py,
+    int real_pitch_x, int py,
     int has_active_mask,
     float normalisation)
 {
@@ -202,15 +203,15 @@ __global__ void unpack_demag_fft_fp32_kernel(
     int total = nx * ny * nz;
     if (idx >= total) return;
 
-    int z = idx / (ny * nx);
+    int z = (nz == 1) ? 0 : (idx / (ny * nx));
     int rem = idx - z * ny * nx;
     int y = rem / nx;
     int x = rem - y * nx;
-    int src = z * py * px + y * px + x;
+    int src = z * py * real_pitch_x + y * real_pitch_x + x;
 
-    const float hx_value = fx[src].x * normalisation;
-    const float hy_value = fy[src].x * normalisation;
-    const float hz_value = fz[src].x * normalisation;
+    const float hx_value = fx[src] * normalisation;
+    const float hy_value = fy[src] * normalisation;
+    const float hz_value = fz[src] * normalisation;
     hx_visual[idx] = hx_value;
     hy_visual[idx] = hy_value;
     hz_visual[idx] = hz_value;
@@ -653,8 +654,16 @@ void launch_demag_field_fp32(Context &ctx) {
         }
     }
 
-    int total_padded = static_cast<int>(ctx.fft_cell_count);
-    int grid_padded = (total_padded + BLOCK_SIZE - 1) / BLOCK_SIZE;
+    if (!ctx.fft_plan_valid || !ctx.fft_plan_inv_valid || !ctx.fft_x || ctx.fft_half_nx == 0) {
+        ctx.last_error = "launch_demag_field_fp32: demag FFT workspace is not initialized";
+        return;
+    }
+
+    int real_pitch_x = static_cast<int>(ctx.fft_half_nx * 2u);
+    int total_real = static_cast<int>(ctx.fft_real_stride);
+    int grid_real = (total_real + BLOCK_SIZE - 1) / BLOCK_SIZE;
+    int total_half = static_cast<int>(ctx.fft_half_cell_count);
+    int grid_half = (total_half + BLOCK_SIZE - 1) / BLOCK_SIZE;
     int total_physical = static_cast<int>(ctx.cell_count);
     int grid_physical = (total_physical + BLOCK_SIZE - 1) / BLOCK_SIZE;
     cudaStream_t stream = context_compute_stream(ctx);
@@ -662,38 +671,37 @@ void launch_demag_field_fp32(Context &ctx) {
         return;
     }
 
-    pack_magnetization_fft_fp32_kernel<<<grid_padded, BLOCK_SIZE, 0, stream>>>(
+    pack_magnetization_fft_fp32_kernel<<<grid_real, BLOCK_SIZE, 0, stream>>>(
         static_cast<const float*>(ctx.m.x),
         static_cast<const float*>(ctx.m.y),
         static_cast<const float*>(ctx.m.z),
         ctx.active_mask,
-        static_cast<cufftComplex*>(ctx.fft_x),
-        static_cast<cufftComplex*>(ctx.fft_y),
-        static_cast<cufftComplex*>(ctx.fft_z),
+        static_cast<float*>(ctx.fft_x),
+        static_cast<float*>(ctx.fft_y),
+        static_cast<float*>(ctx.fft_z),
         static_cast<int>(ctx.nx),
         static_cast<int>(ctx.ny),
         static_cast<int>(ctx.nz),
-        static_cast<int>(ctx.fft_nx),
+        real_pitch_x,
         static_cast<int>(ctx.fft_ny),
         static_cast<int>(ctx.fft_nz),
         ctx.has_active_mask ? 1 : 0,
         static_cast<float>(ctx.Ms),
         ctx.ms_field);
 
-    cufftResult err = cufftExecC2C(
+    cufftResult err = cufftExecR2C(
         ctx.fft_plan,
-        static_cast<cufftComplex*>(ctx.fft_x),
-        static_cast<cufftComplex*>(ctx.fft_x),
-        CUFFT_FORWARD);
+        static_cast<cufftReal*>(ctx.fft_x),
+        static_cast<cufftComplex*>(ctx.fft_x));
     if (err != CUFFT_SUCCESS) {
-        set_cufft_error(ctx, "cufftExecC2C(batch, forward)", err);
+        set_cufft_error(ctx, "cufftExecR2C(batch, forward)", err);
         context_end_compute_stream_work(ctx, "launch_demag_field_fp32");
         return;
     }
     ++ctx.endpoint_field_cache.demag_forward_fft_count;
 
     if (ctx.has_demag_tensor_kernel) {
-        tensor_convolution_fp32_kernel<<<grid_padded, BLOCK_SIZE, 0, stream>>>(
+        tensor_convolution_fp32_kernel<<<grid_half, BLOCK_SIZE, 0, stream>>>(
             static_cast<cufftComplex*>(ctx.fft_x),
             static_cast<cufftComplex*>(ctx.fft_y),
             static_cast<cufftComplex*>(ctx.fft_z),
@@ -703,36 +711,36 @@ void launch_demag_field_fp32(Context &ctx) {
             static_cast<const cufftComplex*>(ctx.demag_kernel.xy),
             static_cast<const cufftComplex*>(ctx.demag_kernel.xz),
             static_cast<const cufftComplex*>(ctx.demag_kernel.yz),
-            total_padded);
+            total_half);
     } else {
-        spectral_projection_fp32_kernel<<<grid_padded, BLOCK_SIZE, 0, stream>>>(
+        spectral_projection_fp32_kernel<<<grid_half, BLOCK_SIZE, 0, stream>>>(
             static_cast<cufftComplex*>(ctx.fft_x),
             static_cast<cufftComplex*>(ctx.fft_y),
             static_cast<cufftComplex*>(ctx.fft_z),
             static_cast<int>(ctx.fft_nx),
             static_cast<int>(ctx.fft_ny),
             static_cast<int>(ctx.fft_nz),
+            static_cast<int>(ctx.fft_half_nx),
             static_cast<float>(ctx.dx),
             static_cast<float>(ctx.dy),
             static_cast<float>(ctx.dz));
     }
 
-    err = cufftExecC2C(
-        ctx.fft_plan,
+    err = cufftExecC2R(
+        ctx.fft_plan_inv,
         static_cast<cufftComplex*>(ctx.fft_x),
-        static_cast<cufftComplex*>(ctx.fft_x),
-        CUFFT_INVERSE);
+        static_cast<cufftReal*>(ctx.fft_x));
     if (err != CUFFT_SUCCESS) {
-        set_cufft_error(ctx, "cufftExecC2C(batch, inverse)", err);
+        set_cufft_error(ctx, "cufftExecC2R(batch, inverse)", err);
         context_end_compute_stream_work(ctx, "launch_demag_field_fp32");
         return;
     }
     ++ctx.endpoint_field_cache.demag_inverse_fft_count;
 
     unpack_demag_fft_fp32_kernel<<<grid_physical, BLOCK_SIZE, 0, stream>>>(
-        static_cast<const cufftComplex*>(ctx.fft_x),
-        static_cast<const cufftComplex*>(ctx.fft_y),
-        static_cast<const cufftComplex*>(ctx.fft_z),
+        static_cast<const float*>(ctx.fft_x),
+        static_cast<const float*>(ctx.fft_y),
+        static_cast<const float*>(ctx.fft_z),
         ctx.active_mask,
         static_cast<float*>(ctx.h_demag.x),
         static_cast<float*>(ctx.h_demag.y),
@@ -743,7 +751,7 @@ void launch_demag_field_fp32(Context &ctx) {
         static_cast<int>(ctx.nx),
         static_cast<int>(ctx.ny),
         static_cast<int>(ctx.nz),
-        static_cast<int>(ctx.fft_nx),
+        real_pitch_x,
         static_cast<int>(ctx.fft_ny),
         ctx.has_active_mask ? 1 : 0,
         1.0f / static_cast<float>(ctx.fft_cell_count));
