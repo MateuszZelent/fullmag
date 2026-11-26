@@ -1,6 +1,6 @@
 {
   "document": {
-    "reviewed_revision": "ab3c8802a691a535063102c12f9a79bb0043b367",
+    "reviewed_revision": "752450f8d259ab97c76c36fe666d5474b02abe9a",
     "path": "public_docs/site/physics/interactions/magnetoelastic/index.md",
     "title": "Magnetoelastic interaction",
     "interaction": "magnetoelastic"
@@ -10,38 +10,335 @@
       "solver": "FDM",
       "device": "CPU",
       "status": "partial",
-      "reason": "Authoring, planning, runtime, and scientific qualification are reported separately on the page."
+      "reason": "Local cubic B1/B2 reference routines exist in crates/fullmag-engine/src/magnetoelastic.rs below the public planner; bidirectional Virieux/Lebedev elastodynamics is specified in FullMag v2."
     },
     {
       "solver": "FDM",
       "device": "GPU",
       "status": "partial",
-      "reason": "Device source presence does not replace executed-device evidence and precision-specific qualification."
+      "reason": "FP64 magnetoelastic energy reduction kernel exists in backends/fdm/gpu/cuda/runtime/reductions_fp64.cu; full 3.5D ping-pong bidirectional CUDA solver is specified in FullMag v2."
     },
     {
       "solver": "FEM",
       "device": "CPU",
       "status": "partial",
-      "reason": "The exact weak/discrete realization and bounded capability envelope remain lane-specific."
+      "reason": "Executable cubic B1/B2 prescribed-strain field and lumped-mass energy kernel is implemented on FEM CPU; two-way elastodynamics and 7-class anisotropy are specified in FullMag v2."
     },
     {
       "solver": "FEM",
       "device": "GPU",
       "status": "partial",
-      "reason": "Strict device residency and executed-device qualification remain separate evidence gates."
+      "reason": "Executable cubic B1/B2 prescribed-strain CUDA upload and block reduction kernel is implemented on FEM GPU; two-way cuDSS/libCEED/Hypre elastodynamics is specified in FullMag v2."
     }
   ],
   "sources": [
     {
-      "id": "python-owner",
+      "id": "py-magnetoelastic",
       "path": "packages/fullmag-py/src/fullmag/model/energy.py",
       "symbol": "class Magnetoelastic",
-      "responsibility": "Own the public interaction constructor, validation, or canonical IR lowering boundary."
+      "responsibility": "Own the public Magnetoelastic coupling constructor and ProblemIR lowering."
+    },
+    {
+      "id": "py-elastic-material",
+      "path": "packages/fullmag-py/src/fullmag/model/mechanics.py",
+      "symbol": "class ElasticMaterial",
+      "responsibility": "Own elastic stiffness constants, density, and IR lowering."
+    },
+    {
+      "id": "py-elastic-body",
+      "path": "packages/fullmag-py/src/fullmag/model/mechanics.py",
+      "symbol": "class ElasticBody",
+      "responsibility": "Bind an elastic geometry domain to an ElasticMaterial."
+    },
+    {
+      "id": "py-magnetostriction-law",
+      "path": "packages/fullmag-py/src/fullmag/model/mechanics.py",
+      "symbol": "class MagnetostrictionLaw",
+      "responsibility": "Own cubic B1/B2 and isotropic lambda_s magnetostriction law authoring."
+    },
+    {
+      "id": "py-mechanical-load",
+      "path": "packages/fullmag-py/src/fullmag/model/mechanics.py",
+      "symbol": "class MechanicalLoad",
+      "responsibility": "Own engineering-Voigt prescribed strain, prescribed stress, and body force records."
+    },
+    {
+      "id": "ir-mechanics",
+      "path": "crates/fullmag-ir/src/mechanics.rs",
+      "symbol": "MechanicsIR",
+      "responsibility": "Define canonical Rust IR schema for elastic materials, bodies, laws, BCs, and loads."
+    },
+    {
+      "id": "plan-fem-mel",
+      "path": "crates/fullmag-plan/src/fem.rs",
+      "symbol": "resolve_fem_magnetoelastic_plan",
+      "responsibility": "Enforce prescribed-strain FEM legality and fail-closed diagnostics."
+    },
+    {
+      "id": "fdm-cpu-hmel",
+      "path": "crates/fullmag-engine/src/magnetoelastic.rs",
+      "symbol": "h_mel_single_with_ms",
+      "responsibility": "Compute local cubic B1/B2 magnetoelastic effective field with Voigt shear halving."
+    },
+    {
+      "id": "fdm-cpu-emel",
+      "path": "crates/fullmag-engine/src/magnetoelastic.rs",
+      "symbol": "e_mel_density_single",
+      "responsibility": "Compute local cubic B1/B2 magnetoelastic energy density."
+    },
+    {
+      "id": "fem-cpu-mel",
+      "path": "backends/fem/cpu/mfem/interactions/magnetoelastic_prescribed_strain.cpp",
+      "symbol": "compute_magnetoelastic_field",
+      "responsibility": "Evaluate FEM CPU prescribed-strain magnetoelastic field and lumped-mass energy."
+    },
+    {
+      "id": "fem-gpu-upload",
+      "path": "backends/fem/gpu/cuda/interactions/magnetoelastic/magnetoelastic_upload.cpp",
+      "symbol": "gpu_magnetoelastic_upload_strain",
+      "responsibility": "Upload engineering-Voigt strain buffers to FEM GPU memory."
+    },
+    {
+      "id": "fem-gpu-kernel",
+      "path": "backends/fem/gpu/cuda/interactions/magnetoelastic/magnetoelastic_kernels.cu",
+      "symbol": "fullmag_cuda_magnetoelastic_field_energy_blocks",
+      "responsibility": "Execute FEM GPU CUDA cubic magnetoelastic field and energy reduction."
+    },
+    {
+      "id": "fdm-gpu-reduce",
+      "path": "backends/fdm/gpu/cuda/runtime/reductions_fp64.cu",
+      "symbol": "reduce_magnetoelastic_energy_fp64",
+      "responsibility": "Reduce FDM GPU FP64 magnetoelastic energy."
+    },
+    {
+      "id": "v2-anisotropic-elasticity",
+      "path": "public_docs/site/physics/interactions/magnetoelastic/index.md",
+      "symbol": "DOC-ANCHOR:magnetoelastic-v2-anisotropic-elasticity-contract",
+      "evidence_status": "planned_contract",
+      "responsibility": "Specify 7-class anisotropic elasticity, Born stability criteria, and Bond SO(3) transformations."
+    },
+    {
+      "id": "v2-hexagonal-mel",
+      "path": "public_docs/site/physics/interactions/magnetoelastic/index.md",
+      "symbol": "DOC-ANCHOR:magnetoelastic-v2-hexagonal-contract",
+      "evidence_status": "planned_contract",
+      "responsibility": "Specify four-constant hexagonal magnetostriction energy, field, and back-action stress."
+    },
+    {
+      "id": "v2-rotational-coupling",
+      "path": "public_docs/site/physics/interactions/magnetoelastic/index.md",
+      "symbol": "DOC-ANCHOR:magnetoelastic-v2-rotational-coupling-contract",
+      "evidence_status": "planned_contract",
+      "responsibility": "Specify Melcher O(omega^2) rotational invariance and antisymmetric rotational stress."
+    },
+    {
+      "id": "v2-damping",
+      "path": "public_docs/site/physics/interactions/magnetoelastic/index.md",
+      "symbol": "DOC-ANCHOR:magnetoelastic-v2-damping-contract",
+      "evidence_status": "planned_contract",
+      "responsibility": "Specify five disjoint mechanical damping models and congruent SPD Kelvin-Voigt construction."
+    },
+    {
+      "id": "v2-thermal-drives",
+      "path": "public_docs/site/physics/interactions/magnetoelastic/index.md",
+      "symbol": "DOC-ANCHOR:magnetoelastic-v2-thermal-drives-contract",
+      "evidence_status": "planned_contract",
+      "responsibility": "Specify Langevin acoustic FDT bath and IDT/Thomsen/harmonic acoustic drives."
     }
   ],
-  "symbols": [],
-  "equations": [],
+  "symbols": [
+    { "id": "u", "latex": "$\\mathbf{u}$", "meaning": "mechanical displacement field", "si_unit": "$\\mathrm{m}$" },
+    { "id": "eps", "latex": "$\\varepsilon_{ij}$", "meaning": "symmetric infinitesimal tensor strain", "si_unit": "$1$" },
+    { "id": "gamma", "latex": "$\\gamma_{ij}$", "meaning": "engineering shear strain ($2\\varepsilon_{ij}$ for $i\\neq j$)", "si_unit": "$1$" },
+    { "id": "omega_rot", "latex": "$\\omega_{ij}$", "meaning": "antisymmetric infinitesimal lattice rotation tensor", "si_unit": "$1$" },
+    { "id": "theta_rot", "latex": "$\\boldsymbol{\\theta}$", "meaning": "infinitesimal lattice rotation axial vector", "si_unit": "$\\mathrm{rad}$" },
+    { "id": "C_V", "latex": "$\\mathbf{C}_V$", "meaning": "$6\\times 6$ Voigt elastic stiffness matrix", "si_unit": "$\\mathrm{Pa}$" },
+    { "id": "C_KM", "latex": "$\\mathbf{C}_{\\mathrm{KM}}$", "meaning": "$6\\times 6$ orthonormal Kelvin–Mandel stiffness matrix", "si_unit": "$\\mathrm{Pa}$" },
+    { "id": "rho", "latex": "$\\rho$", "meaning": "mass density", "si_unit": "$\\mathrm{kg\\,m^{-3}}$" },
+    { "id": "R_rot", "latex": "$\\mathbf{R}$", "meaning": "crystal-to-laboratory proper rotation matrix in $SO(3)$", "si_unit": "$1$" },
+    { "id": "M_sigma", "latex": "$\\mathbf{M}_\\sigma$", "meaning": "$6\\times 6$ Bond stress transformation matrix", "si_unit": "$1$" },
+    { "id": "B1_B2", "latex": "$B_1, B_2$", "meaning": "cubic magnetoelastic coupling constants", "si_unit": "$\\mathrm{Pa} = \\mathrm{J\\,m^{-3}}$" },
+    { "id": "B_hex", "latex": "$B_1^{\\mathrm{hex}}, B_2^{\\mathrm{hex}}, B_3^{\\mathrm{hex}}, B_4^{\\mathrm{hex}}$", "meaning": "hexagonal four-constant magnetoelastic coefficients", "si_unit": "$\\mathrm{Pa} = \\mathrm{J\\,m^{-3}}$" },
+    { "id": "lambda_ms", "latex": "$\\lambda_{100}, \\lambda_{111}, \\lambda_s$", "meaning": "cubic and isotropic saturation magnetostriction constants", "si_unit": "$1$" },
+    { "id": "w_densities", "latex": "$w_{\\mathrm{el}}, w_{\\mathrm{mel}}, w_{\\mathrm{rot}}$", "meaning": "elastic, magnetoelastic, and rotational energy densities", "si_unit": "$\\mathrm{J\\,m^{-3}}$" },
+    { "id": "H_mel_rot", "latex": "$\\mathbf{H}_{\\mathrm{mel}}, \\mathbf{H}_{\\mathrm{rot}}$", "meaning": "magnetoelastic and magneto-rotational effective fields", "si_unit": "$\\mathrm{A\\,m^{-1}}$" },
+    { "id": "sigma_all", "latex": "$\\boldsymbol{\\sigma}^{\\mathrm{el}}, \\boldsymbol{\\sigma}^{\\mathrm{mel}}, \\boldsymbol{\\sigma}^{\\mathrm{rot}}$", "meaning": "elastic, magnetostrictive, and antisymmetric rotational stress tensors", "si_unit": "$\\mathrm{Pa}$" },
+    { "id": "alpha_M", "latex": "$\\alpha_M$", "meaning": "mass-proportional mechanical damping rate", "si_unit": "$\\mathrm{s^{-1}}$" },
+    { "id": "eta_V", "latex": "$\\boldsymbol{\\eta}_V$", "meaning": "$6\\times 6$ Voigt Kelvin–Voigt viscosity matrix", "si_unit": "$\\mathrm{Pa\\,s}$" },
+    { "id": "fQ", "latex": "$fQ_L, fQ_T$", "meaning": "longitudinal and transverse acoustic frequency–quality products", "si_unit": "$\\mathrm{Hz}$" },
+    { "id": "S_mel", "latex": "$\\mathbf{S}_{\\mathrm{mel}}$", "meaning": "magnetoelastic Poynting energy flux vector", "si_unit": "$\\mathrm{W\\,m^{-2}}$" },
+    { "id": "kBT", "latex": "$k_B T$", "meaning": "thermal energy scale in Langevin acoustic bath", "si_unit": "$\\mathrm{J}$" }
+  ],
+  "equations": [
+    { "id": "eq-mel-kinematics-strain-rotation", "symbols": ["u", "eps", "omega_rot", "theta_rot"], "sources": ["v2-anisotropic-elasticity"] },
+    { "id": "eq-public-magnetoelastic-mel-voigt", "symbols": ["eps", "gamma"], "sources": ["py-mechanical-load", "fem-cpu-mel", "fem-gpu-upload"] },
+    { "id": "eq-mel-stress-voigt-and-kelvin-mandel", "symbols": ["eps", "C_KM"], "sources": ["v2-anisotropic-elasticity"] },
+    { "id": "eq-mel-kelvin-mandel-stiffness", "symbols": ["C_V", "C_KM"], "sources": ["v2-anisotropic-elasticity"] },
+    { "id": "eq-mel-christoffel-km-bound", "symbols": ["C_KM", "rho"], "sources": ["v2-anisotropic-elasticity"] },
+    { "id": "eq-mel-elastic-energy", "symbols": ["w_densities", "C_V", "C_KM", "eps"], "sources": ["v2-anisotropic-elasticity"] },
+    { "id": "eq-mel-trigonal-3m-voigt", "symbols": ["C_V"], "sources": ["v2-anisotropic-elasticity"] },
+    { "id": "eq-mel-bond-transformation", "symbols": ["C_V", "R_rot", "M_sigma"], "sources": ["v2-anisotropic-elasticity"] },
+    { "id": "eq-mel-bond-matrix-explicit", "symbols": ["R_rot", "M_sigma"], "sources": ["v2-anisotropic-elasticity"] },
+    { "id": "eq-mel-total-free-energy", "symbols": ["w_densities", "C_V", "eps", "omega_rot"], "sources": ["py-magnetoelastic", "v2-anisotropic-elasticity", "v2-rotational-coupling"] },
+    { "id": "eq-public-magnetoelastic-mel-field", "symbols": ["H_mel_rot", "sigma_all", "w_densities", "eps"], "sources": ["fdm-cpu-hmel", "fem-cpu-mel", "fem-gpu-kernel"] },
+    { "id": "eq-public-magnetoelastic-mel-density", "symbols": ["w_densities", "B1_B2", "eps"], "sources": ["fdm-cpu-emel", "fem-cpu-mel", "fem-gpu-kernel", "fdm-gpu-reduce"] },
+    { "id": "eq-public-magnetoelastic-mel-field-x", "symbols": ["H_mel_rot", "B1_B2", "eps"], "sources": ["fdm-cpu-hmel", "fem-cpu-mel", "fem-gpu-kernel"] },
+    { "id": "eq-mel-cubic-traceless", "symbols": ["w_densities", "B1_B2", "eps"], "sources": ["v2-anisotropic-elasticity"] },
+    { "id": "eq-mel-cubic-stress-crystal", "symbols": ["sigma_all", "B1_B2", "R_rot"], "sources": ["v2-anisotropic-elasticity"] },
+    { "id": "eq-mel-cubic-b-from-lambda", "symbols": ["B1_B2", "lambda_ms", "C_V"], "sources": ["v2-anisotropic-elasticity"] },
+    { "id": "eq-mel-isotropic-b", "symbols": ["B1_B2", "lambda_ms", "sigma_all"], "sources": ["py-magnetostriction-law", "v2-anisotropic-elasticity"] },
+    { "id": "eq-mel-hexagonal-density", "symbols": ["w_densities", "B_hex", "eps"], "sources": ["v2-hexagonal-mel"] },
+    { "id": "eq-mel-hexagonal-field-stress", "symbols": ["H_mel_rot", "B_hex", "eps"], "sources": ["v2-hexagonal-mel"] },
+    { "id": "eq-mel-hexagonal-stress", "symbols": ["sigma_all", "B_hex"], "sources": ["v2-hexagonal-mel"] },
+    { "id": "eq-mel-morphic-anisotropy-renormalization", "symbols": ["w_densities", "sigma_all", "C_V"], "sources": ["v2-anisotropic-elasticity"] },
+    { "id": "eq-mel-delta-kc1-ms", "symbols": ["B1_B2", "C_V"], "sources": ["v2-anisotropic-elasticity"] },
+    { "id": "eq-mel-rotational-energy-order2", "symbols": ["w_densities", "omega_rot"], "sources": ["v2-rotational-coupling"] },
+    { "id": "eq-mel-rotational-field-and-stress", "symbols": ["H_mel_rot", "sigma_all", "omega_rot"], "sources": ["v2-rotational-coupling"] },
+    { "id": "eq-mel-angular-momentum-conservation", "symbols": ["sigma_all"], "sources": ["v2-rotational-coupling"] },
+    { "id": "eq-mel-coupled-pde-system", "symbols": ["u", "rho", "alpha_M", "sigma_all"], "sources": ["v2-anisotropic-elasticity", "v2-damping"] },
+    { "id": "eq-mel-total-field-and-stress", "symbols": ["H_mel_rot", "sigma_all"], "sources": ["v2-anisotropic-elasticity", "v2-rotational-coupling"] },
+    { "id": "eq-mel-energy-power-balance", "symbols": ["u", "rho", "S_mel"], "sources": ["v2-damping"] },
+    { "id": "eq-mel-dissipation-and-poynting", "symbols": ["alpha_M", "rho", "eta_V", "S_mel"], "sources": ["v2-damping"] },
+    { "id": "eq-mel-kelvin-voigt-congruent-spd", "symbols": ["eta_V", "C_V", "fQ"], "sources": ["v2-damping"] },
+    { "id": "eq-mel-rayleigh-two-freq", "symbols": ["alpha_M"], "sources": ["v2-damping"] },
+    { "id": "eq-mel-fdt-thermal-bath", "symbols": ["kBT", "eta_V", "alpha_M", "rho"], "sources": ["v2-thermal-drives"] },
+    { "id": "eq-mel-fdt-equipartition", "symbols": ["kBT"], "sources": ["v2-thermal-drives"] },
+    { "id": "eq-mel-thomsen-laser-stress", "symbols": ["C_V"], "sources": ["v2-thermal-drives"] },
+    { "id": "eq-mel-kittel-dispersion", "symbols": ["B1_B2", "rho"], "sources": ["v2-anisotropic-elasticity"] },
+    { "id": "eq-mel-anticrossing-splitting", "symbols": ["B1_B2", "rho"], "sources": ["v2-anisotropic-elasticity"] }
+  ],
   "public_api": {
-    "parameters": []
+    "parameters": [
+      {
+        "python": "`ElasticMaterial.C11`",
+        "type": "`float`",
+        "default": "required",
+        "si_unit": "`Pa`",
+        "validation": "strictly positive (`> 0`)",
+        "meaning": "cubic longitudinal stiffness constant $C_{11}$",
+        "backend_support": "FEM CPU/GPU IR; full elasticity in v2",
+        "problem_ir": "`mechanics.materials[].c11`"
+      },
+      {
+        "python": "`ElasticMaterial.C12`",
+        "type": "`float`",
+        "default": "required",
+        "si_unit": "`Pa`",
+        "validation": "strictly positive (`> 0`) on `master`; full Born SPD in v2",
+        "meaning": "cubic off-diagonal stiffness constant $C_{12}$",
+        "backend_support": "FEM CPU/GPU IR; full elasticity in v2",
+        "problem_ir": "`mechanics.materials[].c12`"
+      },
+      {
+        "python": "`ElasticMaterial.C44`",
+        "type": "`float`",
+        "default": "required",
+        "si_unit": "`Pa`",
+        "validation": "strictly positive (`> 0`)",
+        "meaning": "cubic shear stiffness constant $C_{44}$",
+        "backend_support": "FEM CPU/GPU IR; full elasticity in v2",
+        "problem_ir": "`mechanics.materials[].c44`"
+      },
+      {
+        "python": "`ElasticMaterial.rho`",
+        "type": "`float`",
+        "default": "required",
+        "si_unit": "`kg/m^3`",
+        "validation": "strictly positive (`> 0`)",
+        "meaning": "mass density $\\rho$ of elastic solid",
+        "backend_support": "IR record; active in v2 elastodynamics",
+        "problem_ir": "`mechanics.materials[].density`"
+      },
+      {
+        "python": "`ElasticMaterial.eta_mech`",
+        "type": "`float | None`",
+        "default": "`None`",
+        "si_unit": "`1`",
+        "validation": "non-negative (`>= 0`) when provided",
+        "meaning": "legacy dimensionless mechanical damping slot (superseded by typed v2 damping models)",
+        "backend_support": "IR record only; fails closed if executed",
+        "problem_ir": "`mechanics.materials[].mechanical_damping`"
+      },
+      {
+        "python": "`MagnetostrictionLaw.kind`",
+        "type": "`str`",
+        "default": "`\"cubic\"`",
+        "si_unit": "`1`",
+        "validation": "`\"cubic\"` or `\"isotropic\"` (`\"hexagonal\"` in v2)",
+        "meaning": "symmetry class of magnetoelastic energy density",
+        "backend_support": "`\"cubic\"` on FEM CPU/GPU; `\"isotropic\"` fails closed",
+        "problem_ir": "`mechanics.laws[].kind`"
+      },
+      {
+        "python": "`MagnetostrictionLaw.B1`",
+        "type": "`float | None`",
+        "default": "`None`",
+        "si_unit": "`Pa`",
+        "validation": "required and finite for `\"cubic\"`",
+        "meaning": "cubic normal-strain coupling constant $B_1$",
+        "backend_support": "FEM CPU/GPU prescribed-strain executable",
+        "problem_ir": "`mechanics.laws[].b1`"
+      },
+      {
+        "python": "`MagnetostrictionLaw.B2`",
+        "type": "`float | None`",
+        "default": "`None`",
+        "si_unit": "`Pa`",
+        "validation": "required and finite for `\"cubic\"`",
+        "meaning": "cubic shear-strain coupling constant $B_2$",
+        "backend_support": "FEM CPU/GPU prescribed-strain executable",
+        "problem_ir": "`mechanics.laws[].b2`"
+      },
+      {
+        "python": "`MagnetostrictionLaw.lambda_s`",
+        "type": "`float | None`",
+        "default": "`None`",
+        "si_unit": "`1`",
+        "validation": "required and finite for `\"isotropic\"`",
+        "meaning": "isotropic saturation magnetostriction $\\lambda_s$",
+        "backend_support": "IR authoring only; fails closed at planner",
+        "problem_ir": "`mechanics.laws[].lambda_s`"
+      },
+      {
+        "python": "`MechanicalLoad.strain`",
+        "type": "`tuple[float, ...] | None`",
+        "default": "`None`",
+        "si_unit": "`1`",
+        "validation": "length 6 engineering-Voigt vector; finite values",
+        "meaning": "prescribed $(\\varepsilon_{11},\\varepsilon_{22},\\varepsilon_{33},\\gamma_{23},\\gamma_{13},\\gamma_{12})$",
+        "backend_support": "FEM CPU/GPU prescribed-strain executable",
+        "problem_ir": "`mechanics.loads[].strain`"
+      },
+      {
+        "python": "`Magnetoelastic.magnet`",
+        "type": "`str`",
+        "default": "required",
+        "si_unit": "`1`",
+        "validation": "non-empty reference to a declared ferromagnet",
+        "meaning": "target magnetic domain $\\Omega_{\\mathrm{mag}}$",
+        "backend_support": "FEM CPU/GPU prescribed-strain executable",
+        "problem_ir": "`energy[].magnet`"
+      },
+      {
+        "python": "`Magnetoelastic.body`",
+        "type": "`str`",
+        "default": "required",
+        "si_unit": "`1`",
+        "validation": "non-empty reference to a declared `ElasticBody`",
+        "meaning": "host elastic domain $\\Omega_{\\mathrm{mech}}$",
+        "backend_support": "FEM CPU/GPU prescribed-strain executable",
+        "problem_ir": "`energy[].body`"
+      },
+      {
+        "python": "`Magnetoelastic.law`",
+        "type": "`str`",
+        "default": "required",
+        "si_unit": "`1`",
+        "validation": "non-empty reference to a declared `MagnetostrictionLaw`",
+        "meaning": "constitutive magnetoelastic coupling law",
+        "backend_support": "FEM CPU/GPU prescribed-strain executable",
+        "problem_ir": "`energy[].law`"
+      }
+    ]
   }
 }
