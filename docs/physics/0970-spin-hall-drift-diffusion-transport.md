@@ -1632,6 +1632,19 @@ bounded M1 GPU realization rejects SML. `charge_edge_enabled` must be one for a
 transparent or longitudinal mixing edge and exact zero for the legal
 transverse-only branch.
 
+Static upload orders the device interface records by axis and canonical face
+index, and the spin boundary records by axis, side and adjacent cell. The CUDA
+assembly and field reconstruction use binary lookup in those existing arrays.
+Exterior faces are sorted stably to preserve the meaning of the first matching
+record, and the sparse interface blocks continue to use the canonical interface
+indices. The lookup leaves the finite-volume coefficients, boundary fluxes,
+accepted-state rules and typed ABI unchanged. Interface and torque closure
+diagnostics reduce cell- and face-local maxima on CUDA. For each cell the
+torque check gathers its incident interface observations using the existing
+sparse adjacency before the observations are reordered for publication. This
+preserves the volume-plus-surface closure and makes it available for grids
+larger than the former serial diagnostic limit of 4096 cells.
+
 Each interface is identified by the tuple `(source_id, topology_id, axis,
 canonical_face_index, negative_cell, positive_cell, from_cell, to_cell)`.
 Records may arrive in any order; matching by array position is forbidden. The
