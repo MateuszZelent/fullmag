@@ -19,6 +19,7 @@ import {
   VIEWPORT_3D_QUALITY_PROFILE_OPTIONS,
   type Viewport3DQualityProfileId,
 } from "@/shared/viewport3dQualityLabels";
+import { normalizeViewport3DFdmCellBudget } from "../viewport3dAppearancePreferences";
 
 import { Viewport3DInspectorTemplateShell } from "./Viewport3DSettingsAndExportSpecs";
 import {
@@ -409,6 +410,22 @@ export function Viewport3DSettingsContent({
                   </AccordionContent>
                 </AccordionItem>
               </Accordion>
+            </SettingsGroup>
+
+            <SettingsGroup title="FDM rendering">
+              <Choice
+                describedBy="fm-view-fdm-cell-limit-help"
+                id="fm-view-fdm-cell-limit"
+                label="FDM cell limit"
+                onChange={(value) => viewport3dStore.setFdmCellBudget(
+                  normalizeViewport3DFdmCellBudget(value === "auto" ? null : Number(value)),
+                )}
+                options={[["auto", "Auto"], ["75000", "75k"], ["150000", "150k"], ["300000", "300k"]]}
+                value={state.widgets.fdmCellBudget === null ? "auto" : String(state.widgets.fdmCellBudget)}
+              />
+              <p className="fm-viewport-3d-settings__help" id="fm-view-fdm-cell-limit-help">
+                Auto samples up to 150k cells, or keeps exact exterior grids up to 300k.
+              </p>
             </SettingsGroup>
           </TabsContent>
     </Viewport3DInspectorTemplateShell>

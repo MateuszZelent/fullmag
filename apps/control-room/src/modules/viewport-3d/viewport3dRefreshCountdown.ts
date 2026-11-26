@@ -5,8 +5,7 @@ const VIEWPORT_3D_REFRESH_DEFAULT_INTERVAL_MS = 1_000;
 const VIEWPORT_3D_REFRESH_MIN_INTERVAL_MS = 200;
 const VIEWPORT_3D_REFRESH_MAX_INTERVAL_MS = 5_000;
 const VIEWPORT_3D_REFRESH_FLASH_MS = 650;
-const VIEWPORT_3D_REFRESH_COUNTDOWN_MAX_TICK_MS = 1_000;
-const VIEWPORT_3D_REFRESH_COUNTDOWN_MIN_TICK_MS = 250;
+const VIEWPORT_3D_REFRESH_TIMER_MIN_DELAY_MS = 250;
 
 export interface Viewport3DFieldRefreshState {
   enabled: boolean;
@@ -29,8 +28,7 @@ export interface Viewport3DRefreshSample {
 export interface Viewport3DRefreshCountdownDisplay {
   ariaLabel: string;
   detail: string;
-  progress: number;
-  state: "counting" | "error" | "syncing" | "updated" | "waiting";
+  state: "error" | "syncing" | "updated" | "waiting";
   title: string;
 }
 
@@ -62,7 +60,10 @@ export function resolveViewport3DRefreshCountdownNextTickDelay(input: {
   if (remainingMs <= 0) {
     return null;
   }
-  return clampTickDelay(remainingMs);
+  return Math.max(
+    VIEWPORT_3D_REFRESH_TIMER_MIN_DELAY_MS,
+    Math.ceil(remainingMs),
+  );
 }
 
 export const EMPTY_VIEWPORT_3D_REFRESH_SAMPLE: Viewport3DRefreshSample = {
@@ -121,57 +122,36 @@ export function resolveViewport3DRefreshCountdownDisplay(input: {
   if (input.status === "error") {
     return {
       ariaLabel: "Field refresh failed",
-      detail: "error",
-      progress: 0,
+      detail: "Refresh failed",
       state: "error",
-      title: "Field sync",
+      title: "Field refresh failed",
     };
   }
 
   if (input.status === "loading" || input.status === "stale") {
-    const syncRevisions = formatViewport3DFieldSyncRevisions({
-      payloadRevision: input.payloadRevision,
-      requestedRevision: input.requestedRevision,
-    });
     return {
-      ariaLabel: syncRevisions
-        ? `Field refresh in progress, ${syncRevisions}`
-        : "Field refresh in progress",
-      detail: syncRevisions ?? "syncing",
-      progress: 1,
+      ariaLabel: "Updating field data",
+      detail: "Updating",
       state: "syncing",
-      title: "Field sync",
+      title: "Field update in progress",
     };
   }
 
   if (input.sample.refreshedAtMs === null || input.nowMs <= 0) {
-    return {
-      ariaLabel: "Waiting for field refresh",
-      detail: "waiting",
-      progress: 0,
-      state: "waiting",
-      title: "Field sync",
-    };
+    return null;
   }
 
   if (input.nowMs < input.sample.flashUntilMs) {
     return {
-      ariaLabel: "Field refreshed",
-      detail: "updated",
-      progress: 1,
+      ariaLabel: "Field data updated",
+      detail: "Updated",
       state: "updated",
-      title: "Field sync",
+      title: "Field data updated",
     };
   }
 
   if (input.sample.pulseId < 2) {
-    return {
-      ariaLabel: "Waiting for new field data",
-      detail: "no new data",
-      progress: 0,
-      state: "waiting",
-      title: "Field data",
-    };
+    return null;
   }
 
   const elapsedMs = Math.max(0, input.nowMs - input.sample.refreshedAtMs);
@@ -179,46 +159,15 @@ export function resolveViewport3DRefreshCountdownDisplay(input: {
   if (remainingMs <= 0) {
     return {
       ariaLabel: "No new field data received",
-      detail: "no new data",
-      progress: 0,
+      detail: "No new data",
       state: "waiting",
-      title: "Field data",
+      title: "Field data delayed",
     };
   }
 
-  const progress = clamp01(elapsedMs / input.sample.intervalMs);
-  return {
-    ariaLabel: `Next field refresh in ${formatViewport3DRefreshRemaining(remainingMs)}`,
-    detail: formatViewport3DRefreshRemaining(remainingMs),
-    progress,
-    state: "counting",
-    title: "Estimated next field sync",
-  };
-}
-
-function formatViewport3DFieldSyncRevisions({
-  payloadRevision,
-  requestedRevision,
-}: {
-  payloadRevision: ResourceRevision | null | undefined;
-  requestedRevision: ResourceRevision | null | undefined;
-}): string | null {
-  if (
-    payloadRevision === null ||
-    payloadRevision === undefined ||
-    requestedRevision === null ||
-    requestedRevision === undefined ||
-    Object.is(payloadRevision, requestedRevision)
-  ) {
-    return null;
-  }
-  return `r${payloadRevision} → r${requestedRevision}`;
-}
-
-function formatViewport3DRefreshRemaining(ms: number): string {
-  const seconds = Math.max(0, ms) / 1_000;
-  if (seconds >= 10) return `${Math.ceil(seconds)}s`;
-  return `${seconds.toFixed(1)}s`;
+  // The ordinary viewport stays quiet until the expected refresh is late.
+  // Exact revisions remain available in the Render details diagnostics.
+  return null;
 }
 
 function resolveViewport3DRefreshInterval(
@@ -243,14 +192,9 @@ function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
 }
 
-function clamp01(value: number): number {
-  return clamp(value, 0, 1);
-}
-
 function clampTickDelay(value: number): number {
-  return clamp(
-    value,
-    VIEWPORT_3D_REFRESH_COUNTDOWN_MIN_TICK_MS,
-    VIEWPORT_3D_REFRESH_COUNTDOWN_MAX_TICK_MS,
+  return Math.max(
+    VIEWPORT_3D_REFRESH_TIMER_MIN_DELAY_MS,
+    Math.ceil(value),
   );
 }

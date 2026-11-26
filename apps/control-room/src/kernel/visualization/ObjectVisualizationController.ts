@@ -14,6 +14,7 @@ import type {
 } from "../api/apiTypes";
 import type { AntennaFieldIntent, AntennaFieldDisplayStatus } from "./antennaFieldIntent";
 import {
+  isAnalysisFieldQuantityId,
   isConductorTransportQuantityId,
   isScalarSpatialQuantityId,
   normalizeQuantityIdOrDefault,
@@ -108,6 +109,8 @@ function resolveObjectContextVisualizationSettings(
 
 export interface VisualizationTargetSettings {
   activeQuantityId: string;
+  /** Client-owned scale for the active target, quantity, and scalar component. */
+  scalarRangePolicy?: ViewportScalarRangePolicy;
   airboxSyntheticVectorsEnabled: boolean;
   boundsOpacityPercent: number;
   boundsVisible: boolean;
@@ -145,10 +148,15 @@ export interface VisualizationTargetSettings {
   wireframeVisible: boolean;
 }
 
-export type VisualizationTargetPatch = Partial<VisualizationTargetSettings>;
+export type VisualizationTargetPatch = Partial<
+  Omit<VisualizationTargetSettings, "scalarRangePolicy">
+> & {
+  /** Local preference patch removed before the canonical backend patch. */
+  scalarRangePreference?: ViewportScalarRangePreferencePatch;
+};
 export type VisualizationStoredTargetPatch = Omit<
   VisualizationTargetPatch,
-  "renderMode"
+  "renderMode" | "scalarRangePreference"
 >;
 /**
  * Client-owned rendering choices. They deliberately live outside the canonical
@@ -163,6 +171,87 @@ export interface ViewportTargetRenderingPreferences {
   vectorCenteringEnabled?: boolean;
   vectorSurfaceOffsetEnabled?: boolean;
   vectorSurfaceOffsetScale?: number;
+  scalarRangePolicies?: Record<string, ViewportScalarRangePolicy>;
+}
+
+export type ViewportScalarRangeComponent =
+  | "magnitude"
+  | "scalar"
+  | "x"
+  | "y"
+  | "z";
+
+/** Structural range policy shared with the viewport render planner. */
+export interface ViewportScalarRangePolicy {
+  max: number | null;
+  min: number | null;
+  mode: "auto" | "manual" | "shared";
+  scale: "diverging" | "linear" | "log";
+  symmetric: boolean;
+}
+
+export interface ViewportScalarRangePreferencePatch {
+  component: ViewportScalarRangeComponent;
+  policy: ViewportScalarRangePolicy;
+  quantityId: string;
+}
+
+export function viewportScalarRangePreferenceKey(
+  quantityId: string,
+  component: ViewportScalarRangeComponent,
+): string {
+  return `${resolveCanonicalQuantityId(quantityId)}|${component}`;
+}
+
+function normalizeManualViewportScalarRangePolicy(
+  policy: ViewportScalarRangePolicy | null | undefined,
+): ViewportScalarRangePolicy | null {
+  if (
+    policy?.mode !== "manual" ||
+    typeof policy.min !== "number" ||
+    typeof policy.max !== "number" ||
+    !Number.isFinite(policy.min) ||
+    !Number.isFinite(policy.max) ||
+    policy.min >= policy.max
+  ) {
+    return null;
+  }
+  return {
+    max: policy.max,
+    min: policy.min,
+    mode: "manual",
+    scale:
+      policy.scale === "diverging" || policy.scale === "log"
+        ? policy.scale
+        : "linear",
+    symmetric: policy.symmetric === true,
+  };
+}
+
+function normalizeViewportScalarRangePolicies(
+  policies: Record<string, ViewportScalarRangePolicy> | undefined,
+): Record<string, ViewportScalarRangePolicy> | undefined {
+  if (!policies) return undefined;
+  const normalized: Record<string, ViewportScalarRangePolicy> = {};
+  const components = new Set<ViewportScalarRangeComponent>([
+    "magnitude",
+    "scalar",
+    "x",
+    "y",
+    "z",
+  ]);
+  for (const [key, policy] of Object.entries(policies)) {
+    const delimiter = key.lastIndexOf("|");
+    if (delimiter <= 0) continue;
+    const quantityId = key.slice(0, delimiter);
+    const component = key.slice(delimiter + 1) as ViewportScalarRangeComponent;
+    if (!components.has(component)) continue;
+    const manualPolicy = normalizeManualViewportScalarRangePolicy(policy);
+    if (!manualPolicy) continue;
+    normalized[viewportScalarRangePreferenceKey(quantityId, component)] =
+      manualPolicy;
+  }
+  return Object.keys(normalized).length > 0 ? normalized : undefined;
 }
 
 export interface SavedFieldSectionPreferences {
@@ -879,7 +968,7 @@ export class ObjectVisualizationController {
   ): VisualizationTargetSettings {
     return normalizeVisualizationSettings({
       ...resolveDefaultVisualizationSettings(this.snapshot, kind, baseSettings),
-      ...(this.snapshot.viewportPreferenceDefaults?.[kind] ?? {}),
+      ...viewportPreferenceSettings(this.snapshot.viewportPreferenceDefaults?.[kind]),
     });
   }
 
@@ -1059,8 +1148,16 @@ export class ObjectVisualizationController {
     const next = normalizeViewportTargetRenderingPreferences({
       ...current,
       ...patch,
+      ...(patch.scalarRangePolicies === undefined
+        ? {}
+        : {
+            scalarRangePolicies: {
+              ...current.scalarRangePolicies,
+              ...patch.scalarRangePolicies,
+            },
+          }),
     });
-    if (samePatch(current, next)) return;
+    if (sameViewportTargetRenderingPreferences(current, next)) return;
 
     this.viewportPreferences.set(key, next);
     this.bump();
@@ -1092,8 +1189,16 @@ export class ObjectVisualizationController {
     const next = normalizeViewportTargetRenderingPreferences({
       ...current,
       ...patch,
+      ...(patch.scalarRangePolicies === undefined
+        ? {}
+        : {
+            scalarRangePolicies: {
+              ...current.scalarRangePolicies,
+              ...patch.scalarRangePolicies,
+            },
+          }),
     });
-    if (samePatch(current, next)) return;
+    if (sameViewportTargetRenderingPreferences(current, next)) return;
 
     this.viewportPreferenceDefaults.set(kind, next);
     this.bump();
@@ -1223,12 +1328,12 @@ export function resolveVisualizationSettings(
     ...(snapshot.overrides[targetKey] ?? {}),
     ...(snapshot.pendingOverrides?.[targetKey]?.patch ?? {}),
   });
-  if (isFdmUniverseOutsideSupportTarget(target)) {
-    return normalizeFdmUniverseOutsideSupportVisualizationSettings(settings);
-  }
-  return target.kind === "airbox"
-    ? normalizeAirboxVisualizationSettings(settings)
-    : settings;
+  const targetSettings = isFdmUniverseOutsideSupportTarget(target)
+    ? normalizeFdmUniverseOutsideSupportVisualizationSettings(settings)
+    : target.kind === "airbox"
+      ? normalizeAirboxVisualizationSettings(settings)
+      : settings;
+  return applyViewportScalarRangePolicy(snapshot, target, targetSettings);
 }
 
 function normalizeAirboxVisualizationSettings(
@@ -1247,6 +1352,55 @@ function normalizeAirboxVisualizationSettings(
     viewportColorbarVisible: false,
     wireframeVisible,
   });
+}
+
+function viewportPreferenceSettings(
+  preferences: ViewportTargetRenderingPreferences | null | undefined,
+): Partial<VisualizationTargetSettings> {
+  if (!preferences) return {};
+  const { scalarRangePolicies: _scalarRangePolicies, ...settings } = preferences;
+  return settings;
+}
+
+function applyViewportScalarRangePolicy(
+  snapshot: ObjectVisualizationSnapshot,
+  target: VisualizationTargetRef,
+  settings: VisualizationTargetSettings,
+): VisualizationTargetSettings {
+  const { scalarRangePolicy: _inheritedPolicy, ...targetSettings } = settings;
+  const component = viewportScalarRangeComponent(settings);
+  if (!component || !settings.activeQuantityId) return targetSettings;
+  const key = viewportScalarRangePreferenceKey(
+    settings.activeQuantityId,
+    component,
+  );
+  const policy = normalizeManualViewportScalarRangePolicy(
+    snapshot.viewportPreferences?.[visualizationTargetKey(target)]
+      ?.scalarRangePolicies?.[key],
+  );
+  return policy ? { ...targetSettings, scalarRangePolicy: policy } : targetSettings;
+}
+
+function viewportScalarRangeComponent(
+  settings: Pick<VisualizationTargetSettings, "activeQuantityId" | "surfaceColorSource">,
+): ViewportScalarRangeComponent | null {
+  const quantityId = resolveCanonicalQuantityId(settings.activeQuantityId);
+  if (!quantityId || isAnalysisFieldQuantityId(quantityId)) return null;
+  switch (settings.surfaceColorSource) {
+    case "component_x":
+      return "x";
+    case "component_y":
+      return "y";
+    case "component_z":
+      return "z";
+    case "magnitude":
+      return "magnitude";
+    case "colormap":
+      return isScalarSpatialQuantityId(quantityId) ? "scalar" : "magnitude";
+    case "orientation":
+    case "solid":
+      return null;
+  }
 }
 
 export function resolveEffectiveVisualizationSettings(
@@ -1386,14 +1540,19 @@ export function resolveTargetVisualization({
         )),
     ...(registryEntry ? {} : (backendOverride ?? {})),
     ...(localOverride ?? {}),
-    ...(viewportPreferenceDefaults ?? {}),
-    ...(viewportPreferences ?? {}),
+    ...viewportPreferenceSettings(viewportPreferenceDefaults),
+    ...viewportPreferenceSettings(viewportPreferences),
   });
-  const settings = resolveObjectContextVisualizationSettings(
+  const resolvedSettings = resolveObjectContextVisualizationSettings(
     isFdmUniverseOutsideSupportTarget(target)
       ? normalizeFdmUniverseOutsideSupportVisualizationSettings(normalizedSettings)
       : normalizedSettings,
     objectContext,
+  );
+  const settings = applyViewportScalarRangePolicy(
+    snapshot,
+    target,
+    resolvedSettings,
   );
 
   return {
@@ -2466,6 +2625,7 @@ export function airboxVisualizationStatePatchFromTargetPatch(
 export function viewportRenderingPreferencesFromTargetPatch(
   patch: VisualizationTargetPatch,
 ): ViewportTargetRenderingPreferences {
+  const scalarRangePreference = patch.scalarRangePreference;
   return {
     ...(patch.airboxSyntheticVectorsEnabled === undefined
       ? {}
@@ -2488,6 +2648,16 @@ export function viewportRenderingPreferencesFromTargetPatch(
     ...(patch.vectorSurfaceOffsetScale === undefined
       ? {}
       : { vectorSurfaceOffsetScale: patch.vectorSurfaceOffsetScale }),
+    ...(scalarRangePreference && scalarRangePreference.quantityId.trim()
+      ? {
+          scalarRangePolicies: {
+            [viewportScalarRangePreferenceKey(
+              scalarRangePreference.quantityId,
+              scalarRangePreference.component,
+            )]: scalarRangePreference.policy,
+          },
+        }
+      : {}),
   };
 }
 
@@ -2510,6 +2680,7 @@ export function persistentVisualizationTargetPatch(
   delete persistent.vectorCenteringEnabled;
   delete persistent.vectorSurfaceOffsetEnabled;
   delete persistent.vectorSurfaceOffsetScale;
+  delete persistent.scalarRangePreference;
   return persistent;
 }
 
@@ -2713,7 +2884,10 @@ function normalizePatch(
   patch: VisualizationTargetPatch,
 ): VisualizationStoredTargetPatch {
   const normalized = Object.fromEntries(
-    Object.entries(patch).filter(([, value]) => value !== undefined),
+    Object.entries(patch).filter(
+      ([field, value]) =>
+        field !== "scalarRangePreference" && value !== undefined,
+    ),
   ) as VisualizationTargetPatch;
   if (normalized.surfaceOpacityPercent !== undefined) {
     normalized.surfaceOpacityPercent = clampOpacity(normalized.surfaceOpacityPercent);
@@ -2804,12 +2978,16 @@ function normalizePatch(
       delete normalized.activeQuantityId;
     }
   }
-  return normalized;
+  delete normalized.scalarRangePreference;
+  return normalized as VisualizationStoredTargetPatch;
 }
 
 function normalizeViewportTargetRenderingPreferences(
   preferences: ViewportTargetRenderingPreferences,
 ): ViewportTargetRenderingPreferences {
+  const scalarRangePolicies = normalizeViewportScalarRangePolicies(
+    preferences.scalarRangePolicies,
+  );
   return {
     ...(preferences.airboxSyntheticVectorsEnabled === undefined
       ? {}
@@ -2844,6 +3022,7 @@ function normalizeViewportTargetRenderingPreferences(
             Math.min(1, preferences.vectorSurfaceOffsetScale),
           ),
         }),
+    ...(scalarRangePolicies ? { scalarRangePolicies } : {}),
   };
 }
 
@@ -3023,4 +3202,40 @@ function samePatch(
     Object.prototype.hasOwnProperty.call(right, key) &&
     Object.is(left[key], right[key]),
   );
+}
+
+function sameViewportTargetRenderingPreferences(
+  left: ViewportTargetRenderingPreferences,
+  right: ViewportTargetRenderingPreferences,
+): boolean {
+  const leftPolicies = left.scalarRangePolicies;
+  const rightPolicies = right.scalarRangePolicies;
+  const leftSettings = { ...left };
+  const rightSettings = { ...right };
+  delete leftSettings.scalarRangePolicies;
+  delete rightSettings.scalarRangePolicies;
+  if (
+    !samePatch(
+      leftSettings as unknown as VisualizationStoredTargetPatch,
+      rightSettings as unknown as VisualizationStoredTargetPatch,
+    )
+  ) {
+    return false;
+  }
+  const leftKeys = Object.keys(leftPolicies ?? {});
+  const rightKeys = Object.keys(rightPolicies ?? {});
+  if (leftKeys.length !== rightKeys.length) return false;
+  return leftKeys.every((key) => {
+    const leftPolicy = leftPolicies?.[key];
+    const rightPolicy = rightPolicies?.[key];
+    return Boolean(
+      leftPolicy &&
+        rightPolicy &&
+        leftPolicy.max === rightPolicy.max &&
+        leftPolicy.min === rightPolicy.min &&
+        leftPolicy.mode === rightPolicy.mode &&
+        leftPolicy.scale === rightPolicy.scale &&
+        leftPolicy.symmetric === rightPolicy.symmetric,
+    );
+  });
 }

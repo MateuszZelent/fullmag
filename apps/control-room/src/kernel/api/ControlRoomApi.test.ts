@@ -4012,6 +4012,46 @@ describe("ControlRoomApi", () => {
     });
   });
 
+  it("uses the typed session scope for durable error history", async () => {
+    const sessionScopeKey = "session=session-a&epoch=epoch-a&request_scope_epoch=req-a";
+    const requestBody = {
+      clearGeneration: 2,
+      events: [{
+        eventId: "event-1",
+        category: "frontend",
+        severity: "error",
+        source: "window.error",
+        title: "Application error",
+        message: "Example report",
+        firstSeenMs: 1,
+        lastSeenMs: 1,
+        count: 1,
+      }],
+    } as const;
+    const requests: Array<{ method: string; path: string; scope: string | null; body: unknown }> = [];
+    const api = new ControlRoomApi({
+      baseUrl: "http://127.0.0.1:8765",
+      fetchImpl: async (url, init) => {
+        requests.push({
+          method: init?.method ?? "GET",
+          path: new URL(String(url)).pathname,
+          scope: new Headers(init?.headers).get("x-fullmag-session-scope"),
+          body: init?.body ? await new Response(init.body).json() : null,
+        });
+        return jsonResponse({ sessionId: "session-a", revision: 3, clearGeneration: 2, entries: [] });
+      },
+    });
+    const options = { sessionScopeKey };
+    await expect(api.diagnostics.sessionErrors(options)).resolves.toMatchObject({ sessionId: "session-a" });
+    await api.diagnostics.appendSessionErrors({ ...requestBody, events: [...requestBody.events] }, options);
+    await api.diagnostics.clearSessionErrors(options);
+    expect(requests).toEqual([
+      { method: "GET", path: "/v2/sessions/current/diagnostics/session-errors", scope: sessionScopeKey, body: null },
+      { method: "POST", path: "/v2/sessions/current/diagnostics/session-errors", scope: sessionScopeKey, body: requestBody },
+      { method: "DELETE", path: "/v2/sessions/current/diagnostics/session-errors", scope: sessionScopeKey, body: null },
+    ]);
+  });
+
   it.each([
     ["performance_observation_busy", "deferred"],
     ["performance_attempt_changed", "error"],
@@ -4035,6 +4075,31 @@ describe("ControlRoomApi", () => {
     if (outcome === "deferred") {
       expect(responses[0].detail).toContain("performance_observation_busy");
     }
+  });
+
+  it("keeps the initiating session on a failure that arrives after switching sessions", async () => {
+    const diagnostics = new RequestDiagnosticsController();
+    let activeScope = "initial-session";
+    const fetchStarted = Promise.withResolvers<void>();
+    const response = Promise.withResolvers<Response>();
+    const api = new ControlRoomApi({
+      baseUrl: "http://127.0.0.1:8765",
+      diagnostics,
+      getDiagnosticSessionScope: () => activeScope,
+      fetchImpl: () => {
+        fetchStarted.resolve();
+        return response.promise;
+      },
+    });
+
+    const request = api.sessions.current.status();
+    await fetchStarted.promise;
+    activeScope = "next-session";
+    response.resolve(jsonResponse({ message: "Late failure" }, { status: 409 }));
+    await expect(request).rejects.toMatchObject({ status: 409 });
+    expect(diagnostics.list().filter(isRequestDiagnosticFailure)).toMatchObject([
+      { outcome: "error", sessionScopeKey: "initial-session" },
+    ]);
   });
 
   it("keeps an unexpected HTTP 409 on another resource as an error", async () => {

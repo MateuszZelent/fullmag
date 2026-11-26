@@ -616,6 +616,20 @@ describe("useViewport3DChunkedScalarColors", () => {
     ).toBe(false);
     expect(
       shouldBuildViewport3DPartChunkedScalarColor({
+        explicitPartFieldVector: false,
+        globalColorModes: ["orientation", "y"],
+        globalColorPalette: "viridis",
+        globalFieldVector: fieldVector,
+        globalScalarRange: range,
+        mode: "y",
+        palette: "viridis",
+        partFieldVector: fieldVector,
+        rangeSource: "manual",
+        scalarRange: range,
+      }),
+    ).toBe(true);
+    expect(
+      shouldBuildViewport3DPartChunkedScalarColor({
         explicitPartFieldVector: true,
         globalColorModes: ["y"],
         globalColorPalette: "viridis",

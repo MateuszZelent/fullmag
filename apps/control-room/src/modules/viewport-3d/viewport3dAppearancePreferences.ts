@@ -201,10 +201,21 @@ export type Viewport3DSavedVisualProfileId =
   | "balanced"
   | "figure";
 
+export type Viewport3DFdmCellBudget = null | 75000 | 150000 | 300000;
+
+export function normalizeViewport3DFdmCellBudget(
+  value: unknown,
+): Viewport3DFdmCellBudget {
+  return value === 75000 || value === 150000 || value === 300000
+    ? value
+    : null;
+}
+
 export interface Viewport3DPersistedWidgetPreferences {
   dimensionFrameMode: "off" | "floor" | "cage";
   dimensionFrameDensity: "auto" | "coarse" | "fine";
   dimensionFrameAnnotation: "ticks" | "extents" | "both";
+  fdmCellBudget: Viewport3DFdmCellBudget;
   scaleUnitMode: "auto" | "nm" | "um" | "mm" | "m";
   scaleLabelsVisible: boolean;
   viewCubeVisible: boolean;
@@ -225,6 +236,7 @@ export const DEFAULT_VIEWPORT_3D_PERSISTED_WIDGET_PREFERENCES = Object.freeze({
   dimensionFrameMode: "floor",
   dimensionFrameDensity: "auto",
   dimensionFrameAnnotation: "ticks",
+  fdmCellBudget: null,
   scaleUnitMode: "auto",
   scaleLabelsVisible: true,
   viewCubeVisible: true,
@@ -305,6 +317,7 @@ function normalizePersistedWidgetPreferences(
     dimensionFrameMode: enumValue(record.dimensionFrameMode, ["off", "floor", "cage"], defaults.dimensionFrameMode),
     dimensionFrameDensity: enumValue(record.dimensionFrameDensity, ["auto", "coarse", "fine"], defaults.dimensionFrameDensity),
     dimensionFrameAnnotation: enumValue(record.dimensionFrameAnnotation, ["ticks", "extents", "both"], defaults.dimensionFrameAnnotation),
+    fdmCellBudget: normalizeViewport3DFdmCellBudget(record.fdmCellBudget),
     scaleUnitMode: enumValue(record.scaleUnitMode, ["auto", "nm", "um", "mm", "m"], defaults.scaleUnitMode),
     scaleLabelsVisible: booleanValue(record.scaleLabelsVisible, defaults.scaleLabelsVisible),
     viewCubeVisible: booleanValue(record.viewCubeVisible, defaults.viewCubeVisible),

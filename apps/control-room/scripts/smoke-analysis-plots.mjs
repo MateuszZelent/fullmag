@@ -1,3 +1,4 @@
+import { createSessionErrorHistoryFixture } from "./lib/session-error-history-fixture.mjs";
 import { createHash } from "node:crypto";
 import { mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
@@ -2237,6 +2238,7 @@ function targetOrTrackedModeId(isTarget, targetModeId, sampleIndex) {
 }
 
 async function installAnalysisDatasetFixtureRoutes(page, frequencyDomainFixture = null) {
+  const sessionErrors = createSessionErrorHistoryFixture(FIXTURE_SESSION_ID);
   const referenceImportEnabled = frequencyDomainFixture?.referenceImport === true;
   const referenceImportState = { referenceCreateRequests: [], definitions: [] };
   const datasetRef = "analysis-fixture";
@@ -2325,6 +2327,16 @@ async function installAnalysisDatasetFixtureRoutes(page, frequencyDomainFixture 
         contentType: "application/json",
         headers: cors,
         status: 200,
+      });
+      return;
+    }
+    const sessionErrorResponse = sessionErrors(request, url.pathname);
+    if (sessionErrorResponse) {
+      await route.fulfill({
+        body: JSON.stringify(sessionErrorResponse.body),
+        contentType: "application/json",
+        headers: cors,
+        status: sessionErrorResponse.status,
       });
       return;
     }

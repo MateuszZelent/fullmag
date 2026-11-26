@@ -8,7 +8,7 @@ import {
 } from "./viewport3dRefreshCountdown";
 
 describe("viewport3dRefreshCountdown", () => {
-  it("counts down from the observed field refresh interval", () => {
+  it("keeps expected refresh timing quiet until the field is late", () => {
     const first = updateViewport3DRefreshSample(
       EMPTY_VIEWPORT_3D_REFRESH_SAMPLE,
       { nowMs: 1_000, revision: "field-a", status: "ready" },
@@ -19,20 +19,29 @@ describe("viewport3dRefreshCountdown", () => {
       status: "ready",
     });
 
-    const display = resolveViewport3DRefreshCountdownDisplay({
+    expect(resolveViewport3DRefreshCountdownDisplay({
       enabled: true,
       nowMs: 2_700,
       sample: second,
       status: "ready",
+    })).toBeNull();
+    expect(resolveViewport3DRefreshCountdownNextTickDelay({
+      enabled: true,
+      nowMs: 2_700,
+      sample: second,
+      status: "ready",
+    })).toBe(300);
+    expect(resolveViewport3DRefreshCountdownDisplay({
+      enabled: true,
+      nowMs: 3_001,
+      sample: second,
+      status: "ready",
+    })).toMatchObject({
+      ariaLabel: "No new field data received",
+      detail: "No new data",
+      state: "waiting",
+      title: "Field data delayed",
     });
-
-    expect(display).toMatchObject({
-      detail: "0.3s",
-      state: "counting",
-      title: "Estimated next field sync",
-    });
-    expect(display?.progress).toBeGreaterThan(0.65);
-    expect(display?.progress).toBeLessThan(0.75);
   });
 
   it("flashes as updated immediately after a new field revision arrives", () => {
@@ -49,9 +58,10 @@ describe("viewport3dRefreshCountdown", () => {
         status: "ready",
       }),
     ).toMatchObject({
-      detail: "updated",
-      progress: 1,
+      ariaLabel: "Field data updated",
+      detail: "Updated",
       state: "updated",
+      title: "Field data updated",
     });
   });
 
@@ -73,13 +83,7 @@ describe("viewport3dRefreshCountdown", () => {
       nowMs: 1_700,
       sample: repeated,
       status: "ready",
-    })).toMatchObject({
-      ariaLabel: "Waiting for new field data",
-      detail: "no new data",
-      progress: 0,
-      state: "waiting",
-      title: "Field data",
-    });
+    })).toBeNull();
     expect(resolveViewport3DRefreshCountdownNextTickDelay({
       enabled: true,
       nowMs: 1_700,
@@ -107,10 +111,9 @@ describe("viewport3dRefreshCountdown", () => {
       status: "ready",
     })).toMatchObject({
       ariaLabel: "No new field data received",
-      detail: "no new data",
-      progress: 0,
+      detail: "No new data",
       state: "waiting",
-      title: "Field data",
+      title: "Field data delayed",
     });
   });
 
@@ -123,25 +126,55 @@ describe("viewport3dRefreshCountdown", () => {
         status: "stale",
       }),
     ).toMatchObject({
-      detail: "syncing",
+      ariaLabel: "Updating field data",
+      detail: "Updating",
       state: "syncing",
+      title: "Field update in progress",
     });
   });
 
-  it("keeps both payload and requested revisions visible while syncing", () => {
-    expect(
-      resolveViewport3DRefreshCountdownDisplay({
-        enabled: true,
-        nowMs: 1_000,
-        payloadRevision: 41,
-        requestedRevision: 42,
-        sample: EMPTY_VIEWPORT_3D_REFRESH_SAMPLE,
-        status: "stale",
-      }),
-    ).toMatchObject({
-      detail: "r41 → r42",
-      state: "syncing",
+  it("keeps FMVP and generation identities out of the ordinary syncing status", () => {
+    const display = resolveViewport3DRefreshCountdownDisplay({
+      enabled: true,
+      nowMs: 1_000,
+      payloadRevision: "fmvp:m:session-31",
+      requestedRevision: "generation:32",
+      sample: EMPTY_VIEWPORT_3D_REFRESH_SAMPLE,
+      status: "stale",
     });
+
+    expect(display).toMatchObject({
+      ariaLabel: "Updating field data",
+      detail: "Updating",
+      state: "syncing",
+      title: "Field update in progress",
+    });
+    expect(JSON.stringify(display)).not.toMatch(/fmvp|generation/i);
+  });
+
+  it("keeps refresh failures visible with a concise accessible label", () => {
+    expect(resolveViewport3DRefreshCountdownDisplay({
+      enabled: true,
+      nowMs: 1_000,
+      payloadRevision: "fmvp:m:session-31",
+      requestedRevision: "generation:32",
+      sample: EMPTY_VIEWPORT_3D_REFRESH_SAMPLE,
+      status: "error",
+    })).toMatchObject({
+      ariaLabel: "Field refresh failed",
+      detail: "Refresh failed",
+      state: "error",
+      title: "Field refresh failed",
+    });
+  });
+
+  it("does not show a persistent waiting label before refresh cadence is known", () => {
+    expect(resolveViewport3DRefreshCountdownDisplay({
+      enabled: true,
+      nowMs: 1_000,
+      sample: EMPTY_VIEWPORT_3D_REFRESH_SAMPLE,
+      status: "ready",
+    })).toBeNull();
   });
 
   it("is hidden when field refresh telemetry is disabled", () => {
@@ -155,7 +188,7 @@ describe("viewport3dRefreshCountdown", () => {
     ).toBeNull();
   });
 
-  it("schedules only meaningful countdown ticks instead of a fixed 100 ms loop", () => {
+  it("schedules only meaningful status transitions instead of a fixed 100 ms loop", () => {
     const first = updateViewport3DRefreshSample(
       EMPTY_VIEWPORT_3D_REFRESH_SAMPLE,
       { nowMs: 1_000, revision: 12, status: "ready" },
