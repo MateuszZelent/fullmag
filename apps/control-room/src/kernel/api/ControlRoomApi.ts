@@ -120,6 +120,7 @@ import {
   DIAGNOSTICS_CPU_PATH,
   DIAGNOSTICS_ENGINE_LOG_PATH,
   DIAGNOSTICS_GPU_PATH,
+  DIAGNOSTICS_SESSION_ERRORS_PATH,
   DIAGNOSTICS_RUN_PERFORMANCE_PATH,
   DIAGNOSTICS_SOLVER_PROFILE_PATH,
   MESHING_CAPABILITIES_PATH,
@@ -411,6 +412,8 @@ import type {
   GeometryRealizationResource,
   GeometryValidationResource,
   GpuTelemetryResource,
+  SessionErrorAppendRequest,
+  SessionErrorHistoryResource,
   RunPerformanceResource,
   HealthResource,
   RuntimeServiceStatusResource,
@@ -2464,6 +2467,22 @@ export class ControlRoomApi {
     solverProfile: (options?: RequestOptions) =>
       this.requestJson<SolverProfileResource>(
         DIAGNOSTICS_SOLVER_PROFILE_PATH,
+        options,
+      ),
+    sessionErrors: (options?: RequestOptions) =>
+      this.requestJson<SessionErrorHistoryResource>(
+        DIAGNOSTICS_SESSION_ERRORS_PATH,
+        options,
+      ),
+    appendSessionErrors: (body: SessionErrorAppendRequest, options?: RequestOptions) =>
+      this.postJson<SessionErrorHistoryResource, SessionErrorAppendRequest>(
+        DIAGNOSTICS_SESSION_ERRORS_PATH,
+        body,
+        options,
+      ),
+    clearSessionErrors: (options?: RequestOptions) =>
+      this.deleteJson<SessionErrorHistoryResource>(
+        DIAGNOSTICS_SESSION_ERRORS_PATH,
         options,
       ),
     runPerformance: (options?: RequestOptions) =>

@@ -2996,6 +2996,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v2/sessions/current/diagnostics/session-errors": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["diagnostics_get_sessions_current_diagnostics_session_errors"];
+        put?: never;
+        post: operations["diagnostics_post_sessions_current_diagnostics_session_errors"];
+        delete: operations["diagnostics_delete_sessions_current_diagnostics_session_errors"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v2/sessions/current/diagnostics/solver-profile": {
         parameters: {
             query?: never;
@@ -16361,6 +16377,61 @@ export interface components {
         SessionCommandability: "allowed" | "forbidden" | "read_only";
         /** @enum {string} */
         SessionConnectivity: "connected" | "degraded" | "disconnected";
+        SessionErrorAppendRequest: {
+            /** Format: int64 */
+            clearGeneration: number;
+            events: components["schemas"]["SessionErrorOccurrence"][];
+        };
+        /** @enum {string} */
+        SessionErrorCategory: "frontend" | "backend" | "api" | "model";
+        SessionErrorEntry: {
+            category: components["schemas"]["SessionErrorCategory"];
+            code?: string | null;
+            /** Format: int32 */
+            count: number;
+            detail?: string | null;
+            fingerprint: string;
+            /** Format: int64 */
+            firstSeenMs: number;
+            id: string;
+            /** Format: int64 */
+            lastSeenMs: number;
+            message: string;
+            path?: string | null;
+            requestId?: string | null;
+            sessionId: string;
+            severity: components["schemas"]["SessionErrorSeverity"];
+            source: string;
+            title: string;
+        };
+        SessionErrorHistoryResource: {
+            /** Format: int64 */
+            clearGeneration: number;
+            entries: components["schemas"]["SessionErrorEntry"][];
+            /** Format: int64 */
+            revision: number;
+            sessionId: string;
+        };
+        SessionErrorOccurrence: {
+            category: components["schemas"]["SessionErrorCategory"];
+            code?: string | null;
+            /** Format: int32 */
+            count: number;
+            detail?: string | null;
+            eventId: string;
+            /** Format: int64 */
+            firstSeenMs: number;
+            /** Format: int64 */
+            lastSeenMs: number;
+            message: string;
+            path?: string | null;
+            requestId?: string | null;
+            severity: components["schemas"]["SessionErrorSeverity"];
+            source: string;
+            title: string;
+        };
+        /** @enum {string} */
+        SessionErrorSeverity: "error" | "warning";
         SessionExecutionResource: {
             backend: components["schemas"]["ScratchSessionBackend"];
             device: components["schemas"]["ScratchSessionDevice"];
@@ -28697,6 +28768,148 @@ export interface operations {
                 content?: never;
             };
             /** @description Retryable performance observation conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    diagnostics_get_sessions_current_diagnostics_session_errors: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Canonical current session scope */
+                "X-Fullmag-Session-Scope": string;
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Durable session error history */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionErrorHistoryResource"];
+                };
+            };
+            /** @description Missing or malformed session scope */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description No active session */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Session scope changed */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    diagnostics_post_sessions_current_diagnostics_session_errors: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Canonical current session scope */
+                "X-Fullmag-Session-Scope": string;
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SessionErrorAppendRequest"];
+            };
+        };
+        responses: {
+            /** @description Durable history after recording events */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionErrorHistoryResource"];
+                };
+            };
+            /** @description Invalid event batch or session scope */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description No active session */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Session scope changed or history was cleared */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    diagnostics_delete_sessions_current_diagnostics_session_errors: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Canonical current session scope */
+                "X-Fullmag-Session-Scope": string;
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Durably cleared session error history */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionErrorHistoryResource"];
+                };
+            };
+            /** @description Missing or malformed session scope */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description No active session */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Session scope changed */
             409: {
                 headers: {
                     [name: string]: unknown;

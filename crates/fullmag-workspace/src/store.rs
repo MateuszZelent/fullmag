@@ -717,6 +717,26 @@ impl Workspace {
         })
     }
 
+    /// Read and conditionally update a setting in one immediate transaction.
+    /// Returning no replacement leaves the original value intact.
+    pub fn update_kv<T>(
+        &self,
+        key: &str,
+        update: impl FnOnce(Option<Value>) -> Result<(Option<Value>, T)>,
+    ) -> Result<T> {
+        self.with_write_txn(|transaction| {
+            let (replacement, result) = update(self.get_kv(key)?)?;
+            if let Some(value) = replacement {
+                transaction.execute(
+                    "INSERT INTO kv (key, value) VALUES (?1, ?2) \
+                     ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                    params![key, serde_json::to_string(&value)?],
+                )?;
+            }
+            Ok(result)
+        })
+    }
+
     /// The folders the scanner looks through (`kv` key
     /// [`WORKSPACE_ROOTS_KEY`]); empty when none were configured.
     pub fn roots(&self) -> Result<Vec<WorkspaceRoot>> {

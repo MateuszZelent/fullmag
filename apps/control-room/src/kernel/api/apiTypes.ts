@@ -430,6 +430,11 @@ export type RealtimeCommunicationPolicyPatch =
   components["schemas"]["RealtimeCommunicationPolicyPatch"];
 export type RealtimeCommunicationPolicyResource =
   components["schemas"]["RealtimeCommunicationPolicyResource"];
+export type SessionErrorHistoryResource = components["schemas"]["SessionErrorHistoryResource"];
+export type SessionErrorAppendRequest = components["schemas"]["SessionErrorAppendRequest"];
+export type SessionErrorOccurrence = components["schemas"]["SessionErrorOccurrence"];
+export type SessionErrorEntry = components["schemas"]["SessionErrorEntry"];
+
 export type RunPerformanceResource =
   components["schemas"]["RunPerformanceResource"];
 export type SolverProfileResource =

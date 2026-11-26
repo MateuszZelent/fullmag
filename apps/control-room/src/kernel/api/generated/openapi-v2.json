@@ -42847,6 +42847,228 @@
         ],
         "type": "string"
       },
+      "SessionErrorAppendRequest": {
+        "properties": {
+          "clearGeneration": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "events": {
+            "items": {
+              "$ref": "#/components/schemas/SessionErrorOccurrence"
+            },
+            "maxItems": 20,
+            "minItems": 1,
+            "type": "array"
+          }
+        },
+        "required": [
+          "clearGeneration",
+          "events"
+        ],
+        "type": "object"
+      },
+      "SessionErrorCategory": {
+        "enum": [
+          "frontend",
+          "backend",
+          "api",
+          "model"
+        ],
+        "type": "string"
+      },
+      "SessionErrorEntry": {
+        "properties": {
+          "category": {
+            "$ref": "#/components/schemas/SessionErrorCategory"
+          },
+          "code": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "count": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "detail": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "fingerprint": {
+            "type": "string"
+          },
+          "firstSeenMs": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "id": {
+            "type": "string"
+          },
+          "lastSeenMs": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "message": {
+            "type": "string"
+          },
+          "path": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "requestId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "sessionId": {
+            "type": "string"
+          },
+          "severity": {
+            "$ref": "#/components/schemas/SessionErrorSeverity"
+          },
+          "source": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "fingerprint",
+          "category",
+          "severity",
+          "source",
+          "title",
+          "message",
+          "firstSeenMs",
+          "lastSeenMs",
+          "count",
+          "sessionId"
+        ],
+        "type": "object"
+      },
+      "SessionErrorHistoryResource": {
+        "properties": {
+          "clearGeneration": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "entries": {
+            "items": {
+              "$ref": "#/components/schemas/SessionErrorEntry"
+            },
+            "type": "array"
+          },
+          "revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "sessionId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "sessionId",
+          "revision",
+          "clearGeneration",
+          "entries"
+        ],
+        "type": "object"
+      },
+      "SessionErrorOccurrence": {
+        "properties": {
+          "category": {
+            "$ref": "#/components/schemas/SessionErrorCategory"
+          },
+          "code": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "count": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "detail": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "eventId": {
+            "type": "string"
+          },
+          "firstSeenMs": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "lastSeenMs": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "message": {
+            "type": "string"
+          },
+          "path": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "requestId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "severity": {
+            "$ref": "#/components/schemas/SessionErrorSeverity"
+          },
+          "source": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "eventId",
+          "category",
+          "severity",
+          "source",
+          "title",
+          "message",
+          "firstSeenMs",
+          "lastSeenMs",
+          "count"
+        ],
+        "type": "object"
+      },
+      "SessionErrorSeverity": {
+        "enum": [
+          "error",
+          "warning"
+        ],
+        "type": "string"
+      },
       "SessionExecutionResource": {
         "properties": {
           "backend": {
@@ -70183,6 +70405,141 @@
           },
           "409": {
             "description": "Retryable performance observation conflict"
+          }
+        },
+        "tags": [
+          "diagnostics"
+        ]
+      }
+    },
+    "/v2/sessions/current/diagnostics/session-errors": {
+      "delete": {
+        "operationId": "diagnostics_delete_sessions_current_diagnostics_session_errors",
+        "parameters": [
+          {
+            "description": "Canonical current session scope",
+            "in": "header",
+            "name": "X-Fullmag-Session-Scope",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionErrorHistoryResource"
+                }
+              }
+            },
+            "description": "Durably cleared session error history"
+          },
+          "400": {
+            "description": "Missing or malformed session scope"
+          },
+          "404": {
+            "description": "No active session"
+          },
+          "409": {
+            "description": "Session scope changed"
+          }
+        },
+        "tags": [
+          "diagnostics"
+        ]
+      },
+      "get": {
+        "operationId": "diagnostics_get_sessions_current_diagnostics_session_errors",
+        "parameters": [
+          {
+            "description": "Canonical current session scope",
+            "in": "header",
+            "name": "X-Fullmag-Session-Scope",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionErrorHistoryResource"
+                }
+              }
+            },
+            "description": "Durable session error history"
+          },
+          "400": {
+            "description": "Missing or malformed session scope"
+          },
+          "404": {
+            "description": "No active session"
+          },
+          "409": {
+            "description": "Session scope changed"
+          }
+        },
+        "tags": [
+          "diagnostics"
+        ]
+      },
+      "post": {
+        "operationId": "diagnostics_post_sessions_current_diagnostics_session_errors",
+        "parameters": [
+          {
+            "description": "Canonical current session scope",
+            "in": "header",
+            "name": "X-Fullmag-Session-Scope",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SessionErrorAppendRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionErrorHistoryResource"
+                }
+              }
+            },
+            "description": "Durable history after recording events"
+          },
+          "400": {
+            "description": "Invalid event batch or session scope"
+          },
+          "404": {
+            "description": "No active session"
+          },
+          "409": {
+            "description": "Session scope changed or history was cleared"
           }
         },
         "tags": [
