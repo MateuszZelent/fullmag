@@ -1317,6 +1317,7 @@ if(FULLMAG_USE_MFEM_STACK AND FULLMAG_ENABLE_CUDA AND FULLMAG_FEM_WITH_SLEPC)
         tests/frequency_domain/gpu_k0_modal_petsc_slepc_test.cpp
         tests/frequency_domain/gpu_projected_pencil_test.cu
         tests/frequency_domain/gpu_augmented_modal_pencil_contract.cpp
+        tests/frequency_domain/gpu_floquet_modal_pencil_contract.cpp
     )
     target_link_libraries(
         fem_gpu_k0_modal_petsc_slepc_contract

@@ -1009,7 +1009,8 @@ FloquetFullDescriptorDiagnostics certify_floquet_full_descriptor(
     const std::vector<Complex> &q_reduced,
     const std::vector<Complex> &phi_reduced,
     Complex lambda,
-    double tolerance)
+    double tolerance,
+    std::vector<Complex> *cartesian_delta_m = nullptr)
 {
     FloquetFullDescriptorDiagnostics diagnostics{};
     const PoissonAirboxSharedDomainAssemblyResult *assembly =
@@ -1275,6 +1276,17 @@ FloquetFullDescriptorDiagnostics certify_floquet_full_descriptor(
         below_tolerance(diagnostics.magnetic_relative_residual) &&
         below_tolerance(diagnostics.potential_relative_residual) &&
         diagnostics.seam_frame_certified;
+    if (diagnostics.full_descriptor_certified && cartesian_delta_m != nullptr) {
+        cartesian_delta_m->resize(3u * node_count);
+        for (std::size_t node = 0; node < node_count; ++node) {
+            const auto &frame = assembly->floquet_tangent_frames[node];
+            for (int component = 0; component < 3; ++component) {
+                (*cartesian_delta_m)[3u * node + component] =
+                    frame.e1[component] * q_full[2u * node] +
+                    frame.e2[component] * q_full[2u * node + 1u];
+            }
+        }
+    }
     return diagnostics;
 }
 
@@ -7178,6 +7190,61 @@ bool run_floquet_dense_original_oracle(
 #endif
 
 } // namespace
+
+bool certify_floquet_device_mode(
+    const FloquetSharedDomainSparseModalOperator &operator_view,
+    std::vector<std::complex<double>> &q_reduced, std::vector<std::complex<double>> &phi_reduced,
+    std::complex<double> lambda, double tolerance, FloquetDeviceModeCertificate &out)
+{
+    out = {};
+#if FULLMAG_HAS_MFEM_STACK
+    const auto *mass = operator_view.positive_tangent_mass;
+    if (!complex_sparse_view_is_valid(mass) || mass->row_count != q_reduced.size() ||
+        mass->column_count != q_reduced.size()) {
+        return false;
+    }
+    const auto weighted = complex_csr_matvec(*mass, q_reduced);
+    std::complex<double> norm_squared{};
+    double term_scale = 0.0;
+    for (std::size_t index = 0; index < q_reduced.size(); ++index) {
+        const auto term = std::conj(q_reduced[index]) * weighted[index];
+        norm_squared += term;
+        term_scale += std::abs(term);
+    }
+    constexpr double roundoff = 64.0 * std::numeric_limits<double>::epsilon();
+    if (!std::isfinite(norm_squared.real()) || norm_squared.real() <= 0.0 ||
+        !std::isfinite(norm_squared.imag()) || !std::isfinite(term_scale) ||
+        std::abs(norm_squared.imag()) > roundoff * term_scale) {
+        return false;
+    }
+    const double norm = std::sqrt(norm_squared.real());
+    for (auto &value : q_reduced) {
+        value /= norm;
+    }
+    for (auto &value : phi_reduced) {
+        value /= norm;
+    }
+    const auto certificate = certify_floquet_full_descriptor(
+        operator_view, q_reduced, phi_reduced, lambda, tolerance, &out.cartesian_delta_m);
+    if (!certificate.full_descriptor_certified) {
+        return false;
+    }
+    out.magnetic_relative_residual = certificate.magnetic_relative_residual;
+    out.potential_relative_residual = certificate.potential_relative_residual;
+    out.scalar_phase_seam_relative_residual = certificate.scalar_phase_seam_relative_residual;
+    out.tangent_frame_seam_relative_residual = certificate.tangent_frame_seam_relative_residual;
+    out.cartesian_magnetic_seam_relative_residual = certificate.cartesian_magnetic_seam_relative_residual;
+    out.equilibrium_pair_relative_residual = certificate.equilibrium_pair_relative_residual;
+    return true;
+#else
+    (void)operator_view;
+    (void)q_reduced;
+    (void)phi_reduced;
+    (void)lambda;
+    (void)tolerance;
+    return false;
+#endif
+}
 
 FloquetPhiBackingStorageTestHarness *set_floquet_phi_backing_storage_test_harness(
     FloquetPhiBackingStorageTestHarness *harness) noexcept

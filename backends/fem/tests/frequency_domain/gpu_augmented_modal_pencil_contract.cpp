@@ -135,6 +135,13 @@ void verify_cudss_factor(const fd::gpu::OpenAirboxAugmentedPencil &pencil,
     check_cuda(cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking));
     {
         const char *failure = nullptr;
+        auto factor = fd::gpu::CudssModalShift::create(pencil, column_count, stream, &failure, 1);
+        require(factor == nullptr && failure != nullptr &&
+                    std::strcmp(failure, "cudss_peak_memory_budget_exceeded") == 0,
+                failure != nullptr ? failure : "cuDSS did not reject a one-byte device budget");
+    }
+    {
+        const char *failure = nullptr;
         auto factor = fd::gpu::CudssModalShift::create(pencil, column_count, stream, &failure);
         require(factor != nullptr, failure != nullptr ? failure : "cuDSS factor is missing");
         require(factor->negative_inertia() == 1, "cuDSS factor reports the wrong negative index of inertia");
@@ -303,6 +310,8 @@ void verify_gpu_augmented_modal_pencil()
     require(nearest->modes.size() == 1 &&
                 std::abs(nearest->modes.front().frequency_hz - expected_hz) <= 1e-12,
             "GPU nearest-mode search differs from the exact positive branch");
+    require(nearest->certified_inertia_factorizations == 5 && nearest->reused_inertia_probes == 5,
+            "GPU nearest-mode search repeated the opening bracket's five certified cuDSS factor probes");
     problem.target_frequency_hz = 0.0;
 
     // Exercise the native diagnostics consumed by the modal publication gate.

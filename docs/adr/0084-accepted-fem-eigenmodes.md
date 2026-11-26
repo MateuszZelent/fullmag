@@ -48,6 +48,7 @@ Wzorem [ADR 0082](0082-accepted-fem-driven-response.md) wprowadzamy pełny, typo
    - Rozróżniamy `requested` i `resolved` backend/device/engine; wymuszone GPU nie dostaje CPU lease ani cichego fallbacku.
    - Dla modeli okresowych K0/Floquet etap poprzedzającej relaksacji FEM pozostaje zablokowany w `accepted_fem_study_worker.rs:598-607` do czasu wyeksportowania atestacji `FemStaticPbcLane` (albo użycia już certyfikowanego wejścia równowagi z CAS) — nie znosimy tej strażnicy bez dowodu native PBC.
 
+(accepted-fem-eigenmodes-cudss-open-airbox)=
 ## Poświadczenie adaptera CUDA dla otwartego airboxa Robin
 
 Dla FEM GPU FP64, niedyssypatywnego dokładnego $k=0$ i otwartego airboxa Robin
@@ -73,6 +74,26 @@ Przed włączeniem publicznego dispatchu wymagany jest test natywnego zakresu
 z checkpointu 8006 sprawdza pełną liczność okna i pierwsze dziesięć modów.
 Kampania Kittela używa tych samych danych wejściowych w parze CPU/GPU
 dla każdego zagęszczenia siatki i rozmiaru airboxa.
+
+Bramka pamięci cuDSS jest częścią tego samego zakresu K0: wymagane są
+natywny poprawny przypadek in-budget i przekroczenie małego limitu
+wstrzykniętego do wewnętrznego `CudssModalShift::create`, bez cichego fallbacku
+na CPU. Brak estimate ma kontrolowany fail-closed w kodzie; test nie fałszuje
+odpowiedzi cuDSS ani nie wymaga osobnego mocka niedostępnej prognozy. Nie
+dodaje się ustawienia DSL, ProblemIR ani zmiennej środowiskowej. Archiwum
+zaakceptowanego K0 sphere
+zostało zweryfikowane: obejmuje 91 plików checkpointu, oryginalną siatkę
+SHA-256 `d181307812e2eea1781680136727d63f1923743345188aa9901672efd5295dfa`
+oraz wynik CPU. `validate_checkpoint_source` i `load_case` wskazują
+niezmienną ścieżkę admission i odtworzenia fixture'u. Próba pojedynczego
+modu CPU/GPU na tym wejściu przeszła. Odtworzenie całego okna oraz
+porównanie poprzedniej z obecną wersją GPU są osobnymi pomiarami do
+kwalifikacji. Dane próby opisuje
+[nota 0830](../physics/0830-fem-poisson-airbox-modal-eigen.md#k0-cudss-memory-budget).
+
+Źródłowy snapshot zawiera już wspólną kontrolę budżetu po analysis i regresję
+in-budget / odmowa po wewnętrznym limicie; pending pozostają managed compile,
+wykonanie natywne oraz ponowny solve zaakceptowanego przypadku.
 
 ## Obowiązki i weryfikacja
 

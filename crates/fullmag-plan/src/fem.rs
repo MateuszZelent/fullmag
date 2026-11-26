@@ -1874,6 +1874,33 @@ fn eigen_policy_floquet_pair_sets_match(plan: &FemEigenPlanIR) -> bool {
         && (requested_set.is_empty() || requested_set == node_set)
 }
 
+fn eigen_policy_floquet_phase_is_nontrivial(plan: &FemEigenPlanIR) -> bool {
+    let Some(fullmag_ir::KSamplingIR::Single { k_vector }) = plan.k_sampling.as_ref() else {
+        return false;
+    };
+    let requested = plan.spin_wave_bc.boundary_pair_ids();
+    let phase_tolerance = 1.0e-12;
+    plan.mesh.periodic_boundary_pairs.iter().any(|pair| {
+        (requested.is_empty() || requested.contains(&pair.pair_id.as_str()))
+            && pair.translation.is_some_and(|translation| {
+                if !k_vector.iter().all(|value| value.is_finite())
+                    || !translation.iter().all(|value| value.is_finite())
+                {
+                    return false;
+                }
+                let angle = -k_vector
+                    .iter()
+                    .zip(translation)
+                    .map(|(k, distance)| k * distance)
+                    .sum::<f64>();
+                let wrapped = (angle + std::f64::consts::PI)
+                    .rem_euclid(std::f64::consts::TAU)
+                    - std::f64::consts::PI;
+                wrapped.abs() > phase_tolerance
+            })
+    })
+}
+
 fn eigen_policy_floquet_dynamic_demag_path(plan: &FemEigenPlanIR, planned_path: bool) -> bool {
     planned_path
         && plan.enable_demag
@@ -2442,6 +2469,59 @@ fn floquet_airbox_dynamic_demag_cpu_plan_supported(
         && problem.validation_profile.execution_mode == fullmag_ir::ExecutionMode::Strict
         && !runtime_requests_cuda(problem)
         && requested_demag_realization.requires_airbox()
+}
+
+/// Explicit GPU is admitted only for the first single-k, nearest-frequency
+/// cuDSS slice. Keep this separate from the broader CPU window/path route.
+fn floquet_airbox_dynamic_demag_gpu_plan_supported(
+    problem: &ProblemIR,
+    operator: &fullmag_ir::EigenOperatorConfigIR,
+    target: &fullmag_ir::EigenTargetIR,
+    damping_policy: fullmag_ir::EigenDampingPolicyIR,
+    spin_wave_bc: &fullmag_ir::SpinWaveBoundaryConditionIR,
+    magnetostatic_bc: fullmag_ir::MagnetostaticBoundaryConditionIR,
+    k_sampling: &Option<fullmag_ir::KSamplingIR>,
+    enable_demag: bool,
+    requested_demag_realization: fullmag_ir::RequestedFemDemagIR,
+    fe_order: u32,
+) -> bool {
+    let explicitly_requested = matches!(
+        problem
+            .problem_meta
+            .runtime_metadata
+            .get("runtime_selection")
+            .and_then(|value| value.get("device"))
+            .and_then(serde_json::Value::as_str),
+        Some("gpu" | "cuda")
+    );
+    let nonzero_single_k = matches!(
+        k_sampling,
+        Some(fullmag_ir::KSamplingIR::Single { k_vector })
+            if k_vector.iter().all(|value| value.is_finite())
+                && k_vector.iter().any(|value| value.abs() > 1.0e-12)
+    );
+    explicitly_requested
+        && fe_order == 1
+        && operator.include_demag
+        && enable_demag
+        && matches!(operator.kind, fullmag_ir::EigenOperatorIR::Full2x2)
+        && matches!(target, fullmag_ir::EigenTargetIR::Nearest { frequency_hz }
+            if frequency_hz.is_finite() && *frequency_hz > 0.0)
+        && matches!(damping_policy, fullmag_ir::EigenDampingPolicyIR::Ignore)
+        && spin_wave_bc.kind() == fullmag_ir::SpinWaveBoundaryKindIR::Floquet
+        && magnetostatic_bc == fullmag_ir::MagnetostaticBoundaryConditionIR::FloquetAirbox
+        && nonzero_single_k
+        && problem.backend_policy.execution_precision == ExecutionPrecision::Double
+        && problem.validation_profile.execution_mode == fullmag_ir::ExecutionMode::Strict
+        && requested_demag_realization.requires_airbox()
+}
+
+fn floquet_gpu_material_alpha_is_zero(material: &fullmag_ir::MaterialIR) -> bool {
+    material.damping.is_finite()
+        && material.damping == 0.0
+        && material.alpha_field.as_ref().is_none_or(|values| {
+            !values.is_empty() && values.iter().all(|value| value.is_finite() && *value == 0.0)
+        })
 }
 
 /// Keep the planner boundary aligned with the local terms currently assembled
@@ -5692,6 +5772,7 @@ fn resolve_k0_periodic_airbox_execution(
 
 fn resolve_floquet_airbox_dynamic_demag_execution(
     problem: &ProblemIR,
+    explicit_gpu: bool,
 ) -> Result<FemEigenExecutionResolutionIR, PlanError> {
     const GPU_UNAVAILABLE_FALLBACK_REASON: &str = "gpu_modal_device_krylov_unavailable";
     if problem.validation_profile.execution_mode != fullmag_ir::ExecutionMode::Strict {
@@ -5735,6 +5816,36 @@ fn resolve_floquet_airbox_dynamic_demag_execution(
         .get("runtime_device_override")
         .and_then(|value| value.get("fallback_reason"))
         .and_then(serde_json::Value::as_str);
+
+    if explicit_gpu {
+        if requested_device != fullmag_ir::ExecutionDevice::Gpu {
+            return Err(PlanError {
+                reasons: vec![
+                    "fem_eigen.floquet_airbox_dynamic_demag_gpu_requires_explicit_gpu_request; fallback=none"
+                        .to_string(),
+                ],
+            });
+        }
+        if runtime_device == fullmag_ir::ExecutionDevice::Cpu || runtime_fallback_reason.is_some() {
+            return Err(PlanError {
+                reasons: vec![
+                    "fem_eigen.floquet_airbox_dynamic_demag_explicit_gpu_rejects_runtime_override_or_fallback; fallback=none"
+                        .to_string(),
+                ],
+            });
+        }
+        return Ok(FemEigenExecutionResolutionIR {
+            requested_device,
+            resolved_device: fullmag_ir::ExecutionDevice::Gpu,
+            requested_precision: problem.backend_policy.execution_precision,
+            resolved_precision: ExecutionPrecision::Double,
+            requested_engine: FemEigenEngineIR::Auto,
+            resolved_engine: FemEigenEngineIR::GpuModalDeviceKrylov,
+            fallback_used: false,
+            fallback_reason: None,
+            selection_reason: "fem_eigen.floquet_airbox_dynamic_demag.explicit_gpu".to_string(),
+        });
+    }
 
     let fallback_reason = match (requested_device, runtime_device, runtime_fallback_reason) {
         (fullmag_ir::ExecutionDevice::Cpu, fullmag_ir::ExecutionDevice::Gpu, _) => {
@@ -6404,6 +6515,30 @@ pub(crate) fn plan_fem_eigen(
         enable_demag,
         requested_demag_realization,
     );
+    let floquet_airbox_dynamic_demag_gpu_candidate =
+        floquet_airbox_dynamic_demag_gpu_plan_supported(
+            problem,
+            operator,
+            target,
+            *damping_policy,
+            spin_wave_bc,
+            *magnetostatic_bc,
+            k_sampling,
+            enable_demag,
+            requested_demag_realization,
+            fem_hints.order,
+        );
+    let floquet_airbox_dynamic_demag_gpu_path = floquet_airbox_dynamic_demag_gpu_candidate
+        && selected_material.as_ref().is_some_and(|material| {
+            floquet_gpu_material_alpha_is_zero(material)
+                && first_unsupported_floquet_airbox_local_interaction(
+                    material,
+                    interfacial_dmi,
+                    bulk_dmi,
+                    spin_wave_bc,
+                )
+                .is_none()
+        });
     if operator.include_demag
         && matches!(
             spin_wave_bc.kind(),
@@ -6411,12 +6546,21 @@ pub(crate) fn plan_fem_eigen(
         )
         && !allows_k0_kittel_synthetic_demag_factor(&k0_kittel_validation, &k_sampling)
         && !floquet_airbox_dynamic_demag_cpu_path
+        && !floquet_airbox_dynamic_demag_gpu_path
     {
         if *magnetostatic_bc == fullmag_ir::MagnetostaticBoundaryConditionIR::FloquetAirbox {
             errors.push(
-                "magnetostatic_bc=floquet_airbox dynamic demag requires a strict double-precision CPU FEM plan with operator.kind='full_2x2', a nonzero-k Single/path sampling, and an airbox Poisson Demag realization"
+                "magnetostatic_bc=floquet_airbox dynamic demag requires the bounded strict double-precision CPU lane or the explicit GPU Single-k nearest P1 Hermitian lane, with operator.kind='full_2x2' and an airbox Poisson Demag realization"
                     .to_string(),
             );
+            if floquet_airbox_dynamic_demag_gpu_candidate
+                && !floquet_airbox_dynamic_demag_gpu_path
+            {
+                errors.push(
+                    "fem_eigen.floquet_airbox_dynamic_demag_gpu_requires_effective_alpha_zero_and_supported_local_terms; fallback=none"
+                        .to_string(),
+                );
+            }
         } else {
             errors.push(
                 "dynamic demag for Floquet periodic FEM requires magnetostatic_bc='floquet_airbox' and the validated CPU Poisson-airbox path; disable demag or provide a numeric supported lane"
@@ -6571,7 +6715,7 @@ pub(crate) fn plan_fem_eigen(
 
     let material =
         selected_material.expect("validation should have caught missing FEM eigen material");
-    if floquet_airbox_dynamic_demag_cpu_path {
+    if floquet_airbox_dynamic_demag_cpu_path || floquet_airbox_dynamic_demag_gpu_path {
         if let Some(interaction) = first_unsupported_floquet_airbox_local_interaction(
             &material,
             interfacial_dmi,
@@ -6760,8 +6904,10 @@ pub(crate) fn plan_fem_eigen(
         k0_kittel_validation.as_ref(),
     ) {
         Some(resolve_k0_periodic_airbox_execution(problem)?)
+    } else if floquet_airbox_dynamic_demag_gpu_path {
+        Some(resolve_floquet_airbox_dynamic_demag_execution(problem, true)?)
     } else if floquet_airbox_dynamic_demag_cpu_path {
-        Some(resolve_floquet_airbox_dynamic_demag_execution(problem)?)
+        Some(resolve_floquet_airbox_dynamic_demag_execution(problem, false)?)
     } else {
         None
     };
@@ -6833,12 +6979,23 @@ pub(crate) fn plan_fem_eigen(
         magnetostatic_bc: *magnetostatic_bc,
     };
 
-    if floquet_airbox_dynamic_demag_cpu_path
+    if (floquet_airbox_dynamic_demag_cpu_path || floquet_airbox_dynamic_demag_gpu_path)
         && !eigen_policy_floquet_pair_sets_match(&fem_plan)
     {
         return Err(PlanError {
             reasons: vec![
                 "floquet_airbox_dynamic_demag_pair_selection_unsupported: shared-domain assembly requires all mesh periodic pairs and matching boundary metadata; use an empty selector (all) or the explicit full pair set; no fallback was selected".to_string(),
+            ],
+        });
+    }
+
+    if floquet_airbox_dynamic_demag_gpu_path
+        && !eigen_policy_floquet_phase_is_nontrivial(&fem_plan)
+    {
+        return Err(PlanError {
+            reasons: vec![
+                "fem_eigen.floquet_airbox_dynamic_demag_gpu_requires_nontrivial_seam_phase; fallback=none"
+                    .to_string(),
             ],
         });
     }

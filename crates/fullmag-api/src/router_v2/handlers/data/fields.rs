@@ -2569,6 +2569,13 @@ pub async fn get_field_catalog(
         let Some(spec) = quantity_spec(&descriptor.quantity_id) else {
             continue;
         };
+        let live_spec = super::quantities::gpu_m1_live_preview_spec(snapshot, spec);
+        let spec = live_spec.as_ref().unwrap_or(spec);
+        if live_spec.is_some() && !saved_transport_quantities.contains(descriptor.quantity_id.as_str()) {
+            descriptor.ui_exposed = spec.ui_exposed;
+            descriptor.spatial = spec.supports_preview_3d;
+            descriptor.location = spec.location.as_str().to_owned();
+        }
         let materialization = match descriptor.state {
             FieldMaterializationState::Complete | FieldMaterializationState::StaleComplete => {
                 QuantityMaterializationCapability::Materialized
@@ -3233,7 +3240,10 @@ pub async fn get_field_meta(
             "unsupported_scope: field '{quantity_id}' is not available on airbox scope"
         )));
     }
-    let location = current_fem_damping_uses_nodes(snapshot, quantity_id).then_some("node")
+    let live_location = spec
+        .and_then(|spec| super::quantities::gpu_m1_live_preview_spec(snapshot, spec))
+        .map(|spec| spec.location.as_str());
+    let location = live_location.or_else(|| current_fem_damping_uses_nodes(snapshot, quantity_id).then_some("node"))
         .or_else(|| current_fem_nodal_projection_kind(snapshot, quantity_id)).map(str::to_string).or_else(|| snapshot
         .preview_cache
         .get(quantity_id)
@@ -3864,6 +3874,8 @@ fn field_meta_resolved_capability(
     carrier_fingerprint: Option<&str>,
 ) -> Option<crate::schemas::quantities::ResolvedQuantityCapability> {
     let spec = quantity_spec(quantity_id)?;
+    let live_spec = super::quantities::gpu_m1_live_preview_spec(snapshot, spec);
+    let spec = live_spec.as_ref().unwrap_or(spec);
     let materialization = match state {
         FieldMaterializationState::Complete | FieldMaterializationState::StaleComplete => {
             QuantityMaterializationCapability::Materialized

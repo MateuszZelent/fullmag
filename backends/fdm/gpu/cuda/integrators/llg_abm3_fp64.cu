@@ -138,7 +138,8 @@ static bool compute_abm3_rhs_fp64(
     double gamma_bar,
     double alpha,
     double evaluation_time,
-    uint64_t stage_id)
+    uint64_t stage_id,
+    GpuTransportStageRole role = GpuTransportStageRole::Rhs)
 {
     if (ctx.enable_exchange) launch_exchange_field_fp64(ctx);
     if (ctx.enable_demag) launch_demag_field_fp64(ctx);
@@ -170,7 +171,7 @@ static bool compute_abm3_rhs_fp64(
     }
     if (!context_evaluate_gpu_transport_rhs(
             ctx, ctx.m, evaluation_time,
-            ctx.gpu_transport_active_attempt_id, stage_id) ||
+            ctx.gpu_transport_active_attempt_id, stage_id, role) ||
         !launch_add_gpu_transport_torque_fp64(ctx, ctx.m, rhs_out)) {
         return false;
     }
@@ -304,7 +305,7 @@ void launch_abm3_step_fp64(Context &ctx, double dt, fullmag_fdm_step_stats *stat
         // Compute RHS at accepted point and store in history
         if (!compute_abm3_rhs_fp64(
                 ctx, ctx.h_ex, n, grid, gamma_bar, alpha,
-                step_start_time + dt, 3)) return;
+                step_start_time + dt, 3, GpuTransportStageRole::EndpointCandidate)) return;
 
         context_stage_accepted_step(ctx, dt);
         abm3_rotate_history(ctx, ctx.cell_count);
@@ -379,7 +380,7 @@ void launch_abm3_step_fp64(Context &ctx, double dt, fullmag_fdm_step_stats *stat
     // derivative must not become the accepted spin/ABM state.
     if (!compute_abm3_rhs_fp64(
             ctx, ctx.h_ex, n, grid, gamma_bar, alpha,
-            step_start_time + dt, 2)) return;
+            step_start_time + dt, 2, GpuTransportStageRole::EndpointCandidate)) return;
 
     context_stage_accepted_step(ctx, dt);
     abm3_rotate_history(ctx, ctx.cell_count);

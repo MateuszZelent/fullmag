@@ -577,6 +577,23 @@
         "source-gpu-augmented-pencil",
         "source-gpu-augmented-pencil-test"
       ]
+    },
+    {
+      "id": "eq-poisson-airbox-cudss-memory-budget",
+      "symbols": [
+        "gpu_cudss_memory_reserve",
+        "gpu_cudss_device_memory",
+        "gpu_cudss_free_memory",
+        "gpu_cudss_memory_budget",
+        "gpu_cudss_peak_memory_estimate"
+      ],
+      "sources": [
+        "source-cudss-memory-budget-contract",
+        "source-cudss-memory-admission",
+        "source-cudss-memory-budget-regression",
+        "source-cudss-window-inertia-cache",
+        "source-cudss-window-owner"
+      ]
     }
   ],
   "symbols": [
@@ -1281,6 +1298,36 @@
       "latex": "$j$, $\\ell$",
       "meaning": "row and column indices in the augmented matrix",
       "si_unit": "$1$"
+    },
+    {
+      "id": "gpu_cudss_device_memory",
+      "latex": "$M_{\\mathrm{device}}$",
+      "meaning": "total VRAM on the active CUDA device",
+      "si_unit": "$\\mathrm{B}$"
+    },
+    {
+      "id": "gpu_cudss_free_memory",
+      "latex": "$M_{\\mathrm{free}}$",
+      "meaning": "free VRAM on the active CUDA device at cuDSS admission",
+      "si_unit": "$\\mathrm{B}$"
+    },
+    {
+      "id": "gpu_cudss_memory_reserve",
+      "latex": "$M_{\\mathrm{reserve}}$",
+      "meaning": "fixed VRAM reserve retained above the estimated cuDSS peak",
+      "si_unit": "$\\mathrm{B}$"
+    },
+    {
+      "id": "gpu_cudss_memory_budget",
+      "latex": "$M_{\\mathrm{budget}}$",
+      "meaning": "free device memory remaining for the cuDSS peak estimate after reserve",
+      "si_unit": "$\\mathrm{B}$"
+    },
+    {
+      "id": "gpu_cudss_peak_memory_estimate",
+      "latex": "$\\widehat M_{\\mathrm{peak}}$",
+      "meaning": "cuDSS post-analysis peak device-memory estimate, returned in bytes",
+      "si_unit": "$\\mathrm{B}$"
     }
   ],
   "sources": [
@@ -2080,6 +2127,62 @@
       "symbol": "validate_strict_initial_equilibrium",
       "responsibility": "Require complete device field provenance and zero accepted steps before admitting a saved GPU equilibrium.",
       "evidence_status": "source_visible"
+    },
+    {
+      "id": "source-cudss-memory-budget-contract",
+      "path": "docs/physics/0830-fem-poisson-airbox-modal-eigen.md",
+      "symbol": "DOC-ANCHOR:k0-cudss-memory-budget",
+      "responsibility": "Specify the required post-analysis fail-closed cuDSS memory budget and stable refusal semantics.",
+      "evidence_status": "planned_contract"
+    },
+    {
+      "id": "source-cudss-memory-admission",
+      "path": "backends/fem/gpu/frequency_domain/modal_cudss_shift.cpp",
+      "symbol": "check_device_memory_budget",
+      "responsibility": "Read the cuDSS post-analysis peak estimate and device free-memory budget before factorization for inertia and Ritz callers.",
+      "evidence_status": "managed_native_contract_pass"
+    },
+    {
+      "id": "source-cudss-memory-budget-regression",
+      "path": "backends/fem/tests/frequency_domain/gpu_augmented_modal_pencil_contract.cpp",
+      "symbol": "verify_gpu_augmented_modal_pencil",
+      "responsibility": "Retain matrix/QR assertions and cover an in-budget success plus an injected small-limit refusal; unavailable estimates fail closed in source without a test mock.",
+      "evidence_status": "managed_native_contract_pass"
+    },
+    {
+      "id": "source-cudss-window-inertia-cache",
+      "path": "backends/fem/gpu/frequency_domain/modal_augmented_window_count.cpp",
+      "symbol": "count_airbox_augmented_window",
+      "responsibility": "Memoize successful unperturbed cuDSS inertia by the exact scaled shift coefficient within one window solve.",
+      "evidence_status": "managed_native_contract_pass;k0_sphere_runtime_pass"
+    },
+    {
+      "id": "source-cudss-window-owner",
+      "path": "backends/fem/gpu/frequency_domain/modal_augmented_window.cpp",
+      "symbol": "solve_airbox_augmented_window",
+      "responsibility": "Own the per-solve inertia cache shared by K0 and Floquet window counting; no numeric factor is reused by Ritz solves.",
+      "evidence_status": "managed_native_contract_pass;k0_sphere_runtime_pass"
+    },
+    {
+      "id": "source-cudss-accepted-sphere-checkpoint",
+      "path": "docs/adr/0084-accepted-fem-eigenmodes.md",
+      "symbol": "DOC-ANCHOR:accepted-fem-eigenmodes-cudss-open-airbox",
+      "responsibility": "Require exact old/new accepted K0 sphere comparison on checkpoint step-8006 when its immutable input remains available.",
+      "evidence_status": "planned_contract"
+    },
+    {
+      "id": "source-k0-cudss-checkpoint-admission",
+      "path": "scripts/prepare_fem_open_airbox_k0_convergence.py",
+      "symbol": "validate_checkpoint_source",
+      "responsibility": "Validate the archived accepted-case source identity and checkpoint admission for the K0 sphere fixture.",
+      "evidence_status": "fixture_archive_validated; solver_rerun_pending"
+    },
+    {
+      "id": "source-k0-cudss-checkpoint-case",
+      "path": "examples/fem_eigen_k0_open_airbox_checkpoint_repeat_case.py",
+      "symbol": "load_case",
+      "responsibility": "Load the archived exact K0 sphere case with its accepted checkpoint identity.",
+      "evidence_status": "fixture_archive_validated; solver_rerun_pending"
     }
   ],
   "public_api": {

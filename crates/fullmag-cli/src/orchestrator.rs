@@ -1317,7 +1317,12 @@ fn current_live_metadata(
             "lossy_fallback_used": runtime.resolved_fallback.is_some(),
         })
     });
-    let capabilities = fullmag_runner::resolve_planned_runtime_capabilities(problem, plan).ok();
+    let mut capabilities = fullmag_runner::resolve_planned_runtime_capabilities(problem, plan).ok();
+    if let (Some(capabilities), BackendPlanIR::Fdm(fdm)) =
+        (capabilities.as_mut(), &plan.backend_plan)
+    {
+        capabilities.register_gpu_m1_live_preview(fdm);
+    }
     let live_preview_supported_quantities = capabilities
         .as_ref()
         .map(|caps| caps.preview_quantities.clone())

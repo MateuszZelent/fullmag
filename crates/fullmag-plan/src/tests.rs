@@ -13764,10 +13764,10 @@ fn fem_eigen_floquet_dynamic_demag_requires_explicit_airbox_cpu_path() {
     );
     let gpu_error = plan(&forced_gpu)
         .expect_err("forced GPU must not silently select the CPU-only Floquet provider");
-    assert!(gpu_error
-        .reasons
-        .iter()
-        .any(|reason| { reason.contains("strict double-precision CPU FEM plan") }));
+    assert!(gpu_error.reasons.iter().any(|reason| {
+        reason.contains("bounded strict double-precision CPU lane")
+            && reason.contains("explicit GPU Single-k nearest P1 Hermitian lane")
+    }));
 
     ir.problem_meta.runtime_metadata.insert(
         "dispersion_validation".to_string(),
@@ -13831,6 +13831,208 @@ fn fem_eigen_floquet_dynamic_demag_requires_explicit_airbox_cpu_path() {
         }
         other => panic!("expected FEM eigen plan, got {other:?}"),
     }
+}
+
+#[test]
+fn fem_eigen_floquet_dynamic_demag_explicit_gpu_single_k_nearest_contract() {
+    let mut ir = ProblemIR::bootstrap_example();
+    ir.backend_policy.requested_backend = BackendTarget::Fem;
+    ir.backend_policy.execution_precision = fullmag_ir::ExecutionPrecision::Double;
+    ir.validation_profile.execution_mode = fullmag_ir::ExecutionMode::Strict;
+    ir.backend_policy.discretization_hints = Some(fullmag_ir::DiscretizationHintsIR {
+        fdm: None,
+        fem: Some(fullmag_ir::FemHintsIR {
+            gpu_bb_preconditioner: None,
+            order: 1,
+            hmax: 2e-9,
+            mesh: Some("meshes/unit_tet.msh".to_string()),
+            demag_solver_policy: None,
+        }),
+        hybrid: None,
+    });
+    ir.geometry_assets = Some(fullmag_ir::GeometryAssetsIR {
+        fdm_grid_assets: vec![],
+        fem_mesh_assets: vec![],
+        fem_domain_mesh_asset: Some(fullmag_ir::FemDomainMeshAssetIR {
+            mesh_source: Some("meshes/unit_tet.msh".to_string()),
+            mesh: Some(fullmag_ir::MeshIR {
+                mesh_name: "strip_air_periodic_gpu".to_string(),
+                nodes: vec![
+                    [0.0, 0.0, 0.0],
+                    [1.0, 0.0, 0.0],
+                    [0.0, 1.0, 0.0],
+                    [0.0, 0.0, 1.0],
+                    [-2.0, -2.0, -2.0],
+                    [2.0, -2.0, -2.0],
+                    [-2.0, 2.0, -2.0],
+                    [-2.0, -2.0, 2.0],
+                ],
+                cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3], [4, 5, 6, 7]]),
+                element_markers: vec![1, 0],
+                facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(vec![[0, 1, 2], [4, 5, 6]]),
+                boundary_markers: vec![10, 11],
+                periodic_boundary_pairs: vec![fullmag_ir::MeshPeriodicBoundaryPairIR {
+                    pair_id: "x_faces".to_string(),
+                    source_marker: None,
+                    destination_marker: None,
+                    marker_a: 10,
+                    marker_b: 11,
+                    translation: Some([1.0, 0.0, 0.0]),
+                    tolerance: None,
+                    axis_hint: None,
+                    orientation: None,
+                    pairing_policy: None,
+                }],
+                periodic_node_pairs: vec![fullmag_ir::MeshPeriodicNodePairIR {
+                    pair_id: "x_faces".to_string(),
+                    node_a: 0,
+                    node_b: 1,
+                }],
+                per_domain_quality: std::collections::HashMap::new(),
+            }),
+            region_markers: vec![fullmag_ir::FemDomainRegionMarkerIR {
+                geometry_name: "strip".to_string(),
+                marker: 1,
+            }],
+            object_region_markers: Vec::new(),
+            build_report: None,
+        }),
+    });
+    if let Some(mesh) = ir
+        .geometry_assets
+        .as_mut()
+        .and_then(|assets| assets.fem_domain_mesh_asset.as_mut())
+        .and_then(|asset| asset.mesh.as_mut())
+    {
+        complete_test_airbox_boundaries(mesh);
+    }
+    ir.energy_terms = vec![
+        fullmag_ir::EnergyTermIR::Exchange,
+        fullmag_ir::EnergyTermIR::Demag {
+            realization: fullmag_ir::RequestedFemDemagIR::Auto,
+        },
+    ];
+    ir.materials[0].damping = 0.0;
+    ir.materials[0].alpha_field = None;
+    ir.materials[0].uniaxial_anisotropy = None;
+    ir.materials[0].uniaxial_anisotropy_k2 = None;
+    ir.materials[0].cubic_anisotropy_kc1 = None;
+    ir.materials[0].cubic_anisotropy_kc2 = None;
+    ir.materials[0].cubic_anisotropy_kc3 = None;
+    ir.study = fullmag_ir::StudyIR::Eigenmodes {
+        dynamics: ir.study.dynamics().clone(),
+        operator: fullmag_ir::EigenOperatorConfigIR {
+            kind: fullmag_ir::EigenOperatorIR::Full2x2,
+            include_demag: true,
+        },
+        count: 1,
+        target: fullmag_ir::EigenTargetIR::Nearest {
+            frequency_hz: 3.0e9,
+        },
+        equilibrium: fullmag_ir::EquilibriumSourceIR::Provided,
+        k_sampling: Some(fullmag_ir::KSamplingIR::Single {
+            k_vector: [-0.25, 0.0, 0.0],
+        }),
+        bias_field_sweep: None,
+        normalization: fullmag_ir::EigenNormalizationIR::UnitL2,
+        damping_policy: fullmag_ir::EigenDampingPolicyIR::Ignore,
+        spin_wave_bc: fullmag_ir::SpinWaveBoundaryConditionIR::Config(
+            fullmag_ir::SpinWaveBoundaryConfigIR {
+                kind: fullmag_ir::SpinWaveBoundaryKindIR::Floquet,
+                boundary_pair_id: Some("x_faces".to_string()),
+                pair_ids: Vec::new(),
+                phase_convention: fullmag_ir::PhaseConventionIR::default(),
+                surface_anisotropy_ks: None,
+                surface_anisotropy_axis: None,
+            },
+        ),
+        magnetostatic_bc: fullmag_ir::MagnetostaticBoundaryConditionIR::FloquetAirbox,
+        sampling: fullmag_ir::SamplingIR {
+            table_autosave: None,
+            stage_autosave: None,
+            outputs: vec![fullmag_ir::OutputIR::EigenSpectrum {
+                quantity: "eigenfrequency".to_string(),
+                scope: None,
+            }],
+        },
+        mode_tracking: None,
+    };
+    ir.problem_meta.runtime_metadata.insert(
+        "runtime_selection".to_string(),
+        serde_json::json!({"device": "gpu", "precision": "double"}),
+    );
+
+    let planned = plan(&ir)
+        .expect("explicit GPU single-k nearest P1 Hermitian Floquet should pass planning");
+    let resolution = planned
+        .provenance
+        .fem_eigen_execution_resolution
+        .as_ref()
+        .expect("explicit GPU Floquet plan must publish execution resolution");
+    assert_eq!(resolution.requested_device, fullmag_ir::ExecutionDevice::Gpu);
+    assert_eq!(resolution.resolved_device, fullmag_ir::ExecutionDevice::Gpu);
+    assert_eq!(
+        resolution.resolved_engine,
+        fullmag_ir::FemEigenEngineIR::GpuModalDeviceKrylov
+    );
+    assert!(!resolution.fallback_used);
+    assert_eq!(
+        resolution.selection_reason,
+        "fem_eigen.floquet_airbox_dynamic_demag.explicit_gpu"
+    );
+
+    let mut nonzero_alpha = ir.clone();
+    nonzero_alpha.materials[0].damping = 0.01;
+    let alpha_error = plan(&nonzero_alpha)
+        .expect_err("explicit GPU Floquet lane must reject nonzero material alpha");
+    assert!(alpha_error.reasons.iter().any(|reason| {
+        reason.contains(
+            "fem_eigen.floquet_airbox_dynamic_demag_gpu_requires_effective_alpha_zero_and_supported_local_terms",
+        )
+    }));
+
+    let mut trivial_phase = ir.clone();
+    if let fullmag_ir::StudyIR::Eigenmodes { k_sampling, .. } = &mut trivial_phase.study {
+        *k_sampling = Some(fullmag_ir::KSamplingIR::Single {
+            k_vector: [0.0, -0.25, 0.0],
+        });
+    }
+    let trivial_phase_error = plan(&trivial_phase)
+        .expect_err("explicit GPU Floquet lane must reject trivial Bloch seam phase");
+    assert!(trivial_phase_error.reasons.iter().any(|reason| {
+        reason.contains("fem_eigen.floquet_airbox_dynamic_demag_gpu_requires_nontrivial_seam_phase")
+    }));
+
+    let mut p2_order = ir.clone();
+    p2_order
+        .backend_policy
+        .discretization_hints
+        .as_mut()
+        .unwrap()
+        .fem
+        .as_mut()
+        .unwrap()
+        .order = 2;
+    let p2_error = plan(&p2_order).expect_err("explicit GPU Floquet lane must reject FE order > 1");
+    assert!(p2_error.reasons.iter().any(|reason| {
+        reason.contains("explicit GPU Single-k nearest P1 Hermitian lane")
+    }));
+
+    let mut cpu_override = ir.clone();
+    cpu_override.problem_meta.runtime_metadata.insert(
+        "runtime_device_override".to_string(),
+        serde_json::json!({"device": "cpu", "source": "managed_launcher"}),
+    );
+    let override_error = plan(&cpu_override)
+        .expect_err("explicit GPU Floquet lane must reject CPU runtime override without fallback");
+    assert!(
+        override_error.reasons.iter().any(|reason| {
+            reason.contains(
+                "fem_eigen.floquet_airbox_dynamic_demag_explicit_gpu_rejects_runtime_override_or_fallback",
+            )
+        }),
+        "unexpected override error: {override_error:?}"
+    );
 }
 
 #[test]

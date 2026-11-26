@@ -93,6 +93,69 @@ pub struct BackendCapabilities {
     pub supports_lossy_fallback_override: bool,
 }
 
+// Only cell vectors use the existing live field path. The spin-current tensor
+// is available through the transport field/export path.
+pub(crate) const GPU_M1_LIVE_PREVIEW_FIELDS: [&str; 2] = ["spin_potential", "torque_stt"];
+
+impl BackendCapabilities {
+    /// Register the bound M1 observer for runners that forward interactive
+    /// display demand to the active solver. Accepted worker capabilities use
+    /// the artifact evaluation path instead.
+    pub fn register_gpu_m1_live_preview(&mut self, plan: &fullmag_ir::FdmPlanIR) {
+        if self.engine_id != RuntimeEngineId::FdmCuda
+            || plan.precision != fullmag_ir::ExecutionPrecision::Double
+            || !plan.fdm_gpu_charge_transports.is_empty()
+            || !matches!(plan.spin_transport_plans.as_slice(), [transport] if transport.fdm_gpu_double.is_some())
+            || plan.relaxation.as_ref().is_some_and(|relaxation| {
+                relaxation.algorithm != fullmag_ir::RelaxationAlgorithmIR::LlgOverdamped
+            })
+        {
+            return;
+        }
+        let Some(registry) = self.resolved_quantity_registry.as_mut().filter(|registry| {
+            registry.source == QuantityProviderRegistrySource::ResolvedPlan
+                && registry.lane == RuntimeEngineId::FdmCuda.as_str()
+                && registry.precision == "double"
+        }) else {
+            return;
+        };
+        for quantity in GPU_M1_LIVE_PREVIEW_FIELDS {
+            if !self.preview_quantities.iter().any(|id| id == quantity) {
+                self.preview_quantities.push(quantity.to_owned());
+            }
+            if !registry.field_quantities.iter().any(|id| id == quantity) {
+                registry.field_quantities.push(quantity.to_owned());
+            }
+        }
+        registry.field_quantities.sort_unstable();
+    }
+
+    /// The accepted GPU M1 observer publishes cell vectors only on resolved
+    /// plans that have an active, bound steady-spin solver.
+    pub fn gpu_m1_live_preview_spec(
+        &self,
+        spec: &fullmag_quantities::QuantitySpec,
+    ) -> Option<fullmag_quantities::QuantitySpec> {
+        (self.engine_id == RuntimeEngineId::FdmCuda
+            && GPU_M1_LIVE_PREVIEW_FIELDS.contains(&spec.id.as_str())
+            && self.preview_quantities.iter().any(|id| id == spec.id.as_str())
+            && self.resolved_quantity_registry.as_ref().is_some_and(|registry| {
+                registry.source == QuantityProviderRegistrySource::ResolvedPlan
+                    && registry.lane == self.engine_id.as_str()
+                    && registry.precision == "double"
+                    && registry.contains(spec)
+            }))
+        .then(|| fullmag_quantities::QuantitySpec {
+            location: fullmag_quantities::QuantityLocation::Cell,
+            ui_exposed: true,
+            interactive_preview: true,
+            supports_preview_2d: false,
+            supports_preview_3d: true,
+            ..spec.clone()
+        })
+    }
+}
+
 /// Provider plane for one quantity in the resolved backend/plan.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -416,6 +479,8 @@ pub fn resolve_quantity_capability(
     spec: &fullmag_quantities::QuantitySpec,
     context: ResolvedQuantityCapabilityContext<'_>,
 ) -> ResolvedQuantityCapability {
+    let live_spec = capabilities.gpu_m1_live_preview_spec(spec);
+    let spec = live_spec.as_ref().unwrap_or(spec);
     let registry = capabilities.resolved_quantity_registry.as_ref();
     let registry_available = registry.is_some();
     let registry_is_resolved_plan = registry

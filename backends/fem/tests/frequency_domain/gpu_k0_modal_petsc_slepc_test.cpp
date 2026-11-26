@@ -1448,6 +1448,7 @@ int run_production_scale_focused_test()
 
 void verify_gpu_projected_pencil();
 void verify_gpu_augmented_modal_pencil();
+void verify_gpu_floquet_modal_pencil();
 
 int main()
 {
@@ -1458,6 +1459,7 @@ int main()
     if (std::getenv("FULLMAG_GPU_PRODUCTION_SCALE_FOCUSED") != nullptr) {
         verify_gpu_projected_pencil();
         verify_gpu_augmented_modal_pencil();
+        verify_gpu_floquet_modal_pencil();
         return run_production_scale_focused_test();
     }
     if (std::getenv("FULLMAG_GPU_TEARDOWN_LIFECYCLE_FOCUSED") != nullptr) {

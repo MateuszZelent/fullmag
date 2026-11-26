@@ -1639,11 +1639,24 @@ Exterior faces are sorted stably to preserve the meaning of the first matching
 record, and the sparse interface blocks continue to use the canonical interface
 indices. The lookup leaves the finite-volume coefficients, boundary fluxes,
 accepted-state rules and typed ABI unchanged. Interface and torque closure
-diagnostics reduce cell- and face-local maxima on CUDA. For each cell the
-torque check gathers its incident interface observations using the existing
-sparse adjacency before the observations are reordered for publication. This
-preserves the volume-plus-surface closure and makes it available for grids
-larger than the former serial diagnostic limit of 4096 cells.
+diagnostics reduce cell- and face-local maxima on CUDA. The torque check
+reconstructs each cell's volume contribution and the surface contribution from
+its incident mixing faces. The canonical face lookup uses static geometry, so
+the closure remains available after the temporary sparse solver state has been
+discarded.
+
+The bound CUDA LLG path evaluates the same steady-spin equation and absorbed
+torque from the magnetization and charge snapshot of every required RK
+substep. A completed step pins the exact accepted endpoint magnetization,
+spin solution and spin right-hand side on the device. Only an authorized spin
+field or checkpoint read reconstructs the complete fluxes, reaction fields
+and interface observations from that endpoint. The first such read builds
+the immutable observation arrays on the device and subsequent reads reuse
+them. Reconstructing observations preserves the accepted state, spin solve
+digest and convergence diagnostics. It requires no additional spin solve.
+A rejected attempt discards its trial endpoint and leaves the previous
+accepted endpoint available. The standalone steady-spin ABI still publishes
+complete fields when it returns.
 
 Each interface is identified by the tuple `(source_id, topology_id, axis,
 canonical_face_index, negative_cell, positive_cell, from_cell, to_cell)`.
@@ -4046,6 +4059,7 @@ a qualified workload without the validation gates above.
 | FDM GPU M1 runtime ABI contract | docs/specs/spin-transport-runtime-contract-v1.md | DOC-ANCHOR:fdm-gpu-m1-abi-v1 | specify append-only layout, state machine, exact checkpoint grammar and fail-closed errors | normative contract with partial implementation |
 | FDM GPU M1 spin-observation ABI | backends/fdm/include/fullmag/fdm/transport/gpu_abi_v1.h | fullmag_fdm_gpu_transport_solve_steady_spin_v1 | declare the steady-spin entry point and append-only typed immutable observation readback | C11 and Rust layout contracts |
 | FDM GPU M1 spin operator and compact observations | backends/fdm/gpu/cuda/transport/spin/device_solver.cu | solve_device; materialize_observation_range | solve FP64 steady spin, retain per-cell reaction/torque in compact SoA, retain immutable interface identity, and reconstruct complete 288-byte records only during bounded readback | `just verify-fdm-gpu-m1-spin-native-contract`; actual-device PASS, capability remains semantic-only |
+| FDM GPU M1 accepted spin observation | backends/fdm/gpu/cuda/transport/context.cu | materialize_accepted_spin | reconstruct complete fields once per observed accepted CUDA endpoint | field parity and native checkpoint export contract |
 | FDM GPU M1 spin-observation parity | backends/fdm/tests/gpu_m1_spin_operator_parity_v1_contract.cpp | main | compare reconstructed typed observations with the CPU owner, including reversed orientation and exact accepted charge traces | managed actual-device CPU--GPU parity PASS |
 | FDM GPU M1 sparse public dispatch | backends/fdm/tests/gpu_m1_spin_sparse_dispatch_v1_contract.cpp | main | prove 1,048,576-cell public dispatch, 512 MiB external envelope, 2 GiB total peak, persistent cache, component-sensitive digest invalidation, NaN rollback and deterministic restore | `just verify-fdm-gpu-m1-spin-native-contract`; actual-device PASS |
 | FDM GPU M1 sparse performance | backends/fdm/tests/gpu_m1_spin_sparse_performance_v1_contract.cu | main | enforce the frozen absolute setup, warm-solve, transfer and whole-context memory budgets on one identified GPU | `just verify-fdm-gpu-m1-spin-sparse-performance-contract`; durable actual-device JSON PASS |

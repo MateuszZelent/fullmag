@@ -15,6 +15,12 @@ namespace fullmag::fdm::gpu::transport::spin {
 // different Krylov realization while retaining the same provenance IDs.
 inline constexpr uint64_t kGmresRestartV1 = 50;
 
+enum class SolveOutputMode : uint8_t {
+    FullFields = 0,
+    TorqueOnly = 1,
+    RetainEndpoint = 2,
+};
+
 struct Buffers {
     double *mu_x = nullptr;
     double *mu_y = nullptr;
@@ -30,6 +36,8 @@ struct Buffers {
     double *torque_total = nullptr;
     uint32_t *cell_region_ids = nullptr;
     fullmag_fdm_gpu_transport_spin_observation_record_v1 *interface_observations = nullptr;
+    // Compact accepted endpoint: m_stage, RHS, then solution, each 3*cells SoA doubles.
+    double *retained_endpoint = nullptr;
     uint64_t cells = 0;
     uint64_t qx_values = 0;
     uint64_t qy_values = 0;
@@ -87,6 +95,7 @@ struct SolveInput {
     const double *accepted_interface_delta_trace_v = nullptr;
     const double *accepted_interface_charge_current_density = nullptr;
     uint64_t accepted_interface_count = 0;
+    SolveOutputMode output_mode = SolveOutputMode::FullFields;
     uint8_t accepted_snapshot_digest[32]{};
     const double *m_stage = nullptr;
     double *torque_destination = nullptr;
@@ -119,6 +128,8 @@ struct SolveOutput {
     double torque_balance = 0.0;
     uint64_t transfer_count = 0;
     uint64_t transfer_bytes = 0;
+    uint64_t state_d2d_count = 0;
+    uint64_t state_d2d_bytes = 0;
     uint64_t control_host_sync_count = 0;
     uint64_t forbidden_transfer_bytes = 0;
     uint64_t setup_h2d_count = 0;
@@ -144,6 +155,9 @@ uint32_t materialize_observation_range(
     fullmag_fdm_gpu_transport_spin_observation_record_v1 *destination_device,
     cudaStream_t stream) noexcept;
 uint32_t solve_device(const SolveInput &input, SolveOutput *output) noexcept;
+uint32_t materialize_endpoint(
+    const SolveInput &input, const Buffers &endpoint,
+    const uint8_t *hierarchy_digest, SolveOutput *output) noexcept;
 uint32_t test_direct_she_signs_device(double output[18]) noexcept;
 
 } // namespace fullmag::fdm::gpu::transport::spin
