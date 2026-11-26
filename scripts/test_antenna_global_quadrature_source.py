@@ -116,14 +116,18 @@ def test_source_uses_final_target_ledger_without_local_stop_tests():
 def test_source_budgets_attempted_samples_and_whole_projection():
     source = OWNER.read_text(encoding="utf-8")
     ordinary = source.split("RuleIntegral integrate_once(", 1)[1].split("child_indices()", 1)[0]
-    duffy = source.split("RuleIntegral integrate_duffy_once(", 1)[1].split("class DirectScalarCoefficient", 1)[0]
+    duffy = source.split("RuleIntegral integrate_duffy_once(", 1)[1].split("struct Leaf", 1)[0]
     assert ordinary.index("work.sample()") < ordinary.index("evaluate_current(")
     assert duffy.index("work.sample()") < duffy.index("evaluate_current(")
     assert "work.visit()" in source
     projection = source.split("DirectTetraQuadrature::ProjectField(", 1)[1]
-    assert projection.index("WorkBudget work;") < projection.index("for (int component = 0;")
-    assert "elements, options, component, work" in projection
-    assert "kernel_evaluations >= DirectTetraQuadrature::maximum_kernel_evaluations" in source
+    assert "DirectScalarCoefficient" not in source
+    assert projection.index("WorkBudget work(options);") < projection.index("evaluate_prepared_impl(")
+    assert projection.count("evaluate_prepared_impl(") == 1
+    assert "elements, target_points, options, work," in projection
+    assert projection.index("evaluate_prepared_impl(") < projection.index("for (int component = 0;")
+    assert "kernel_evaluations >= limits.maximum_kernel_evaluations" in source
+    assert "ledger_leaf_visits >= limits.maximum_ledger_leaf_visits" in source
 
 
 def test_source_version_and_policy_expose_no_relative_floor():
@@ -148,7 +152,7 @@ def test_binary64_target_gate_keeps_sub_ulp_positive_residual(error, roundoff, t
     accepted = rounded < tolerance or rounded == tolerance and residual <= 0.
     assert accepted == (Fraction(error) + Fraction(roundoff) <= Fraction(tolerance))
     source = OWNER.read_text(encoding="utf-8")
-    rust = (ROOT / "crates/fullmag-runner/src/native_fem/accepted_external_lead/record.rs").read_text(encoding="utf-8")
+    rust = (ROOT / "crates/fullmag-antenna-artifacts/src/bundle.rs").read_text(encoding="utf-8")
     producer = (ROOT / "backends/fem/cpu/mfem/workflows/antenna_field_solve/accepted_external_lead_source.cpp").read_text(encoding="utf-8")
     for text in (source, rust, producer):
         assert "smaller - (sum - larger)" in text and "residual <= 0.0" in text

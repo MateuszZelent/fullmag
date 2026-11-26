@@ -1,53 +1,310 @@
 #include "cpu/mfem/interactions/oersted/direct_tetra_quadrature.hpp"
+#include "cpu/mfem/common/sparse_linear_solver.hpp"
 #include "cpu/mfem/interactions/oersted/surface_rt0.hpp"
 #include "cpu/mfem/transport/affine_rt0_element.hpp"
+
+#if defined(FULLMAG_HAS_CUDA_RUNTIME) && FULLMAG_HAS_CUDA_RUNTIME
+#include "gpu/cuda/interactions/oersted/direct_tetra_farfield_kernels.hpp"
+#endif
 
 #include <mfem.hpp>
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
-#include <limits>
-#include <memory>
+#include <cstdlib>
+#include <cstring>
+#include <exception>
 #include <iomanip>
 #include <iostream>
+#include <limits>
 #include <locale>
+#include <memory>
+#include <mutex>
+#include <optional>
 #include <sstream>
 #include <stdexcept>
+#include <string>
+#include <thread>
 #include <utility>
+#include <vector>
 
 namespace fullmag::fem::oersted {
 namespace {
 
 using Point = std::array<double, 3>;
 using CurrentElement = fullmag::fem::transport::AffineRt0Element;
+
 struct PreparedElement {
     CurrentElement current;
     std::array<Point, 4> vertices;
 };
 
-struct WorkBudget {
-    explicit WorkBudget(const DirectTetraQuadratureOptions &options)
-        : limits(DirectTetraQuadrature::ResolveWorkLimits(options)) {}
+struct TetQuadPoint {
+    double x;
+    double y;
+    double z;
+    double weight;
+};
+
+struct SegQuadPoint {
+    double x;
+    double weight;
+};
+
+std::mutex &mfem_int_rules_mutex()
+{
+    static std::mutex mutex;
+    return mutex;
+}
+
+std::mutex &failure_stderr_mutex()
+{
+    static std::mutex mutex;
+    return mutex;
+}
+
+struct QuadratureRuleTable {
+    int min_order = 0;
+    int max_order = 0;
+    std::vector<std::vector<TetQuadPoint>> tet_rules;
+    std::vector<std::vector<SegQuadPoint>> seg_rules;
+
+    static QuadratureRuleTable build(const DirectTetraQuadratureOptions &options)
+    {
+        QuadratureRuleTable table;
+        table.min_order = options.base_quadrature_order;
+        table.max_order = options.base_quadrature_order +
+            2 * options.maximum_subdivision_depth + 2;
+        const std::size_t count =
+            static_cast<std::size_t>(table.max_order - table.min_order + 1);
+        table.tet_rules.resize(count);
+        table.seg_rules.resize(count);
+        // Pre-extract flat immutable quadrature tables before spawning worker
+        // threads because mfem::IntRules.Get mutates an unsynchronized cache.
+        std::lock_guard<std::mutex> lock(mfem_int_rules_mutex());
+        for (int order = table.min_order; order <= table.max_order; order += 2) {
+            const std::size_t slot = static_cast<std::size_t>(order - table.min_order);
+            const auto &tet = mfem::IntRules.Get(mfem::Geometry::TETRAHEDRON, order);
+            auto &tet_dst = table.tet_rules[slot];
+            tet_dst.reserve(static_cast<std::size_t>(tet.GetNPoints()));
+            for (int i = 0; i < tet.GetNPoints(); ++i) {
+                const auto &ip = tet.IntPoint(i);
+                tet_dst.push_back({ip.x, ip.y, ip.z, ip.weight});
+            }
+            const auto &seg = mfem::IntRules.Get(mfem::Geometry::SEGMENT, order);
+            auto &seg_dst = table.seg_rules[slot];
+            seg_dst.reserve(static_cast<std::size_t>(seg.GetNPoints()));
+            for (int i = 0; i < seg.GetNPoints(); ++i) {
+                const auto &ip = seg.IntPoint(i);
+                seg_dst.push_back({ip.x, ip.weight});
+            }
+        }
+        return table;
+    }
+
+    const std::vector<TetQuadPoint> &tetra_rule(int order) const
+    {
+        if (order < min_order || order > max_order || ((order - min_order) % 2) != 0) {
+            throw std::runtime_error("quadrature_rule_order_out_of_range");
+        }
+        return tet_rules[static_cast<std::size_t>(order - min_order)];
+    }
+
+    const std::vector<SegQuadPoint> &segment_rule(int order) const
+    {
+        if (order < min_order || order > max_order || ((order - min_order) % 2) != 0) {
+            throw std::runtime_error("quadrature_rule_order_out_of_range");
+        }
+        return seg_rules[static_cast<std::size_t>(order - min_order)];
+    }
+};
+
+struct ParallelCancelled {};
+
+struct SharedWorkBudget {
+    explicit SharedWorkBudget(const DirectTetraQuadratureWorkLimits &limits_in)
+        : limits(limits_in) {}
 
     const DirectTetraQuadratureWorkLimits limits;
+    std::atomic<std::uint64_t> kernel_evaluations{0};
+    std::atomic<std::uint64_t> ledger_leaf_visits{0};
+    std::atomic<bool> stop_requested{false};
+};
+
+struct WorkBudget {
+    static constexpr std::uint64_t kAtomicFlushStride = 256;
+
+    explicit WorkBudget(
+        const DirectTetraQuadratureOptions &options,
+        SharedWorkBudget *shared_in = nullptr)
+        : limits(DirectTetraQuadrature::ResolveWorkLimits(options)),
+          shared(shared_in) {}
+
+    const DirectTetraQuadratureWorkLimits limits;
+    SharedWorkBudget *shared = nullptr;
     std::uint64_t kernel_evaluations = 0;
     std::uint64_t ledger_leaf_visits = 0;
+    std::uint64_t pending_samples = 0;
+    std::uint64_t pending_visits = 0;
+
+    void flush_samples()
+    {
+        if (shared == nullptr || pending_samples == 0) return;
+        const std::uint64_t delta = pending_samples;
+        pending_samples = 0;
+        const std::uint64_t previous = shared->kernel_evaluations.fetch_add(
+            delta, std::memory_order_relaxed);
+        if (previous > limits.maximum_kernel_evaluations ||
+                delta > limits.maximum_kernel_evaluations - previous) {
+            shared->stop_requested.store(true, std::memory_order_release);
+            throw std::runtime_error("kernel_evaluation_budget_exceeded");
+        }
+    }
+
+    void flush_visits()
+    {
+        if (shared == nullptr || pending_visits == 0) return;
+        const std::uint64_t delta = pending_visits;
+        pending_visits = 0;
+        const std::uint64_t previous = shared->ledger_leaf_visits.fetch_add(
+            delta, std::memory_order_relaxed);
+        if (previous > limits.maximum_ledger_leaf_visits ||
+                delta > limits.maximum_ledger_leaf_visits - previous) {
+            shared->stop_requested.store(true, std::memory_order_release);
+            throw std::runtime_error("ledger_leaf_visit_budget_exceeded");
+        }
+    }
+
+    void flush_all()
+    {
+        flush_samples();
+        flush_visits();
+    }
 
     void sample()
     {
-        if (kernel_evaluations >= limits.maximum_kernel_evaluations) {
+        if (shared != nullptr) {
+            ++pending_samples;
+            if (pending_samples >= kAtomicFlushStride) {
+                flush_samples();
+                if (shared->stop_requested.load(std::memory_order_acquire)) {
+                    throw ParallelCancelled{};
+                }
+            }
+        } else if (kernel_evaluations >= limits.maximum_kernel_evaluations) {
             throw std::runtime_error("kernel_evaluation_budget_exceeded");
         }
         ++kernel_evaluations;
     }
+
     void visit()
     {
-        if (ledger_leaf_visits >= limits.maximum_ledger_leaf_visits) {
+        if (shared != nullptr) {
+            ++pending_visits;
+            if (pending_visits >= kAtomicFlushStride) {
+                flush_visits();
+                if (shared->stop_requested.load(std::memory_order_acquire)) {
+                    throw ParallelCancelled{};
+                }
+            }
+        } else if (ledger_leaf_visits >= limits.maximum_ledger_leaf_visits) {
             throw std::runtime_error("ledger_leaf_visit_budget_exceeded");
         }
         ++ledger_leaf_visits;
     }
+
+    void charge_exact(std::uint64_t samples, std::uint64_t visits)
+    {
+        if (shared != nullptr) {
+            pending_samples += samples;
+            pending_visits += visits;
+            flush_all();
+            kernel_evaluations += samples;
+            ledger_leaf_visits += visits;
+            return;
+        }
+        if (kernel_evaluations > limits.maximum_kernel_evaluations ||
+                samples > limits.maximum_kernel_evaluations - kernel_evaluations) {
+            throw std::runtime_error("kernel_evaluation_budget_exceeded");
+        }
+        kernel_evaluations += samples;
+        if (ledger_leaf_visits > limits.maximum_ledger_leaf_visits ||
+                visits > limits.maximum_ledger_leaf_visits - ledger_leaf_visits) {
+            throw std::runtime_error("ledger_leaf_visit_budget_exceeded");
+        }
+        ledger_leaf_visits += visits;
+    }
 };
+
+struct ThreadJoinGuard {
+    std::vector<std::thread> threads;
+    std::atomic<bool> *stop_flag = nullptr;
+
+    explicit ThreadJoinGuard(std::atomic<bool> *stop_flag_in = nullptr)
+        : stop_flag(stop_flag_in) {}
+
+    ~ThreadJoinGuard()
+    {
+        if (stop_flag != nullptr) {
+            stop_flag->store(true, std::memory_order_release);
+        }
+        join_all();
+    }
+
+    void join_all()
+    {
+        for (auto &thread : threads) {
+            if (thread.joinable()) {
+                thread.join();
+            }
+        }
+    }
+};
+
+std::optional<int> parse_positive_env_int(const char *name)
+{
+    const char *raw = std::getenv(name);
+    if (raw == nullptr || *raw == '\0') return std::nullopt;
+    char *end = nullptr;
+    const long parsed = std::strtol(raw, &end, 10);
+    if (end == raw || *end != '\0' || parsed < 1) return std::nullopt;
+    if (parsed > 1024) return 1024;
+    return static_cast<int>(parsed);
+}
+
+bool env_requests_auto_threads(const char *name)
+{
+    const char *raw = std::getenv(name);
+    if (raw == nullptr || *raw == '\0') return false;
+    return std::strcmp(raw, "auto") == 0 ||
+        std::strcmp(raw, "AUTO") == 0 ||
+        std::strcmp(raw, "Auto") == 0;
+}
+
+int resolve_available_worker_threads(int requested_worker_threads)
+{
+    if (requested_worker_threads > 0) {
+        return std::min(requested_worker_threads, 1024);
+    }
+    int available = 1;
+    if (env_requests_auto_threads("FULLMAG_CPU_THREADS")) {
+        if (const auto resolved = parse_positive_env_int("FULLMAG_NATIVE_THREADS_AUTO_RESOLVED")) {
+            available = *resolved;
+        } else if (const auto legacy = parse_positive_env_int("FULLMAG_CPU_THREADS_AUTO_RESOLVED")) {
+            available = *legacy;
+        } else {
+            available = static_cast<int>(std::max(1u, std::thread::hardware_concurrency()));
+        }
+    } else if (const auto from_omp = parse_positive_env_int("OMP_NUM_THREADS")) {
+        available = *from_omp;
+    } else if (const auto from_fullmag = parse_positive_env_int("FULLMAG_CPU_THREADS")) {
+        available = *from_fullmag;
+    } else {
+        available = static_cast<int>(std::max(1u, std::thread::hardware_concurrency()));
+    }
+    return std::clamp(available, 1, 64);
+}
 
 struct ScalarAccumulator {
     long double value = 0.0L;
@@ -91,12 +348,6 @@ public:
     SampledSingularity() : std::runtime_error("quadrature_sampled_singularity") {}
 };
 
-DirectTetraQuadratureResult evaluate_prepared(
-    const std::vector<PreparedElement> &elements,
-    const std::vector<Point> &target_points,
-    const DirectTetraQuadratureOptions &options,
-    WorkBudget &work, const SurfaceRt0ProgressObserver *observer = nullptr);
-
 void validate_pair_budget(std::uint64_t source_count, std::uint64_t target_count,
     const DirectTetraQuadratureOptions &options)
 {
@@ -111,8 +362,11 @@ void validate_pair_budget(std::uint64_t source_count, std::uint64_t target_count
             "direct tetrahedral Oersted source-target pair budget exceeded");
     }
 }
+
 constexpr double kPi = 3.141592653589793238462643383279502884;
 constexpr double kBarycentricTolerance = 1.0e-12;
+constexpr double kGpuFarFieldNearRadiusFactor = 3.0;
+constexpr std::size_t kSourceRootParallelThreshold = 128;
 
 Point subtract(const Point &left, const Point &right)
 {
@@ -195,9 +449,10 @@ RuleIntegral integrate_once(
     const std::array<Point, 4> &vertices,
     const Point &target,
     int order,
+    const QuadratureRuleTable &quad_tables,
     WorkBudget &work)
 {
-    const auto &rules = mfem::IntRules.Get(mfem::Geometry::TETRAHEDRON, order);
+    const auto &rules = quad_tables.tetra_rule(order);
     const double jacobian = std::abs(determinant(
         subtract(vertices[1], vertices[0]),
         subtract(vertices[2], vertices[0]),
@@ -208,9 +463,9 @@ RuleIntegral integrate_once(
     }
     PairAccumulator integral;
     ScalarAccumulator weighted_norm;
-    for (int point = 0; point < rules.GetNPoints(); ++point) {
+    for (std::size_t point = 0; point < rules.size(); ++point) {
         work.sample();
-        const auto &ip = rules.IntPoint(point);
+        const auto &ip = rules[point];
         const Point physical = physical_barycentric(vertices,
             ip.x, ip.y, ip.z);
         const Point displacement = subtract(target, physical);
@@ -223,7 +478,7 @@ RuleIntegral integrate_once(
         const Point current = evaluate_current(source, physical);
         const Point kernel = scale(cross(current, displacement),
             inverse_kernel_denominator(distance));
-        const double weight = jacobian * rules.IntPoint(point).weight;
+        const double weight = jacobian * ip.weight;
         const Point term = scale(kernel, weight);
         const double magnitude = norm(term);
         if (!std::isfinite(magnitude)) {
@@ -320,9 +575,10 @@ RuleIntegral integrate_duffy_once(
     const std::array<Point, 4> &vertices,
     const Point &target,
     int order,
+    const QuadratureRuleTable &quad_tables,
     WorkBudget &work)
 {
-    const auto &rules = mfem::IntRules.Get(mfem::Geometry::SEGMENT, order);
+    const auto &rules = quad_tables.segment_rule(order);
     const Point edge1 = subtract(vertices[1], target);
     const Point edge2 = subtract(vertices[2], target);
     const Point edge3 = subtract(vertices[3], target);
@@ -333,15 +589,15 @@ RuleIntegral integrate_duffy_once(
     }
     PairAccumulator integral;
     ScalarAccumulator weighted_norm;
-    for (int xi_index = 0; xi_index < rules.GetNPoints(); ++xi_index) {
-        const auto &xi_point = rules.IntPoint(xi_index);
+    for (std::size_t xi_index = 0; xi_index < rules.size(); ++xi_index) {
+        const auto &xi_point = rules[xi_index];
         const double xi = xi_point.x;
-        for (int eta_index = 0; eta_index < rules.GetNPoints(); ++eta_index) {
-            const auto &eta_point = rules.IntPoint(eta_index);
+        for (std::size_t eta_index = 0; eta_index < rules.size(); ++eta_index) {
+            const auto &eta_point = rules[eta_index];
             const double eta = eta_point.x;
-            for (int zeta_index = 0; zeta_index < rules.GetNPoints();
+            for (std::size_t zeta_index = 0; zeta_index < rules.size();
                     ++zeta_index) {
-                const auto &zeta_point = rules.IntPoint(zeta_index);
+                const auto &zeta_point = rules[zeta_index];
                 work.sample();
                 const double zeta = zeta_point.x;
                 const Point ray = add(scale(edge1, 1.0 - eta),
@@ -377,56 +633,6 @@ RuleIntegral integrate_duffy_once(
     return {integral.point(), weighted_norm.value};
 }
 
-class DirectScalarCoefficient final : public mfem::Coefficient {
-public:
-    DirectScalarCoefficient(
-        const std::vector<PreparedElement> &source,
-        const DirectTetraQuadratureOptions &options,
-        int component,
-        WorkBudget &work)
-        : source_(source), options_(options), component_(component), work_(work)
-    {
-        if (component_ < 0 || component_ >= 3) {
-            throw std::invalid_argument(
-                "direct tetrahedral Oersted scalar projection component is invalid");
-        }
-    }
-
-    double Eval(
-        mfem::ElementTransformation &transformation,
-        const mfem::IntegrationPoint &point) override
-    {
-        mfem::Vector physical(3);
-        transformation.Transform(point, physical);
-        const std::vector<std::array<double, 3>> targets{
-            {physical[0], physical[1], physical[2]}};
-        const auto result = evaluate_prepared(source_, targets, options_, work_);
-        diagnostics_.source_target_pairs +=
-            result.diagnostics.source_target_pairs;
-        diagnostics_.refined_pairs += result.diagnostics.refined_pairs;
-        diagnostics_.kernel_evaluations += result.diagnostics.kernel_evaluations;
-        diagnostics_.ledger_leaf_visits += result.diagnostics.ledger_leaf_visits;
-        diagnostics_.unconverged_pair_count +=
-            result.diagnostics.unconverged_pair_count;
-        diagnostics_.maximum_pair_error_apm = std::max(
-            diagnostics_.maximum_pair_error_apm,
-            result.diagnostics.maximum_pair_error_apm);
-        return result.h_xyz_apm[static_cast<std::size_t>(component_)];
-    }
-
-    const DirectTetraQuadratureDiagnostics &diagnostics() const
-    {
-        return diagnostics_;
-    }
-
-private:
-    const std::vector<PreparedElement> &source_;
-    const DirectTetraQuadratureOptions &options_;
-    int component_;
-    WorkBudget &work_;
-    DirectTetraQuadratureDiagnostics diagnostics_;
-};
-
 struct Leaf {
     std::array<Point, 4> vertices;
     std::size_t source_index = 0;
@@ -443,6 +649,7 @@ Leaf evaluate_leaf(
     Leaf leaf,
     const Point &target,
     const DirectTetraQuadratureOptions &options,
+    const QuadratureRuleTable &quad_tables,
     WorkBudget &work,
     DirectTetraQuadratureDiagnostics &diagnostics)
 {
@@ -460,9 +667,9 @@ Leaf evaluate_leaf(
             ScalarAccumulator magnitude;
             for (int child = 0; child < count; ++child) {
                 const auto lo = integrate_duffy_once(source, singular_children[child],
-                    effective_target, low_order, work);
+                    effective_target, low_order, quad_tables, work);
                 const auto hi = integrate_duffy_once(source, singular_children[child],
-                    effective_target, high_order, work);
+                    effective_target, high_order, quad_tables, work);
                 low_sum.add(lo.value);
                 high_sum.add(hi.value);
                 magnitude.add(lo.weighted_norm_sum);
@@ -471,8 +678,8 @@ Leaf evaluate_leaf(
             low = {low_sum.point(), magnitude.value};
             high = {high_sum.point(), 0.0L};
         } else {
-            low = integrate_once(source, leaf.vertices, target, low_order, work);
-            high = integrate_once(source, leaf.vertices, target, high_order, work);
+            low = integrate_once(source, leaf.vertices, target, low_order, quad_tables, work);
+            high = integrate_once(source, leaf.vertices, target, high_order, quad_tables, work);
         }
     } catch (const SampledSingularity &) {
         leaf.needs_refine = true;
@@ -600,18 +807,103 @@ void emit_failure_leaves(const char *reason, const std::vector<Leaf> &leaves,
         record << ']';
         // Keep room in the worker's 512-character failure prefix. Earlier stderr
         // can still displace this additive record; it is not a durable field artifact.
+        std::lock_guard<std::mutex> lock(failure_stderr_mutex());
         std::cerr << record.str().substr(0, 479) << '\n';
     } catch (...) {
         // Diagnostics must not mask the original numerical/resource failure.
     }
 }
 
+void evaluate_root_leaves_parallel(
+    const std::vector<PreparedElement> &elements,
+    const Point &target,
+    const DirectTetraQuadratureOptions &options,
+    const QuadratureRuleTable &quad_tables,
+    WorkBudget &work,
+    DirectTetraQuadratureDiagnostics &diagnostics,
+    int root_workers,
+    std::vector<Leaf> &leaves)
+{
+    leaves.resize(elements.size());
+    SharedWorkBudget shared_budget(work.limits);
+    shared_budget.kernel_evaluations.store(work.kernel_evaluations, std::memory_order_relaxed);
+    shared_budget.ledger_leaf_visits.store(work.ledger_leaf_visits, std::memory_order_relaxed);
+
+    const std::size_t worker_count = static_cast<std::size_t>(
+        std::min<std::size_t>(static_cast<std::size_t>(root_workers), elements.size()));
+    std::vector<double> worker_max_error(worker_count, 0.0);
+    std::vector<std::uint64_t> worker_samples(worker_count, 0);
+    std::atomic<std::size_t> next_source{0};
+    std::mutex exception_mutex;
+    std::exception_ptr first_exception;
+
+    constexpr std::size_t kSourceChunk = 16;
+    {
+        ThreadJoinGuard guard(&shared_budget.stop_requested);
+        guard.threads.reserve(worker_count);
+        for (std::size_t worker_id = 0; worker_id < worker_count; ++worker_id) {
+            guard.threads.emplace_back([&, worker_id]() {
+                try {
+                    WorkBudget local_work(options, &shared_budget);
+                    DirectTetraQuadratureDiagnostics local_diag;
+                    for (;;) {
+                        if (shared_budget.stop_requested.load(std::memory_order_acquire)) {
+                            break;
+                        }
+                        const std::size_t begin = next_source.fetch_add(
+                            kSourceChunk, std::memory_order_relaxed);
+                        if (begin >= elements.size()) {
+                            break;
+                        }
+                        const std::size_t end = std::min(begin + kSourceChunk, elements.size());
+                        for (std::size_t source = begin; source < end; ++source) {
+                            Leaf leaf;
+                            leaf.vertices = elements[source].vertices;
+                            leaf.source_index = source;
+                            leaf.sequence = static_cast<std::uint64_t>(source);
+                            leaves[source] = evaluate_leaf(
+                                elements, leaf, target, options, quad_tables,
+                                local_work, local_diag);
+                        }
+                    }
+                    local_work.flush_all();
+                    worker_samples[worker_id] = local_work.kernel_evaluations;
+                    worker_max_error[worker_id] = local_diag.maximum_pair_error_apm;
+                } catch (const ParallelCancelled &) {
+                    // Sibling worker recorded the primary failure.
+                } catch (...) {
+                    std::lock_guard<std::mutex> lock(exception_mutex);
+                    if (!first_exception) {
+                        first_exception = std::current_exception();
+                    }
+                    shared_budget.stop_requested.store(true, std::memory_order_release);
+                }
+            });
+        }
+        guard.join_all();
+    }
+
+    if (first_exception) {
+        std::rethrow_exception(first_exception);
+    }
+
+    std::uint64_t total_root_samples = 0;
+    for (std::size_t worker_id = 0; worker_id < worker_count; ++worker_id) {
+        total_root_samples += worker_samples[worker_id];
+        diagnostics.maximum_pair_error_apm = std::max(
+            diagnostics.maximum_pair_error_apm, worker_max_error[worker_id]);
+    }
+    work.charge_exact(total_root_samples, 0);
+}
+
 std::pair<Point, DirectTetraTargetDiagnostics> evaluate_target(
     const std::vector<PreparedElement> &elements,
     const Point &target,
     const DirectTetraQuadratureOptions &options,
+    const QuadratureRuleTable &quad_tables,
     WorkBudget &work,
-    DirectTetraQuadratureDiagnostics &diagnostics)
+    DirectTetraQuadratureDiagnostics &diagnostics,
+    int root_workers = 1)
 {
     const auto initial_samples = work.kernel_evaluations;
     const auto initial_visits = work.ledger_leaf_visits;
@@ -652,14 +944,27 @@ std::pair<Point, DirectTetraTargetDiagnostics> evaluate_target(
     };
     try {
         // Populate every source root before any acceptance decision.
-        for (std::size_t source = 0; source < elements.size(); ++source) {
-            Leaf leaf;
-            leaf.vertices = elements[source].vertices;
-            leaf.source_index = source;
-            leaf.sequence = sequence++;
-            leaves.push_back(evaluate_leaf(elements, leaf, target, options, work, diagnostics));
-            ledger.add(leaves.back(), 1);
-            enqueue(leaves.size() - 1u);
+        if (root_workers > 1 && elements.size() >= kSourceRootParallelThreshold) {
+            evaluate_root_leaves_parallel(
+                elements, target, options, quad_tables, work, diagnostics,
+                root_workers, leaves);
+            sequence = static_cast<std::uint64_t>(elements.size());
+            // Deterministic ascending source accumulation preserves 0-ULP parity.
+            for (std::size_t source = 0; source < elements.size(); ++source) {
+                ledger.add(leaves[source], 1);
+                enqueue(source);
+            }
+        } else {
+            for (std::size_t source = 0; source < elements.size(); ++source) {
+                Leaf leaf;
+                leaf.vertices = elements[source].vertices;
+                leaf.source_index = source;
+                leaf.sequence = sequence++;
+                leaves.push_back(evaluate_leaf(
+                    elements, leaf, target, options, quad_tables, work, diagnostics));
+                ledger.add(leaves.back(), 1);
+                enqueue(leaves.size() - 1u);
+            }
         }
         for (;;) {
             if (!(std::isfinite(ledger.error.value) && ledger.error.value >= 0.0L &&
@@ -705,7 +1010,8 @@ std::pair<Point, DirectTetraTargetDiagnostics> evaluate_target(
                 leaf.source_index = parent.source_index;
                 leaf.depth = parent.depth + 1;
                 leaf.sequence = sequence++;
-                children[child] = evaluate_leaf(elements, leaf, target, options, work, diagnostics);
+                children[child] = evaluate_leaf(
+                    elements, leaf, target, options, quad_tables, work, diagnostics);
             }
             reserve_bounded(leaves, leaves.size() + 7u);
             ledger.add(parent, -1);
@@ -734,6 +1040,555 @@ std::pair<Point, DirectTetraTargetDiagnostics> evaluate_target(
     }
 }
 
+struct TargetEvalOutput {
+    Point field{};
+    DirectTetraTargetDiagnostics target_diag{};
+    std::uint64_t refined_pairs = 0;
+    double maximum_pair_error_apm = 0.0;
+    std::uint64_t gpu_farfield_pairs = 0;
+    std::uint64_t cpu_near_singular_pairs = 0;
+};
+
+#if defined(FULLMAG_HAS_CUDA_RUNTIME) && FULLMAG_HAS_CUDA_RUNTIME
+
+GpuDirectTetraSourceHostData build_gpu_source_host_data(
+    const std::vector<PreparedElement> &elements)
+{
+    GpuDirectTetraSourceHostData data;
+    const std::size_t n = elements.size();
+    data.source_count = n;
+    data.vertex_x.resize(4u * n);
+    data.vertex_y.resize(4u * n);
+    data.vertex_z.resize(4u * n);
+    data.signed_coefficients_a.resize(4u * n);
+    data.center_x.resize(n);
+    data.center_y.resize(n);
+    data.center_z.resize(n);
+    data.bounding_radius.resize(n);
+    data.volume.resize(n);
+    data.abs_det.resize(n);
+
+    for (std::size_t s = 0; s < n; ++s) {
+        const auto frozen = elements[s].current.frozen_input();
+        long double cx_ld = 0.0L;
+        long double cy_ld = 0.0L;
+        long double cz_ld = 0.0L;
+        for (int k = 0; k < 4; ++k) {
+            const std::size_t idx = static_cast<std::size_t>(k) * n + s;
+            data.vertex_x[idx] = frozen.vertices_m[k][0];
+            data.vertex_y[idx] = frozen.vertices_m[k][1];
+            data.vertex_z[idx] = frozen.vertices_m[k][2];
+            data.signed_coefficients_a[idx] = frozen.signed_coefficients_a[k];
+            cx_ld += static_cast<long double>(frozen.vertices_m[k][0]);
+            cy_ld += static_cast<long double>(frozen.vertices_m[k][1]);
+            cz_ld += static_cast<long double>(frozen.vertices_m[k][2]);
+        }
+        const double cx = static_cast<double>(cx_ld * 0.25L);
+        const double cy = static_cast<double>(cy_ld * 0.25L);
+        const double cz = static_cast<double>(cz_ld * 0.25L);
+        data.center_x[s] = cx;
+        data.center_y[s] = cy;
+        data.center_z[s] = cz;
+
+        double radius = 0.0;
+        for (int k = 0; k < 4; ++k) {
+            const double dx = frozen.vertices_m[k][0] - cx;
+            const double dy = frozen.vertices_m[k][1] - cy;
+            const double dz = frozen.vertices_m[k][2] - cz;
+            radius = std::max(radius, std::hypot(std::hypot(dx, dy), dz));
+        }
+        data.bounding_radius[s] = radius;
+
+        const auto &v = frozen.vertices_m;
+        const long double e1x = static_cast<long double>(v[1][0]) - v[0][0];
+        const long double e1y = static_cast<long double>(v[1][1]) - v[0][1];
+        const long double e1z = static_cast<long double>(v[1][2]) - v[0][2];
+        const long double e2x = static_cast<long double>(v[2][0]) - v[0][0];
+        const long double e2y = static_cast<long double>(v[2][1]) - v[0][1];
+        const long double e2z = static_cast<long double>(v[2][2]) - v[0][2];
+        const long double e3x = static_cast<long double>(v[3][0]) - v[0][0];
+        const long double e3y = static_cast<long double>(v[3][1]) - v[0][1];
+        const long double e3z = static_cast<long double>(v[3][2]) - v[0][2];
+        const long double det_ld =
+            e1x * (e2y * e3z - e2z * e3y) +
+            e1y * (e2z * e3x - e2x * e3z) +
+            e1z * (e2x * e3y - e2y * e3x);
+        const double abs_det = static_cast<double>(std::abs(det_ld));
+        if (!(std::isfinite(abs_det) && abs_det > 0.0)) {
+            throw std::runtime_error(
+                "direct tetrahedral Oersted source tetrahedron is degenerate");
+        }
+        data.abs_det[s] = abs_det;
+        data.volume[s] = abs_det / 6.0;
+    }
+    return data;
+}
+
+TargetEvalOutput evaluate_target_gpu_hybrid(
+    const std::vector<PreparedElement> &elements,
+    const Point &target,
+    std::size_t target_index,
+    const GpuDirectTetraTargetResult &gpu_out,
+    const DirectTetraQuadratureOptions &options,
+    const QuadratureRuleTable &quad_tables,
+    WorkBudget &work,
+    int root_workers)
+{
+    const bool force_full_cpu =
+        gpu_out.target_requires_full_cpu_fallback[target_index] != 0 ||
+        gpu_out.far_pair_count[target_index] == 0;
+    if (force_full_cpu) {
+        DirectTetraQuadratureDiagnostics local_diag;
+        const auto evaluated = evaluate_target(
+            elements, target, options, quad_tables, work, local_diag, root_workers);
+        return {
+            evaluated.first,
+            evaluated.second,
+            local_diag.refined_pairs,
+            local_diag.maximum_pair_error_apm,
+            0,
+            static_cast<std::uint64_t>(elements.size())};
+    }
+
+    const Point far_h{
+        gpu_out.far_h_xyz_apm[3u * target_index + 0u],
+        gpu_out.far_h_xyz_apm[3u * target_index + 1u],
+        gpu_out.far_h_xyz_apm[3u * target_index + 2u]};
+    const double far_err = gpu_out.far_error_sum_apm[target_index];
+    const double far_wn = gpu_out.far_weighted_norm_sum_apm[target_index];
+    const double far_max_err = gpu_out.far_max_pair_error_apm[target_index];
+    const std::uint64_t far_pairs = gpu_out.far_pair_count[target_index];
+    const std::uint64_t far_evals = gpu_out.far_kernel_evaluations[target_index];
+    const std::uint64_t cpu_begin = gpu_out.cpu_pair_offsets[target_index];
+    const std::uint64_t cpu_end = gpu_out.cpu_pair_offsets[target_index + 1u];
+    const std::uint64_t cpu_root_count = cpu_end - cpu_begin;
+
+    const bool far_valid =
+        std::isfinite(far_h[0]) && std::isfinite(far_h[1]) && std::isfinite(far_h[2]) &&
+        std::isfinite(far_err) && far_err >= 0.0 &&
+        std::isfinite(far_wn) && far_wn >= 0.0 &&
+        std::isfinite(far_max_err) && far_max_err >= 0.0 &&
+        (far_pairs + cpu_root_count == static_cast<std::uint64_t>(elements.size()));
+    if (!far_valid) {
+        DirectTetraQuadratureDiagnostics local_diag;
+        const auto evaluated = evaluate_target(
+            elements, target, options, quad_tables, work, local_diag, root_workers);
+        return {
+            evaluated.first,
+            evaluated.second,
+            local_diag.refined_pairs,
+            local_diag.maximum_pair_error_apm,
+            0,
+            static_cast<std::uint64_t>(elements.size())};
+    }
+
+    const auto initial_samples = work.kernel_evaluations;
+    const auto initial_visits = work.ledger_leaf_visits;
+    work.charge_exact(far_evals, far_pairs);
+
+    // Fast path when every source pair for this target converged on GPU at depth 0.
+    if (cpu_root_count == 0) {
+        const double estimated_error_apm = upward_nonnegative(static_cast<long double>(far_err));
+        const double roundoff_indicator_apm = upward_nonnegative(
+            std::numeric_limits<double>::epsilon() * static_cast<long double>(far_wn));
+        const double tolerance_apm = std::fma(
+            options.relative_tolerance, norm(far_h), options.absolute_tolerance_apm);
+        if (std::isfinite(tolerance_apm) &&
+                target_error_fits(estimated_error_apm, roundoff_indicator_apm, tolerance_apm)) {
+            return {
+                far_h,
+                {estimated_error_apm, tolerance_apm, roundoff_indicator_apm,
+                    far_pairs,
+                    work.kernel_evaluations - initial_samples,
+                    work.ledger_leaf_visits - initial_visits},
+                0,
+                far_max_err,
+                far_pairs,
+                0};
+        }
+        // Global target cancellation or tight tolerance requires subdividing far pairs.
+        DirectTetraQuadratureDiagnostics local_diag;
+        const auto full_eval = evaluate_target(
+            elements, target, options, quad_tables, work, local_diag, root_workers);
+        auto merged_target_diag = full_eval.second;
+        merged_target_diag.kernel_evaluations = work.kernel_evaluations - initial_samples;
+        merged_target_diag.ledger_leaf_visits = work.ledger_leaf_visits - initial_visits;
+        return {
+            full_eval.first,
+            merged_target_diag,
+            local_diag.refined_pairs,
+            local_diag.maximum_pair_error_apm,
+            0,
+            static_cast<std::uint64_t>(elements.size())};
+    }
+
+    DirectTetraQuadratureDiagnostics local_diag;
+    local_diag.maximum_pair_error_apm = far_max_err;
+    std::vector<Leaf> leaves;
+    std::vector<std::size_t> heap;
+    reserve_bounded(leaves, static_cast<std::size_t>(cpu_root_count));
+    reserve_bounded(heap, static_cast<std::size_t>(cpu_root_count));
+    std::uint64_t sequence = 0;
+    auto init_far_ledger = [&]() {
+        TargetLedger result;
+        result.field.add(far_h);
+        result.error.add(static_cast<long double>(far_err));
+        result.magnitude.add(static_cast<long double>(far_wn));
+        return result;
+    };
+    auto recompute_hybrid_ledger = [&]() {
+        TargetLedger result = init_far_ledger();
+        for (const auto &leaf : leaves) {
+            work.visit();
+            result.add(leaf, 1);
+        }
+        return result;
+    };
+    TargetLedger ledger = init_far_ledger();
+    Point high{};
+    double estimated_error_apm = 0.0, roundoff_indicator_apm = 0.0, tolerance_apm = 0.0;
+    auto priority = [&leaves](std::size_t left, std::size_t right) {
+        const auto &a = leaves[left];
+        const auto &b = leaves[right];
+        if (a.needs_refine != b.needs_refine) return !a.needs_refine;
+        if (a.error != b.error) return a.error < b.error;
+        return a.sequence > b.sequence;
+    };
+    auto enqueue = [&](std::size_t index) {
+        if (leaves[index].depth < options.maximum_subdivision_depth) {
+            reserve_bounded(heap, heap.size() + 1u);
+            heap.push_back(index);
+            std::push_heap(heap.begin(), heap.end(), priority);
+        } else if (leaves[index].needs_refine) {
+            throw std::runtime_error("sampled_singularity_at_depth_limit");
+        }
+    };
+    auto totals = [&]() {
+        high = ledger.field.point();
+        estimated_error_apm = upward_nonnegative(ledger.error.value);
+        roundoff_indicator_apm = upward_nonnegative(
+            std::numeric_limits<double>::epsilon() * ledger.magnitude.value);
+        tolerance_apm = std::fma(options.relative_tolerance,
+            norm(high), options.absolute_tolerance_apm);
+        if (!std::isfinite(tolerance_apm)) {
+            throw std::runtime_error("target_tolerance_is_non_finite");
+        }
+    };
+
+    bool requeue_full_cpu = false;
+    try {
+        for (std::uint64_t pos = cpu_begin; pos < cpu_end; ++pos) {
+            const std::size_t source =
+                static_cast<std::size_t>(gpu_out.cpu_pair_sources[static_cast<std::size_t>(pos)]);
+            Leaf leaf;
+            leaf.vertices = elements[source].vertices;
+            leaf.source_index = source;
+            leaf.sequence = sequence++;
+            leaves.push_back(evaluate_leaf(
+                elements, leaf, target, options, quad_tables, work, local_diag));
+            ledger.add(leaves.back(), 1);
+            enqueue(leaves.size() - 1u);
+        }
+        for (;;) {
+            if (!(std::isfinite(ledger.error.value) && ledger.error.value >= 0.0L &&
+                    std::isfinite(ledger.magnitude.value) && ledger.magnitude.value >= 0.0L)) {
+                ledger = recompute_hybrid_ledger();
+            }
+            totals();
+            const auto meets_budget = [&]() {
+                return ledger.unresolved == 0 &&
+                    target_error_fits(estimated_error_apm, roundoff_indicator_apm, tolerance_apm);
+            };
+            if (meets_budget() || heap.empty()) {
+                ledger = recompute_hybrid_ledger();
+                totals();
+                if (meets_budget()) {
+                    return {
+                        high,
+                        {estimated_error_apm, tolerance_apm, roundoff_indicator_apm,
+                            far_pairs + static_cast<std::uint64_t>(leaves.size()),
+                            work.kernel_evaluations - initial_samples,
+                            work.ledger_leaf_visits - initial_visits},
+                        local_diag.refined_pairs,
+                        local_diag.maximum_pair_error_apm,
+                        far_pairs,
+                        cpu_root_count};
+                }
+            }
+            if (heap.empty() ||
+                    (!leaves[heap.front()].needs_refine && leaves[heap.front()].error == 0.0)) {
+                if (far_err > 0.0) {
+                    // Far-field root pairs must enter adaptive subdivision on CPU to
+                    // certify the global target tolerance without losing accuracy.
+                    requeue_full_cpu = true;
+                    break;
+                }
+                if (heap.empty()) throw std::runtime_error("global_target_depth_exhausted");
+                throw std::runtime_error(estimated_error_apm > tolerance_apm ?
+                    "global_target_depth_exhausted" : "roundoff_indicator_exceeds_tolerance");
+            }
+            if (far_pairs + leaves.size() >
+                    DirectTetraQuadrature::maximum_final_leaves_per_target - 7u) {
+                throw std::runtime_error("final_leaf_budget_exceeded");
+            }
+            std::pop_heap(heap.begin(), heap.end(), priority);
+            const auto index = heap.back();
+            heap.pop_back();
+            const Leaf parent = leaves[index];
+            const auto midpoints = midpoint_vertices(parent.vertices);
+            std::array<Leaf, 8> children;
+            const auto indices = child_indices();
+            for (std::size_t child = 0; child < children.size(); ++child) {
+                Leaf leaf;
+                leaf.vertices = {midpoints[indices[child][0]], midpoints[indices[child][1]],
+                    midpoints[indices[child][2]], midpoints[indices[child][3]]};
+                leaf.source_index = parent.source_index;
+                leaf.depth = parent.depth + 1;
+                leaf.sequence = sequence++;
+                children[child] = evaluate_leaf(
+                    elements, leaf, target, options, quad_tables, work, local_diag);
+            }
+            reserve_bounded(leaves, leaves.size() + 7u);
+            ledger.add(parent, -1);
+            for (std::size_t child = 0; child < children.size(); ++child) {
+                const auto child_index = child == 0 ? index : leaves.size();
+                if (child == 0) leaves[index] = children[child];
+                else leaves.push_back(children[child]);
+                ledger.add(children[child], 1);
+                enqueue(child_index);
+            }
+            ++local_diag.refined_pairs;
+        }
+    } catch (const std::exception &error) {
+        emit_failure_leaves(error.what(), leaves, target, options);
+        ++local_diag.unconverged_pair_count;
+        std::ostringstream detail;
+        detail << std::setprecision(17) << error.what() << "; target_m=("
+               << target[0] << ',' << target[1] << ',' << target[2]
+               << "); estimated_error_apm=" << estimated_error_apm
+               << "; roundoff_indicator_apm=" << roundoff_indicator_apm
+               << "; tolerance_apm=" << tolerance_apm
+               << "; final_leaves=" << (far_pairs + leaves.size())
+               << "; kernel_evaluations=" << work.kernel_evaluations
+               << "; ledger_leaf_visits=" << work.ledger_leaf_visits;
+        throw std::runtime_error(detail.str());
+    }
+
+    if (requeue_full_cpu) {
+        DirectTetraQuadratureDiagnostics full_diag;
+        const auto full_eval = evaluate_target(
+            elements, target, options, quad_tables, work, full_diag, root_workers);
+        auto merged_target_diag = full_eval.second;
+        merged_target_diag.kernel_evaluations = work.kernel_evaluations - initial_samples;
+        merged_target_diag.ledger_leaf_visits = work.ledger_leaf_visits - initial_visits;
+        return {
+            full_eval.first,
+            merged_target_diag,
+            full_diag.refined_pairs,
+            full_diag.maximum_pair_error_apm,
+            0,
+            static_cast<std::uint64_t>(elements.size())};
+    }
+
+    throw std::runtime_error("direct tetrahedral Oersted hybrid target terminated unexpectedly");
+}
+
+DirectTetraQuadratureResult evaluate_prepared_gpu_hybrid(
+    const std::vector<PreparedElement> &elements,
+    const std::vector<Point> &target_points,
+    const DirectTetraQuadratureOptions &options,
+    const QuadratureRuleTable &quad_tables,
+    WorkBudget &work,
+    const SurfaceRt0ProgressObserver *observer)
+{
+    const auto source_count = static_cast<std::uint64_t>(elements.size());
+    const auto target_count = static_cast<std::uint64_t>(target_points.size());
+
+    const auto gpu_sources = build_gpu_source_host_data(elements);
+    std::vector<double> flat_targets;
+    flat_targets.reserve(target_points.size() * 3u);
+    for (const auto &target : target_points) {
+        flat_targets.push_back(target[0]);
+        flat_targets.push_back(target[1]);
+        flat_targets.push_back(target[2]);
+    }
+
+    const auto &low_rule = quad_tables.tetra_rule(options.base_quadrature_order);
+    const auto &high_rule = quad_tables.tetra_rule(options.base_quadrature_order + 2);
+    std::vector<double> low_xyzw;
+    low_xyzw.reserve(low_rule.size() * 4u);
+    for (const auto &pt : low_rule) {
+        low_xyzw.push_back(pt.x);
+        low_xyzw.push_back(pt.y);
+        low_xyzw.push_back(pt.z);
+        low_xyzw.push_back(pt.weight);
+    }
+    std::vector<double> high_xyzw;
+    high_xyzw.reserve(high_rule.size() * 4u);
+    for (const auto &pt : high_rule) {
+        high_xyzw.push_back(pt.x);
+        high_xyzw.push_back(pt.y);
+        high_xyzw.push_back(pt.z);
+        high_xyzw.push_back(pt.weight);
+    }
+
+    GpuDirectTetraTargetResult gpu_out;
+    std::string cuda_error;
+    const bool cuda_ok = fullmag_cuda_direct_tetra_evaluate_root_farfield(
+        gpu_sources,
+        flat_targets.empty() ? nullptr : flat_targets.data(),
+        target_points.size(),
+        low_xyzw.data(),
+        static_cast<int>(low_rule.size()),
+        high_xyzw.data(),
+        static_cast<int>(high_rule.size()),
+        kGpuFarFieldNearRadiusFactor,
+        options.relative_tolerance,
+        options.absolute_tolerance_apm,
+        gpu_out,
+        cuda_error);
+    if (!cuda_ok) {
+        throw std::runtime_error(cuda_error.empty()
+            ? "direct tetrahedral Oersted CUDA far-field evaluation failed"
+            : cuda_error);
+    }
+
+    const auto initial_samples = work.kernel_evaluations;
+    const auto initial_visits = work.ledger_leaf_visits;
+    DirectTetraQuadratureResult result;
+    result.operator_version = DirectTetraQuadrature::operator_version;
+    result.h_xyz_apm.assign(target_points.size() * 3u, 0.0);
+    result.target_diagnostics.reserve(target_points.size());
+    result.diagnostics.source_target_pairs = source_count * target_count;
+    result.diagnostics.resolved_execution_policy = "gpu_hybrid_farfield";
+
+    const int requested_workers = resolve_available_worker_threads(options.worker_threads);
+    const bool use_target_parallel = requested_workers > 1 &&
+        target_points.size() >= static_cast<std::size_t>(2 * requested_workers);
+    const int effective_workers = use_target_parallel ? requested_workers : 1;
+    result.diagnostics.effective_worker_threads = effective_workers;
+
+    if (observer) {
+        observer->emit(AntennaProgressPhase::evaluating_field, 0, target_count, source_count);
+    }
+
+    if (use_target_parallel) {
+        SharedWorkBudget shared_budget(work.limits);
+        shared_budget.kernel_evaluations.store(work.kernel_evaluations, std::memory_order_relaxed);
+        shared_budget.ledger_leaf_visits.store(work.ledger_leaf_visits, std::memory_order_relaxed);
+
+        std::vector<TargetEvalOutput> per_target(target_points.size());
+        std::atomic<std::size_t> next_target{0};
+        std::mutex observer_mutex;
+        std::uint64_t completed_targets = 0;
+        std::mutex exception_mutex;
+        std::exception_ptr first_exception;
+
+        {
+            ThreadJoinGuard guard(&shared_budget.stop_requested);
+            guard.threads.reserve(static_cast<std::size_t>(effective_workers));
+            for (int w = 0; w < effective_workers; ++w) {
+                guard.threads.emplace_back([&]() {
+                    try {
+                        WorkBudget local_work(options, &shared_budget);
+                        for (;;) {
+                            if (shared_budget.stop_requested.load(std::memory_order_acquire)) {
+                                break;
+                            }
+                            const std::size_t target_index =
+                                next_target.fetch_add(1u, std::memory_order_relaxed);
+                            if (target_index >= target_points.size()) {
+                                break;
+                            }
+                            auto slot = evaluate_target_gpu_hybrid(
+                                elements, target_points[target_index], target_index,
+                                gpu_out, options, quad_tables, local_work, 1);
+                            local_work.flush_all();
+                            for (int component = 0; component < 3; ++component) {
+                                if (!std::isfinite(slot.field[component])) {
+                                    throw std::runtime_error(
+                                        "direct tetrahedral Oersted field is non-finite");
+                                }
+                            }
+                            per_target[target_index] = slot;
+                            if (observer != nullptr) {
+                                std::lock_guard<std::mutex> lock(observer_mutex);
+                                const std::uint64_t done = ++completed_targets;
+                                observer->emit(AntennaProgressPhase::evaluating_field,
+                                    done, target_count, source_count);
+                            }
+                        }
+                    } catch (const ParallelCancelled &) {
+                        // Sibling worker recorded the primary failure.
+                    } catch (...) {
+                        std::lock_guard<std::mutex> lock(exception_mutex);
+                        if (!first_exception) {
+                            first_exception = std::current_exception();
+                        }
+                        shared_budget.stop_requested.store(true, std::memory_order_release);
+                    }
+                });
+            }
+            guard.join_all();
+        }
+
+        if (first_exception) {
+            std::rethrow_exception(first_exception);
+        }
+
+        std::uint64_t total_samples = 0;
+        std::uint64_t total_visits = 0;
+        for (std::size_t target_index = 0; target_index < target_points.size(); ++target_index) {
+            const auto &slot = per_target[target_index];
+            result.target_diagnostics.push_back(slot.target_diag);
+            for (int component = 0; component < 3; ++component) {
+                result.h_xyz_apm[3u * target_index + static_cast<std::size_t>(component)] =
+                    slot.field[component];
+            }
+            result.diagnostics.refined_pairs += slot.refined_pairs;
+            result.diagnostics.maximum_pair_error_apm = std::max(
+                result.diagnostics.maximum_pair_error_apm,
+                slot.maximum_pair_error_apm);
+            result.diagnostics.gpu_farfield_pairs += slot.gpu_farfield_pairs;
+            result.diagnostics.cpu_near_singular_pairs += slot.cpu_near_singular_pairs;
+            total_samples += slot.target_diag.kernel_evaluations;
+            total_visits += slot.target_diag.ledger_leaf_visits;
+        }
+        work.charge_exact(total_samples, total_visits);
+    } else {
+        for (std::size_t target_index = 0; target_index < target_points.size(); ++target_index) {
+            const auto slot = evaluate_target_gpu_hybrid(
+                elements, target_points[target_index], target_index,
+                gpu_out, options, quad_tables, work, 1);
+            result.target_diagnostics.push_back(slot.target_diag);
+            for (int component = 0; component < 3; ++component) {
+                const double value = slot.field[component];
+                if (!std::isfinite(value)) {
+                    throw std::runtime_error(
+                        "direct tetrahedral Oersted field is non-finite");
+                }
+                result.h_xyz_apm[3u * target_index + static_cast<std::size_t>(component)] = value;
+            }
+            result.diagnostics.refined_pairs += slot.refined_pairs;
+            result.diagnostics.maximum_pair_error_apm = std::max(
+                result.diagnostics.maximum_pair_error_apm,
+                slot.maximum_pair_error_apm);
+            result.diagnostics.gpu_farfield_pairs += slot.gpu_farfield_pairs;
+            result.diagnostics.cpu_near_singular_pairs += slot.cpu_near_singular_pairs;
+            if (observer) {
+                observer->emit(AntennaProgressPhase::evaluating_field,
+                    target_index + 1, target_count, source_count);
+            }
+        }
+    }
+
+    result.diagnostics.kernel_evaluations = work.kernel_evaluations - initial_samples;
+    result.diagnostics.ledger_leaf_visits = work.ledger_leaf_visits - initial_visits;
+    return result;
+}
+
+#endif
+
 std::array<Point, 4> element_vertices(const mfem::Mesh &mesh, int element)
 {
     mfem::Array<int> vertices;
@@ -750,6 +1605,212 @@ std::array<Point, 4> element_vertices(const mfem::Mesh &mesh, int element)
     return result;
 }
 
+std::vector<PreparedElement> prepare_source(
+    const mfem::Mesh &mesh,
+    const mfem::GridFunction &rt0_field,
+    const DirectTetraQuadratureOptions &options)
+{
+    validate_pair_budget(static_cast<std::uint64_t>(mesh.GetNE()), 0, options);
+    if (rt0_field.FESpace() == nullptr ||
+            rt0_field.FESpace()->GetMesh() == nullptr ||
+            rt0_field.FESpace()->FEColl() == nullptr ||
+            rt0_field.FESpace()->FEColl()->Name() != std::string("RT_3D_P0") ||
+            rt0_field.FESpace()->GetMesh() != &mesh) {
+        throw std::invalid_argument(
+            "direct tetrahedral Oersted requires an RT0 source field");
+    }
+    std::vector<PreparedElement> elements;
+    elements.reserve(mesh.GetNE());
+    for (int element = 0; element < mesh.GetNE(); ++element) {
+        elements.push_back({CurrentElement(rt0_field, element), element_vertices(mesh, element)});
+    }
+    return elements;
+}
+
+DirectTetraQuadratureResult evaluate_prepared_impl(
+    const std::vector<PreparedElement> &elements,
+    const std::vector<Point> &target_points,
+    const DirectTetraQuadratureOptions &options,
+    WorkBudget &work,
+    bool enforce_pair_budget,
+    const SurfaceRt0ProgressObserver *observer = nullptr)
+{
+    const auto source_count = static_cast<std::uint64_t>(elements.size());
+    const auto target_count = static_cast<std::uint64_t>(target_points.size());
+    if (enforce_pair_budget) {
+        validate_pair_budget(source_count, target_count, options);
+    } else {
+        (void)DirectTetraQuadrature::ResolveWorkLimits(options);
+        if (source_count > DirectTetraQuadrature::maximum_final_leaves_per_target) {
+            throw std::invalid_argument("direct tetrahedral Oersted cardinality is invalid");
+        }
+    }
+    for (const auto &target : target_points) {
+        for (const double coordinate : target) {
+            if (!std::isfinite(coordinate)) {
+                throw std::invalid_argument("direct tetrahedral Oersted target is non-finite");
+            }
+        }
+    }
+
+    const auto quad_tables = QuadratureRuleTable::build(options);
+
+    if (options.execution_policy == DirectTetraExecutionPolicy::GpuHybridFarField) {
+#if defined(FULLMAG_HAS_CUDA_RUNTIME) && FULLMAG_HAS_CUDA_RUNTIME
+        return evaluate_prepared_gpu_hybrid(
+            elements, target_points, options, quad_tables, work, observer);
+#else
+        throw std::runtime_error(
+            "direct tetrahedral Oersted GPU hybrid policy requires CUDA runtime");
+#endif
+    }
+
+    const auto initial_samples = work.kernel_evaluations;
+    const auto initial_visits = work.ledger_leaf_visits;
+    DirectTetraQuadratureResult result;
+    result.operator_version = DirectTetraQuadrature::operator_version;
+    result.h_xyz_apm.assign(target_points.size() * 3u, 0.0);
+    result.target_diagnostics.reserve(target_points.size());
+    result.diagnostics.source_target_pairs = source_count * target_count;
+    result.diagnostics.resolved_execution_policy = "cpu_deterministic";
+    result.diagnostics.gpu_farfield_pairs = 0;
+    result.diagnostics.cpu_near_singular_pairs = source_count * target_count;
+
+    const int requested_workers = resolve_available_worker_threads(options.worker_threads);
+    const bool use_target_parallel = requested_workers > 1 &&
+        target_points.size() >= static_cast<std::size_t>(2 * requested_workers);
+    const bool use_source_parallel = !use_target_parallel &&
+        requested_workers > 1 &&
+        !target_points.empty() &&
+        elements.size() >= kSourceRootParallelThreshold;
+    const int effective_workers = use_target_parallel
+        ? requested_workers
+        : (use_source_parallel
+            ? std::min<int>(requested_workers, static_cast<int>(elements.size()))
+            : 1);
+    result.diagnostics.effective_worker_threads = effective_workers;
+
+    if (observer) {
+        observer->emit(AntennaProgressPhase::evaluating_field, 0, target_count, source_count);
+    }
+
+    if (use_target_parallel) {
+        SharedWorkBudget shared_budget(work.limits);
+        shared_budget.kernel_evaluations.store(work.kernel_evaluations, std::memory_order_relaxed);
+        shared_budget.ledger_leaf_visits.store(work.ledger_leaf_visits, std::memory_order_relaxed);
+
+        std::vector<TargetEvalOutput> per_target(target_points.size());
+        std::atomic<std::size_t> next_target{0};
+        std::mutex observer_mutex;
+        std::uint64_t completed_targets = 0;
+        std::mutex exception_mutex;
+        std::exception_ptr first_exception;
+
+        {
+            ThreadJoinGuard guard(&shared_budget.stop_requested);
+            guard.threads.reserve(static_cast<std::size_t>(effective_workers));
+            for (int w = 0; w < effective_workers; ++w) {
+                guard.threads.emplace_back([&]() {
+                    try {
+                        WorkBudget local_work(options, &shared_budget);
+                        for (;;) {
+                            if (shared_budget.stop_requested.load(std::memory_order_acquire)) {
+                                break;
+                            }
+                            const std::size_t target_index =
+                                next_target.fetch_add(1u, std::memory_order_relaxed);
+                            if (target_index >= target_points.size()) {
+                                break;
+                            }
+                            DirectTetraQuadratureDiagnostics local_diag;
+                            const auto target_result = evaluate_target(
+                                elements, target_points[target_index], options,
+                                quad_tables, local_work, local_diag, 1);
+                            local_work.flush_all();
+                            for (int component = 0; component < 3; ++component) {
+                                if (!std::isfinite(target_result.first[component])) {
+                                    throw std::runtime_error(
+                                        "direct tetrahedral Oersted field is non-finite");
+                                }
+                            }
+                            per_target[target_index] = {
+                                target_result.first,
+                                target_result.second,
+                                local_diag.refined_pairs,
+                                local_diag.maximum_pair_error_apm,
+                                0,
+                                source_count};
+                            if (observer != nullptr) {
+                                std::lock_guard<std::mutex> lock(observer_mutex);
+                                const std::uint64_t done = ++completed_targets;
+                                observer->emit(AntennaProgressPhase::evaluating_field,
+                                    done, target_count, source_count);
+                            }
+                        }
+                    } catch (const ParallelCancelled &) {
+                        // Sibling worker recorded the primary failure.
+                    } catch (...) {
+                        std::lock_guard<std::mutex> lock(exception_mutex);
+                        if (!first_exception) {
+                            first_exception = std::current_exception();
+                        }
+                        shared_budget.stop_requested.store(true, std::memory_order_release);
+                    }
+                });
+            }
+            guard.join_all();
+        }
+
+        if (first_exception) {
+            std::rethrow_exception(first_exception);
+        }
+
+        std::uint64_t total_samples = 0;
+        std::uint64_t total_visits = 0;
+        for (std::size_t target_index = 0; target_index < target_points.size(); ++target_index) {
+            const auto &slot = per_target[target_index];
+            result.target_diagnostics.push_back(slot.target_diag);
+            for (int component = 0; component < 3; ++component) {
+                result.h_xyz_apm[3u * target_index + static_cast<std::size_t>(component)] =
+                    slot.field[component];
+            }
+            result.diagnostics.refined_pairs += slot.refined_pairs;
+            result.diagnostics.maximum_pair_error_apm = std::max(
+                result.diagnostics.maximum_pair_error_apm,
+                slot.maximum_pair_error_apm);
+            total_samples += slot.target_diag.kernel_evaluations;
+            total_visits += slot.target_diag.ledger_leaf_visits;
+        }
+        work.charge_exact(total_samples, total_visits);
+    } else {
+        const int root_workers = use_source_parallel ? effective_workers : 1;
+        for (std::size_t target_index = 0; target_index < target_points.size();
+                ++target_index) {
+            const auto target_result = evaluate_target(
+                elements, target_points[target_index], options, quad_tables,
+                work, result.diagnostics, root_workers);
+            result.target_diagnostics.push_back(target_result.second);
+            for (int component = 0; component < 3; ++component) {
+                const double value = target_result.first[component];
+                if (!std::isfinite(value)) {
+                    throw std::runtime_error(
+                        "direct tetrahedral Oersted field is non-finite");
+                }
+                result.h_xyz_apm[3u * target_index +
+                    static_cast<std::size_t>(component)] = value;
+            }
+            if (observer) {
+                observer->emit(AntennaProgressPhase::evaluating_field,
+                    target_index + 1, target_count, source_count);
+            }
+        }
+    }
+
+    result.diagnostics.kernel_evaluations = work.kernel_evaluations - initial_samples;
+    result.diagnostics.ledger_leaf_visits = work.ledger_leaf_visits - initial_visits;
+    return result;
+}
+
 } // namespace
 
 DirectTetraQuadratureWorkLimits DirectTetraQuadrature::ResolveWorkLimits(
@@ -758,7 +1819,10 @@ DirectTetraQuadratureWorkLimits DirectTetraQuadrature::ResolveWorkLimits(
     if (options.base_quadrature_order < 2 || options.base_quadrature_order > 16 ||
             options.maximum_subdivision_depth < 0 || options.maximum_subdivision_depth > 6 ||
             !(std::isfinite(options.absolute_tolerance_apm) && options.absolute_tolerance_apm >= 0.0) ||
-            !(std::isfinite(options.relative_tolerance) && options.relative_tolerance >= 0.0)) {
+            !(std::isfinite(options.relative_tolerance) && options.relative_tolerance >= 0.0) ||
+            options.worker_threads < 0 ||
+            (options.execution_policy != DirectTetraExecutionPolicy::CpuDeterministic &&
+             options.execution_policy != DirectTetraExecutionPolicy::GpuHybridFarField)) {
         throw std::invalid_argument("direct tetrahedral Oersted options are invalid");
     }
     if (options.maximum_source_target_pairs > 0 &&
@@ -785,78 +1849,6 @@ DirectTetraQuadratureResult DirectTetraQuadrature::Evaluate(
     return result;
 }
 
-namespace {
-
-std::vector<PreparedElement> prepare_source(
-    const mfem::Mesh &mesh,
-    const mfem::GridFunction &rt0_field,
-    const DirectTetraQuadratureOptions &options)
-{
-    validate_pair_budget(static_cast<std::uint64_t>(mesh.GetNE()), 0, options);
-    if (rt0_field.FESpace() == nullptr ||
-            rt0_field.FESpace()->GetMesh() == nullptr ||
-            rt0_field.FESpace()->FEColl() == nullptr ||
-            rt0_field.FESpace()->FEColl()->Name() != std::string("RT_3D_P0") ||
-            rt0_field.FESpace()->GetMesh() != &mesh) {
-        throw std::invalid_argument(
-            "direct tetrahedral Oersted requires an RT0 source field");
-    }
-    std::vector<PreparedElement> elements;
-    elements.reserve(mesh.GetNE());
-    for (int element = 0; element < mesh.GetNE(); ++element) {
-        elements.push_back({CurrentElement(rt0_field, element), element_vertices(mesh, element)});
-    }
-    return elements;
-}
-
-DirectTetraQuadratureResult evaluate_prepared(
-    const std::vector<PreparedElement> &elements,
-    const std::vector<Point> &target_points,
-    const DirectTetraQuadratureOptions &options,
-    WorkBudget &work, const SurfaceRt0ProgressObserver *observer)
-{
-    const auto source_count = static_cast<std::uint64_t>(elements.size());
-    const auto target_count = static_cast<std::uint64_t>(target_points.size());
-    validate_pair_budget(source_count, target_count, options);
-    for (const auto &target : target_points) {
-        for (const double coordinate : target) {
-            if (!std::isfinite(coordinate)) {
-                throw std::invalid_argument("direct tetrahedral Oersted target is non-finite");
-            }
-        }
-    }
-    const auto initial_samples = work.kernel_evaluations;
-    const auto initial_visits = work.ledger_leaf_visits;
-    DirectTetraQuadratureResult result;
-    result.operator_version = DirectTetraQuadrature::operator_version;
-    result.h_xyz_apm.assign(target_points.size() * 3u, 0.0);
-    result.target_diagnostics.reserve(target_points.size());
-    result.diagnostics.source_target_pairs = source_count * target_count;
-    if (observer) observer->emit(AntennaProgressPhase::evaluating_field, 0, target_count, source_count);
-    for (std::size_t target_index = 0; target_index < target_points.size();
-            ++target_index) {
-        const auto target_result = evaluate_target(elements, target_points[target_index],
-            options, work, result.diagnostics);
-        result.target_diagnostics.push_back(target_result.second);
-        for (int component = 0; component < 3; ++component) {
-            const double value = target_result.first[component];
-            if (!std::isfinite(value)) {
-                throw std::runtime_error(
-                    "direct tetrahedral Oersted field is non-finite");
-            }
-            result.h_xyz_apm[3u * target_index +
-                static_cast<std::size_t>(component)] = value;
-        }
-        if (observer) observer->emit(AntennaProgressPhase::evaluating_field,
-            target_index + 1, target_count, source_count);
-    }
-    result.diagnostics.kernel_evaluations = work.kernel_evaluations - initial_samples;
-    result.diagnostics.ledger_leaf_visits = work.ledger_leaf_visits - initial_visits;
-    return result;
-}
-
-} // namespace
-
 DirectTetraQuadratureResult DirectTetraQuadrature::EvaluateField(
     const mfem::Mesh &mesh,
     const mfem::GridFunction &rt0_field,
@@ -868,9 +1860,9 @@ DirectTetraQuadratureResult DirectTetraQuadrature::EvaluateField(
         static_cast<std::uint64_t>(target_points.size()), options);
     const auto elements = prepare_source(mesh, rt0_field, options);
     WorkBudget work(options);
-    return evaluate_prepared(elements, target_points, options, work, observer);
+    return evaluate_prepared_impl(elements, target_points, options, work,
+        /*enforce_pair_budget=*/true, observer);
 }
-
 
 DirectTetraQuadratureResult DirectTetraQuadrature::EvaluateFrozenField(
     const std::vector<fullmag::fem::transport::AffineRt0Element::FrozenInput> &source,
@@ -886,7 +1878,8 @@ DirectTetraQuadratureResult DirectTetraQuadrature::EvaluateFrozenField(
         elements.push_back({CurrentElement(input), input.vertices_m});
     }
     WorkBudget work(options);
-    return evaluate_prepared(elements, target_points, options, work, observer);
+    return evaluate_prepared_impl(elements, target_points, options, work,
+        /*enforce_pair_budget=*/true, observer);
 }
 
 DirectTetraQuadratureDiagnostics DirectTetraQuadrature::ProjectField(
@@ -926,16 +1919,21 @@ DirectTetraQuadratureDiagnostics DirectTetraQuadrature::ProjectField(
     if (options.maximum_source_target_pairs > 1'000'000) {
         throw std::invalid_argument("direct tetrahedral Oersted H1 projection requires a legacy work profile");
     }
-    // Freeze one source snapshot for all target points and Cartesian components.
+    // Freeze one source snapshot for all target quadrature points and Cartesian components.
     const auto elements = prepare_source(source_mesh, rt0_field, options);
 
     const int target_order = std::max(2, options.base_quadrature_order + 2);
-    const auto &target_rule = mfem::IntRules.Get(
-        mfem::Geometry::TETRAHEDRON, target_order);
+    const mfem::IntegrationRule *target_rule = nullptr;
+    {
+        std::lock_guard<std::mutex> lock(mfem_int_rules_mutex());
+        target_rule = &mfem::IntRules.Get(mfem::Geometry::TETRAHEDRON, target_order);
+    }
 
     // MFEM's VectorFEMassIntegrator is for vector finite elements (ND/RT),
-    // not a scalar H1 space with vdim=3.  Assemble one scalar H1 mass system
-    // per Cartesian component and lift the three solutions into byVDIM data.
+    // not a scalar H1 space with vdim=3.  Assemble one scalar H1 mass system,
+    // evaluate the 3-component Biot-Savart field once across all quadrature
+    // points, assemble all 3 RHS vectors in one element pass, and reuse a
+    // single sparse mass factorization across all 3 Cartesian components.
     mfem::FiniteElementSpace scalar_space(
         &target_mesh, target_field.FESpace()->FEColl(), 1,
         mfem::Ordering::byNODES);
@@ -946,50 +1944,100 @@ DirectTetraQuadratureDiagnostics DirectTetraQuadrature::ProjectField(
     }
     mfem::BilinearForm mass(&scalar_space);
     auto *mass_integrator = new mfem::MassIntegrator();
-    mass_integrator->SetIntRule(&target_rule);
+    mass_integrator->SetIntRule(target_rule);
     mass.AddDomainIntegrator(mass_integrator);
     mass.Assemble();
     mass.Finalize();
 
-    target_field = 0.0;
-    mfem::GSSmoother smoother(mass.SpMat());
-    DirectTetraQuadratureDiagnostics diagnostics;
-    mfem::Vector solution(scalar_dofs);
-    mfem::Vector residual(scalar_dofs);
-    WorkBudget work(options);
-    for (int component = 0; component < 3; ++component) {
-        DirectScalarCoefficient direct_component(
-            elements, options, component, work);
-        mfem::LinearForm rhs(&scalar_space);
-        auto *rhs_integrator = new mfem::DomainLFIntegrator(direct_component);
-        rhs_integrator->SetIntRule(&target_rule);
-        rhs.AddDomainIntegrator(rhs_integrator);
-        rhs.Assemble();
-
-        solution = 0.0;
-        mfem::PCG(mass, smoother, rhs, solution,
-            0, 1000, 1.0e-12, 1.0e-24);
-        mass.Mult(solution, residual);
-        residual -= rhs;
-        const double residual_norm = residual.Norml2();
-        const double residual_scale = std::max(1.0, rhs.Norml2());
-        if (!(std::isfinite(residual_norm) &&
-                residual_norm <= 1.0e-10 * residual_scale)) {
-            throw std::runtime_error(
-                "direct tetrahedral Oersted H1 projection mass residual exceeds tolerance");
+    const int num_target_elements = target_mesh.GetNE();
+    const int npts = target_rule->GetNPoints();
+    std::vector<Point> target_points;
+    target_points.reserve(static_cast<std::size_t>(num_target_elements) *
+        static_cast<std::size_t>(npts));
+    mfem::Vector physical(3);
+    for (int element = 0; element < num_target_elements; ++element) {
+        mfem::ElementTransformation *tr = target_mesh.GetElementTransformation(element);
+        for (int p = 0; p < npts; ++p) {
+            tr->Transform(target_rule->IntPoint(p), physical);
+            target_points.push_back({physical[0], physical[1], physical[2]});
         }
-        diagnostics.source_target_pairs +=
-            direct_component.diagnostics().source_target_pairs;
-        diagnostics.refined_pairs += direct_component.diagnostics().refined_pairs;
-        diagnostics.kernel_evaluations += direct_component.diagnostics().kernel_evaluations;
-        diagnostics.ledger_leaf_visits += direct_component.diagnostics().ledger_leaf_visits;
-        diagnostics.unconverged_pair_count +=
-            direct_component.diagnostics().unconverged_pair_count;
-        diagnostics.maximum_pair_error_apm = std::max(
-            diagnostics.maximum_pair_error_apm,
-            direct_component.diagnostics().maximum_pair_error_apm);
-        for (int dof = 0; dof < scalar_dofs; ++dof) {
-            target_field[component * scalar_dofs + dof] = solution[dof];
+    }
+
+    // Single shared WorkBudget across the entire fused 3-component projection;
+    // bypass only the pointwise pair cap so large projection meshes do not hit
+    // false pair-cap errors relative to single-point evaluation.
+    WorkBudget work(options);
+    const auto evaluated = evaluate_prepared_impl(
+        elements, target_points, options, work,
+        /*enforce_pair_budget=*/false, /*observer=*/nullptr);
+
+    std::array<mfem::Vector, 3> rhs;
+    for (int component = 0; component < 3; ++component) {
+        rhs[static_cast<std::size_t>(component)].SetSize(scalar_dofs);
+        rhs[static_cast<std::size_t>(component)] = 0.0;
+    }
+
+    mfem::Array<int> vdofs;
+    mfem::Vector shape;
+    std::array<mfem::Vector, 3> elvect;
+    std::size_t point_cursor = 0;
+    for (int element = 0; element < num_target_elements; ++element) {
+        const mfem::FiniteElement *fe = scalar_space.GetFE(element);
+        mfem::ElementTransformation *tr = target_mesh.GetElementTransformation(element);
+        const int dof_count = fe->GetDof();
+        shape.SetSize(dof_count);
+        for (int component = 0; component < 3; ++component) {
+            elvect[static_cast<std::size_t>(component)].SetSize(dof_count);
+            elvect[static_cast<std::size_t>(component)] = 0.0;
+        }
+        for (int p = 0; p < npts; ++p) {
+            const mfem::IntegrationPoint &ip = target_rule->IntPoint(p);
+            tr->SetIntPoint(&ip);
+            fe->CalcShape(ip, shape);
+            const double weight = ip.weight * tr->Weight();
+            for (int component = 0; component < 3; ++component) {
+                const double h_val = evaluated.h_xyz_apm[
+                    3u * point_cursor + static_cast<std::size_t>(component)];
+                elvect[static_cast<std::size_t>(component)].Add(weight * h_val, shape);
+            }
+            ++point_cursor;
+        }
+        scalar_space.GetElementDofs(element, vdofs);
+        for (int component = 0; component < 3; ++component) {
+            rhs[static_cast<std::size_t>(component)].AddElementVector(
+                vdofs, elvect[static_cast<std::size_t>(component)]);
+        }
+    }
+
+    target_field = 0.0;
+    if (scalar_dofs > 0) {
+        fullmag::fem::multiphysics::SparseSolveConfig mass_config;
+        mass_config.kind = fullmag::fem::multiphysics::SparseMatrixKind::Spd;
+        mass_config.execution_target = fullmag::fem::multiphysics::SparseExecutionTarget::Cpu;
+        mass_config.cpu_backend = fullmag::fem::multiphysics::SparseCpuBackendPolicy::Auto;
+        mass_config.relative_tolerance = 1.0e-12;
+        mass_config.absolute_tolerance = 0.0;
+        mass_config.maximum_iterations = 2000;
+        fullmag::fem::multiphysics::SparseLinearSolver mass_solver(mass.SpMat(), mass_config);
+
+        mfem::Vector solution(scalar_dofs);
+        mfem::Vector residual(scalar_dofs);
+        for (int component = 0; component < 3; ++component) {
+            solution = 0.0;
+            const auto &component_rhs = rhs[static_cast<std::size_t>(component)];
+            const auto solve_stats = mass_solver.solve(component_rhs, solution, 1.0);
+            mass.Mult(solution, residual);
+            residual -= component_rhs;
+            const double residual_norm = residual.Norml2();
+            const double residual_scale = std::max(1.0, component_rhs.Norml2());
+            if (!(solve_stats.converged && std::isfinite(residual_norm) &&
+                    residual_norm <= 1.0e-10 * residual_scale)) {
+                throw std::runtime_error(
+                    "direct tetrahedral Oersted H1 projection mass residual exceeds tolerance");
+            }
+            for (int dof = 0; dof < scalar_dofs; ++dof) {
+                target_field[component * scalar_dofs + dof] = solution[dof];
+            }
         }
     }
     for (int dof = 0; dof < target_field.Size(); ++dof) {
@@ -998,7 +2046,7 @@ DirectTetraQuadratureDiagnostics DirectTetraQuadrature::ProjectField(
                 "direct tetrahedral Oersted H1 projection is non-finite");
         }
     }
-    return diagnostics;
+    return evaluated.diagnostics;
 }
 
 } // namespace fullmag::fem::oersted
