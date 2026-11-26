@@ -1358,7 +1358,7 @@
       "id": "fem-oef2-nodal-projection",
       "path": "backends/fem/cpu/mfem/interactions/oersted/vector_potential.cpp",
       "symbol": "project_compatible_h_to_nodes",
-      "responsibility": "Project compatible RT0 H=curl(A)/mu0 into a bounded scalar H1/P1 nodal field for the LLG interface and publish the normalized projection residual."
+      "responsibility": "Project compatible RT0 H=curl(A)/mu0 into a continuous scalar H1/P1 nodal field for the LLG interface via single-pass 3-RHS assembly and factor-once sparse SPD mass solve, publishing the normalized O(nnz) projection residual."
     },
     {
       "id": "fem-dispatch-injection",
@@ -1478,7 +1478,7 @@
       "id": "managed-fem-oef2-gate",
       "path": "backends/fem/tests/oersted_vector_potential_contract.cpp",
       "symbol": "main",
-      "responsibility": "Managed CPU mixed H(curl)-H1 vector-potential contract with gauge and weak-Ampere diagnostics."
+      "responsibility": "Managed CPU mixed H(curl)-H1 vector-potential contract covering gauge and weak-Ampere diagnostics, sparse-vs-dense oracle parity (Auto/Hypre AMS/MfemSerial), >4096 ND scaling, nanometer equilibration, zero-interior-H1 SPD path and explicit cap rejection."
     },
     {
       "id": "rank-bareiss-reducer",

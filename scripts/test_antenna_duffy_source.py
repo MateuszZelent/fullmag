@@ -14,7 +14,7 @@ VERSION = "fem_oersted_direct_tetra_quadrature.v3"
 
 def source_body():
     text = CPP.read_text(encoding="utf-8")
-    return text.split("RuleIntegral integrate_duffy_once(", 1)[1].split("class DirectScalarCoefficient", 1)[0]
+    return text.split("RuleIntegral integrate_duffy_once(", 1)[1].split("struct Leaf", 1)[0]
 
 
 def expression(name):
@@ -144,11 +144,12 @@ def test_corrected_operator_identity_is_shared_and_archives_not_relabelled():
     ir = (ROOT / "crates/fullmag-ir/src/antenna.rs").read_text(encoding="utf-8")
     abi = (ROOT / "backends/fem/cpu/mfem/transport/steady_transport_c_api.cpp").read_text(encoding="utf-8")
     codec = (ROOT / "crates/fullmag-runner/src/native_fem/accepted_external_lead/record.rs").read_text(encoding="utf-8")
+    bundle = (ROOT / "crates/fullmag-antenna-artifacts/src/bundle.rs").read_text(encoding="utf-8")
     assert VERSION in header and VERSION in ir
     assert 'schema_version\\\":\\\"%s' in abi
-    assert "pub quadrature_operator_version: String" in codec
-    assert '"fem_oersted_direct_tetra_quadrature.v1"' in codec
-    assert '"fem_oersted_direct_tetra_quadrature.v2"' in codec
+    assert "pub quadrature_operator_version: String" in bundle
+    assert '"fem_oersted_direct_tetra_quadrature.v1"' in bundle
+    assert '"fem_oersted_direct_tetra_quadrature.v2"' in bundle
     assert "fullmag_ir::ANTENNA_DIRECT_OERSTED_OPERATOR_VERSION" in codec
     binding = codec.split("fn bind_preflighted_request(", 1)[1]
     assert re.search(r"bundle\.field\.quadrature_operator_version\s*==\s*fullmag_ir::ANTENNA_DIRECT_OERSTED_OPERATOR_VERSION", binding)
