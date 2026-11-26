@@ -48,6 +48,21 @@ bool gpu_component_upload_aos(
     TransferAudit &audit,
     std::string &error);
 
+/* Copy a contiguous host AoS vector into persistent device AoS scratch on the
+ * supplied stream, unpack into device SoA component arrays, and synchronize.
+ */
+bool gpu_component_upload_aos_packed(
+    const FemGpuLifecycleDeviceState &lifecycle,
+    FemGpuComponentField &field,
+    double *aos_device_scratch,
+    uint64_t scratch_dof_len,
+    void *raw_stream,
+    const double *xyz,
+    uint64_t len,
+    const char *label,
+    TransferAudit &audit,
+    std::string &error);
+
 bool gpu_component_zero_device(
     const FemGpuLifecycleDeviceState &lifecycle,
     FemGpuComponentField &field,

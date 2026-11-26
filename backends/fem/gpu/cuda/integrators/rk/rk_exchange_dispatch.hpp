@@ -29,7 +29,8 @@ bool gpu_rk_compute_legacy_sparse_exchange(
     cudaStream_t stream,
     std::string &reason,
     FemGpuExecutionReceiptRuntimeState *execution_receipt = nullptr,
-    GpuPerformanceCounterState *performance_counters = nullptr);
+    GpuPerformanceCounterState *performance_counters = nullptr,
+    bool compensated_accumulation = true);
 
 } // namespace fullmag::fem
 #endif

@@ -69,6 +69,15 @@ const std::vector<double> *full_domain_visual_field_source(
     return nullptr;
 }
 
+bool can_use_packed_gpu_transfer(const Context &ctx)
+{
+    const auto &gpu = ctx.gpu_state.device;
+    return ctx.gpu_state.cuda.compute_stream != nullptr &&
+        (gpu.lifecycle.dof_len == 0 ||
+            (gpu.packed_field_download.aos_device != nullptr &&
+             gpu.packed_field_download.dof_len == gpu.lifecycle.dof_len));
+}
+
 int copy_torque_observable_f64(
     const Context &ctx,
     double *out_xyz,
@@ -88,13 +97,23 @@ int copy_torque_observable_f64(
             error = "GPU accepted-endpoint observable cache is invalid; refresh a snapshot before reading torque";
             return FULLMAG_FEM_ERR_INVALID;
         }
-        if (!gpu_state_download_component_aos(
-                const_cast<FemGpuState &>(ctx.gpu_state.device),
-                ctx.gpu_state.device.fields.h_eff,
-                gpu_h_eff,
-                const_cast<TransferAudit &>(ctx.transfer_audit.audit),
-                "H_eff",
-                error)) {
+        const bool downloaded = can_use_packed_gpu_transfer(ctx)
+            ? gpu_state_download_component_aos_packed(
+                  const_cast<FemGpuState &>(ctx.gpu_state.device),
+                  ctx.gpu_state.device.fields.h_eff,
+                  gpu_h_eff,
+                  const_cast<TransferAudit &>(ctx.transfer_audit.audit),
+                  ctx.gpu_state.cuda.compute_stream,
+                  "H_eff",
+                  error)
+            : gpu_state_download_component_aos(
+                  const_cast<FemGpuState &>(ctx.gpu_state.device),
+                  ctx.gpu_state.device.fields.h_eff,
+                  gpu_h_eff,
+                  const_cast<TransferAudit &>(ctx.transfer_audit.audit),
+                  "H_eff",
+                  error);
+        if (!downloaded) {
             error = std::string("GPU component download failed: ") + error;
             return FULLMAG_FEM_ERR_INTERNAL;
         }
@@ -305,11 +324,19 @@ bool context_sync_gpu_magnetization_to_host(Context &ctx, std::string &error)
         ctx.gpu_state.device.residency.host_state != FemGpuSyncState::HostStale) {
         return true;
     }
-    if (!gpu_state_download_magnetization_aos(
-            ctx.gpu_state.device,
-            ctx.state.m_xyz,
-            ctx.transfer_audit.audit,
-            error)) {
+    const bool downloaded = can_use_packed_gpu_transfer(ctx)
+        ? gpu_state_download_magnetization_aos_packed(
+              ctx.gpu_state.device,
+              ctx.state.m_xyz,
+              ctx.transfer_audit.audit,
+              ctx.gpu_state.cuda.compute_stream,
+              error)
+        : gpu_state_download_magnetization_aos(
+              ctx.gpu_state.device,
+              ctx.state.m_xyz,
+              ctx.transfer_audit.audit,
+              error);
+    if (!downloaded) {
         error = "GPU magnetization readback failed: " + error;
         return false;
     }
@@ -418,13 +445,23 @@ int context_copy_field_f64(
                 return FULLMAG_FEM_ERR_INVALID;
             }
             std::vector<double> tmp;
-            if (!gpu_state_download_component_aos(
-                    const_cast<FemGpuState &>(ctx.gpu_state.device),
-                    *gpu_field,
-                    tmp,
-                    const_cast<TransferAudit &>(ctx.transfer_audit.audit),
-                    label,
-                    error)) {
+            const bool downloaded = can_use_packed_gpu_transfer(ctx)
+                ? gpu_state_download_component_aos_packed(
+                      const_cast<FemGpuState &>(ctx.gpu_state.device),
+                      *gpu_field,
+                      tmp,
+                      const_cast<TransferAudit &>(ctx.transfer_audit.audit),
+                      ctx.gpu_state.cuda.compute_stream,
+                      label,
+                      error)
+                : gpu_state_download_component_aos(
+                      const_cast<FemGpuState &>(ctx.gpu_state.device),
+                      *gpu_field,
+                      tmp,
+                      const_cast<TransferAudit &>(ctx.transfer_audit.audit),
+                      label,
+                      error);
+            if (!downloaded) {
                 error = std::string("GPU component download failed: ") + error;
                 return FULLMAG_FEM_ERR_INTERNAL;
             }
@@ -570,13 +607,23 @@ int context_copy_linearization_field_f64(
             return FULLMAG_FEM_ERR_INVALID;
         }
         std::vector<double> tmp;
-        if (!gpu_state_download_component_aos(
-                const_cast<FemGpuState &>(ctx.gpu_state.device),
-                *gpu_field,
-                tmp,
-                const_cast<TransferAudit &>(ctx.transfer_audit.audit),
-                label,
-                error)) {
+        const bool downloaded = can_use_packed_gpu_transfer(ctx)
+            ? gpu_state_download_component_aos_packed(
+                  const_cast<FemGpuState &>(ctx.gpu_state.device),
+                  *gpu_field,
+                  tmp,
+                  const_cast<TransferAudit &>(ctx.transfer_audit.audit),
+                  ctx.gpu_state.cuda.compute_stream,
+                  label,
+                  error)
+            : gpu_state_download_component_aos(
+                  const_cast<FemGpuState &>(ctx.gpu_state.device),
+                  *gpu_field,
+                  tmp,
+                  const_cast<TransferAudit &>(ctx.transfer_audit.audit),
+                  label,
+                  error);
+        if (!downloaded) {
             error = std::string("GPU linearization field download failed: ") + error;
             return FULLMAG_FEM_ERR_INTERNAL;
         }
@@ -624,12 +671,21 @@ int context_upload_magnetization_f64(
         return FULLMAG_FEM_ERR_INVALID;
     }
     if (ctx.gpu_state.device.lifecycle.allocated) {
-        if (!gpu_state_upload_magnetization_aos(
-                ctx.gpu_state.device,
-                uploaded_m.data(),
-                static_cast<uint64_t>(uploaded_m.size()),
-                ctx.transfer_audit.audit,
-                error)) {
+        const bool uploaded = can_use_packed_gpu_transfer(ctx)
+            ? gpu_state_upload_magnetization_aos_packed(
+                  ctx.gpu_state.device,
+                  uploaded_m.data(),
+                  static_cast<uint64_t>(uploaded_m.size()),
+                  ctx.transfer_audit.audit,
+                  ctx.gpu_state.cuda.compute_stream,
+                  error)
+            : gpu_state_upload_magnetization_aos(
+                  ctx.gpu_state.device,
+                  uploaded_m.data(),
+                  static_cast<uint64_t>(uploaded_m.size()),
+                  ctx.transfer_audit.audit,
+                  error);
+        if (!uploaded) {
             return FULLMAG_FEM_ERR_INTERNAL;
         }
     } else {

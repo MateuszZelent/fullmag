@@ -12,6 +12,7 @@ namespace fullmag::fem {
 
 static constexpr int kBlockSize = 256;
 
+template <bool ComputeEnergy>
 __global__ void magnetoelastic_field_energy_blocks_kernel(
     const double *__restrict__ mx,
     const double *__restrict__ my,
@@ -66,21 +67,29 @@ __global__ void magnetoelastic_field_energy_blocks_kernel(
         h_mel_x[i] = hx;
         h_mel_y[i] = hy;
         h_mel_z[i] = hz;
-        const double energy_density =
-            b1 * (lmx * lmx * e11 + lmy * lmy * e22 + lmz * lmz * e33) +
-            2.0 * b2 * (lmx * lmy * tensor_e12 + lmx * lmz * tensor_e13 + lmy * lmz * tensor_e23);
-        local = energy_density * lumped_mass[i];
+        if constexpr (ComputeEnergy) {
+            const double energy_density =
+                b1 * (lmx * lmx * e11 + lmy * lmy * e22 + lmz * lmz * e33) +
+                2.0 * b2 * (lmx * lmy * tensor_e12 + lmx * lmz * tensor_e13 + lmy * lmz * tensor_e23);
+            local = energy_density * lumped_mass[i];
+        }
     } else if (i < N) {
         h_mel_x[i] = 0.0;
         h_mel_y[i] = 0.0;
         h_mel_z[i] = 0.0;
     }
 
-    typedef cub::BlockReduce<double, 256> BlockReduce;
-    __shared__ typename BlockReduce::TempStorage temp_storage;
-    const double block_sum = BlockReduce(temp_storage).Sum(local);
-    if (threadIdx.x == 0) {
-        block_sums[blockIdx.x] = block_sum;
+    if constexpr (ComputeEnergy) {
+        typedef cub::BlockReduce<double, kBlockSize> BlockReduce;
+        __shared__ typename BlockReduce::TempStorage temp_storage;
+        const double block_sum = BlockReduce(temp_storage).Sum(local);
+        if (threadIdx.x == 0) {
+            block_sums[blockIdx.x] = block_sum;
+        }
+    } else {
+        (void)local;
+        (void)lumped_mass;
+        (void)block_sums;
     }
 }
 
@@ -108,29 +117,57 @@ void fullmag_cuda_magnetoelastic_field_energy_blocks(
     int N,
     cudaStream_t stream)
 {
+    if (N <= 0) {
+        return;
+    }
     const int num_blocks = (N + kBlockSize - 1) / kBlockSize;
-    magnetoelastic_field_energy_blocks_kernel<<<num_blocks, kBlockSize, 0, stream>>>(
-        mx,
-        my,
-        mz,
-        ms,
-        lumped_mass,
-        magnetic_node_mask,
-        per_node_strain_voigt,
-        h_mel_x,
-        h_mel_y,
-        h_mel_z,
-        block_sums,
-        b1,
-        b2,
-        e11,
-        e22,
-        e33,
-        tensor_e23,
-        tensor_e13,
-        tensor_e12,
-        use_per_node_strain,
-        N);
+    if (block_sums != nullptr) {
+        magnetoelastic_field_energy_blocks_kernel<true><<<num_blocks, kBlockSize, 0, stream>>>(
+            mx,
+            my,
+            mz,
+            ms,
+            lumped_mass,
+            magnetic_node_mask,
+            per_node_strain_voigt,
+            h_mel_x,
+            h_mel_y,
+            h_mel_z,
+            block_sums,
+            b1,
+            b2,
+            e11,
+            e22,
+            e33,
+            tensor_e23,
+            tensor_e13,
+            tensor_e12,
+            use_per_node_strain,
+            N);
+    } else {
+        magnetoelastic_field_energy_blocks_kernel<false><<<num_blocks, kBlockSize, 0, stream>>>(
+            mx,
+            my,
+            mz,
+            ms,
+            lumped_mass,
+            magnetic_node_mask,
+            per_node_strain_voigt,
+            h_mel_x,
+            h_mel_y,
+            h_mel_z,
+            nullptr,
+            b1,
+            b2,
+            e11,
+            e22,
+            e33,
+            tensor_e23,
+            tensor_e13,
+            tensor_e12,
+            use_per_node_strain,
+            N);
+    }
 }
 
 } // namespace fullmag::fem

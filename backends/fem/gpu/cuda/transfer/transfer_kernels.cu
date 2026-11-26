@@ -118,6 +118,23 @@ __global__ void pack_soa_to_aos_kernel(
     }
 }
 
+__global__ void unpack_aos_to_soa_kernel(
+    const double *aos_xyz,
+    double *x,
+    double *y,
+    double *z,
+    int N)
+{
+    const unsigned long long node =
+        static_cast<unsigned long long>(blockIdx.x) * blockDim.x + threadIdx.x;
+    if (node < static_cast<unsigned long long>(N)) {
+        const unsigned long long offset = 3ull * node;
+        x[node] = aos_xyz[offset + 0ull];
+        y[node] = aos_xyz[offset + 1ull];
+        z[node] = aos_xyz[offset + 2ull];
+    }
+}
+
 } // namespace
 
 cudaError_t fullmag_cuda_pack_soa_to_aos(
@@ -147,6 +164,37 @@ cudaError_t fullmag_cuda_pack_soa_to_aos(
         y,
         z,
         aos_xyz,
+        N);
+    return cudaGetLastError();
+}
+
+cudaError_t fullmag_cuda_unpack_aos_to_soa(
+    const double *aos_xyz,
+    double *x,
+    double *y,
+    double *z,
+    int N,
+    cudaStream_t stream)
+{
+    if (stream == nullptr || N < 0) {
+        return cudaErrorInvalidValue;
+    }
+    if (N == 0) {
+        return cudaSuccess;
+    }
+    if (aos_xyz == nullptr || x == nullptr || y == nullptr || z == nullptr) {
+        return cudaErrorInvalidValue;
+    }
+
+    constexpr unsigned int threads_per_block = 256;
+    const unsigned long long block_count =
+        (static_cast<unsigned long long>(N) + threads_per_block - 1ull) /
+        threads_per_block;
+    unpack_aos_to_soa_kernel<<<static_cast<unsigned int>(block_count), threads_per_block, 0, stream>>>(
+        aos_xyz,
+        x,
+        y,
+        z,
         N);
     return cudaGetLastError();
 }

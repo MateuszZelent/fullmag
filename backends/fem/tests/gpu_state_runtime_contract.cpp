@@ -371,6 +371,35 @@ void gpu_state_audit04_memory_contracts_are_source_visible() {
             body->find("cudaStreamSynchronize(nullptr)") == std::string::npos,
             "GPU-state host I/O helpers must not force a default-stream synchronization");
     }
+
+    const std::string upload_m_packed_body =
+        extract_function_body(gpu_state, "bool gpu_state_upload_magnetization_aos_packed(");
+    const std::string download_m_packed_body =
+        extract_function_body(gpu_state, "bool gpu_state_download_magnetization_aos_packed(");
+    const std::string upload_component_packed_body =
+        extract_function_body(component_transfer, "bool gpu_component_upload_aos_packed(");
+    check(
+        transfer_kernels.find("unpack_aos_to_soa_kernel") != std::string::npos &&
+            transfer_kernels.find("cudaError_t fullmag_cuda_unpack_aos_to_soa(") !=
+                std::string::npos,
+        "AoS/SoA CUDA transfer helpers must provide device-side unpack kernel returning cudaError_t");
+    check(
+        upload_component_packed_body.find("fullmag_cuda_unpack_aos_to_soa(") !=
+                std::string::npos &&
+            upload_component_packed_body.find("cudaMemcpyAsync(") != std::string::npos &&
+            upload_component_packed_body.find("cudaStreamSynchronize(nullptr)") ==
+                std::string::npos,
+        "packed GPU component upload must use contiguous cudaMemcpyAsync plus device unpack on an explicit stream");
+    check(
+        upload_m_packed_body.find("gpu_component_upload_aos_packed(") !=
+                std::string::npos &&
+            upload_m_packed_body.find("state.packed_field_download.aos_device") !=
+                std::string::npos &&
+            download_m_packed_body.find("gpu_state_download_component_aos_packed(") !=
+                std::string::npos &&
+            upload_m_packed_body.find("std::vector<double>") == std::string::npos &&
+            download_m_packed_body.find("std::vector<double>") == std::string::npos,
+        "packed GPU magnetization helpers must reuse persistent device AoS scratch without host component copies");
 }
 
 void no_cuda_bootstrap_initializes_host_resident_gpu_metadata() {

@@ -12,6 +12,7 @@ namespace fullmag::fem {
 
 static constexpr int kBlockSize = 256;
 
+template <bool ComputeEnergy>
 __global__ void uniaxial_anisotropy_field_energy_blocks_kernel(
     const double *__restrict__ mx,
     const double *__restrict__ my,
@@ -65,21 +66,30 @@ __global__ void uniaxial_anisotropy_field_energy_blocks_kernel(
         h_ani_x[i] = hx;
         h_ani_y[i] = hy;
         h_ani_z[i] = hz;
-        local = (-ku_i * m_dot_u2 - ku2_i * m_dot_u2 * m_dot_u2) * lumped_mass[i];
+        if constexpr (ComputeEnergy) {
+            local = (-ku_i * m_dot_u2 - ku2_i * m_dot_u2 * m_dot_u2) * lumped_mass[i];
+        }
     } else if (i < N) {
         h_ani_x[i] = 0.0;
         h_ani_y[i] = 0.0;
         h_ani_z[i] = 0.0;
     }
 
-    typedef cub::BlockReduce<double, 256> BlockReduce;
-    __shared__ typename BlockReduce::TempStorage temp_storage;
-    const double block_sum = BlockReduce(temp_storage).Sum(local);
-    if (threadIdx.x == 0) {
-        block_sums[blockIdx.x] = block_sum;
+    if constexpr (ComputeEnergy) {
+        typedef cub::BlockReduce<double, kBlockSize> BlockReduce;
+        __shared__ typename BlockReduce::TempStorage temp_storage;
+        const double block_sum = BlockReduce(temp_storage).Sum(local);
+        if (threadIdx.x == 0) {
+            block_sums[blockIdx.x] = block_sum;
+        }
+    } else {
+        (void)local;
+        (void)lumped_mass;
+        (void)block_sums;
     }
 }
 
+template <bool ComputeEnergy>
 __global__ void cubic_anisotropy_field_energy_blocks_kernel(
     const double *__restrict__ mx,
     const double *__restrict__ my,
@@ -156,20 +166,28 @@ __global__ void cubic_anisotropy_field_energy_blocks_kernel(
         h_cubic_x[i] = hx;
         h_cubic_y[i] = hy;
         h_cubic_z[i] = hz;
-        local =
-            (kc1_i * sigma + kc2_i * m1sq * m2sq * m3sq + kc3_i * sigma * sigma) *
-            lumped_mass[i];
+        if constexpr (ComputeEnergy) {
+            local =
+                (kc1_i * sigma + kc2_i * m1sq * m2sq * m3sq + kc3_i * sigma * sigma) *
+                lumped_mass[i];
+        }
     } else if (i < N) {
         h_cubic_x[i] = 0.0;
         h_cubic_y[i] = 0.0;
         h_cubic_z[i] = 0.0;
     }
 
-    typedef cub::BlockReduce<double, 256> BlockReduce;
-    __shared__ typename BlockReduce::TempStorage temp_storage;
-    const double block_sum = BlockReduce(temp_storage).Sum(local);
-    if (threadIdx.x == 0) {
-        block_sums[blockIdx.x] = block_sum;
+    if constexpr (ComputeEnergy) {
+        typedef cub::BlockReduce<double, kBlockSize> BlockReduce;
+        __shared__ typename BlockReduce::TempStorage temp_storage;
+        const double block_sum = BlockReduce(temp_storage).Sum(local);
+        if (threadIdx.x == 0) {
+            block_sums[blockIdx.x] = block_sum;
+        }
+    } else {
+        (void)local;
+        (void)lumped_mass;
+        (void)block_sums;
     }
 }
 
@@ -200,32 +218,63 @@ void fullmag_cuda_uniaxial_anisotropy_field_energy_blocks(
     int N,
     cudaStream_t stream)
 {
+    if (N <= 0) {
+        return;
+    }
     const int num_blocks = (N + kBlockSize - 1) / kBlockSize;
-    uniaxial_anisotropy_field_energy_blocks_kernel<<<num_blocks, kBlockSize, 0, stream>>>(
-        mx,
-        my,
-        mz,
-        ms,
-        ku,
-        ku2,
-        axis_x_field,
-        axis_y_field,
-        axis_z_field,
-        lumped_mass,
-        magnetic_node_mask,
-        h_ani_x,
-        h_ani_y,
-        h_ani_z,
-        block_sums,
-        uniform_ku,
-        uniform_ku2,
-        axis_x,
-        axis_y,
-        axis_z,
-        use_ku_field,
-        use_ku2_field,
-        use_axis_field,
-        N);
+    if (block_sums != nullptr) {
+        uniaxial_anisotropy_field_energy_blocks_kernel<true><<<num_blocks, kBlockSize, 0, stream>>>(
+            mx,
+            my,
+            mz,
+            ms,
+            ku,
+            ku2,
+            axis_x_field,
+            axis_y_field,
+            axis_z_field,
+            lumped_mass,
+            magnetic_node_mask,
+            h_ani_x,
+            h_ani_y,
+            h_ani_z,
+            block_sums,
+            uniform_ku,
+            uniform_ku2,
+            axis_x,
+            axis_y,
+            axis_z,
+            use_ku_field,
+            use_ku2_field,
+            use_axis_field,
+            N);
+    } else {
+        uniaxial_anisotropy_field_energy_blocks_kernel<false><<<num_blocks, kBlockSize, 0, stream>>>(
+            mx,
+            my,
+            mz,
+            ms,
+            ku,
+            ku2,
+            axis_x_field,
+            axis_y_field,
+            axis_z_field,
+            lumped_mass,
+            magnetic_node_mask,
+            h_ani_x,
+            h_ani_y,
+            h_ani_z,
+            nullptr,
+            uniform_ku,
+            uniform_ku2,
+            axis_x,
+            axis_y,
+            axis_z,
+            use_ku_field,
+            use_ku2_field,
+            use_axis_field,
+            N);
+    }
 }
 
 void fullmag_cuda_cubic_anisotropy_field_energy_blocks(
@@ -257,34 +306,67 @@ void fullmag_cuda_cubic_anisotropy_field_energy_blocks(
     int N,
     cudaStream_t stream)
 {
+    if (N <= 0) {
+        return;
+    }
     const int num_blocks = (N + kBlockSize - 1) / kBlockSize;
-    cubic_anisotropy_field_energy_blocks_kernel<<<num_blocks, kBlockSize, 0, stream>>>(
-        mx,
-        my,
-        mz,
-        ms,
-        kc1,
-        kc2,
-        kc3,
-        lumped_mass,
-        magnetic_node_mask,
-        h_cubic_x,
-        h_cubic_y,
-        h_cubic_z,
-        block_sums,
-        uniform_kc1,
-        uniform_kc2,
-        uniform_kc3,
-        c1x,
-        c1y,
-        c1z,
-        c2x,
-        c2y,
-        c2z,
-        use_kc1_field,
-        use_kc2_field,
-        use_kc3_field,
-        N);
+    if (block_sums != nullptr) {
+        cubic_anisotropy_field_energy_blocks_kernel<true><<<num_blocks, kBlockSize, 0, stream>>>(
+            mx,
+            my,
+            mz,
+            ms,
+            kc1,
+            kc2,
+            kc3,
+            lumped_mass,
+            magnetic_node_mask,
+            h_cubic_x,
+            h_cubic_y,
+            h_cubic_z,
+            block_sums,
+            uniform_kc1,
+            uniform_kc2,
+            uniform_kc3,
+            c1x,
+            c1y,
+            c1z,
+            c2x,
+            c2y,
+            c2z,
+            use_kc1_field,
+            use_kc2_field,
+            use_kc3_field,
+            N);
+    } else {
+        cubic_anisotropy_field_energy_blocks_kernel<false><<<num_blocks, kBlockSize, 0, stream>>>(
+            mx,
+            my,
+            mz,
+            ms,
+            kc1,
+            kc2,
+            kc3,
+            lumped_mass,
+            magnetic_node_mask,
+            h_cubic_x,
+            h_cubic_y,
+            h_cubic_z,
+            nullptr,
+            uniform_kc1,
+            uniform_kc2,
+            uniform_kc3,
+            c1x,
+            c1y,
+            c1z,
+            c2x,
+            c2y,
+            c2z,
+            use_kc1_field,
+            use_kc2_field,
+            use_kc3_field,
+            N);
+    }
 }
 
 } // namespace fullmag::fem

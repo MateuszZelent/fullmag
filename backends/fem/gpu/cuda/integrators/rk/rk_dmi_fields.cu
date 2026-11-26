@@ -77,7 +77,7 @@ bool gpu_rk_compute_one_dmi_field(
         field.x,
         field.y,
         field.z,
-        gpu.reductions.scalar_workspace,
+        nullptr,
         ctx.material_fields.material.saturation_magnetisation,
         bulk_mode ? ctx.dmi.bulk_D : ctx.dmi.interfacial_D,
         bulk_mode ? 0.0 : ctx.dmi.rotated_interfacial_D,

@@ -68,7 +68,7 @@ bool gpu_rk_compute_thermal_field_contribution(
         gpu.fields.h_therm.x,
         gpu.fields.h_therm.y,
         gpu.fields.h_therm.z,
-        gpu.reductions.scalar_workspace,
+        nullptr,
         ctx.material_fields.material.gyromagnetic_ratio,
         ctx.material_fields.material.damping,
         ctx.thermal_brown.temperature,

@@ -22,6 +22,8 @@ namespace fullmag::fem {
 /// Legacy assembled FEM exchange:
 /// h_ex = -2/(mu0*Ms) * M_lumped^-1 * K * m.
 /// Nonmagnetic FEM nodes are skipped when magnetic_node_mask is present.
+/// Setting compensated_accumulation = false uses hardware FP64 FMA graph-Laplacian
+/// accumulation for explicit RK stages while preserving compensated DD by default.
 void fullmag_cuda_legacy_sparse_exchange(
     const uint32_t *csr_row_offsets,
     const uint32_t *csr_col_indices,
@@ -32,7 +34,8 @@ void fullmag_cuda_legacy_sparse_exchange(
     const uint8_t *magnetic_node_mask,
     double *h_component,
     int rows,
-    cudaStream_t stream = nullptr);
+    cudaStream_t stream = nullptr,
+    bool compensated_accumulation = true);
 
 /// Fused non-periodic legacy sparse exchange for all three SoA components.
 /// The row scale is precomputed once per runtime coefficient upload/setup.
@@ -50,7 +53,8 @@ void fullmag_cuda_legacy_sparse_exchange_xyz(
     double *hy,
     double *hz,
     int rows,
-    cudaStream_t stream = nullptr);
+    cudaStream_t stream = nullptr,
+    bool compensated_accumulation = true);
 
 /// Build -2/(mu0*Ms_i) once per exchange setup. The inverse lumped mass is
 /// applied after the compensated CSR sum to preserve the legacy operation
@@ -101,7 +105,8 @@ void fullmag_cuda_periodic_reduced_exchange_xyz(
     double *hz,
     int rows,
     int reduced_rows,
-    cudaStream_t stream = nullptr);
+    cudaStream_t stream = nullptr,
+    bool compensated_accumulation = true);
 
 /// Per-block exchange energy partials for the class-level periodic CSR.
 /// The reduced rows and representative map preserve the same graph-Laplacian

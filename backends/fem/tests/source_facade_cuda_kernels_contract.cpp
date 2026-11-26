@@ -1395,15 +1395,15 @@ void gpu_rk_effective_field_is_owned_by_cuda_rk_module() {
                 std::string::npos,
         "GPU CUDA RK effective-field source must document and include its module header");
     check(
-        effective_source.find("fullmag_cuda_accumulate_heff(") !=
+        effective_source.find("fullmag_cuda_accumulate_heff_fused_xyz(") !=
                 std::string::npos &&
-            effective_source.find("fullmag_cuda_add_field_inplace(") !=
-                std::string::npos &&
-            effective_source.find("gpu_rk_accumulate_oersted_field(ctx, stream, n, evaluation_time_s, reason)") !=
+            effective_source.find("gpu_rk_prepare_oersted_heff_term(ctx, evaluation_time_s, terms, reason)") !=
                 std::string::npos,
-        "GPU CUDA RK effective-field source must own base/local H_eff accumulation and delegate Oersted contribution");
+        "GPU CUDA RK effective-field source must own fused H_eff accumulation and delegate Oersted contribution");
     check(
         oersted_header.find("GPU CUDA RK Oersted field accumulation module header") !=
+                std::string::npos &&
+            oersted_header.find("gpu_rk_prepare_oersted_heff_term(") !=
                 std::string::npos &&
             oersted_header.find("gpu_rk_accumulate_oersted_field(") !=
                 std::string::npos,
@@ -1415,7 +1415,7 @@ void gpu_rk_effective_field_is_owned_by_cuda_rk_module() {
                 std::string::npos &&
             oersted_source.find("GPU CUDA RK Oersted field accumulation source contract") !=
                 std::string::npos &&
-            oersted_source.find("double gpu_rk_oersted_scale(const Context &ctx)") !=
+            oersted_source.find("double gpu_rk_oersted_scale(const Context &ctx, double evaluation_time_s)") !=
                 std::string::npos &&
             oersted_source.find("ctx.oersted.time_dep_kind") !=
                 std::string::npos &&
@@ -1427,7 +1427,7 @@ void gpu_rk_effective_field_is_owned_by_cuda_rk_module() {
     check(
         effective_source.find("fullmag_cuda_add_scaled_field_inplace(") ==
                 std::string::npos &&
-            effective_source.find("double gpu_rk_oersted_scale(const Context &ctx)") ==
+            effective_source.find("double gpu_rk_oersted_scale(") ==
                 std::string::npos &&
             effective_source.find("launch GPU RK Oersted h_eff accumulation") ==
                 std::string::npos,
@@ -2005,8 +2005,8 @@ void gpu_regional_field_drive_is_device_resident_and_stage_time_aware() {
           evaluator.find("stable_device_sinc") != std::string::npos,
         "device evaluator must implement stage-local, PWL, and stable sinc semantics");
     check(effective.find("gpu_regional_field_drive_materialize_and_accumulate") != std::string::npos &&
-          effective.find("evaluation_time_s, true") != std::string::npos,
-        "every GPU RK RHS must materialize H_drive at its exact stage time");
+          effective.find("evaluation_time_s, false") != std::string::npos,
+        "every GPU RK RHS must materialize H_drive at its exact stage time before fused H_eff accumulation");
     check(energy.find("GpuFinalScalarSlot::DriveEnergy") != std::string::npos &&
           energy.find("ctx.state.current_time, false") != std::string::npos,
         "GPU drive energy must use the final-time field without adding H_drive to H_eff twice");

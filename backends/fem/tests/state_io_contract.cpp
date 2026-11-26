@@ -82,6 +82,33 @@ void context_state_io_is_owned_by_runtime_module() {
         state_io_header.find("Synchronize and expose native FEM context state I/O") !=
             std::string::npos,
         "state_io header must document runtime state I/O ownership");
+
+    const std::string stage_compute = read_text_file(
+        root / "gpu" / "cuda" / "demag_poisson" / "stage_compute.cpp");
+    check(
+        state_io.find("gpu_state_download_component_aos_packed(") != std::string::npos &&
+            state_io.find("gpu_state_download_magnetization_aos_packed(") !=
+                std::string::npos &&
+            state_io.find("gpu_state_upload_magnetization_aos_packed(") !=
+                std::string::npos &&
+            state_io.find("ctx.gpu_state.cuda.compute_stream") != std::string::npos,
+        "state_io GPU transfer paths must use packed device AoS/SoA helpers on compute_stream");
+    const std::size_t visual_pos =
+        stage_compute.find("bool recover_device_demag_visual_field(");
+    const std::size_t next_pos =
+        stage_compute.find("bool reduce_device_demag_robin_boundary_energy(", visual_pos);
+    check(
+        visual_pos != std::string::npos && next_pos != std::string::npos &&
+            next_pos > visual_pos,
+        "stage_compute must define recover_device_demag_visual_field");
+    const std::string visual_body =
+        stage_compute.substr(visual_pos, next_pos - visual_pos);
+    check(
+        visual_body.find("gpu_state_download_component_aos_packed(") !=
+                std::string::npos &&
+            visual_body.find("raw_stream") != std::string::npos &&
+            visual_body.find("cudaStreamSynchronize(") == std::string::npos,
+        "recover_device_demag_visual_field must download via packed AoS helper on raw_stream without redundant pre-copy sync");
 }
 
 void observable_copy_prefers_visual_demag_and_effective_fields() {

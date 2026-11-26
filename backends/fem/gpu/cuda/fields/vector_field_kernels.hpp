@@ -32,6 +32,70 @@ void fullmag_cuda_accumulate_heff(
     double *h_eff,
     int N, bool has_ext, cudaStream_t stream = nullptr);
 
+enum FemGpuHeffTermBits : uint32_t {
+    FEM_GPU_HEFF_TERM_EXT = 1u << 0,
+    FEM_GPU_HEFF_TERM_DRIVE = 1u << 1,
+    FEM_GPU_HEFF_TERM_ANI = 1u << 2,
+    FEM_GPU_HEFF_TERM_CUBIC = 1u << 3,
+    FEM_GPU_HEFF_TERM_DMI = 1u << 4,
+    FEM_GPU_HEFF_TERM_BULK_DMI = 1u << 5,
+    FEM_GPU_HEFF_TERM_OE_SCALED = 1u << 6,
+    FEM_GPU_HEFF_TERM_OE_EXPLICIT = 1u << 7,
+    FEM_GPU_HEFF_TERM_MEL = 1u << 8,
+    FEM_GPU_HEFF_TERM_THERM = 1u << 9,
+};
+
+struct FemGpuHeffAccumulateTerms {
+    const double *h_ex_x = nullptr;
+    const double *h_ex_y = nullptr;
+    const double *h_ex_z = nullptr;
+    const double *h_demag_x = nullptr;
+    const double *h_demag_y = nullptr;
+    const double *h_demag_z = nullptr;
+    const double *h_ext_x = nullptr;
+    const double *h_ext_y = nullptr;
+    const double *h_ext_z = nullptr;
+    const double *h_drive_x = nullptr;
+    const double *h_drive_y = nullptr;
+    const double *h_drive_z = nullptr;
+    const double *h_ani_x = nullptr;
+    const double *h_ani_y = nullptr;
+    const double *h_ani_z = nullptr;
+    const double *h_cubic_x = nullptr;
+    const double *h_cubic_y = nullptr;
+    const double *h_cubic_z = nullptr;
+    const double *h_dmi_x = nullptr;
+    const double *h_dmi_y = nullptr;
+    const double *h_dmi_z = nullptr;
+    const double *h_bulk_dmi_x = nullptr;
+    const double *h_bulk_dmi_y = nullptr;
+    const double *h_bulk_dmi_z = nullptr;
+    const double *h_oe_src_x = nullptr;
+    const double *h_oe_src_y = nullptr;
+    const double *h_oe_src_z = nullptr;
+    double *h_oe_out_x = nullptr;
+    double *h_oe_out_y = nullptr;
+    double *h_oe_out_z = nullptr;
+    double h_oe_scale = 1.0;
+    const double *h_mel_x = nullptr;
+    const double *h_mel_y = nullptr;
+    const double *h_mel_z = nullptr;
+    const double *h_therm_x = nullptr;
+    const double *h_therm_y = nullptr;
+    const double *h_therm_z = nullptr;
+    uint32_t active_mask = 0u;
+};
+
+/// Fused single-launch XYZ effective-field accumulation preserving the exact
+/// FP64 addition order of the split component-wise accumulation path.
+void fullmag_cuda_accumulate_heff_fused_xyz(
+    const FemGpuHeffAccumulateTerms &terms,
+    double *h_eff_x,
+    double *h_eff_y,
+    double *h_eff_z,
+    int N,
+    cudaStream_t stream = nullptr);
+
 /// Zero a sparse index list in a device vector.
 void fullmag_cuda_zero_indexed_values(
     double *values,
