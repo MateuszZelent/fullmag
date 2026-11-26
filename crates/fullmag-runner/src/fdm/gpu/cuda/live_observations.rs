@@ -1458,6 +1458,7 @@ mod tests {
         ObservationJobIdentity, SourceStamp, GPU_M1_LIVE_PREVIEW_FIELDS,
         LIVE_OBSERVATION_MAX_BYTES,
     };
+    use crate::quantities::QuantityShape;
     use crate::types::LivePreviewField;
     use crate::DisplaySelectionState;
     use std::collections::BTreeSet;
