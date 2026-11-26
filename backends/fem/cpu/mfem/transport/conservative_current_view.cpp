@@ -1,3 +1,4 @@
+#include "cpu/mfem/common/sparse_linear_solver.hpp"
 #include "cpu/mfem/transport/conservative_current_view.hpp"
 #include "cpu/mfem/transport/affine_rt0_element.hpp"
 #include "cpu/mfem/transport/coincident_cut_v2.hpp"
@@ -6,7 +7,13 @@
 #include <mfem.hpp>
 
 #if defined(MFEM_USE_MPI) && !defined(FULLMAG_OET0_DISABLE_MPI)
+#include "cpu/mfem/runtime/hypre_host_policy.hpp"
+#include "cpu/mfem/runtime/mpi_init.hpp"
 #include <mpi.h>
+#if defined(__unix__)
+#include <sys/socket.h>
+#include <unistd.h>
+#endif
 #endif
 
 #include <algorithm>
@@ -1730,6 +1737,179 @@ void solve_dense_kkt(std::vector<double> *matrix, std::vector<double> *rhs)
     }
 }
 
+#if defined(MFEM_USE_MPI) && !defined(FULLMAG_OET0_DISABLE_MPI)
+bool oet0_can_initialize_openmpi_singleton() noexcept
+{
+#if defined(__unix__)
+    const int fd = ::socket(AF_INET, SOCK_STREAM, 0);
+    if (fd >= 0) {
+        ::close(fd);
+        return true;
+    }
+    return false;
+#else
+    return true;
+#endif
+}
+
+class HypreSchurBoomerAmgPreconditioner final : public mfem::Solver {
+public:
+    explicit HypreSchurBoomerAmgPreconditioner(mfem::SparseMatrix &schur_matrix)
+        : mfem::Solver(schur_matrix.Height()), size_(schur_matrix.Height())
+    {
+        if (size_ <= 0 || !oet0_can_initialize_openmpi_singleton()) {
+            return;
+        }
+        std::string policy_error;
+        if (!fullmag::fem::configure_hypre_host_policy(policy_error)) {
+            return;
+        }
+        const auto snapshot = fullmag::fem::current_hypre_host_policy();
+        if (!snapshot.memory_location_host || !snapshot.execution_policy_host) {
+            return;
+        }
+        fullmag::fem::ensure_mpi_initialized();
+        row_starts_[0] = 0;
+        row_starts_[1] = static_cast<HYPRE_BigInt>(size_);
+        schur_matrix.HostReadI();
+        schur_matrix.HostReadJ();
+        schur_matrix.HostReadData();
+        hypre_mat_ = std::make_unique<mfem::HypreParMatrix>(
+            fullmag::fem::fullmag_serial_comm(),
+            static_cast<HYPRE_BigInt>(size_),
+            row_starts_,
+            &schur_matrix);
+        amg_ = std::make_unique<mfem::HypreBoomerAMG>(*hypre_mat_);
+        amg_->SetPrintLevel(0);
+        amg_->SetMaxIter(1);
+        amg_->SetTol(0.0);
+        amg_->iterative_mode = false;
+        valid_ = true;
+    }
+
+    bool valid() const noexcept { return valid_; }
+
+    void SetOperator(const mfem::Operator &) override {}
+
+    void Mult(const mfem::Vector &x, mfem::Vector &y) const override
+    {
+        mfem::HypreParVector b_par(
+            fullmag::fem::fullmag_serial_comm(),
+            static_cast<HYPRE_BigInt>(size_),
+            const_cast<HYPRE_BigInt *>(row_starts_));
+        mfem::HypreParVector y_par(
+            fullmag::fem::fullmag_serial_comm(),
+            static_cast<HYPRE_BigInt>(size_),
+            const_cast<HYPRE_BigInt *>(row_starts_));
+        const double *xp = x.HostRead();
+        double *bp = b_par.HostWrite();
+        double *yp = y_par.HostWrite();
+        for (int i = 0; i < size_; ++i) {
+            bp[i] = xp[i];
+            yp[i] = 0.0;
+        }
+        amg_->Mult(b_par, y_par);
+        const double *out = y_par.HostRead();
+        double *dst = y.HostWrite();
+        for (int i = 0; i < size_; ++i) {
+            dst[i] = out[i];
+        }
+    }
+
+private:
+    int size_ = 0;
+    HYPRE_BigInt row_starts_[2] = {0, 0};
+    std::unique_ptr<mfem::HypreParMatrix> hypre_mat_;
+    std::unique_ptr<mfem::HypreBoomerAMG> amg_;
+    bool valid_ = false;
+};
+#endif
+
+// Build strictly SPD Schur-complement approximation
+//   S_tilde = beta^2 * C_tilde * diag(M_f)^{-1} * C_tilde^T
+// guarding dense terminal rows (degree > 64) by retaining only their positive
+// diagonal contribution to avoid O(|F_term|^2) fill-in while preserving
+// exact symmetry and positive definiteness for MINRES.
+mfem::SparseMatrix build_degree_guarded_schur_approx(
+    const mfem::SparseMatrix &free_mass,
+    const mfem::SparseMatrix &constraint_matrix,
+    double beta)
+{
+    constexpr int kMaxCoupledConstraintRowDegree = 64;
+    const int free_size = free_mass.Height();
+    const int constraint_size = constraint_matrix.Height();
+    mfem::Vector mass_diag(free_size);
+    free_mass.GetDiag(mass_diag);
+    std::vector<double> inv_diag_scaled(static_cast<std::size_t>(free_size), 0.0);
+    const long double beta_sq =
+        static_cast<long double>(beta) * static_cast<long double>(beta);
+    for (int col = 0; col < free_size; ++col) {
+        const double d = mass_diag[col];
+        require(std::isfinite(d) && d > 0.0,
+            "OE-T0 sparse mass diagonal must be finite and strictly positive");
+        const double weight = static_cast<double>(beta_sq / static_cast<long double>(d));
+        require(std::isfinite(weight) && weight > 0.0,
+            "OE-T0 Schur diagonal scaling overflowed or underflowed");
+        inv_diag_scaled[static_cast<std::size_t>(col)] = weight;
+    }
+
+    const int *c_rows = constraint_matrix.HostReadI();
+    const int *c_cols = constraint_matrix.HostReadJ();
+    const double *c_vals = constraint_matrix.HostReadData();
+
+    std::vector<std::vector<std::pair<int, double>>> col_to_sparse_rows(
+        static_cast<std::size_t>(free_size));
+    std::vector<bool> dense_row(static_cast<std::size_t>(constraint_size), false);
+    std::vector<double> dense_row_diag(static_cast<std::size_t>(constraint_size), 0.0);
+
+    for (int row = 0; row < constraint_size; ++row) {
+        const int begin = c_rows[row];
+        const int end = c_rows[row + 1];
+        const int degree = end - begin;
+        if (degree > kMaxCoupledConstraintRowDegree) {
+            dense_row[static_cast<std::size_t>(row)] = true;
+            long double diag_sum = 0.0L;
+            for (int entry = begin; entry < end; ++entry) {
+                const int col = c_cols[entry];
+                const long double c = static_cast<long double>(c_vals[entry]);
+                diag_sum += static_cast<long double>(
+                    inv_diag_scaled[static_cast<std::size_t>(col)]) * c * c;
+            }
+            const double diag_value = static_cast<double>(diag_sum);
+            require(std::isfinite(diag_value) && diag_value > 0.0,
+                "OE-T0 Schur dense-row diagonal is nonpositive or nonfinite");
+            dense_row_diag[static_cast<std::size_t>(row)] = diag_value;
+        } else {
+            for (int entry = begin; entry < end; ++entry) {
+                col_to_sparse_rows[static_cast<std::size_t>(c_cols[entry])].emplace_back(
+                    row, c_vals[entry]);
+            }
+        }
+    }
+
+    mfem::SparseMatrix schur(constraint_size);
+    for (int col = 0; col < free_size; ++col) {
+        const double weight = inv_diag_scaled[static_cast<std::size_t>(col)];
+        const auto &adj = col_to_sparse_rows[static_cast<std::size_t>(col)];
+        for (std::size_t a = 0; a < adj.size(); ++a) {
+            for (std::size_t b = 0; b < adj.size(); ++b) {
+                schur.Add(adj[a].first, adj[b].first,
+                    weight * adj[a].second * adj[b].second);
+            }
+        }
+    }
+    for (int row = 0; row < constraint_size; ++row) {
+        if (dense_row[static_cast<std::size_t>(row)]) {
+            schur.Add(row, row, dense_row_diag[static_cast<std::size_t>(row)]);
+        }
+    }
+    schur.Finalize();
+    schur.HostReadI();
+    schur.HostReadJ();
+    schur.HostReadData();
+    return schur;
+}
+
 WeightedRt0Result solve_weighted_rt0_projection(
     std::unique_ptr<mfem::Mesh> mesh,
     const StableMeshVertexIdentities &ids,
@@ -1738,7 +1918,8 @@ WeightedRt0Result solve_weighted_rt0_projection(
     const std::vector<PairConstraint> &pairs,
     const std::vector<FaceKey> &terminal_faces,
     const ConstraintRankCertificate &rank_certificate,
-    const std::vector<Rt0TerminalFluxConstraint> &terminal_constraints = {})
+    const std::vector<Rt0TerminalFluxConstraint> &terminal_constraints = {},
+    bool pin_mpi_single_rank_backend = false)
 {
     require(mesh != nullptr, "OE-T0 projection requires an owned mesh");
     require(mesh->GetNE() > 0, "OE-T0 projection requires elements");
@@ -2081,15 +2262,19 @@ WeightedRt0Result solve_weighted_rt0_projection(
         free_mass.Finalize();
         mfem::SparseMatrix constraint_matrix(
             static_cast<int>(constraint_count), static_cast<int>(free_count));
+        mfem::SparseMatrix constraint_transpose_csr(
+            static_cast<int>(free_count), static_cast<int>(constraint_count));
         for (std::size_t row = 0; row < constraint_count; ++row) {
             for (const auto [dof, coefficient] : active[row].coefficients) {
                 const int index = free_index.at(static_cast<std::size_t>(dof));
                 require(index >= 0,
                     "OE-T0 sparse constraint references fixed dof");
                 constraint_matrix.Add(static_cast<int>(row), index, coefficient);
+                constraint_transpose_csr.Add(index, static_cast<int>(row), coefficient);
             }
         }
         constraint_matrix.Finalize();
+        constraint_transpose_csr.Finalize();
 
         mfem::Vector kkt_rhs(static_cast<int>(system_size));
         kkt_rhs = 0.0;
@@ -2105,15 +2290,6 @@ WeightedRt0Result solve_weighted_rt0_projection(
         const int free_size = static_cast<int>(free_count);
         const int constraint_size = static_cast<int>(constraint_count);
         const int total_size = static_cast<int>(system_size);
-        mfem::Array<int> offsets(3);
-        offsets[0] = 0;
-        offsets[1] = free_size;
-        offsets[2] = total_size;
-        mfem::BlockOperator kkt(offsets);
-        mfem::TransposeOperator constraint_transpose(&constraint_matrix);
-        kkt.SetDiagonalBlock(0, &free_mass);
-        kkt.SetBlock(0, 1, &constraint_transpose);
-        kkt.SetBlock(1, 0, &constraint_matrix);
 
         std::size_t max_iterations = system_size > 50000
             ? 200000u
@@ -2121,45 +2297,34 @@ WeightedRt0Result solve_weighted_rt0_projection(
         max_iterations = std::min<std::size_t>(max_iterations,
             static_cast<std::size_t>(std::numeric_limits<int>::max()));
         if (constraint_count == 0) {
-            mfem::GSSmoother preconditioner(free_mass);
-            mfem::CGSolver solver;
-            solver.SetPreconditioner(preconditioner);
-            solver.SetOperator(free_mass);
-            solver.SetRelTol(1.0e-12);
-            solver.SetAbsTol(1.0e-14);
-            solver.SetMaxIter(static_cast<int>(max_iterations));
-            solver.SetPrintLevel(-1);
-            solver.Mult(kkt_rhs, kkt_solution);
-            require(solver.GetConverged(),
+            fullmag::fem::multiphysics::SparseSolveConfig mass_config;
+            mass_config.kind = fullmag::fem::multiphysics::SparseMatrixKind::Spd;
+            mass_config.execution_target =
+                fullmag::fem::multiphysics::SparseExecutionTarget::Cpu;
+#if defined(MFEM_USE_MPI) && !defined(FULLMAG_OET0_DISABLE_MPI)
+            mass_config.cpu_backend = pin_mpi_single_rank_backend
+                ? fullmag::fem::multiphysics::SparseCpuBackendPolicy::Hypre
+                : fullmag::fem::multiphysics::SparseCpuBackendPolicy::Auto;
+#else
+            (void)pin_mpi_single_rank_backend;
+            mass_config.cpu_backend =
+                fullmag::fem::multiphysics::SparseCpuBackendPolicy::Auto;
+#endif
+            mass_config.relative_tolerance = 1.0e-12;
+            mass_config.absolute_tolerance = 1.0e-14;
+            mass_config.maximum_iterations = static_cast<int>(max_iterations);
+            mass_config.max_refinement_sweeps = 2;
+            fullmag::fem::multiphysics::SparseLinearSolver mass_solver(
+                free_mass, mass_config);
+            const auto stats = mass_solver.solve(kkt_rhs, kkt_solution, 0.0);
+            require(stats.converged,
                 "OE-T0 sparse mass solver did not converge");
         } else {
-            mfem::GSSmoother mass_preconditioner(free_mass);
-            mfem::IdentityOperator constraint_preconditioner(constraint_size);
-            mfem::BlockDiagonalPreconditioner preconditioner(offsets);
-            preconditioner.SetDiagonalBlock(0, &mass_preconditioner);
-            preconditioner.SetDiagonalBlock(1, &constraint_preconditioner);
-            mfem::MINRESSolver solver;
-            solver.SetPreconditioner(preconditioner);
-            solver.SetOperator(kkt);
-            solver.SetRelTol(1.0e-12);
-            // A fixed absolute stop can exceed the local physical flux gate.
-            solver.SetAbsTol(0.0);
-            solver.SetMaxIter(static_cast<int>(max_iterations));
-            solver.SetPrintLevel(-1);
-            solver.Mult(kkt_rhs, kkt_solution);
-            require(solver.GetConverged(),
-                "OE-T0 sparse KKT solver did not converge");
-            const int initial_iterations = solver.GetNumIterations();
-            require(initial_iterations >= 0 &&
-                    static_cast<std::size_t>(initial_iterations) <= max_iterations,
-                "OE-T0 sparse KKT initial iteration count exceeds its budget");
-            std::size_t used_iterations = static_cast<std::size_t>(initial_iterations);
-
-            // Keep true residuals in separate SI units. The recursive MINRES
-            // norm is not an admission test for a local current balance.
-            const int *rows = free_mass.GetI();
-            const int *columns = free_mass.GetJ();
-            const double *values = free_mass.GetData();
+            // Keep true residuals in separate SI units. Any Krylov or direct
+            // residual is not an admission test for a local current balance.
+            const int *rows = free_mass.HostReadI();
+            const int *columns = free_mass.HostReadJ();
+            const double *values = free_mass.HostReadData();
             std::vector<long double> voltage_residual(free_count);
             std::vector<long double> voltage_scale(free_count);
             mfem::Vector true_residual(total_size), correction(total_size);
@@ -2226,29 +2391,213 @@ WeightedRt0Result solve_weighted_rt0_projection(
                 }
                 return accepted;
             };
-            while (!measure_true_residual()) {
-                require(used_iterations < max_iterations,
-                    "OE-T0 sparse KKT true-residual refinement exhausted its iteration budget");
-                const std::size_t remaining = max_iterations - used_iterations;
-                solver.SetMaxIter(static_cast<int>(remaining));
-                correction = 0.0;
-                solver.Mult(true_residual, correction);
-                require(solver.GetConverged(),
-                    "OE-T0 sparse KKT true-residual correction did not converge");
-                const int iterations = solver.GetNumIterations();
-                require(iterations > 0 && static_cast<std::size_t>(iterations) <= remaining,
-                    "OE-T0 sparse KKT true-residual correction made no iterative progress");
-                used_iterations += static_cast<std::size_t>(iterations);
-                bool changed = false;
-                for (int index = 0; index < total_size; ++index) {
-                    const double updated = kkt_solution[index] + correction[index];
-                    require(std::isfinite(correction[index]) && std::isfinite(updated),
-                        "OE-T0 sparse KKT true-residual correction is nonfinite");
-                    changed = (updated != kkt_solution[index]) || changed;
-                    kkt_solution[index] = updated;
+
+            const double beta =
+                fullmag::fem::multiphysics::compute_saddle_point_equilibration_beta(
+                    free_mass, constraint_transpose_csr);
+            mfem::Vector eq_rhs(total_size);
+            mfem::Vector eq_sol(total_size);
+            const auto load_equilibrated_rhs = [&](const mfem::Vector &unscaled_rhs) {
+                for (int row = 0; row < free_size; ++row) {
+                    eq_rhs[row] = unscaled_rhs[row];
                 }
-                require(changed,
-                    "OE-T0 sparse KKT true-residual correction stagnated in binary64");
+                for (int row = 0; row < constraint_size; ++row) {
+                    const double scaled = beta * unscaled_rhs[free_size + row];
+                    require(std::isfinite(scaled),
+                        "OE-T0 sparse KKT equilibrated right-hand side is nonfinite");
+                    eq_rhs[free_size + row] = scaled;
+                }
+            };
+
+            bool solved_by_direct = false;
+#if defined(FULLMAG_FEM_WITH_SLEPC) && FULLMAG_FEM_WITH_SLEPC && \
+    !defined(FULLMAG_OET0_DISABLE_MPI)
+            if (!pin_mpi_single_rank_backend) {
+                const mfem::SparseMatrix kkt_equilibrated =
+                    fullmag::fem::multiphysics::assemble_equilibrated_saddle_point_csr(
+                        free_mass, constraint_transpose_csr, beta);
+                fullmag::fem::multiphysics::SparseSolveConfig direct_config;
+                direct_config.kind =
+                    fullmag::fem::multiphysics::SparseMatrixKind::SymmetricIndefinite;
+                direct_config.execution_target =
+                    fullmag::fem::multiphysics::SparseExecutionTarget::Cpu;
+                direct_config.cpu_backend =
+                    fullmag::fem::multiphysics::SparseCpuBackendPolicy::PetscMumps;
+                direct_config.relative_tolerance = 1.0e-12;
+                direct_config.absolute_tolerance = 0.0;
+                direct_config.maximum_iterations = 2000;
+                direct_config.max_refinement_sweeps = 2;
+
+                std::unique_ptr<fullmag::fem::multiphysics::SparseLinearSolver> direct_solver;
+                try {
+                    direct_solver =
+                        std::make_unique<fullmag::fem::multiphysics::SparseLinearSolver>(
+                            kkt_equilibrated, direct_config);
+                } catch (const std::runtime_error &) {
+                    // PETSc/MUMPS unavailable in this runtime (e.g., world_size > 1
+                    // without PETSc initialized); proceed cleanly to Tier-2 Schur-AMG.
+                    direct_solver.reset();
+                }
+
+                if (direct_solver != nullptr) {
+                    load_equilibrated_rhs(kkt_rhs);
+                    eq_sol = 0.0;
+                    (void)direct_solver->solve(eq_rhs, eq_sol, 0.0);
+                    bool finite_initial = true;
+                    for (int row = 0; row < free_size; ++row) {
+                        kkt_solution[row] = eq_sol[row];
+                        finite_initial = finite_initial && std::isfinite(kkt_solution[row]);
+                    }
+                    for (int row = 0; row < constraint_size; ++row) {
+                        kkt_solution[free_size + row] = beta * eq_sol[free_size + row];
+                        finite_initial = finite_initial &&
+                            std::isfinite(kkt_solution[free_size + row]);
+                    }
+                    if (finite_initial) {
+                        bool direct_accepted = measure_true_residual();
+                        for (int sweep = 0; !direct_accepted && sweep < 4; ++sweep) {
+                            load_equilibrated_rhs(true_residual);
+                            eq_sol = 0.0;
+                            (void)direct_solver->solve(eq_rhs, eq_sol, 0.0);
+                            bool changed = false;
+                            for (int row = 0; row < free_size; ++row) {
+                                const double updated = kkt_solution[row] + eq_sol[row];
+                                require(std::isfinite(eq_sol[row]) && std::isfinite(updated),
+                                    "OE-T0 sparse KKT direct refinement is nonfinite");
+                                changed = (updated != kkt_solution[row]) || changed;
+                                kkt_solution[row] = updated;
+                            }
+                            for (int row = 0; row < constraint_size; ++row) {
+                                const double delta_lambda = beta * eq_sol[free_size + row];
+                                const double updated =
+                                    kkt_solution[free_size + row] + delta_lambda;
+                                require(std::isfinite(delta_lambda) && std::isfinite(updated),
+                                    "OE-T0 sparse KKT direct refinement multiplier is nonfinite");
+                                changed = (updated != kkt_solution[free_size + row]) || changed;
+                                kkt_solution[free_size + row] = updated;
+                            }
+                            direct_accepted = measure_true_residual();
+                            if (!changed) {
+                                break;
+                            }
+                        }
+                        if (direct_accepted) {
+                            solved_by_direct = true;
+                        } else {
+                            kkt_solution = 0.0;
+                        }
+                    } else {
+                        kkt_solution = 0.0;
+                    }
+                }
+            }
+#else
+            (void)pin_mpi_single_rank_backend;
+#endif
+
+            if (!solved_by_direct) {
+                mfem::SparseMatrix scaled_constraint(constraint_size, free_size);
+                const int *c_i = constraint_matrix.HostReadI();
+                const int *c_j = constraint_matrix.HostReadJ();
+                const double *c_a = constraint_matrix.HostReadData();
+                for (int row = 0; row < constraint_size; ++row) {
+                    for (int p = c_i[row]; p < c_i[row + 1]; ++p) {
+                        scaled_constraint.Add(row, c_j[p], beta * c_a[p]);
+                    }
+                }
+                scaled_constraint.Finalize();
+
+                mfem::Array<int> offsets(3);
+                offsets[0] = 0;
+                offsets[1] = free_size;
+                offsets[2] = total_size;
+                mfem::BlockOperator eq_kkt(offsets);
+                mfem::TransposeOperator scaled_constraint_transpose(&scaled_constraint);
+                eq_kkt.SetDiagonalBlock(0, &free_mass);
+                eq_kkt.SetBlock(0, 1, &scaled_constraint_transpose);
+                eq_kkt.SetBlock(1, 0, &scaled_constraint);
+
+                mfem::SparseMatrix schur_approx = build_degree_guarded_schur_approx(
+                    free_mass, constraint_matrix, beta);
+                mfem::GSSmoother mass_preconditioner(free_mass);
+                mfem::BlockDiagonalPreconditioner preconditioner(offsets);
+                preconditioner.SetDiagonalBlock(0, &mass_preconditioner);
+
+                std::unique_ptr<mfem::GSSmoother> serial_schur_preconditioner;
+#if defined(MFEM_USE_MPI) && !defined(FULLMAG_OET0_DISABLE_MPI)
+                HypreSchurBoomerAmgPreconditioner hypre_schur_preconditioner(schur_approx);
+                if (hypre_schur_preconditioner.valid()) {
+                    preconditioner.SetDiagonalBlock(1, &hypre_schur_preconditioner);
+                } else {
+                    serial_schur_preconditioner =
+                        std::make_unique<mfem::GSSmoother>(schur_approx);
+                    preconditioner.SetDiagonalBlock(1, serial_schur_preconditioner.get());
+                }
+#else
+                serial_schur_preconditioner =
+                    std::make_unique<mfem::GSSmoother>(schur_approx);
+                preconditioner.SetDiagonalBlock(1, serial_schur_preconditioner.get());
+#endif
+
+                load_equilibrated_rhs(kkt_rhs);
+                eq_sol = 0.0;
+                mfem::MINRESSolver solver;
+                solver.SetPreconditioner(preconditioner);
+                solver.SetOperator(eq_kkt);
+                solver.SetRelTol(1.0e-12);
+                // A fixed absolute stop can exceed the local physical flux gate.
+                solver.SetAbsTol(0.0);
+                solver.SetMaxIter(static_cast<int>(max_iterations));
+                solver.SetPrintLevel(-1);
+                solver.Mult(eq_rhs, eq_sol);
+                require(solver.GetConverged(),
+                    "OE-T0 sparse KKT solver did not converge");
+                const int initial_iterations = solver.GetNumIterations();
+                require(initial_iterations >= 0 &&
+                        static_cast<std::size_t>(initial_iterations) <= max_iterations,
+                    "OE-T0 sparse KKT initial iteration count exceeds its budget");
+                std::size_t used_iterations = static_cast<std::size_t>(initial_iterations);
+                for (int row = 0; row < free_size; ++row) {
+                    kkt_solution[row] = eq_sol[row];
+                }
+                for (int row = 0; row < constraint_size; ++row) {
+                    kkt_solution[free_size + row] = beta * eq_sol[free_size + row];
+                }
+
+                while (!measure_true_residual()) {
+                    require(used_iterations < max_iterations,
+                        "OE-T0 sparse KKT true-residual refinement exhausted its iteration budget");
+                    const std::size_t remaining = max_iterations - used_iterations;
+                    solver.SetMaxIter(static_cast<int>(remaining));
+                    load_equilibrated_rhs(true_residual);
+                    correction = 0.0;
+                    solver.Mult(eq_rhs, correction);
+                    require(solver.GetConverged(),
+                        "OE-T0 sparse KKT true-residual correction did not converge");
+                    const int iterations = solver.GetNumIterations();
+                    require(iterations > 0 && static_cast<std::size_t>(iterations) <= remaining,
+                        "OE-T0 sparse KKT true-residual correction made no iterative progress");
+                    used_iterations += static_cast<std::size_t>(iterations);
+                    bool changed = false;
+                    for (int row = 0; row < free_size; ++row) {
+                        const double updated = kkt_solution[row] + correction[row];
+                        require(std::isfinite(correction[row]) && std::isfinite(updated),
+                            "OE-T0 sparse KKT true-residual correction is nonfinite");
+                        changed = (updated != kkt_solution[row]) || changed;
+                        kkt_solution[row] = updated;
+                    }
+                    for (int row = 0; row < constraint_size; ++row) {
+                        const double delta_lambda = beta * correction[free_size + row];
+                        const double updated =
+                            kkt_solution[free_size + row] + delta_lambda;
+                        require(std::isfinite(delta_lambda) && std::isfinite(updated),
+                            "OE-T0 sparse KKT true-residual correction is nonfinite");
+                        changed = (updated != kkt_solution[free_size + row]) || changed;
+                        kkt_solution[free_size + row] = updated;
+                    }
+                    require(changed,
+                        "OE-T0 sparse KKT true-residual correction stagnated in binary64");
+                }
             }
         }
         for (std::size_t index = 0; index < free_count; ++index) {
@@ -2402,7 +2751,8 @@ std::unique_ptr<mfem::GridFunction> solve_external_lead_potential(
     const StableMeshVertexIdentities &device_ids,
     const ExternalLeadExtensionCurrentClosure &closure,
     CombinedConductivity &conductivity,
-    double algebraic_relative_tolerance)
+    double algebraic_relative_tolerance,
+    bool pin_mpi_single_rank_backend = false)
 {
     require(h1_space.GetVSize() == combined_mesh.GetNV(),
         "external-lead quotient solve requires scalar P1 vertex DOFs");
@@ -2512,16 +2862,26 @@ std::unique_ptr<mfem::GridFunction> solve_external_lead_potential(
     free_matrix.Finalize();
     mfem::Vector free_solution(free_size);
     free_solution = 0.0;
-    mfem::GSSmoother preconditioner(free_matrix);
-    mfem::CGSolver solver;
-    solver.SetOperator(free_matrix);
-    solver.SetPreconditioner(preconditioner);
-    solver.SetRelTol(std::min(algebraic_relative_tolerance, 1.0e-14));
-    solver.SetAbsTol(1.0e-15);
-    solver.SetMaxIter(std::max(1000, free_size * 20));
-    solver.SetPrintLevel(-1);
-    solver.Mult(rhs, free_solution);
-    require(solver.GetConverged(),
+    fullmag::fem::multiphysics::SparseSolveConfig lead_config;
+    lead_config.kind = fullmag::fem::multiphysics::SparseMatrixKind::Spd;
+    lead_config.execution_target =
+        fullmag::fem::multiphysics::SparseExecutionTarget::Cpu;
+#if defined(MFEM_USE_MPI) && !defined(FULLMAG_OET0_DISABLE_MPI)
+    lead_config.cpu_backend = pin_mpi_single_rank_backend
+        ? fullmag::fem::multiphysics::SparseCpuBackendPolicy::Hypre
+        : fullmag::fem::multiphysics::SparseCpuBackendPolicy::Auto;
+#else
+    (void)pin_mpi_single_rank_backend;
+    lead_config.cpu_backend =
+        fullmag::fem::multiphysics::SparseCpuBackendPolicy::Auto;
+#endif
+    lead_config.relative_tolerance = std::min(algebraic_relative_tolerance, 1.0e-13);
+    lead_config.absolute_tolerance = 0.0;
+    lead_config.maximum_iterations = std::max(1000, free_size * 20);
+    lead_config.max_refinement_sweeps = 2;
+    fullmag::fem::multiphysics::SparseLinearSolver lead_solver(free_matrix, lead_config);
+    const auto lead_stats = lead_solver.solve(rhs, free_solution, 0.0);
+    require(lead_stats.converged,
         "external-lead coupled scalar-potential solve did not converge");
 
     mfem::Vector quotient_solution(quotient_size);
@@ -3181,7 +3541,8 @@ ConservativeCurrentView::Ptr ConservativeCurrentView::Build(
             request.physical_relative_gate);
         auto weighted = solve_weighted_rt0_projection(
             std::move(mesh), request.stable_vertex_identities, current,
-            *request.conductivity, topology.pairs, topology.terminal_faces, rank);
+            *request.conductivity, topology.pairs, topology.terminal_faces, rank,
+            {}, request.reference_mpi_gather_broadcast);
         data = finalize_view_data(std::move(weighted.mesh),
             request.stable_vertex_identities, std::move(weighted.collection),
             std::move(weighted.space),
@@ -3219,7 +3580,8 @@ ConservativeCurrentView::Ptr ConservativeCurrentView::Build(
         auto potential = solve_external_lead_potential(*mesh, h1_space, ids,
             request.mesh->GetNV(), request.mesh->GetNE(),
             request.stable_vertex_identities, external, conductivity,
-            request.algebraic_relative_tolerance);
+            request.algebraic_relative_tolerance,
+            request.reference_mpi_gather_broadcast);
         charge_potential = copy_charge_potential_vertices(*potential);
         PotentialCurrentCoefficient current(*potential, conductivity);
         const auto rank = analyze_physical_constraint_rank(
@@ -3227,7 +3589,8 @@ ConservativeCurrentView::Ptr ConservativeCurrentView::Build(
             request.physical_absolute_gate_a, request.physical_relative_gate);
         auto weighted = solve_weighted_rt0_projection(
             std::move(mesh), ids, current, conductivity,
-            topology.pairs, topology.terminal_faces, rank);
+            topology.pairs, topology.terminal_faces, rank,
+            {}, request.reference_mpi_gather_broadcast);
         data = finalize_view_data(std::move(weighted.mesh), std::move(ids),
             std::move(weighted.collection), std::move(weighted.space),
             std::move(weighted.field),

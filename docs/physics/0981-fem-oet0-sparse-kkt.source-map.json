@@ -36,9 +36,12 @@
     {"id": "k_max", "latex": "k_{\\max}", "meaning": "bounded MINRES iteration budget", "si_unit": "1"}
   ],
   "sources": [
-    {"id": "weighted-projection", "path": "backends/fem/cpu/mfem/transport/conservative_current_view.cpp", "symbol": "class ConservativeCurrentView", "responsibility": "Own the accepted current-view implementation containing dense and sparse RT0 projection lanes."},
+    {"id": "weighted-projection", "path": "backends/fem/cpu/mfem/transport/conservative_current_view.cpp", "symbol": "class ConservativeCurrentView", "responsibility": "Own the accepted current-view implementation containing dense and 3-tier equilibrated sparse RT0 projection lanes."},
+    {"id": "schur-approx", "path": "backends/fem/cpu/mfem/transport/conservative_current_view.cpp", "symbol": "build_degree_guarded_schur_approx", "responsibility": "Assemble the degree-64-guarded SPD Schur approximation for Tier-2 HYPRE BoomerAMG and Tier-3 TSan MINRES."},
+    {"id": "shared-sparse-solver", "path": "backends/fem/cpu/mfem/common/sparse_linear_solver.hpp", "symbol": "class SparseLinearSolver", "responsibility": "Provide the shared 3-tier CPU sparse linear solver (PETSc/MUMPS, HYPRE, MFEM serial) and saddle-point CSR helpers."},
+    {"id": "periodic-mpi-pin", "path": "backends/fem/cpu/mfem/transport/periodic_charge_potential.cpp", "symbol": "PeriodicChargePotentialSolver::Solve", "responsibility": "Pin single-rank HYPRE on MPI_COMM_SELF when reference_mpi_gather_rank0_broadcast is enabled for n=1 vs n=2 byte identity."},
     {"id": "dense-reference", "path": "backends/fem/cpu/mfem/transport/conservative_current_view.cpp", "symbol": "class ConservativeCurrentView", "responsibility": "Own the bounded deterministic small-mesh Gaussian-elimination reference used by the view."},
-    {"id": "sparse-runtime-test", "path": "backends/fem/tests/conservative_current_view_contract.cpp", "symbol": "main", "responsibility": "Dispatch the optional sparse runtime fixture beyond 4096 RT0 DOFs."},
+    {"id": "sparse-runtime-test", "path": "backends/fem/tests/conservative_current_view_contract.cpp", "symbol": "main", "responsibility": "Dispatch the OE-T0 serial, MPI, TSan, concurrent ChargeTraceWorkspace, and sparse KKT runtime fixtures."},
     {"id": "source-regression", "path": "backends/fem/tests/source_facade_gpu_rk_contract.cpp", "symbol": "main", "responsibility": "Run the source ownership regression that guards sparse MFEM/MINRES selection."},
     {"id": "view-boundary", "path": "backends/fem/cpu/mfem/transport/conservative_current_view.hpp", "symbol": "class ConservativeCurrentView", "responsibility": "Expose the immutable accepted FEM current-view boundary."},
     {"id": "managed-oet0-gate", "path": "justfile", "symbol": "verify-fem-oersted-oet0-cpu-contract", "responsibility": "Build and run the managed CPU OE-T0 serial and real MPI n1/n2 byte-identity qualification."},

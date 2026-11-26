@@ -26,6 +26,7 @@
 #include <cstdint>
 #include <cstring>
 #include <cstdlib>
+#include <exception>
 #include <fstream>
 #include <functional>
 #include <initializer_list>
@@ -33,6 +34,7 @@
 #include <limits>
 #include <map>
 #include <memory>
+#include <mutex>
 #include <numeric>
 #include <set>
 #include <sstream>
@@ -3621,6 +3623,171 @@ void charge_trace_workspace_reuses_owned_operator_after_sources_are_destroyed()
         "charge workspace mutated an earlier owned reaction snapshot");
 }
 
+void charge_trace_workspace_concurrent_const_solves_are_race_free_and_consistent()
+{
+    using fullmag::fem::antenna_field_solve::ChargeTraceSolveRequest;
+    using fullmag::fem::antenna_field_solve::ChargeTraceSolution;
+    using fullmag::fem::antenna_field_solve::ChargeTraceWorkspace;
+
+    auto mesh = mfem::Mesh::MakeCartesian3D(
+        3, 2, 2, mfem::Element::TETRAHEDRON, 1.0, 1.0, 1.0);
+    mfem::ConstantCoefficient conductivity(4.0);
+    mfem::H1_FECollection collection(1, 3);
+    mfem::FiniteElementSpace space(&mesh, &collection);
+    ChargeTraceSolveRequest request;
+    request.mesh = &mesh;
+    request.conductivity = &conductivity;
+    request.stable_vertex_identities = coordinate_stable_vertex_ids(mesh);
+    for (int minus = 0; minus < mesh.GetNV(); ++minus) {
+        const auto *position = mesh.GetVertex(minus);
+        if (std::abs(position[0]) > 1.0e-12) continue;
+        for (int plus = 0; plus < mesh.GetNV(); ++plus) {
+            const auto *peer = mesh.GetVertex(plus);
+            if (std::abs(peer[0] - 1.0) > 1.0e-12 ||
+                std::abs(peer[1] - position[1]) > 1.0e-12 ||
+                std::abs(peer[2] - position[2]) > 1.0e-12) continue;
+            mfem::Array<int> minus_dofs, plus_dofs;
+            space.GetVertexDofs(minus, minus_dofs);
+            space.GetVertexDofs(plus, plus_dofs);
+            request.trace_relations.push_back({minus_dofs[0], plus_dofs[0], 0.0,
+                "concurrent-cut:" + std::to_string(minus)});
+        }
+    }
+
+    // Validate out-of-range anchor DOF rejection eagerly in constructor.
+    for (int bad_dof : {-1, space.GetVSize()}) {
+        auto bad_request = request;
+        bad_request.potential_anchors.push_back({bad_dof, 0.0});
+        bool rejected = false;
+        try {
+            ChargeTraceWorkspace invalid_ws(bad_request);
+        } catch (const std::invalid_argument &) {
+            rejected = true;
+        }
+        require(rejected,
+            "ChargeTraceWorkspace constructor accepted an out-of-range potential anchor");
+    }
+
+    mfem::Array<int> anchor_dofs;
+    space.GetVertexDofs(0, anchor_dofs);
+    request.potential_anchors.push_back({anchor_dofs[0], 0.0});
+
+    const ChargeTraceWorkspace workspace(request);
+
+    constexpr int kWorkloads = 8;
+    std::vector<std::vector<double>> jumps_list(kWorkloads);
+    std::vector<std::vector<double>> anchors_list(kWorkloads);
+    std::vector<std::shared_ptr<const ChargeTraceSolution>> reference(kWorkloads);
+    for (int k = 0; k < kWorkloads; ++k) {
+        const double jump_v = (k % 2 == 0 ? 1.0 : -1.0) * (0.25 + 0.5 * static_cast<double>(k));
+        const double anchor_v = -1.5 + 0.4 * static_cast<double>(k);
+        jumps_list[static_cast<std::size_t>(k)].assign(request.trace_relations.size(), jump_v);
+        anchors_list[static_cast<std::size_t>(k)] = {anchor_v};
+        reference[static_cast<std::size_t>(k)] = workspace.solve(
+            jumps_list[static_cast<std::size_t>(k)],
+            anchors_list[static_cast<std::size_t>(k)]);
+    }
+
+    constexpr int kThreads = 4;
+    std::vector<std::shared_ptr<const ChargeTraceSolution>> concurrent_results(kWorkloads);
+    std::mutex error_mutex;
+    std::exception_ptr first_error;
+    std::vector<std::thread> threads;
+    threads.reserve(kThreads);
+    for (int t = 0; t < kThreads; ++t) {
+        threads.emplace_back([&, t]() {
+            try {
+                for (int k = t; k < kWorkloads; k += kThreads) {
+                    concurrent_results[static_cast<std::size_t>(k)] = workspace.solve(
+                        jumps_list[static_cast<std::size_t>(k)],
+                        anchors_list[static_cast<std::size_t>(k)]);
+                }
+            } catch (...) {
+                std::lock_guard<std::mutex> lock(error_mutex);
+                if (!first_error) {
+                    first_error = std::current_exception();
+                }
+            }
+        });
+    }
+    for (auto &thread : threads) {
+        thread.join();
+    }
+    if (first_error) {
+        std::rethrow_exception(first_error);
+    }
+    for (int k = 0; k < kWorkloads; ++k) {
+        const auto &ref = *reference[static_cast<std::size_t>(k)];
+        const auto &got = *concurrent_results[static_cast<std::size_t>(k)];
+        require(got.potential_vertex_values_v.size() == ref.potential_vertex_values_v.size() &&
+                got.reaction_vertex_values_a.size() == ref.reaction_vertex_values_a.size(),
+            "concurrent ChargeTraceWorkspace::solve changed output size");
+        for (std::size_t i = 0; i < ref.potential_vertex_values_v.size(); ++i) {
+            const double p_scale = std::max(1.0, std::abs(ref.potential_vertex_values_v[i]));
+            const double r_scale = std::max(1.0, std::abs(ref.reaction_vertex_values_a[i]));
+            require(std::abs(got.potential_vertex_values_v[i] -
+                        ref.potential_vertex_values_v[i]) <= 1.0e-13 * p_scale &&
+                    std::abs(got.reaction_vertex_values_a[i] -
+                        ref.reaction_vertex_values_a[i]) <= 1.0e-13 * r_scale,
+                "concurrent ChargeTraceWorkspace::solve disagreed with serial reference");
+        }
+    }
+}
+
+void sparse_kkt_matches_reference_and_handles_dependent_and_terminal_rows()
+{
+    // 7x7x7 Cartesian tetrahedral cube has 4410 RT0 DOFs (> 4096 sparse threshold),
+    // dependent divergence constraints certified by ConservativeConstraintRank,
+    // and source-cut pairing rows.
+    ChargeFixture fixture(mfem::Mesh::MakeCartesian3D(
+        7, 7, 7, mfem::Element::TETRAHEDRON, 1.0, 1.0, 1.0));
+    const auto ids = stable_vertex_ids(fixture.mesh);
+    const auto request_auto = periodic_request(fixture, ids, identity_input());
+    const auto view_auto = ConservativeCurrentView::Build(request_auto);
+    require(view_auto->space().GetVSize() > 4096,
+        "7x7x7 sparse KKT parity fixture did not enter the sparse KKT lane");
+    require(!view_auto->constraint_rank_certificate().omitted_rows.empty(),
+        "7x7x7 sparse KKT parity fixture did not exercise dependent-row omission");
+    require(std::isfinite(view_auto->balance().scaled_kkt_residual) &&
+            view_auto->balance().scaled_kkt_residual <= 1.0e-10,
+        "sparse KKT Tier-1/Auto scaled residual exceeds 1e-10");
+    require(view_auto->balance().max_element_divergence_a <= kAbsoluteCurrentToleranceA,
+        "sparse KKT Tier-1/Auto element divergence exceeds 1e-12 A");
+    const auto avg_auto = volume_average(view_auto->field());
+    require(std::abs(avg_auto[0] - 4.0) <= 1.0e-10 &&
+            std::abs(avg_auto[1]) <= 1.0e-10 &&
+            std::abs(avg_auto[2]) <= 1.0e-10,
+        "sparse KKT Tier-1/Auto current density disagrees with analytical 4 A/m^2");
+
+#if defined(MFEM_USE_MPI) && !defined(FULLMAG_OET0_DISABLE_MPI)
+    // Explicitly exercise Tier-2 HYPRE Schur-AMG MINRES lane via the pinned
+    // single-rank MPI policy and verify parity against Tier-1/Auto.
+    auto request_tier2 = request_auto;
+    request_tier2.reference_mpi_gather_broadcast = true;
+    const auto view_tier2 = ConservativeCurrentView::Build(request_tier2);
+    require(std::isfinite(view_tier2->balance().scaled_kkt_residual) &&
+            view_tier2->balance().scaled_kkt_residual <= 1.0e-10,
+        "sparse KKT Tier-2 Schur-AMG scaled residual exceeds 1e-10");
+    require(view_tier2->balance().max_element_divergence_a <= kAbsoluteCurrentToleranceA,
+        "sparse KKT Tier-2 Schur-AMG element divergence exceeds 1e-12 A");
+    require(view_tier2->field().Size() == view_auto->field().Size(),
+        "sparse KKT Tier-1 and Tier-2 produced different RT0 DOF counts");
+    double max_field_diff = 0.0;
+    double max_field_scale = 1.0;
+    for (int dof = 0; dof < view_auto->field().Size(); ++dof) {
+        const double a = view_auto->field()[dof];
+        const double b = view_tier2->field()[dof];
+        max_field_diff = std::max(max_field_diff, std::abs(a - b));
+        max_field_scale = std::max(max_field_scale, std::abs(a));
+    }
+    require(max_field_diff <= 1.0e-10 * max_field_scale,
+        "sparse KKT Tier-1 MUMPS and Tier-2 Schur-AMG RT0 fields disagree");
+    require(std::abs(view_auto->balance().correction_norm_mw -
+                view_tier2->balance().correction_norm_mw) <= 1.0e-10,
+        "sparse KKT Tier-1 MUMPS and Tier-2 Schur-AMG correction energies disagree");
+#endif
+}
+
 void charge_current_response_preserves_sign_and_independent_component_scales()
 {
     using fullmag::fem::antenna_field_solve::ChargeCurrentResponseRequest;
@@ -6289,6 +6456,8 @@ int main(int argc, char **argv)
         charge_trace_workspace_preserves_component_gauges_and_weak_reactions();
         charge_trace_workspace_rejects_jumps_lost_after_anchoring();
         charge_trace_workspace_reuses_owned_operator_after_sources_are_destroyed();
+        charge_trace_workspace_concurrent_const_solves_are_race_free_and_consistent();
+        sparse_kkt_matches_reference_and_handles_dependent_and_terminal_rows();
         charge_current_response_preserves_sign_and_independent_component_scales();
         charge_current_response_uses_terminal_anchors_and_rejects_common_mode();
         prepared_charge_current_response_reuses_owned_operator_and_checks_topology();

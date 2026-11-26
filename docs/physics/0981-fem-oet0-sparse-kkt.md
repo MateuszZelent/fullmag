@@ -2,7 +2,7 @@
 
 - Status: executable reference realization; production qualification is bounded
 - Owners: Fullmag FEM current-transport
-- Last updated: 2026-08-05
+- Last updated: 2026-11-26
 - Related physics owner: `docs/physics/0980-dynamic-current-and-oersted-coupling.md`
 - Related specification: `docs/specs/spin-transport-runtime-contract-v1.md`
 - Operator: `fem_conservative_current_rt0_view.v1`
@@ -53,9 +53,32 @@ K_s\begin{bmatrix}x_s\\\eta_s\end{bmatrix}=
 \begin{bmatrix}g_f\\d_s\end{bmatrix}.
 ```
 
-MINRES uses a block diagonal preconditioner with Gauss--Seidel smoothing for
-$M_f$ and an identity constraint block. The returned algebraic certificate is
-the scaled Euclidean residual
+The sparse lane equilibrates the saddle-point blocks by a positive scalar
+$\beta = \operatorname{mean\_diag}(M_f) / \operatorname{rms\_nz}(C_f^{\mathsf T})$
+so the scaled block system solves for $(x_s, \tilde\eta_s)$ with
+$\eta_s = \beta\tilde\eta_s$:
+- **Tier 1 (`FULLMAG_FEM_WITH_SLEPC=1`, single-rank non-pinned CPU):**
+  assembles the equilibrated CSR matrix and solves via `SparseLinearSolver`
+  (PETSc + MUMPS LU with METIS ordering `ICNTL(7)=5`, `ICNTL(14)=50`),
+  followed by up to 4 `long double` true-residual refinement sweeps on the
+  same factorization.
+- **Tier 2 (`FULLMAG_FEM_WITH_SLEPC=0`, `reference_mpi_gather_broadcast`, or `world_size > 1`):**
+  solves the equilibrated block operator with `MINRES` preconditioned by
+  `blkdiag(GSSmoother(M_f), HypreBoomerAMG(S_tilde))` on `MPI_COMM_SELF`
+  (after host-policy verification), where the SPD Schur approximation
+  $\tilde S = \beta^2 \tilde C_f \operatorname{diag}(M_f)^{-1} \tilde C_f^{\mathsf T}$
+  retains full sparse coupling for constraint rows of degree $\le 64$ and
+  diagonal-only entries for dense terminal rows (degree $> 64$) to prevent
+  $O(|F_{\mathrm{term}}|^2)$ fill-in.
+- **Tier 3 (`FULLMAG_OET0_DISABLE_MPI=1`, TSan lane):**
+  solves the equilibrated block operator with `MINRES` preconditioned by
+  `blkdiag(GSSmoother(M_f), GSSmoother(S_tilde))` without any MPI or PETSc
+  calls.
+
+All three tiers pass the same `long double` true-residual gate covering every
+stationarity row and every physical constraint row (including omitted dependent
+rows and fixed zero traces). The returned algebraic certificate is the scaled
+Euclidean residual
 
 ```{math}
 :label: oet0-residual
@@ -191,10 +214,19 @@ operators remain governed by the cell-integrated convolution contract in
 
 For $n_f\le4096$ the deterministic dense binary64 reference remains available
 for small regression fixtures. Larger views allocate MFEM `SparseMatrix` objects
-for $M_f$ and $C_f`, assemble the same local RT0 quadrature, and solve the same
-KKT equations with preconditioned MINRES. No unconstrained projection or dense
-fallback is allowed. The `7\times7\times7` Cartesian tetrahedral fixture has
-more than 4096 RT0 DOFs and exercises this lane.
+for $M_f$ and $C_f$, assemble the same local RT0 quadrature, compute the
+symmetric equilibration scalar $\beta$, and solve the equilibrated KKT system
+via Tier 1 (PETSc+MUMPS LU + `long double` iterative refinement), Tier 2
+(degree-64-guarded Schur-AMG `MINRES` on `MPI_COMM_SELF`), or Tier 3
+(TSan-safe serial Schur `MINRES` with `GSSmoother`). No unconstrained
+projection or dense fallback is allowed. When
+`reference_mpi_gather_broadcast` or `reference_mpi_gather_rank0_broadcast` is
+enabled, both `n=1` and `n=2` MPI runs pin the same single-rank HYPRE policy
+on `MPI_COMM_SELF` (`ChargeTraceWorkspace`, `solve_external_lead_potential`,
+and Tier-2 Schur-AMG `MINRES`) to preserve bit-exact MPI byte identity across
+`FULLMAG_FEM_WITH_SLEPC=0` and `FULLMAG_FEM_WITH_SLEPC=1`. The `7\times7\times7`
+Cartesian tetrahedral fixture has more than 4096 RT0 DOFs and exercises this
+lane.
 
 ### 5.3 FEM GPU and hybrid
 
@@ -207,16 +239,25 @@ evidence. A hybrid CPU/GPU fallback is forbidden in strict mode.
 ## 6. Implementation mapping
 
 The projection owner is `solve_weighted_rt0_projection`. It selects the sparse
-lane from the RT0 global DOF count, assembles MFEM sparse matrices, runs MINRES,
-and computes the same independent residual and correction-energy diagnostics as
-the dense reference. The runtime test is opt-in because it is intentionally a
-larger qualification workload than the fast contract gate.
+lane from the RT0 global DOF count, assembles MFEM sparse matrices, runs the
+equilibrated 3-tier sparse KKT solver (Tier 1 PETSc/MUMPS LU + `long double`
+refinement, Tier 2 degree-64-guarded Schur-AMG `MINRES`, or Tier 3 TSan serial
+Schur `MINRES`), and computes the same independent residual and
+correction-energy diagnostics as the dense reference. `solve_external_lead_potential`
+and `PeriodicChargePotentialSolver` delegate SPD charge solves to
+`SparseLinearSolver` / `ChargeTraceWorkspace` with single-rank HYPRE pinning
+when `reference_mpi_gather_*_broadcast` is enabled.
 
 | Claim | Source path | Symbol |
 |---|---|---|
-| weighted RT0 projection and lane selection | `backends/fem/cpu/mfem/transport/conservative_current_view.cpp` | `solve_weighted_rt0_projection` |
+| weighted RT0 projection and 3-tier sparse lane selection | `backends/fem/cpu/mfem/transport/conservative_current_view.cpp` | `solve_weighted_rt0_projection` |
+| degree-64-guarded SPD Schur approximation for MINRES | `backends/fem/cpu/mfem/transport/conservative_current_view.cpp` | `build_degree_guarded_schur_approx` |
+| shared 3-tier sparse linear solver and saddle-point CSR helper | `backends/fem/cpu/mfem/common/sparse_linear_solver.hpp` | `class SparseLinearSolver` |
 | small-mesh dense reference | `backends/fem/cpu/mfem/transport/conservative_current_view.cpp` | `solve_dense_kkt` |
+| single-rank MPI byte-identity charge pin | `backends/fem/cpu/mfem/transport/periodic_charge_potential.cpp` | `PeriodicChargePotentialSolver::Solve` |
 | large-mesh runtime gate | `backends/fem/tests/conservative_current_view_contract.cpp` | `large_tetrahedral_projection_uses_sparse_kkt_lane` |
+| Tier-1 vs Tier-2 sparse KKT parity and dependent-row gate | `backends/fem/tests/conservative_current_view_contract.cpp` | `sparse_kkt_matches_reference_and_handles_dependent_and_terminal_rows` |
+| concurrent TSan-safe `ChargeTraceWorkspace::solve` gate | `backends/fem/tests/conservative_current_view_contract.cpp` | `charge_trace_workspace_concurrent_const_solves_are_race_free_and_consistent` |
 | source ownership regression | `backends/fem/tests/source_facade_gpu_rk_contract.cpp` | `fem_oet0_large_mesh_has_sparse_kkt_lane` |
 | canonical current-view contract | `backends/fem/cpu/mfem/transport/conservative_current_view.hpp` | `class ConservativeCurrentView` |
 
@@ -275,10 +316,19 @@ full dynamic Oersted capability.
 | Path | Symbol | Responsibility |
 |---|---|---|
 | `backends/fem/cpu/mfem/transport/conservative_current_view.cpp` | `class ConservativeCurrentView` | owns the accepted view and both projection lanes |
-| `backends/fem/cpu/mfem/transport/conservative_current_view.cpp` | `solve_weighted_rt0_projection` | assemble and solve the constrained RT0 projection |
+| `backends/fem/cpu/mfem/transport/conservative_current_view.cpp` | `solve_weighted_rt0_projection` | assemble and solve the constrained RT0 projection (dense reference or 3-tier equilibrated sparse KKT) |
+| `backends/fem/cpu/mfem/transport/conservative_current_view.cpp` | `build_degree_guarded_schur_approx` | construct the degree-64-guarded SPD Schur approximation for Tier-2/Tier-3 MINRES |
 | `backends/fem/cpu/mfem/transport/conservative_current_view.cpp` | `solve_dense_kkt` | bounded small-mesh reference solve |
-| `backends/fem/tests/conservative_current_view_contract.cpp` | `main` | dispatches the optional large sparse runtime gate |
+| `backends/fem/cpu/mfem/common/sparse_linear_solver.hpp` | `class SparseLinearSolver` | shared 3-tier CPU sparse linear solver and saddle-point CSR equilibration helpers |
+| `backends/fem/cpu/mfem/transport/periodic_charge_potential.cpp` | `PeriodicChargePotentialSolver::Solve` | delegate periodic charge solve to `ChargeTraceWorkspace` with single-rank HYPRE pin under MPI gather/broadcast |
+| `backends/fem/tests/conservative_current_view_contract.cpp` | `main` | dispatches the OE-T0 serial, MPI, TSan, and sparse KKT runtime gates |
 | `backends/fem/tests/conservative_current_view_contract.cpp` | `large_tetrahedral_projection_uses_sparse_kkt_lane` | managed large-mesh sparse runtime check |
+| `backends/fem/tests/conservative_current_view_contract.cpp` | `sparse_kkt_matches_reference_and_handles_dependent_and_terminal_rows` | 7x7x7 sparse KKT Tier-1 vs Tier-2 parity and dependent-row check (source-implemented; Phase 2 verification pending) |
+| `backends/fem/tests/conservative_current_view_contract.cpp` | `charge_trace_workspace_concurrent_const_solves_are_race_free_and_consistent` | concurrent TSan-safe `ChargeTraceWorkspace::solve` and anchor-bounds check (source-implemented; Phase 2 verification pending) |
 | `backends/fem/tests/source_facade_gpu_rk_contract.cpp` | `main` | runs source ownership regression |
 | `backends/fem/tests/source_facade_gpu_rk_contract.cpp` | `fem_oet0_large_mesh_has_sparse_kkt_lane` | source ownership and no-dense-limit regression |
 | `backends/fem/cpu/mfem/transport/conservative_current_view.hpp` | `class ConservativeCurrentView` | immutable current-view public boundary |
+| `justfile` | `verify-fem-oersted-oet0-cpu-contract` | build and run managed CPU OE-T0 serial and real MPI n1/n2 byte-identity qualification |
+| `justfile` | `verify-fem-oersted-oet0-tsan-cpu-contract` | run isolated sanitizer contract through seccomp-relaxed TSan service and ASLR-disabled launcher |
+| `compose.yaml` | `fem-cpu-tsan` | isolate sanitizer-only seccomp relaxation from the ordinary FEM CPU service |
+| `scripts/run_fem_cpu_only_contract.sh` | `oersted-oet0-tsan` | disable ASLR before loading the instrumented OE-T0 executable and fail closed on sanitizer reports |

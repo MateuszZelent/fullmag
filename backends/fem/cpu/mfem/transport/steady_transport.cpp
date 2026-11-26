@@ -61,15 +61,22 @@ void validate_parameters(const SteadyTransportParameters &p)
     }
 }
 
-double independent_relative_residual(
-    const mfem::Operator &op,
-    const mfem::Vector &x,
-    const mfem::Vector &rhs)
+fullmag::fem::multiphysics::SparseSolveConfig make_sparse_config(
+    const SteadyTransportParameters &parameters,
+    fullmag::fem::multiphysics::SparseMatrixKind kind,
+    int by_nodes_component_count = 1)
 {
-    mfem::Vector residual(rhs.Size());
-    op.Mult(x, residual);
-    residual -= rhs;
-    return residual.Norml2() / std::max(rhs.Norml2(), 1.0);
+    fullmag::fem::multiphysics::SparseSolveConfig config;
+    config.kind = kind;
+    config.execution_target = parameters.execution_target;
+    config.cpu_backend = parameters.cpu_backend;
+    config.relative_tolerance = parameters.relative_tolerance;
+    config.absolute_tolerance = 0.0;
+    config.maximum_iterations = parameters.maximum_iterations;
+    config.gmres_kdim = std::min(100, std::max(1, parameters.maximum_iterations));
+    config.by_nodes_component_count = by_nodes_component_count;
+    config.max_refinement_sweeps = 2;
+    return config;
 }
 
 int marker_sum(const mfem::Array<int> &marker)
@@ -665,18 +672,13 @@ public:
         form.FormLinearSystem(
             essential_true_dofs, potential, rhs, system_operator, solution, system_rhs);
         auto &matrix = dynamic_cast<mfem::SparseMatrix &>(*system_operator.Ptr());
-        mfem::GSSmoother preconditioner(matrix);
-        mfem::CGSolver solver;
-        solver.SetOperator(matrix);
-        solver.SetPreconditioner(preconditioner);
-        solver.SetRelTol(parameters.relative_tolerance);
-        solver.SetAbsTol(0.0);
-        solver.SetMaxIter(parameters.maximum_iterations);
-        solver.SetPrintLevel(0);
-        solver.Mult(system_rhs, solution);
-        const double residual = independent_relative_residual(matrix, solution, system_rhs);
+        const auto solver_config = make_sparse_config(
+            parameters, fullmag::fem::multiphysics::SparseMatrixKind::Spd);
+        fullmag::fem::multiphysics::SparseLinearSolver solver(matrix, solver_config);
+        const auto stats = solver.solve(system_rhs, solution, 0.0);
+        const double residual = stats.independent_relative_residual;
         form.RecoverFEMSolution(solution, rhs, potential);
-        if (solver.GetConverged() && marked_boundaries > 0) {
+        if (stats.converged && marked_boundaries > 0) {
             // FullMult restores the eliminated stiffness contribution. Work
             // in true-dof coordinates when the H1 space is nonconforming.
             mfem::Vector true_potential, true_rhs;
@@ -707,9 +709,10 @@ public:
         }
 
         ChargeSolveDiagnostics diagnostics;
-        diagnostics.converged = solver.GetConverged();
-        diagnostics.iterations = solver.GetNumIterations();
+        diagnostics.converged = stats.converged;
+        diagnostics.iterations = stats.iterations;
         diagnostics.relative_residual = residual;
+        diagnostics.resolved_solver = stats.resolved_solver;
         accumulate_charge_diagnostics(diagnostics);
         return diagnostics;
     }
@@ -718,6 +721,12 @@ public:
         const std::vector<std::vector<int>> &terminal_boundary_attributes,
         const std::vector<double> &requested_outward_current_a)
     {
+        last_charge_weak_residual.SetSize(0);
+        last_charge_marker.SetSize(0);
+        if (parameters.constitutive_model != TransportConstitutiveModel::OneWay) {
+            throw std::invalid_argument(
+                "reciprocal transport requires the monolithic solve_reciprocal entry point");
+        }
         const std::size_t count = terminal_boundary_attributes.size();
         if (count == 0 || count != requested_outward_current_a.size()) {
             throw std::invalid_argument(
@@ -747,6 +756,7 @@ public:
         std::vector<int> terminal_component(count, -1);
         std::map<int, std::vector<int>> component_terminals;
         std::map<int, int> dof_owner;
+        std::map<int, std::vector<int>> attribute_true_dofs;
         for (std::size_t terminal = 0; terminal < count; ++terminal) {
             if (terminal_boundary_attributes[terminal].empty() ||
                 !std::isfinite(requested_outward_current_a[terminal])) {
@@ -772,6 +782,18 @@ public:
                     static_cast<int>(terminal);
                 marker[attribute - 1] = 1;
                 all_terminals[attribute - 1] = 1;
+
+                mfem::Array<int> attr_marker(max_attribute);
+                attr_marker = 0;
+                attr_marker[attribute - 1] = 1;
+                mfem::Array<int> attr_dofs;
+                scalar_space.GetEssentialTrueDofs(attr_marker, attr_dofs);
+                std::vector<int> stored_dofs;
+                stored_dofs.reserve(static_cast<std::size_t>(attr_dofs.Size()));
+                for (int i = 0; i < attr_dofs.Size(); ++i) {
+                    stored_dofs.push_back(attr_dofs[i]);
+                }
+                attribute_true_dofs.emplace(attribute, std::move(stored_dofs));
             }
             mfem::Array<int> terminal_dofs;
             scalar_space.GetEssentialTrueDofs(marker, terminal_dofs);
@@ -802,8 +824,77 @@ public:
             }
         }
 
+        // Factor-once multi-RHS assembly: assemble and factor K_elim once for
+        // this call only (so external Coefficient mutations between calls never
+        // observe a stale factor).
+        mfem::BilinearForm diffusion_form(&scalar_space);
+        diffusion_form.AddDomainIntegrator(new mfem::DiffusionIntegrator(conductivity));
+        diffusion_form.Assemble();
+        mfem::Array<int> essential_true_dofs;
+        scalar_space.GetEssentialTrueDofs(all_terminals, essential_true_dofs);
+        add_unreferenced_component_gauges(
+            mesh, scalar_space, all_terminals, essential_true_dofs);
+
+        mfem::GridFunction zero_potential(&scalar_space);
+        zero_potential = 0.0;
+        mfem::LinearForm zero_rhs(&scalar_space);
+        zero_rhs = 0.0;
+        zero_rhs.Assemble();
+        mfem::OperatorPtr system_operator;
+        mfem::Vector dummy_solution, dummy_rhs;
+        diffusion_form.FormLinearSystem(
+            essential_true_dofs, zero_potential, zero_rhs,
+            system_operator, dummy_solution, dummy_rhs);
+        auto &eliminated_matrix = dynamic_cast<mfem::SparseMatrix &>(*system_operator.Ptr());
+        const int true_size = scalar_space.GetTrueVSize();
+        std::vector<bool> is_essential_true_dof(static_cast<std::size_t>(true_size), false);
+        for (int index = 0; index < essential_true_dofs.Size(); ++index) {
+            is_essential_true_dof[static_cast<std::size_t>(essential_true_dofs[index])] = true;
+        }
+        mfem::Vector eliminated_diag(true_size);
+        eliminated_matrix.GetDiag(eliminated_diag);
+
+        const auto solver_config = make_sparse_config(
+            parameters, fullmag::fem::multiphysics::SparseMatrixKind::Spd);
+        fullmag::fem::multiphysics::SparseLinearSolver charge_solver(
+            eliminated_matrix, solver_config);
+
+        const auto *restriction = scalar_space.GetConformingRestriction();
+        const auto *prolongation = scalar_space.GetConformingProlongation();
+
         std::vector<double> attribute_voltage(static_cast<std::size_t>(max_attribute), 0.0);
         TerminalBoundaryPotential boundary_potential(attribute_voltage);
+        mfem::GridFunction bdr_potential(&scalar_space);
+        mfem::Vector true_bdr(true_size);
+        mfem::Vector rhs_full(true_size);
+        mfem::Vector system_rhs(true_size);
+        mfem::Vector solution(true_size);
+        mfem::Vector weak_residual(true_size);
+
+        const auto solve_for_current_voltages = [&]() {
+            bdr_potential = 0.0;
+            bdr_potential.ProjectBdrCoefficient(boundary_potential, all_terminals);
+            if (restriction != nullptr) {
+                restriction->Mult(bdr_potential, true_bdr);
+            } else {
+                true_bdr = bdr_potential;
+            }
+            for (int i = 0; i < true_size; ++i) {
+                if (!is_essential_true_dof[static_cast<std::size_t>(i)]) {
+                    true_bdr[i] = 0.0;
+                }
+            }
+            diffusion_form.FullMult(true_bdr, rhs_full);
+            for (int i = 0; i < true_size; ++i) {
+                if (is_essential_true_dof[static_cast<std::size_t>(i)]) {
+                    system_rhs[i] = eliminated_diag[i] * true_bdr[i];
+                } else {
+                    system_rhs[i] = -rhs_full[i];
+                }
+            }
+            return charge_solver.solve(system_rhs, solution, 0.0);
+        };
+
         std::vector<std::vector<double>> response(count, std::vector<double>(count, 0.0));
         ChargeTerminalCurrentSolution result;
         result.terminal_voltage_v.assign(count, 0.0);
@@ -816,15 +907,19 @@ public:
                         static_cast<std::size_t>(source)]) {
                     attribute_voltage[static_cast<std::size_t>(attribute - 1)] = 1.0;
                 }
-                const auto diagnostics = solve_charge(
-                    all_terminals, boundary_potential, ChargeGauge::BoundaryReference);
-                if (!diagnostics.converged) {
+                const auto stats = solve_for_current_voltages();
+                if (!stats.converged ||
+                    stats.independent_relative_residual > parameters.relative_tolerance) {
                     throw std::runtime_error("unit-terminal H1 response solve did not converge");
                 }
+                diffusion_form.FullMult(solution, weak_residual);
                 for (std::size_t terminal = 0; terminal < count; ++terminal) {
                     for (int attribute : terminal_boundary_attributes[terminal]) {
-                        response[terminal][static_cast<std::size_t>(source)] +=
-                            boundary_weak_current_a(attribute);
+                        double outward = 0.0;
+                        for (int dof : attribute_true_dofs.at(attribute)) {
+                            outward -= weak_residual[dof];
+                        }
+                        response[terminal][static_cast<std::size_t>(source)] += outward;
                     }
                 }
                 for (int attribute : terminal_boundary_attributes[
@@ -846,11 +941,27 @@ public:
                     result.terminal_voltage_v[terminal];
             }
         }
-        result.diagnostics = solve_charge(
-            all_terminals, boundary_potential, ChargeGauge::BoundaryReference);
-        if (!result.diagnostics.converged) {
+        const auto final_stats = solve_for_current_voltages();
+        if (!final_stats.converged ||
+            final_stats.independent_relative_residual > parameters.relative_tolerance) {
             throw std::runtime_error("prescribed terminal-current H1 solve did not converge");
         }
+        if (prolongation != nullptr) {
+            prolongation->Mult(solution, potential);
+        } else {
+            potential = solution;
+        }
+        last_charge_weak_residual.SetSize(true_size);
+        diffusion_form.FullMult(solution, last_charge_weak_residual);
+        last_charge_marker = all_terminals;
+        project_charge_current();
+
+        result.diagnostics.converged = final_stats.converged;
+        result.diagnostics.iterations = final_stats.iterations;
+        result.diagnostics.relative_residual = final_stats.independent_relative_residual;
+        result.diagnostics.resolved_solver = final_stats.resolved_solver;
+        accumulate_charge_diagnostics(result.diagnostics);
+
         result.measured_outward_current_a.assign(count, 0.0);
         for (std::size_t terminal = 0; terminal < count; ++terminal) {
             for (int attribute : terminal_boundary_attributes[terminal]) {
@@ -922,16 +1033,14 @@ public:
         mfem::Vector solution, system_rhs;
         form.FormLinearSystem(
             essential_true_dofs, spin, rhs, system_operator, solution, system_rhs);
-        mfem::GMRESSolver solver;
-        solver.SetOperator(*system_operator.Ptr());
-        solver.SetRelTol(parameters.relative_tolerance);
-        solver.SetAbsTol(0.0);
-        solver.SetMaxIter(parameters.maximum_iterations);
-        solver.SetKDim(100);
-        solver.SetPrintLevel(0);
-        solver.Mult(system_rhs, solution);
-        const double residual = independent_relative_residual(
-            *system_operator.Ptr(), solution, system_rhs);
+        auto &matrix = dynamic_cast<mfem::SparseMatrix &>(*system_operator.Ptr());
+        const auto solver_config = make_sparse_config(
+            parameters,
+            fullmag::fem::multiphysics::SparseMatrixKind::GeneralNonsymmetric,
+            3);
+        fullmag::fem::multiphysics::SparseLinearSolver solver(matrix, solver_config);
+        const auto stats = solver.solve(system_rhs, solution, 0.0);
+        const double residual = stats.independent_relative_residual;
         form.RecoverFEMSolution(solution, rhs, spin);
         project_spin_current();
         mfem::Vector full_weak_residual(rhs.Size());
@@ -947,9 +1056,10 @@ public:
         source_coefficients.clear();
 
         SpinSolveDiagnostics diagnostics;
-        diagnostics.converged = solver.GetConverged();
-        diagnostics.iterations = solver.GetNumIterations();
+        diagnostics.converged = stats.converged;
+        diagnostics.iterations = stats.iterations;
         diagnostics.relative_residual = residual;
+        diagnostics.resolved_solver = stats.resolved_solver;
         accumulate_spin_diagnostics(diagnostics);
         project_torque(diagnostics);
         return diagnostics;
@@ -1048,14 +1158,13 @@ public:
         mfem::Vector solution, system_rhs;
         form.FormLinearSystem(
             essential_true_dofs, coupled_state, rhs, system_operator, solution, system_rhs);
-        mfem::GMRESSolver solver;
-        solver.SetOperator(*system_operator.Ptr());
-        solver.SetRelTol(parameters.relative_tolerance);
-        solver.SetAbsTol(0.0);
-        solver.SetMaxIter(parameters.maximum_iterations);
-        solver.SetKDim(std::min(100, std::max(1, parameters.maximum_iterations)));
-        solver.SetPrintLevel(0);
-        solver.Mult(system_rhs, solution);
+        auto &matrix = dynamic_cast<mfem::SparseMatrix &>(*system_operator.Ptr());
+        const auto solver_config = make_sparse_config(
+            parameters,
+            fullmag::fem::multiphysics::SparseMatrixKind::GeneralNonsymmetric,
+            4);
+        fullmag::fem::multiphysics::SparseLinearSolver solver(matrix, solver_config);
+        const auto stats = solver.solve(system_rhs, solution, 0.0);
 
         double relative_residual = std::numeric_limits<double>::infinity();
         if (system_rhs.Size() == 0) {
@@ -1091,12 +1200,14 @@ public:
         project_charge_current();
         project_spin_current();
         ReciprocalSolveDiagnostics diagnostics;
-        diagnostics.charge.converged = solver.GetConverged();
-        diagnostics.charge.iterations = solver.GetNumIterations();
+        diagnostics.charge.converged = stats.converged;
+        diagnostics.charge.iterations = stats.iterations;
         diagnostics.charge.relative_residual = relative_residual;
-        diagnostics.spin.converged = solver.GetConverged();
-        diagnostics.spin.iterations = solver.GetNumIterations();
+        diagnostics.charge.resolved_solver = stats.resolved_solver;
+        diagnostics.spin.converged = stats.converged;
+        diagnostics.spin.iterations = stats.iterations;
         diagnostics.spin.relative_residual = relative_residual;
+        diagnostics.spin.resolved_solver = stats.resolved_solver;
         accumulate_charge_diagnostics(diagnostics.charge);
         accumulate_spin_diagnostics(diagnostics.spin);
         project_torque(diagnostics.spin);
@@ -1503,32 +1614,60 @@ public:
         } torque_coefficient(spin, magnetization, parameters);
 
         mfem::ConstantCoefficient one(1.0);
-        mfem::BilinearForm mass_form(&vector_space);
-        mass_form.AddDomainIntegrator(new mfem::VectorMassIntegrator(one));
-        mass_form.Assemble();
+        mfem::BilinearForm scalar_mass_form(&scalar_space);
+        scalar_mass_form.AddDomainIntegrator(new mfem::MassIntegrator(one));
+        scalar_mass_form.Assemble();
         mfem::LinearForm torque_load(&vector_space);
         torque_load.AddDomainIntegrator(new mfem::VectorDomainLFIntegrator(torque_coefficient));
         torque_load.Assemble();
+
         mfem::Array<int> no_essential_dofs;
+        mfem::GridFunction dummy_scalar(&scalar_space);
+        dummy_scalar = 0.0;
+        mfem::LinearForm dummy_load(&scalar_space);
+        dummy_load = 0.0;
+        dummy_load.Assemble();
         mfem::OperatorPtr mass_operator;
-        mfem::Vector projected, load;
+        mfem::Vector dummy_projected, dummy_rhs;
+        scalar_mass_form.FormLinearSystem(
+            no_essential_dofs, dummy_scalar, dummy_load,
+            mass_operator, dummy_projected, dummy_rhs);
+        auto &scalar_mass_matrix = dynamic_cast<mfem::SparseMatrix &>(*mass_operator.Ptr());
+        const auto mass_config = make_sparse_config(
+            parameters, fullmag::fem::multiphysics::SparseMatrixKind::Spd);
+        fullmag::fem::multiphysics::SparseLinearSolver mass_solver(
+            scalar_mass_matrix, mass_config);
+
+        const int scalar_vsize = scalar_space.GetVSize();
+        const int scalar_true_size = scalar_space.GetTrueVSize();
+        const auto *prolongation = scalar_space.GetConformingProlongation();
+        mfem::Vector comp_load_full(scalar_vsize);
+        mfem::Vector comp_rhs(scalar_true_size);
+        mfem::Vector comp_sol(scalar_true_size);
+        mfem::Vector comp_full(scalar_vsize);
         torque = 0.0;
-        mass_form.FormLinearSystem(
-            no_essential_dofs, torque, torque_load, mass_operator, projected, load);
-        auto &mass_matrix = dynamic_cast<mfem::SparseMatrix &>(*mass_operator.Ptr());
-        mfem::GSSmoother mass_preconditioner(mass_matrix);
-        mfem::CGSolver projection_solver;
-        projection_solver.SetOperator(mass_matrix);
-        projection_solver.SetPreconditioner(mass_preconditioner);
-        projection_solver.SetRelTol(parameters.relative_tolerance);
-        projection_solver.SetAbsTol(0.0);
-        projection_solver.SetMaxIter(parameters.maximum_iterations);
-        projection_solver.SetPrintLevel(0);
-        projection_solver.Mult(load, projected);
-        if (!projection_solver.GetConverged()) {
-            throw std::runtime_error("consistent L2 transport-torque projection did not converge");
+        for (int component = 0; component < 3; ++component) {
+            for (int dof = 0; dof < scalar_vsize; ++dof) {
+                comp_load_full[dof] = torque_load[vector_space.DofToVDof(dof, component)];
+            }
+            if (prolongation != nullptr) {
+                prolongation->MultTranspose(comp_load_full, comp_rhs);
+            } else {
+                comp_rhs = comp_load_full;
+            }
+            const auto stats = mass_solver.solve(comp_rhs, comp_sol, 0.0);
+            if (!stats.converged) {
+                throw std::runtime_error("consistent L2 transport-torque projection did not converge");
+            }
+            if (prolongation != nullptr) {
+                prolongation->Mult(comp_sol, comp_full);
+            } else {
+                comp_full = comp_sol;
+            }
+            for (int dof = 0; dof < scalar_vsize; ++dof) {
+                torque[vector_space.DofToVDof(dof, component)] = comp_full[dof];
+            }
         }
-        mass_form.RecoverFEMSolution(projected, torque_load, torque);
         mfem::Vector integral(3);
         integral = 0.0;
         double squared_norm = 0.0;

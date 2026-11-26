@@ -920,6 +920,423 @@ void reciprocal_m2_converges_on_three_mesh_resolutions()
         "reciprocal M2 three-grid refinement is too weak");
 }
 
+mfem::Mesh make_four_terminal_plus_unforced_component_mesh()
+{
+    mfem::Mesh main_bar = mfem::Mesh::MakeCartesian3D(
+        6, 2, 2, mfem::Element::TETRAHEDRON, 6.0, 2.0, 2.0);
+    mfem::Mesh unforced_bar = mfem::Mesh::MakeCartesian3D(
+        1, 1, 1, mfem::Element::TETRAHEDRON, 1.0, 1.0, 1.0);
+    for (int vertex = 0; vertex < unforced_bar.GetNV(); ++vertex) {
+        unforced_bar.GetVertex(vertex)[0] += 8.0;
+    }
+
+    const int main_nv = main_bar.GetNV();
+    const int total_nv = main_nv + unforced_bar.GetNV();
+    const int total_ne = main_bar.GetNE() + unforced_bar.GetNE();
+    const int total_nbe = main_bar.GetNBE() + unforced_bar.GetNBE();
+    mfem::Mesh combined(3, total_nv, total_ne, total_nbe, 3);
+    for (int v = 0; v < main_nv; ++v) {
+        combined.AddVertex(main_bar.GetVertex(v));
+    }
+    for (int v = 0; v < unforced_bar.GetNV(); ++v) {
+        combined.AddVertex(unforced_bar.GetVertex(v));
+    }
+    for (int e = 0; e < main_bar.GetNE(); ++e) {
+        mfem::Array<int> verts;
+        main_bar.GetElementVertices(e, verts);
+        int tet[4] = {verts[0], verts[1], verts[2], verts[3]};
+        combined.AddTet(tet, 1);
+    }
+    for (int e = 0; e < unforced_bar.GetNE(); ++e) {
+        mfem::Array<int> verts;
+        unforced_bar.GetElementVertices(e, verts);
+        int tet[4] = {
+            main_nv + verts[0], main_nv + verts[1],
+            main_nv + verts[2], main_nv + verts[3],
+        };
+        combined.AddTet(tet, 2);
+    }
+
+    // Assign four vertex-disjoint terminals on component 0:
+    //   attr 1: x == 0
+    //   attr 2: x == 6
+    //   attr 3: y == 0 and 1 <= x <= 2
+    //   attr 4: y == 2 and 4 <= x <= 5
+    //   attr 5: remaining insulating faces on component 0
+    //   attr 6: insulating faces on disconnected unforced component 1
+    constexpr double eps = 1.0e-12;
+    for (int b = 0; b < main_bar.GetNBE(); ++b) {
+        mfem::Array<int> verts;
+        main_bar.GetBdrElementVertices(b, verts);
+        bool on_x0 = true, on_x6 = true, on_y0_patch = true, on_y2_patch = true;
+        for (int i = 0; i < verts.Size(); ++i) {
+            const double *p = main_bar.GetVertex(verts[i]);
+            on_x0 = on_x0 && std::abs(p[0]) <= eps;
+            on_x6 = on_x6 && std::abs(p[0] - 6.0) <= eps;
+            on_y0_patch = on_y0_patch && std::abs(p[1]) <= eps &&
+                p[0] >= 1.0 - eps && p[0] <= 2.0 + eps;
+            on_y2_patch = on_y2_patch && std::abs(p[1] - 2.0) <= eps &&
+                p[0] >= 4.0 - eps && p[0] <= 5.0 + eps;
+        }
+        int attr = 5;
+        if (on_x0) attr = 1;
+        else if (on_x6) attr = 2;
+        else if (on_y0_patch) attr = 3;
+        else if (on_y2_patch) attr = 4;
+        int tri[3] = {verts[0], verts[1], verts[2]};
+        combined.AddBdrTriangle(tri, attr);
+    }
+    for (int b = 0; b < unforced_bar.GetNBE(); ++b) {
+        mfem::Array<int> verts;
+        unforced_bar.GetBdrElementVertices(b, verts);
+        int tri[3] = {
+            main_nv + verts[0], main_nv + verts[1], main_nv + verts[2],
+        };
+        combined.AddBdrTriangle(tri, 6);
+    }
+    combined.FinalizeTopology();
+    combined.Finalize(false, true);
+    return combined;
+}
+
+void multi_terminal_factor_once_matches_independent_charge_solves()
+{
+    using fullmag::fem::multiphysics::SparseCpuBackendPolicy;
+
+    mfem::Mesh mesh = make_four_terminal_plus_unforced_component_mesh();
+    double sigma_value = 3.5;
+    class MutableConductivity final : public mfem::Coefficient {
+    public:
+        explicit MutableConductivity(double &v) : value_(v) {}
+        double Eval(mfem::ElementTransformation &, const mfem::IntegrationPoint &) override
+        {
+            return value_;
+        }
+    private:
+        double &value_;
+    } sigma(sigma_value);
+    mfem::VectorConstantCoefficient magnetization(mfem::Vector({0.0, 0.0, 1.0}));
+
+    const std::vector<std::vector<int>> terminals = {{1}, {2}, {3}, {4}};
+    const std::vector<double> requested = {-1.0, 0.4, 0.35, 0.25};
+
+    std::vector<SparseCpuBackendPolicy> policies = {
+        SparseCpuBackendPolicy::Auto,
+#if defined(MFEM_USE_MPI)
+        SparseCpuBackendPolicy::Hypre,
+#endif
+        SparseCpuBackendPolicy::MfemSerial,
+    };
+
+    std::vector<double> reference_voltages;
+    mfem::Vector reference_potential;
+    for (const auto policy : policies) {
+        SteadyTransportParameters parameters;
+        parameters.sigma_s_spm = 5.0;
+        parameters.relative_tolerance = 1.0e-12;
+        parameters.maximum_iterations = 2000;
+        parameters.cpu_backend = policy;
+
+        SteadyTransportOracle oracle(mesh, sigma, magnetization, parameters);
+        const auto sol = oracle.solve_charge_terminal_currents(terminals, requested);
+        require(sol.diagnostics.converged,
+            "multi-terminal factor-once charge solve did not converge");
+        require(!sol.diagnostics.resolved_solver.empty(),
+            "multi-terminal factor-once did not populate resolved_solver");
+        require(sol.diagnostics.relative_residual <= 1.0e-11,
+            "multi-terminal factor-once residual exceeds tolerance");
+        require(sol.gauge_terminal_indices == std::vector<int>{0},
+            "multi-terminal factor-once chose the wrong gauge terminal");
+        for (std::size_t t = 0; t < requested.size(); ++t) {
+            require(std::abs(sol.measured_outward_current_a[t] - requested[t]) <=
+                    1.0e-8 * std::abs(requested[t]) + 1.0e-18,
+                "multi-terminal factor-once terminal current mismatch");
+        }
+        // Unforced disconnected component (x >= 7.5) must stay pinned at 0 V.
+        const auto &pot = oracle.electric_potential();
+        for (int v = 0; v < mesh.GetNV(); ++v) {
+            if (mesh.GetVertex(v)[0] >= 7.5) {
+                mfem::Array<int> dofs;
+                pot.FESpace()->GetVertexDofs(v, dofs);
+                require(dofs.Size() == 1 && std::abs(pot[dofs[0]]) <= 1.0e-12,
+                    "unforced disconnected component drifted away from zero gauge");
+            }
+        }
+        if (reference_voltages.empty()) {
+            reference_voltages = sol.terminal_voltage_v;
+            reference_potential = pot;
+
+            // Cross-check against an independent single-call solve_charge with
+            // the solved terminal voltages prescribed on attributes 1..4.
+            mfem::Array<int> all_terms(mesh.bdr_attributes.Max());
+            all_terms = 0;
+            for (int attr = 1; attr <= 4; ++attr) all_terms[attr - 1] = 1;
+            class BdrAttrVoltage final : public mfem::Coefficient {
+            public:
+                explicit BdrAttrVoltage(const std::vector<double> &v) : voltages_(v) {}
+                double Eval(mfem::ElementTransformation &T, const mfem::IntegrationPoint &) override
+                {
+                    return (T.Attribute >= 1 && T.Attribute <= 4)
+                        ? voltages_[static_cast<std::size_t>(T.Attribute - 1)]
+                        : 0.0;
+                }
+            private:
+                const std::vector<double> &voltages_;
+            } prescribed_voltage(reference_voltages);
+
+            SteadyTransportOracle check_oracle(mesh, sigma, magnetization, parameters);
+            const auto check_diag = check_oracle.solve_charge(
+                all_terms, prescribed_voltage, ChargeGauge::BoundaryReference);
+            require(check_diag.converged && !check_diag.resolved_solver.empty(),
+                "independent charge cross-check did not converge");
+            mfem::Vector diff(check_oracle.electric_potential());
+            diff -= reference_potential;
+            require(diff.Normlinf() <= 1.0e-11 * std::max(1.0, reference_potential.Normlinf()),
+                "multi-terminal factor-once potential differs from independent solve_charge");
+        } else {
+            for (std::size_t t = 0; t < requested.size(); ++t) {
+                require(std::abs(sol.terminal_voltage_v[t] - reference_voltages[t]) <=
+                        1.0e-11 * std::max(1.0, std::abs(reference_voltages[t])),
+                    "multi-terminal voltages disagree across CPU sparse backends");
+            }
+            mfem::Vector diff(pot);
+            diff -= reference_potential;
+            require(diff.Normlinf() <= 1.0e-11 * std::max(1.0, reference_potential.Normlinf()),
+                "multi-terminal potential disagrees across CPU sparse backends");
+        }
+    }
+
+    // Verify per-call factorization lifetime: mutating external conductivity
+    // between two calls on one SteadyTransportOracle must not reuse a stale factor.
+    SteadyTransportParameters mut_params;
+    mut_params.sigma_s_spm = 5.0;
+    mut_params.relative_tolerance = 1.0e-12;
+    SteadyTransportOracle mut_oracle(mesh, sigma, magnetization, mut_params);
+    sigma_value = 3.5;
+    const auto first = mut_oracle.solve_charge_terminal_currents(terminals, requested);
+    sigma_value = 7.0;
+    const auto second = mut_oracle.solve_charge_terminal_currents(terminals, requested);
+    for (std::size_t t = 1; t < requested.size(); ++t) {
+        require(std::abs(second.terminal_voltage_v[t] - 0.5 * first.terminal_voltage_v[t]) <=
+                1.0e-11 * std::max(1.0, std::abs(first.terminal_voltage_v[t])),
+            "solve_charge_terminal_currents reused a stale factor after conductivity mutation");
+    }
+}
+
+void stiff_precession_m1_and_reciprocal_m2_converge_with_strong_ahe_and_contrast()
+{
+    using fullmag::fem::multiphysics::SparseCpuBackendPolicy;
+
+    constexpr double length_m = 1.0;
+    mfem::Mesh mesh = mfem::Mesh::MakeCartesian3D(
+        8, 8, 8, mfem::Element::TETRAHEDRON, length_m, length_m, length_m);
+    for (int element = 0; element < mesh.GetNE(); ++element) {
+        mfem::Array<int> verts;
+        mesh.GetElementVertices(element, verts);
+        double x = 0.0;
+        for (int i = 0; i < verts.Size(); ++i) {
+            x += mesh.GetVertex(verts[i])[0];
+        }
+        x /= static_cast<double>(verts.Size());
+        mesh.GetElement(element)->SetAttribute(x < 0.5 * length_m ? 1 : 2);
+    }
+
+    // 100x conductivity contrast between layers.
+    mfem::Vector sigma_values(2);
+    sigma_values[0] = 1.0;
+    sigma_values[1] = 100.0;
+    mfem::PWConstCoefficient sigma(sigma_values);
+    mfem::Vector m_dir({0.3, -0.4, std::sqrt(1.0 - 0.09 - 0.16)});
+    mfem::VectorConstantCoefficient magnetization(m_dir);
+
+    const auto electrodes = x_electrodes(mesh);
+    mfem::Array<int> no_spin_dirichlet(mesh.bdr_attributes.Max());
+    no_spin_dirichlet = 0;
+    mfem::FunctionCoefficient voltage([](const mfem::Vector &x) { return 1.0 - x[0]; });
+
+    std::vector<SparseCpuBackendPolicy> policies = {
+        SparseCpuBackendPolicy::Auto,
+#if defined(MFEM_USE_MPI)
+        SparseCpuBackendPolicy::Hypre,
+#endif
+    };
+
+    mfem::Vector ref_m1_spin;
+    mfem::Vector ref_m2_potential;
+    mfem::Vector ref_m2_spin;
+
+    for (const auto policy : policies) {
+        // M1 stiff precession (lambda_J = 0.05 L) + 100x contrast.
+        SteadyTransportParameters m1_params;
+        m1_params.constitutive_model = TransportConstitutiveModel::OneWay;
+        m1_params.sigma_s_spm = 100.0;
+        m1_params.polarization_p = 0.2;
+        m1_params.theta_sh = 0.15;
+        m1_params.lambda_sf_m = 0.2 * length_m;
+        m1_params.lambda_j_m = 0.05 * length_m;
+        m1_params.lambda_phi_m = 0.15 * length_m;
+        m1_params.relative_tolerance = 1.0e-11;
+        m1_params.maximum_iterations = 2000;
+        m1_params.cpu_backend = policy;
+
+        SteadyTransportOracle m1_oracle(mesh, sigma, magnetization, m1_params);
+        const auto m1_charge = m1_oracle.solve_charge(
+            electrodes, voltage, ChargeGauge::BoundaryReference);
+        require(m1_charge.converged && m1_charge.relative_residual <= 1.0e-11 &&
+                !m1_charge.resolved_solver.empty(),
+            "stiff-precession M1 charge solve did not converge");
+        const auto m1_spin = m1_oracle.solve_spin(no_spin_dirichlet, nullptr);
+        require(m1_spin.converged && m1_spin.relative_residual <= 1.0e-11 &&
+                !m1_spin.resolved_solver.empty(),
+            "stiff-precession M1 spin solve did not converge");
+        for (int a = 0; a < 3; ++a) {
+            const double scale = std::abs(m1_spin.boundary_spin_flux_a[a]) +
+                std::abs(m1_spin.reaction_integral_a[a]);
+            require(std::abs(m1_spin.angular_momentum_balance_apm2[a]) <=
+                    1.0e-7 * std::max(scale, 1.0e-10),
+                "stiff-precession M1 angular momentum balance is not closed");
+        }
+        require(m1_spin.torque_l2_per_s > 0.0,
+            "stiff-precession M1 torque projection vanished");
+
+        // M2 reciprocal with strong AMR (1.5x), AHE (0.3 * sigma_perp),
+        // stiff precession (lambda_J = 0.05 L), and 100x conductivity contrast.
+        SteadyTransportParameters m2_params = m1_params;
+        m2_params.constitutive_model = TransportConstitutiveModel::Reciprocal;
+        m2_params.sigma_perpendicular_spm = 50.0;
+        m2_params.sigma_parallel_spm = 75.0;
+        m2_params.sigma_ahe_spm = 0.3 * m2_params.sigma_perpendicular_spm;
+
+        SteadyTransportOracle m2_oracle(mesh, sigma, magnetization, m2_params);
+        const auto m2_diag = m2_oracle.solve_reciprocal(
+            electrodes, voltage, no_spin_dirichlet, nullptr,
+            ChargeGauge::BoundaryReference);
+        require(m2_diag.charge.converged && m2_diag.spin.converged &&
+                m2_diag.charge.relative_residual <= 1.0e-11 &&
+                m2_diag.spin.relative_residual <= 1.0e-11 &&
+                !m2_diag.charge.resolved_solver.empty() &&
+                !m2_diag.spin.resolved_solver.empty(),
+            "stiff-precession reciprocal M2 solve with strong AHE/contrast did not converge");
+        for (int a = 0; a < 3; ++a) {
+            const double scale = std::abs(m2_diag.spin.boundary_spin_flux_a[a]) +
+                std::abs(m2_diag.spin.reaction_integral_a[a]);
+            require(std::abs(m2_diag.spin.angular_momentum_balance_apm2[a]) <=
+                    1.0e-7 * std::max(scale, 1.0e-10),
+                "stiff-precession reciprocal M2 angular momentum balance is not closed");
+        }
+        require(m2_diag.spin.torque_l2_per_s > 0.0,
+            "stiff-precession reciprocal M2 torque projection vanished");
+
+        if (ref_m1_spin.Size() == 0) {
+            ref_m1_spin = m1_oracle.spin_potential();
+            ref_m2_potential = m2_oracle.electric_potential();
+            ref_m2_spin = m2_oracle.spin_potential();
+        } else {
+            mfem::Vector d1(m1_oracle.spin_potential());
+            d1 -= ref_m1_spin;
+            require(d1.Normlinf() <= 1.0e-9 * std::max(1.0, ref_m1_spin.Normlinf()),
+                "stiff M1 spin potential disagrees between Auto and Hypre");
+            mfem::Vector d2v(m2_oracle.electric_potential());
+            d2v -= ref_m2_potential;
+            require(d2v.Normlinf() <= 1.0e-9 * std::max(1.0, ref_m2_potential.Normlinf()),
+                "stiff M2 electric potential disagrees between Auto and Hypre");
+            mfem::Vector d2s(m2_oracle.spin_potential());
+            d2s -= ref_m2_spin;
+            require(d2s.Normlinf() <= 1.0e-9 * std::max(1.0, ref_m2_spin.Normlinf()),
+                "stiff M2 spin potential disagrees between Auto and Hypre");
+        }
+    }
+}
+
+void gpu_cudss_transport_parity_when_cuda_enabled()
+{
+    using fullmag::fem::multiphysics::SparseExecutionTarget;
+
+    mfem::Mesh mesh = make_four_terminal_plus_unforced_component_mesh();
+    mfem::ConstantCoefficient sigma(4.0);
+    mfem::VectorConstantCoefficient magnetization(mfem::Vector({0.0, 0.0, 1.0}));
+    const std::vector<std::vector<int>> terminals = {{1}, {2}, {3}, {4}};
+    const std::vector<double> requested = {-1.0, 0.4, 0.35, 0.25};
+
+#if defined(FULLMAG_FEM_CUDSS_POISSON_ENABLED) && FULLMAG_FEM_CUDSS_POISSON_ENABLED && \
+    defined(FULLMAG_HAS_CUDA_RUNTIME) && FULLMAG_HAS_CUDA_RUNTIME
+    SteadyTransportParameters cpu_params;
+    cpu_params.sigma_s_spm = 5.0;
+    cpu_params.relative_tolerance = 1.0e-12;
+    cpu_params.execution_target = SparseExecutionTarget::Cpu;
+    SteadyTransportParameters gpu_params = cpu_params;
+    gpu_params.execution_target = SparseExecutionTarget::GpuCudss;
+
+    SteadyTransportOracle cpu_charge_oracle(mesh, sigma, magnetization, cpu_params);
+    SteadyTransportOracle gpu_charge_oracle(mesh, sigma, magnetization, gpu_params);
+    const auto cpu_sol = cpu_charge_oracle.solve_charge_terminal_currents(terminals, requested);
+    const auto gpu_sol = gpu_charge_oracle.solve_charge_terminal_currents(terminals, requested);
+    require(gpu_sol.diagnostics.converged &&
+            gpu_sol.diagnostics.resolved_solver.rfind("cuda_cudss_", 0) == 0,
+        "GpuCudss multi-terminal charge solve did not resolve to cuDSS");
+    for (std::size_t t = 0; t < requested.size(); ++t) {
+        require(std::abs(gpu_sol.terminal_voltage_v[t] - cpu_sol.terminal_voltage_v[t]) <=
+                1.0e-11 * std::max(1.0, std::abs(cpu_sol.terminal_voltage_v[t])),
+            "GpuCudss multi-terminal voltage disagrees with CPU");
+    }
+
+    mfem::Mesh m2_mesh = mfem::Mesh::MakeCartesian3D(
+        6, 2, 6, mfem::Element::TETRAHEDRON, 1.0, 0.4, 1.0);
+    SteadyTransportParameters m2_cpu;
+    m2_cpu.constitutive_model = TransportConstitutiveModel::Reciprocal;
+    m2_cpu.sigma_s_spm = 5.0;
+    m2_cpu.sigma_parallel_spm = 6.0;
+    m2_cpu.sigma_perpendicular_spm = 3.0;
+    m2_cpu.sigma_ahe_spm = 0.5;
+    m2_cpu.polarization_p = 0.25;
+    m2_cpu.theta_sh = 0.1;
+    m2_cpu.lambda_sf_m = 0.3;
+    m2_cpu.lambda_j_m = 0.1;
+    m2_cpu.lambda_phi_m = 0.2;
+    m2_cpu.relative_tolerance = 1.0e-12;
+    m2_cpu.execution_target = SparseExecutionTarget::Cpu;
+    SteadyTransportParameters m2_gpu = m2_cpu;
+    m2_gpu.execution_target = SparseExecutionTarget::GpuCudss;
+
+    const auto electrodes = x_electrodes(m2_mesh);
+    mfem::Array<int> no_spin(m2_mesh.bdr_attributes.Max());
+    no_spin = 0;
+    mfem::FunctionCoefficient voltage([](const mfem::Vector &x) { return 1.0 - x[0]; });
+
+    SteadyTransportOracle m2_cpu_oracle(m2_mesh, sigma, magnetization, m2_cpu);
+    SteadyTransportOracle m2_gpu_oracle(m2_mesh, sigma, magnetization, m2_gpu);
+    const auto m2_cpu_diag = m2_cpu_oracle.solve_reciprocal(
+        electrodes, voltage, no_spin, nullptr, ChargeGauge::BoundaryReference);
+    const auto m2_gpu_diag = m2_gpu_oracle.solve_reciprocal(
+        electrodes, voltage, no_spin, nullptr, ChargeGauge::BoundaryReference);
+    require(m2_cpu_diag.charge.converged && m2_gpu_diag.charge.converged &&
+            m2_gpu_diag.spin.converged &&
+            m2_gpu_diag.spin.resolved_solver.rfind("cuda_cudss_", 0) == 0,
+        "GpuCudss reciprocal M2 solve did not resolve to cuDSS");
+    mfem::Vector dv(m2_gpu_oracle.electric_potential());
+    dv -= m2_cpu_oracle.electric_potential();
+    require(dv.Normlinf() <= 1.0e-11 * std::max(1.0, m2_cpu_oracle.electric_potential().Normlinf()),
+        "GpuCudss reciprocal M2 electric potential disagrees with CPU");
+    mfem::Vector ds(m2_gpu_oracle.spin_potential());
+    ds -= m2_cpu_oracle.spin_potential();
+    require(ds.Normlinf() <= 1.0e-11 * std::max(1.0, m2_cpu_oracle.spin_potential().Normlinf()),
+        "GpuCudss reciprocal M2 spin potential disagrees with CPU");
+#else
+    SteadyTransportParameters gpu_params;
+    gpu_params.sigma_s_spm = 5.0;
+    gpu_params.execution_target = SparseExecutionTarget::GpuCudss;
+    SteadyTransportOracle gpu_oracle(mesh, sigma, magnetization, gpu_params);
+    bool failed_closed = false;
+    try {
+        (void)gpu_oracle.solve_charge_terminal_currents(terminals, requested);
+    } catch (const std::runtime_error &) {
+        failed_closed = true;
+    }
+    require(failed_closed,
+        "GpuCudss transport request silently fell back to CPU without CUDA/cuDSS");
+#endif
+}
+
 } // namespace
 
 int main()
@@ -940,6 +1357,9 @@ int main()
         reciprocal_m2_uniform_she_and_ishe_have_canonical_si_response();
         const auto m2_convergence_oracle = &reciprocal_m2_converges_on_three_mesh_resolutions;
         m2_convergence_oracle();
+        multi_terminal_factor_once_matches_independent_charge_solves();
+        stiff_precession_m1_and_reciprocal_m2_converge_with_strong_ahe_and_contrast();
+        gpu_cudss_transport_parity_when_cuda_enabled();
         std::cout << "fem steady transport contract: PASS\n";
         return EXIT_SUCCESS;
     } catch (const std::exception &error) {
