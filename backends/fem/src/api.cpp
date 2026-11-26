@@ -421,24 +421,43 @@ bool apply_device_demag_tangent_with_potential_f64(
         return false;
     }
     ctx.gpu_state.device.rk.fsal_valid = false;
-    const cudaError_t stream_status =
-        cudaStreamSynchronize(reinterpret_cast<cudaStream_t>(ctx.gpu_state.cuda.compute_stream));
-    if (stream_status != cudaSuccess) {
-        error = std::string("device demag tangent-with-potential stream synchronize failed: ") +
-            cudaGetErrorString(stream_status);
-        return false;
-    }
-
     std::vector<double> delta_h_demag;
-    if (!fullmag::fem::gpu_state_download_component_aos(
-            ctx.gpu_state.device,
-            ctx.gpu_state.device.fields.h_demag,
-            delta_h_demag,
-            ctx.transfer_audit.audit,
-            "frequency-domain delta_H_demag",
-            error)) {
-        error = "device demag tangent-with-potential H_demag download failed: " + error;
-        return false;
+    const bool use_packed_download =
+        ctx.gpu_state.cuda.compute_stream != nullptr &&
+        (ctx.gpu_state.device.lifecycle.dof_len == 0 ||
+            (ctx.gpu_state.device.packed_field_download.aos_device != nullptr &&
+             ctx.gpu_state.device.packed_field_download.dof_len ==
+                 ctx.gpu_state.device.lifecycle.dof_len));
+    if (use_packed_download) {
+        if (!fullmag::fem::gpu_state_download_component_aos_packed(
+                ctx.gpu_state.device,
+                ctx.gpu_state.device.fields.h_demag,
+                delta_h_demag,
+                ctx.transfer_audit.audit,
+                ctx.gpu_state.cuda.compute_stream,
+                "frequency-domain delta_H_demag",
+                error)) {
+            error = "device demag tangent-with-potential H_demag download failed: " + error;
+            return false;
+        }
+    } else {
+        const cudaError_t stream_status =
+            cudaStreamSynchronize(reinterpret_cast<cudaStream_t>(ctx.gpu_state.cuda.compute_stream));
+        if (stream_status != cudaSuccess) {
+            error = std::string("device demag tangent-with-potential stream synchronize failed: ") +
+                cudaGetErrorString(stream_status);
+            return false;
+        }
+        if (!fullmag::fem::gpu_state_download_component_aos(
+                ctx.gpu_state.device,
+                ctx.gpu_state.device.fields.h_demag,
+                delta_h_demag,
+                ctx.transfer_audit.audit,
+                "frequency-domain delta_H_demag",
+                error)) {
+            error = "device demag tangent-with-potential H_demag download failed: " + error;
+            return false;
+        }
     }
     if (delta_h_demag.size() != static_cast<std::size_t>(expected_vector_len)) {
         error = "device demag tangent-with-potential H_demag download returned mismatched length";

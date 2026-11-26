@@ -62,5 +62,7 @@ Recommended filenames:
 - `0950-quasistatic-microwave-antenna-field-basis-and-k-selective-excitation.md`
 - [0952 · Harmoniczne źródło antenowe RF dla CPW](0952-harmonic-rf-antenna-cpw.md) — projekt modelu RF i kwalifikacji względem Maxwella.
 - `0960-canonical-llg-time-domain-solver-and-qualification-contract.md`
+- `0999-fem-gpu-short-range-kernel-optimizations.md` — bramkowanie martwych redukcji etapów pośrednich RK (DMI, anizotropia, magnetoelastyczność, termika, `h_drive_zeroed`), rozdział `gpu_relax_dd` (FP64 FMA w RK vs DD w relaksacji), fuzja `H_eff` oraz zastąpienie strided `cudaMemcpy2D` pakowaniem device AoS/SoA.
+- `1000-fem-gpu-driven-response-cudss.md` — jednorazowa analiza symboliczna i bezpośredni solver rzadki `cuDSS` (`CUDSS_MTYPE_GENERAL`, `CUDSS_C_64F`) dla przemiatań RF w dziedzinie częstotliwości (open-airbox $k=0$ oraz `periodic_airbox_k0`), ekwilibracja Ruiza, preflight VRAM i niezależna certyfikacja rezyduów $(r_q, r_\phi)$.
 
 The numbering is semantic, not bureaucratic.
