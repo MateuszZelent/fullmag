@@ -57,8 +57,8 @@ pub const ANTENNA_VECTOR_POTENTIAL_OPERATOR_VERSION: &str = "fem_oersted_hcurl_h
 pub const ANTENNA_VECTOR_POTENTIAL_BOUNDARY_GAUGE: &str = "tangential_A_h1_0.v1";
 pub const ANTENNA_VECTOR_POTENTIAL_MU0_SI: f64 = 1.25663706212e-6;
 pub const ANTENNA_VECTOR_POTENTIAL_RELATIVE_TOLERANCE: f64 = 1.0e-10;
-pub const ANTENNA_VECTOR_POTENTIAL_MAX_ND_DOFS: i32 = 4096;
-pub const ANTENNA_VECTOR_POTENTIAL_MAX_H1_DOFS: i32 = 2048;
+pub const ANTENNA_VECTOR_POTENTIAL_MAX_ND_DOFS: i32 = 2_000_000;
+pub const ANTENNA_VECTOR_POTENTIAL_MAX_H1_DOFS: i32 = 1_000_000;
 
 /// Rigid transform shared by all conductor bodies and terminal selectors of
 /// an authored microwave antenna layout.

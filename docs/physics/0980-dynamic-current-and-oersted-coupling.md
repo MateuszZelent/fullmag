@@ -2290,9 +2290,20 @@ składowej `H_k`. Residuum publikowane w diagnostyce jako
 ||M u_k - b_k||_2 / max(1, ||b_k||_2).
 ```
 
-Wersja CPU/double używa deterministycznej gęstej odwrotności macierzy masy i
-limitu `maximum_h1_dofs=2048`; jest to bounded reference projection, a nie
-skalowalny solver dla dużych siatek. Wynik `nodal_h_xyz_apm` ma kolejność
+Wersja CPU/double rozwiązuje układ siodłowy `H_0(curl) x H^1_0` bez
+składania macierzy gęstych, stosując symetryczną ekwilibrację bloków
+`beta = d_K / g_rms` (oraz bezpośrednią ścieżkę SPD na siatkach bez
+wewnętrznych stopni swobody `H^1`, tj. `n_{H1,int} = 0`): w Tier 1 bezpośredni
+rzadki solver PETSc+MUMPS LU (METIS + doprecyzowanie iteracyjne `long double`),
+w Tier 2 rzadki `MINRES` z prekondycjonerem blokowym HYPRE `HypreAMS`
+(`gamma = mu0^-1 L^-2`, `L = diam(Omega)`) + `HypreBoomerAMG` i nieosobliwym
+blokiem brzegowym `1.0` na `Gamma_{H1}`, a w Tier 3 szeregowy blokowy `MINRES`
+MFEM. Projekcja nodalna `project_compatible_h_to_nodes` składa trzy prawe
+strony w jednym przebiegu po elementach i rozwiązuje rzadką macierz masy
+`M_{H1}` jednorazowo sfaktoryzowanym solverem SPD z rzadką kontrolą rezyduum
+`O(nnz)`. Domyślne limity zostały podniesione do `maximum_nd_dofs=2'000'000`
+oraz `maximum_h1_dofs=1'000'000` (przy ścisłej walidacji jawnych limitów
+wywołującego). Wynik `nodal_h_xyz_apm` ma kolejność
 `[node0.x,node0.y,node0.z,...]`, jednostkę A/m i jest publikowany wyłącznie
 po kontroli długości, skończoności, zgodności
 `source_view_identity_digest` oraz operatora
@@ -2679,7 +2690,7 @@ evidence that the approximation is accurate.
 | `crates/fullmag-runner/src/native_fem.rs` | `native_fem_external_lead_oersted_callback_advances_one_cpu_llg_step` | managed native CPU Heun step that installs the provider, lets the real RK cadence evaluate RT0/OE-F1, commits the observation and publishes finite post-step magnetization |
 | `crates/fullmag-runner/src/native_fem.rs` | `native_fem_external_lead_oersted_callback_rolls_back_rejected_adaptive_attempt` | managed adaptive RK23 regression that forces at least one rejected native attempt and proves callback rollback count equals the integrator rejection count before an accepted retry |
 | `crates/fullmag-runner/src/native_fem.rs` | `native_fem_external_lead_oersted_callback_covers_all_explicit_rk_integrators` | managed three-step callback-trajectory regression for fixed Heun/RK4 and adaptive RK23/RK45 with persistent provider state and one commit per step |
-| `backends/fem/cpu/mfem/interactions/oersted/vector_potential.cpp` | `project_compatible_h_to_nodes` | bounded RT0-compatible H to H1/P1 nodal projection and residual |
+| `backends/fem/cpu/mfem/interactions/oersted/vector_potential.cpp` | `project_compatible_h_to_nodes` | sparse factor-once single-pass RT0-compatible H to H1/P1 nodal projection and residual |
 | `crates/fullmag-runner/src/native_fem/steady_transport/stage_cache.rs` | `SteadySourceCache::reuse` | exact-key invariant-source cache and fail-closed identity guard |
 | `crates/fullmag-runner/src/native_fem/steady_transport/stage_cache.rs` | `begin_attempt` | checkpoint/rollback coordinator for accepted and rejected source stages |
 | `crates/fullmag-runner/src/native_fem/stage_oersted.rs` | `from_plan` | public CPU stage binding for closed_geometry/external_lead to the RT0/OE-F1/OE-F2 adapter, envelope/zero-drive handling, exact stage identity and transactional callbacks |
