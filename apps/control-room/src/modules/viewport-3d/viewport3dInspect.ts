@@ -1,6 +1,7 @@
 import type { DecodedFieldVector } from "@/kernel/api/codecs";
 
 import type { FdmCuboidInstanceModel } from "./layers/FdmCuboidLayer";
+import { buildFdmFieldIndexResolver } from "./model/fdmFieldIndexing";
 
 interface Viewport3DInspectComponent {
   label: string;
@@ -17,6 +18,7 @@ interface Viewport3DInspectReadySample {
   pointIndex: number;
   quantityId: string;
   status: "ready";
+  targetId?: string;
   targetLabel: string;
   unit: string | null;
   worldPosition: [number, number, number];
@@ -26,6 +28,7 @@ interface Viewport3DInspectUnavailableSample {
   message: string;
   quantityId: string;
   status: "unavailable";
+  targetId?: string;
   targetLabel: string;
   worldPosition: [number, number, number];
 }
@@ -39,6 +42,7 @@ export interface Viewport3DFdmInspectSampleInput {
   instanceId: number | null | undefined;
   model: FdmCuboidInstanceModel | null | undefined;
   quantityId: string;
+  targetId?: string;
   worldPosition: [number, number, number];
 }
 
@@ -47,6 +51,7 @@ export function buildViewport3DFdmInspectSample({
   instanceId,
   model,
   quantityId,
+  targetId,
   worldPosition,
 }: Viewport3DFdmInspectSampleInput): Viewport3DInspectSample {
   const safeInstanceId =
@@ -60,16 +65,24 @@ export function buildViewport3DFdmInspectSample({
   const targetLabel =
     typeof pointIndex === "number" ? `Cell ${pointIndex}` : "FDM cell";
 
-  if (
-    !fieldVector ||
-    typeof pointIndex !== "number" ||
-    pointIndex < 0 ||
-    pointIndex >= fieldVector.pointCount
-  ) {
+  const indexing = fieldVector && model
+    ? buildFdmFieldIndexResolver(
+        fieldVector,
+        model.gridShape[0] * model.gridShape[1] * model.gridShape[2],
+        model.gridShape,
+      )
+    : null;
+  const fieldPointIndex = typeof pointIndex === "number" && indexing?.status === "compatible"
+    ? indexing.resolve(pointIndex)
+    : null;
+  const targetIdentity = targetId ? { targetId } : {};
+
+  if (!fieldVector || typeof pointIndex !== "number" || fieldPointIndex === null) {
     return {
       message: "Field sample is not loaded for this cell.",
       quantityId,
       status: "unavailable",
+      ...targetIdentity,
       targetLabel,
       worldPosition,
     };
@@ -78,12 +91,13 @@ export function buildViewport3DFdmInspectSample({
   return {
     components: resolveViewport3DInspectComponents(
       fieldVector,
-      pointIndex,
+      fieldPointIndex,
       quantityId,
     ),
     pointIndex,
     quantityId,
     status: "ready",
+    ...targetIdentity,
     targetLabel,
     unit: unitForInspectQuantity(quantityId),
     worldPosition,

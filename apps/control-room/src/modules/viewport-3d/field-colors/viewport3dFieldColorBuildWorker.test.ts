@@ -97,6 +97,66 @@ describe("viewport3dFieldColorBuildWorker", () => {
     expect(posted.transfer).toContain(response.data.vectorValues?.buffer);
   });
 
+  it("maps FDM cell ordinals and reports full-field diagnostics in the worker", async () => {
+    const scope = new FakeWorkerScope();
+    installViewport3DFieldColorBuildWorker(scope);
+
+    scope.dispatch({
+      colorMode: "z",
+      colorPalette: "viridis",
+      fieldVector: {
+        dtype: "float64",
+        grid: [4, 1, 1],
+        indexing: "explicit_node_indices",
+        nodeIndices: new Uint32Array([2, 0, 3, 1]),
+        nComp: 1,
+        pointCount: 4,
+        quantityId: "H_eff",
+        valueCount: 4,
+        values: new Float64Array([10, 20, 30, 40]),
+      },
+      id: 8,
+      scalarRange: { max: 40, min: 0 },
+      target: {
+        cellOrdinals: new Uint32Array([0, 2]),
+        diagnosticsCacheKey: "field-buffer:H_eff:field-r1",
+        domainCellCount: 4,
+        domainGridShape: [4, 1, 1],
+        kind: "fdm-sampled",
+      },
+    });
+
+    await waitForWorkerTurn();
+
+    const posted = scope.posted[0];
+    expect(posted?.message).toEqual(
+      expect.objectContaining({ id: 8, ok: true }),
+    );
+    const response = posted?.message as {
+      data: {
+        range: { max: number; min: number };
+        rangeDiagnostics?: {
+          finiteCount: number;
+          max: number;
+          mean: number;
+          min: number;
+        };
+        rangeSource?: string;
+        scalarValues?: Float32Array;
+      };
+    };
+    expect(Array.from(response.data.scalarValues ?? [])).toEqual([0.5, 0.25]);
+    expect(response.data.range).toEqual({ max: 40, min: 0 });
+    expect(response.data.rangeSource).toBe("manual");
+    expect(response.data.rangeDiagnostics).toMatchObject({
+      finiteCount: 4,
+      max: 40,
+      mean: 25,
+      min: 10,
+    });
+    expect(posted?.transfer).toContain(response.data.scalarValues?.buffer);
+  });
+
   it("uses the same transferable list helper for optional color buffer arrays", () => {
     const colors = new Float32Array([1, 0, 0]);
     const scalarValues = new Float32Array([1]);

@@ -625,6 +625,7 @@ try {
 }
 
 async function assertModelExportDownloads(page, viewport, canvas) {
+  await setAuditStep(page, "export:model-downloads");
   const dialog = page.getByRole("dialog", { name: "Export 3D model" });
   const download = async (extension) => {
     const [file] = await Promise.all([
@@ -640,6 +641,14 @@ async function assertModelExportDownloads(page, viewport, canvas) {
     return data;
   };
 
+  // The preceding diagnostic reads open two nested, portalled popovers.
+  for (const name of ["Render diagnostics", "View layers"]) {
+    const popover = page.getByRole("dialog", { name, exact: true });
+    if (await popover.isVisible()) {
+      await page.keyboard.press("Escape");
+      await popover.waitFor({ state: "hidden", timeout: 5_000 });
+    }
+  }
   await viewport.getByRole("button", { name: "Export", exact: true }).click();
   await page.getByRole("menuitem", { name: "Export 3D model", exact: true }).click();
   await dialog.getByRole("checkbox", { name: "Include vector arrows" }).uncheck();
@@ -2288,37 +2297,73 @@ async function installFdmFixtureApi(page, fixture, requests) {
       const airboxScoped = fixture.multilayerAirboxEnabled &&
         scopeKind === "airbox" &&
         scopeId === "airbox";
-      if (layer || airboxScoped) {
-        const fieldDomain = layer
-          ? {
-              carrierFingerprint: FDM_MULTILAYER_GRID_FINGERPRINT,
-              carrierRevision: FDM_MULTILAYER_LAYOUT_REVISION,
-              grid: FIELD_GRID,
-              indexing: "full_domain",
-              scopeId,
-              scopeKind,
-            }
-          : {
-              carrierFingerprint: FDM_MULTILAYER_AIRBOX_GRID_FINGERPRINT,
-              carrierRevision: 1,
-              grid: FDM_MULTILAYER_AIRBOX_SHAPE,
-              indexing: "explicit_node_indices",
-              scopeId,
-              scopeKind,
-            };
-        const { buffer, headers } = makeFdmMultilayerFieldVectorBuffer({
-          domainGenerationId: "1",
-          domain: fieldDomain,
-          quantityId,
-        });
+      const objectScoped =
+        scopeKind === "object" && scopeId === FDM_MEMORY_OBJECT_ID;
+      if (layer || airboxScoped || objectScoped) {
+        const carrierFingerprint = layer
+          ? FDM_MULTILAYER_GRID_FINGERPRINT
+          : airboxScoped
+            ? FDM_MULTILAYER_AIRBOX_GRID_FINGERPRINT
+            : fixture.fdmMembership.grid_fingerprint;
+        const carrierRevision = layer
+          ? FDM_MULTILAYER_LAYOUT_REVISION
+          : airboxScoped
+            ? 1
+            : fixture.fdmMembership.mesh_revision;
         const etag = `"fdm-memory-${quantityId}-${scopeKind}-${scopeId}"`;
         fixture.scopedFieldResponses.push({
-          carrierFingerprint: fieldDomain.carrierFingerprint,
+          carrierFingerprint,
           formatVersion: 3,
           quantityId,
           resourceKey: `${requestUrl.pathname}${requestUrl.search}`,
           scopeId,
           scopeKind,
+        });
+        if (objectScoped && request.headers()["if-none-match"] === etag) {
+          await fulfillEmpty(route, 304, { etag });
+          return;
+        }
+
+        const objectNodeIndices = objectScoped
+          ? fdmObjectFieldNodeIndices(fixture)
+          : null;
+        const fieldDomain = layer
+          ? {
+              carrierFingerprint,
+              carrierRevision,
+              grid: FIELD_GRID,
+              indexing: "full_domain",
+              scopeId,
+              scopeKind,
+            }
+          : airboxScoped
+            ? {
+                carrierFingerprint,
+                carrierRevision,
+                grid: FDM_MULTILAYER_AIRBOX_SHAPE,
+                indexing: "explicit_node_indices",
+                scopeId,
+                scopeKind,
+              }
+            : {
+                carrierFingerprint,
+                carrierRevision,
+                grid: [objectNodeIndices.length, 1, 1],
+                indexing: "explicit_node_indices",
+                nodeIndices: objectNodeIndices,
+                scopeId,
+                scopeKind,
+              };
+        const { buffer, headers } = objectScoped
+          ? makeFdmObjectFieldVectorBuffer({
+              domain: fieldDomain,
+              fixture,
+              quantityId,
+            })
+          : makeFdmMultilayerFieldVectorBuffer({
+          domainGenerationId: "1",
+          domain: fieldDomain,
+          quantityId,
         });
         await fulfillBinary(route, buffer, 200, {
           ...headers,
@@ -2326,6 +2371,16 @@ async function installFdmFixtureApi(page, fixture, requests) {
           "x-fullmag-domain-generation-id": "1",
           "x-fullmag-field-revision": "1",
           "x-fullmag-payload-state": "current",
+          ...(objectScoped
+            ? {
+                "x-fullmag-grid-fingerprint": fixture.fdmMembership.grid_fingerprint,
+                "x-fullmag-region-membership-revision": String(
+                  fixture.fdmMembership.region_membership_revision,
+                ),
+                "x-fullmag-scope-id": FDM_MEMORY_OBJECT_ID,
+                "x-fullmag-scope-kind": "object",
+              }
+            : {}),
           "x-fullmag-quantity-id": quantityId,
         });
         return;
@@ -3032,7 +3087,7 @@ function fixtureHeaders(extra = {}) {
     "access-control-allow-methods": "GET,POST,PATCH,PUT,DELETE,OPTIONS",
     "access-control-allow-origin": "*",
     "access-control-expose-headers":
-      "x-api-contract-version,etag,x-request-id,x-fullmag-grid-fingerprint,x-fullmag-region-membership-revision,x-fullmag-domain-generation-id,x-fullmag-encoding,x-fullmag-component,x-fullmag-payload-state,x-fullmag-field-revision,x-fullmag-n-comp,x-fullmag-point-count,x-fullmag-quantity-id,x-fullmag-value-count,x-fullmag-field-indexing,x-fullmag-mesh-topology-hash,x-fullmag-mesh-topology-revision,x-fullmag-node-index-count",
+      "x-api-contract-version,etag,x-request-id,x-fullmag-grid-fingerprint,x-fullmag-region-membership-revision,x-fullmag-domain-generation-id,x-fullmag-encoding,x-fullmag-component,x-fullmag-payload-state,x-fullmag-field-revision,x-fullmag-n-comp,x-fullmag-point-count,x-fullmag-quantity-id,x-fullmag-value-count,x-fullmag-field-indexing,x-fullmag-mesh-topology-hash,x-fullmag-mesh-topology-revision,x-fullmag-node-index-count,x-fullmag-scope-kind,x-fullmag-scope-id",
     "x-api-contract-version": "1.0.0",
     ...extra,
   };
@@ -3815,17 +3870,18 @@ function makeFdmMultilayerFieldVectorBuffer({
   domain,
   domainGenerationId,
   quantityId,
+  values: providedValues,
 }) {
   const [nx, ny, nz] = domain.grid;
-  const pointCount = nx * ny * nz;
+  const nodeIndices = domain.indexing === "explicit_node_indices"
+    ? domain.nodeIndices ?? Uint32Array.from({ length: nx * ny * nz }, (_, index) => index)
+    : null;
+  const pointCount = nodeIndices?.length ?? nx * ny * nz;
   const valueCount = pointCount * 3;
   const encoder = new TextEncoder();
   const scopeKindBytes = encoder.encode(domain.scopeKind);
   const scopeIdBytes = encoder.encode(domain.scopeId);
   const generationIdBytes = encoder.encode(domainGenerationId);
-  const nodeIndices = domain.indexing === "explicit_node_indices"
-    ? Uint32Array.from({ length: pointCount }, (_, index) => index)
-    : null;
   const rawMetadataLength =
     68 +
     scopeKindBytes.length +
@@ -3872,12 +3928,19 @@ function makeFdmMultilayerFieldVectorBuffer({
   }
 
   const values = new Float64Array(buffer, 48 + metadataLength, valueCount);
-  const phase = quantityPhase(quantityId);
-  for (let cellIndex = 0; cellIndex < pointCount; cellIndex += 1) {
-    const x = (cellIndex % 3) * 0.25;
-    values[cellIndex * 3] = Math.cos(phase) + x;
-    values[cellIndex * 3 + 1] = Math.sin(phase) + 0.5;
-    values[cellIndex * 3 + 2] = 1;
+  if (providedValues) {
+    if (providedValues.length !== valueCount) {
+      throw new Error("FDM fixture FMVP values do not match the point count.");
+    }
+    values.set(providedValues);
+  } else {
+    const phase = quantityPhase(quantityId);
+    for (let cellIndex = 0; cellIndex < pointCount; cellIndex += 1) {
+      const x = (cellIndex % 3) * 0.25;
+      values[cellIndex * 3] = Math.cos(phase) + x;
+      values[cellIndex * 3 + 1] = Math.sin(phase) + 0.5;
+      values[cellIndex * 3 + 2] = 1;
+    }
   }
 
   return {
@@ -3897,6 +3960,63 @@ function makeFdmMultilayerFieldVectorBuffer({
       "x-fullmag-value-count": String(valueCount),
     },
   };
+}
+
+function fdmObjectFieldNodeIndices(fixture) {
+  const regionIds = new Set(
+    fixture.fdmMembership.region_legend
+      .filter((entry) => entry.object_id === FDM_MEMORY_OBJECT_ID)
+      .map((entry) => entry.numeric_id),
+  );
+  if (regionIds.size === 0) {
+    throw new Error("FDM object fixture has no membership regions.");
+  }
+
+  const view = new DataView(fixture.fdmMembershipBinary);
+  const cellCount = fixture.fdmMembership.cell_count;
+  const nodeIndices = [];
+  for (let cellOrdinal = 0; cellOrdinal < cellCount; cellOrdinal += 1) {
+    const regionId = view.getUint32(
+      FDM_FMRM_HEADER_BYTES + cellOrdinal * FDM_FMRM_WORD_BYTES,
+      true,
+    );
+    if (regionIds.has(regionId)) nodeIndices.push(cellOrdinal);
+  }
+
+  const expectedActiveCellCount =
+    (FDM_MEMORY_SUPPORT_RANGE.xEnd - FDM_MEMORY_SUPPORT_RANGE.xStart) *
+    (FDM_MEMORY_SUPPORT_RANGE.yEnd - FDM_MEMORY_SUPPORT_RANGE.yStart) *
+    (FDM_MEMORY_SUPPORT_RANGE.zEnd - FDM_MEMORY_SUPPORT_RANGE.zStart);
+  if (nodeIndices.length !== expectedActiveCellCount) {
+    throw new Error(
+      `FDM object fixture membership has ${nodeIndices.length} cells; expected ${expectedActiveCellCount}.`,
+    );
+  }
+  return Uint32Array.from(nodeIndices);
+}
+
+function makeFdmObjectFieldVectorBuffer({ domain, fixture, quantityId }) {
+  const nodeIndices = domain.nodeIndices;
+  if (!(nodeIndices instanceof Uint32Array)) {
+    throw new Error("FDM object fixture requires exact membership node indices.");
+  }
+
+  const fullValues = new Float64Array(makeFdmFieldVectorBuffer(quantityId), 48);
+  const values = new Float64Array(nodeIndices.length * 3);
+  for (let index = 0; index < nodeIndices.length; index += 1) {
+    const sourceOffset = (nodeIndices[index] ?? -1) * 3;
+    const targetOffset = index * 3;
+    values[targetOffset] = fullValues[sourceOffset] ?? 0;
+    values[targetOffset + 1] = fullValues[sourceOffset + 1] ?? 0;
+    values[targetOffset + 2] = fullValues[sourceOffset + 2] ?? 0;
+  }
+
+  return makeFdmMultilayerFieldVectorBuffer({
+    domain,
+    domainGenerationId: fixture.fdmMembership.domain_generation_id,
+    quantityId,
+    values,
+  });
 }
 
 function quantityPhase(quantityId) {

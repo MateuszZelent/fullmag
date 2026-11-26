@@ -86,18 +86,37 @@ test("ABL editor updates the live FDM damping field and canonical script", async
   const samplesUrl = url("data/fields/mat_alpha/samples/vector");
   const viewport = page.locator(".fm-viewport-3d");
   const canvas = viewport.locator("canvas").first();
-  const inspectField = async (response: Response | APIResponse, layer: FieldCase) => {
+  const inspectField = async (
+    response: Response | APIResponse,
+    layer: FieldCase,
+    expectedScope: "object" | "full",
+  ) => {
     const bytes = await response.body();
     const packet = decodeFieldVector(Uint8Array.from(bytes).buffer);
     expect(packet.quantityId).toBe("mat_alpha");
-    expect(packet.grid).toEqual([32, 8, 2]);
+    const grid = [32, 8, 2];
+    const cellCount = grid[0] * grid[1] * grid[2];
+    expect(packet.grid).toEqual(expectedScope === "object" ? [cellCount, 1, 1] : grid);
     expect(packet.nComp).toBe(1);
+    expect(packet.scopeKind).toBe(expectedScope);
+    if (expectedScope === "object") {
+      expect(packet.scopeId).toBe(fixture.object_id);
+      expect(packet.indexing).toBe("explicit_node_indices");
+      expect(packet.nodeIndices).toHaveLength(cellCount);
+    }
+    const firstRow = new Array<number>(grid[0]);
+    const coveredCells = new Uint8Array(cellCount);
     let maximumError = 0;
     for (let i = 0; i < packet.values.length; i++) {
-      maximumError = Math.max(maximumError, Math.abs(packet.values[i] - expectedAlpha(i % 32, layer)));
+      const cell = packet.nodeIndices?.[i] ?? i;
+      coveredCells[cell] = 1;
+      const alpha = packet.values[i];
+      maximumError = Math.max(maximumError, Math.abs(alpha - expectedAlpha(cell % grid[0], layer)));
+      if (cell < grid[0]) firstRow[cell] = alpha;
     }
+    expect(coveredCells).toEqual(new Uint8Array(cellCount).fill(1));
     return { maximumError, etag: response.headers().etag, sha256: createHash("sha256").update(bytes).digest("hex"),
-      firstRow: Array.from(packet.values.slice(0, 32)) };
+      firstRow };
   };
   await page.addInitScript(installFdmColorProbe);
   await installInspectorCommitTrace(page);
@@ -138,7 +157,7 @@ test("ABL editor updates the live FDM damping field and canonical script", async
           if (!issued.has(response.request()) || response.status() !== 200) return false;
           let sample: Awaited<ReturnType<typeof inspectField>>;
           try {
-            sample = await inspectField(response, layer);
+            sample = await inspectField(response, layer, "object");
           } catch (error) {
             // Chromium can evict the body of a superseded request. Recover only
             // the exact representation the page received, identified by its ETag.
@@ -148,7 +167,7 @@ test("ABL editor updates the live FDM damping field and canonical script", async
             const replay = await page.request.get(response.url(), { headers });
             try {
               if (!replay.ok() || replay.headers().etag !== etag) return false;
-              sample = await inspectField(replay, layer);
+              sample = await inspectField(replay, layer, "object");
             } finally {
               await replay.dispose();
             }
@@ -196,7 +215,7 @@ test("ABL editor updates the live FDM damping field and canonical script", async
         }
         const response = await page.request.get(samplesUrl + "?component=full", { headers, timeout: 5000 });
         diagnostics.directStatus = response.status();
-        if (response.status() === 200) diagnostics.directField = await inspectField(response, layer);
+        if (response.status() === 200) diagnostics.directField = await inspectField(response, layer, "full");
       } catch (probeError) {
         diagnostics.probeError = String(probeError);
       }

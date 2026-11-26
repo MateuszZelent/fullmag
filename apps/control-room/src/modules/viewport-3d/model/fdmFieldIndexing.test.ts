@@ -10,7 +10,7 @@ import {
 function fieldVector(
   pointCount: number,
   indexing?: DecodedFieldVector["indexing"],
-  nodeIndices?: readonly number[] | null,
+  nodeIndices?: DecodedFieldVector["nodeIndices"],
 ): DecodedFieldVector {
   return {
     dtype: "float64",
@@ -94,6 +94,27 @@ describe("buildFdmFieldIndexResolver", () => {
     expect(resolver.resolve(3)).toBe(0);
     expect(resolver.resolve(1)).toBe(1);
     expect(resolver.resolve(0)).toBeNull();
+  });
+
+  it("maps a compact contiguous layer using its global offset", () => {
+    const resolver = expectCompatible(
+      buildFdmFieldIndexResolver(fieldVector(3, "explicit_node_indices", [5, 6, 7]), 12),
+    );
+    expect([4, 5, 6, 7, 8].map(resolver.resolve)).toEqual([null, 0, 1, 2, null]);
+    expect(
+      buildFdmFieldIndexResolver(fieldVector(3, "explicit_node_indices", [5, 5, 7]), 12),
+    ).toMatchObject({ reason: "duplicate-node-index", status: "degraded" });
+  });
+
+  it("reuses a validated compact payload index within its grid", () => {
+    const field = fieldVector(3, "explicit_node_indices", Uint32Array.of(2, 5, 7));
+    const first = expectCompatible(buildFdmFieldIndexResolver(field, 9));
+    expect(buildFdmFieldIndexResolver(field, 9)).toBe(first);
+    expect(first.resolve(5)).toBe(1);
+    expect(buildFdmFieldIndexResolver(field, 6)).toMatchObject({
+      reason: "node-index-out-of-range",
+      status: "degraded",
+    });
   });
 
   it("maps sampled FDM cell indices and leaves unsampled cells unresolved", () => {

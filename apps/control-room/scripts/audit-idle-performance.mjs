@@ -181,7 +181,8 @@ function allowsViewport3DDemandFrameOneShots(relativePath, content) {
       requestCount === 1 &&
       cancelCount === 1 &&
       content.includes("const handleInspectPointerMove = (event: PointerEvent)") &&
-      content.includes("processInspectPointerMove(eventToProcess)") &&
+      content.includes("if (rafId !== null) return;") &&
+      content.includes("processInspectPointerMove(eventToProcess, cachedRect)") &&
       content.includes("passive: true")
     );
   }
