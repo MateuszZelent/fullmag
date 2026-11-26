@@ -101,4 +101,20 @@ double sparse_independent_relative_residual(
     const mfem::Vector &rhs,
     double denominator_floor = 1.0);
 
+// Temporarily pins OpenMP thread count to 1 on the current thread (restoring
+// the previous value on scope exit) so HYPRE 3.1.0 OpenMP reductions remain
+// bit-exact deterministic across repeated solves regardless of OMP_NUM_THREADS.
+class ScopedHypreSingleThread {
+public:
+    ScopedHypreSingleThread() noexcept;
+    ~ScopedHypreSingleThread();
+
+    ScopedHypreSingleThread(const ScopedHypreSingleThread &) = delete;
+    ScopedHypreSingleThread &operator=(const ScopedHypreSingleThread &) = delete;
+
+private:
+    int previous_threads_ = 0;
+    void (*set_threads_fn_)(int) = nullptr;
+};
+
 } // namespace fullmag::fem::multiphysics

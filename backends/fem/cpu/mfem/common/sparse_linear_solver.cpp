@@ -46,6 +46,10 @@
 #include <unistd.h>
 #endif
 
+#if defined(__unix__)
+#include <dlfcn.h>
+#endif
+
 #if defined(FULLMAG_FEM_CUDSS_POISSON_ENABLED) && FULLMAG_FEM_CUDSS_POISSON_ENABLED && \
     defined(FULLMAG_HAS_CUDA_RUNTIME) && FULLMAG_HAS_CUDA_RUNTIME
 #define FULLMAG_MULTIPHYSICS_HAS_CUDSS 1
@@ -66,6 +70,17 @@ double elapsed_ms(SteadyClock::time_point start) noexcept
 {
     return std::chrono::duration<double, std::milli>(SteadyClock::now() - start).count();
 }
+
+#if FULLMAG_MULTIPHYSICS_HAS_MPI || FULLMAG_MULTIPHYSICS_HAS_CUDSS
+double max_abs_vector(const double *data, int n) noexcept
+{
+    double max_val = 0.0;
+    for (int i = 0; i < n; ++i) {
+        max_val = std::max(max_val, std::abs(data[i]));
+    }
+    return max_val;
+}
+#endif
 
 #if FULLMAG_MULTIPHYSICS_HAS_MPI || FULLMAG_MULTIPHYSICS_HAS_PETSC
 bool can_initialize_openmpi_singleton() noexcept
@@ -310,13 +325,16 @@ public:
         const double *data = matrix.HostReadData();
         for (int i = 0; i < n; ++i) {
             double diag = 0.0;
+            double row_max = 0.0;
             for (int p = row_ptr[i]; p < row_ptr[i + 1]; ++p) {
+                const double av = std::abs(data[p]);
+                row_max = std::max(row_max, av);
                 if (col_idx[p] == i) {
-                    diag = std::abs(data[p]);
-                    break;
+                    diag = av;
                 }
             }
-            inv_diag_[static_cast<std::size_t>(i)] = (diag > 1.0e-30) ? (1.0 / diag) : 1.0;
+            const double scale = (diag > 1.0e-30) ? diag : row_max;
+            inv_diag_[static_cast<std::size_t>(i)] = (scale > 1.0e-30) ? (1.0 / scale) : 1.0;
         }
     }
 
@@ -921,6 +939,8 @@ struct SparseLinearSolver::Impl {
         }
 
         fullmag::fem::ensure_mpi_initialized();
+        mfem::Hypre::Init();
+        ScopedHypreSingleThread omp_guard;
         hypre_row_starts[0] = 0;
         hypre_row_starts[1] = static_cast<HYPRE_BigInt>(n);
         hypre_mat = std::make_unique<mfem::HypreParMatrix>(
@@ -1276,12 +1296,15 @@ struct SparseLinearSolver::Impl {
                 // under CUDSS_MTYPE_GENERAL). Run one deterministic probe solve and verify
                 // the independent unpreconditioned residual against the original CSR matrix.
                 mfem::Vector probe_rhs(n);
-                std::vector<double> scaled_probe_rhs(static_cast<std::size_t>(n), 0.0);
-                const double inv_scale = 1.0 / cudss_matrix_scale;
                 for (int i = 0; i < n; ++i) {
-                    const double v = std::sin(0.73 * static_cast<double>(i + 1));
-                    probe_rhs[i] = v;
-                    scaled_probe_rhs[static_cast<std::size_t>(i)] = v * inv_scale;
+                    probe_rhs[i] = std::sin(0.73 * static_cast<double>(i + 1));
+                }
+                const double probe_scale = max_abs_vector(probe_rhs.HostRead(), n);
+                const double inv_probe_scale =
+                    (std::isfinite(probe_scale) && probe_scale > 0.0) ? (1.0 / probe_scale) : 1.0;
+                std::vector<double> scaled_probe_rhs(static_cast<std::size_t>(n), 0.0);
+                for (int i = 0; i < n; ++i) {
+                    scaled_probe_rhs[static_cast<std::size_t>(i)] = probe_rhs[i] * inv_probe_scale;
                 }
                 mfem::Vector probe_sol(n);
                 if (!cuda_check(cudaMemcpy(d_rhs, scaled_probe_rhs.data(),
@@ -1301,6 +1324,13 @@ struct SparseLinearSolver::Impl {
                                            cudaMemcpyDeviceToHost),
                                 "probe solution download", err)) {
                     fail(err);
+                }
+                const double probe_out_scale =
+                    ((std::isfinite(probe_scale) && probe_scale > 0.0) ? probe_scale : 1.0) /
+                    cudss_matrix_scale;
+                double *probe_sol_ptr = probe_sol.HostWrite();
+                for (int i = 0; i < n; ++i) {
+                    probe_sol_ptr[i] *= probe_out_scale;
                 }
                 long double probe_res = 0.0L;
                 long double probe_rhs_norm = 0.0L;
@@ -1450,6 +1480,22 @@ struct SparseLinearSolver::Impl {
         stats.setup_ms = setup_ms;
 #if FULLMAG_MULTIPHYSICS_HAS_MPI
         std::lock_guard<std::mutex> lock(solve_mutex);
+        ScopedHypreSingleThread omp_guard;
+        const double *rhs_host = rhs.HostRead();
+        const double rhs_scale = max_abs_vector(rhs_host, n);
+        if (rhs_scale == 0.0) {
+            solution = 0.0;
+            stats.converged = true;
+            stats.iterations = 0;
+            stats.independent_relative_residual = 0.0;
+            stats.solve_ms = elapsed_ms(start);
+            return stats;
+        }
+        const double inv_rhs_scale = 1.0 / rhs_scale;
+        const double internal_atol =
+            config.absolute_tolerance > 0.0 ? 0.1 * config.absolute_tolerance : 0.0;
+        hypre_pcg->SetAbsTol(internal_atol > 0.0 ? internal_atol * inv_rhs_scale : 0.0);
+
         mfem::HypreParVector b_par(
             fullmag::fem::fullmag_serial_comm(),
             static_cast<HYPRE_BigInt>(n),
@@ -1458,11 +1504,10 @@ struct SparseLinearSolver::Impl {
             fullmag::fem::fullmag_serial_comm(),
             static_cast<HYPRE_BigInt>(n),
             const_cast<HYPRE_BigInt *>(hypre_row_starts));
-        const double *rhs_host = rhs.HostRead();
         double *b_host = b_par.HostWrite();
         double *x_host = x_par.HostWrite();
         for (int i = 0; i < n; ++i) {
-            b_host[i] = rhs_host[i];
+            b_host[i] = rhs_host[i] * inv_rhs_scale;
             x_host[i] = 0.0;
         }
         hypre_pcg->Mult(b_par, x_par);
@@ -1471,7 +1516,7 @@ struct SparseLinearSolver::Impl {
         const double *solved_host = x_par.HostRead();
         double *sol_host = solution.HostWrite();
         for (int i = 0; i < n; ++i) {
-            sol_host[i] = solved_host[i];
+            sol_host[i] = solved_host[i] * rhs_scale;
         }
 
         long double res_norm = 0.0L;
@@ -1507,6 +1552,17 @@ struct SparseLinearSolver::Impl {
         if (!all_nonzero_diag) {
             return false;
         }
+        ScopedHypreSingleThread omp_guard;
+        const double *rhs_host = rhs.HostRead();
+        const double rhs_scale = max_abs_vector(rhs_host, n);
+        if (rhs_scale == 0.0) {
+            solution = 0.0;
+            iterations_out = 0;
+            abs_res_out = 0.0L;
+            rel_res_out = 0.0;
+            return true;
+        }
+        const double inv_rhs_scale = 1.0 / rhs_scale;
         const double internal_rtol = std::max(1.0e-15, 0.1 * config.relative_tolerance);
         const double internal_atol =
             config.absolute_tolerance > 0.0 ? 0.1 * config.absolute_tolerance : 0.0;
@@ -1520,15 +1576,13 @@ struct SparseLinearSolver::Impl {
             hypre_gmres = std::make_unique<mfem::HypreGMRES>(fullmag::fem::fullmag_serial_comm());
             hypre_gmres->iterative_mode = false;
             hypre_gmres->SetTol(internal_rtol);
-            if (internal_atol > 0.0) {
-                hypre_gmres->SetAbsTol(internal_atol);
-            }
             hypre_gmres->SetMaxIter(config.maximum_iterations);
             hypre_gmres->SetKDim(config.gmres_kdim);
             hypre_gmres->SetPrintLevel(0);
             hypre_gmres->SetOperator(*hypre_mat);
             hypre_gmres->SetPreconditioner(*hypre_ilu);
         }
+        hypre_gmres->SetAbsTol(internal_atol > 0.0 ? internal_atol * inv_rhs_scale : 0.0);
 
         mfem::HypreParVector b_par(
             fullmag::fem::fullmag_serial_comm(),
@@ -1538,11 +1592,10 @@ struct SparseLinearSolver::Impl {
             fullmag::fem::fullmag_serial_comm(),
             static_cast<HYPRE_BigInt>(n),
             const_cast<HYPRE_BigInt *>(hypre_row_starts));
-        const double *rhs_host = rhs.HostRead();
         double *b_host = b_par.HostWrite();
         double *x_host = x_par.HostWrite();
         for (int i = 0; i < n; ++i) {
-            b_host[i] = rhs_host[i];
+            b_host[i] = rhs_host[i] * inv_rhs_scale;
             x_host[i] = 0.0;
         }
         hypre_gmres->Mult(b_par, x_par);
@@ -1551,7 +1604,7 @@ struct SparseLinearSolver::Impl {
         const double *solved_host = x_par.HostRead();
         double *sol_host = solution.HostWrite();
         for (int i = 0; i < n; ++i) {
-            sol_host[i] = solved_host[i];
+            sol_host[i] = solved_host[i] * rhs_scale;
         }
 
         long double res_norm = 0.0L;
@@ -1584,6 +1637,18 @@ struct SparseLinearSolver::Impl {
         stats.setup_ms = setup_ms;
 #if FULLMAG_MULTIPHYSICS_HAS_MPI
         std::lock_guard<std::mutex> lock(solve_mutex);
+        ScopedHypreSingleThread omp_guard;
+        const double *rhs_host = rhs.HostRead();
+        const double rhs_scale = max_abs_vector(rhs_host, n);
+        if (rhs_scale == 0.0) {
+            solution = 0.0;
+            stats.converged = true;
+            stats.iterations = 0;
+            stats.independent_relative_residual = 0.0;
+            stats.solve_ms = elapsed_ms(start);
+            return stats;
+        }
+        const double inv_rhs_scale = 1.0 / rhs_scale;
         const double internal_rtol = std::max(1.0e-15, 0.1 * config.relative_tolerance);
         const double internal_atol =
             config.absolute_tolerance > 0.0 ? 0.1 * config.absolute_tolerance : 0.0;
@@ -1594,16 +1659,22 @@ struct SparseLinearSolver::Impl {
         std::string used_solver = resolved_solver;
 
         if (block_amg != nullptr) {
+            mfem::Vector scaled_rhs(n);
+            double *sb = scaled_rhs.HostWrite();
+            for (int i = 0; i < n; ++i) {
+                sb[i] = rhs_host[i] * inv_rhs_scale;
+            }
             mfem::GMRESSolver gmres;
             gmres.SetKDim(config.gmres_kdim);
             gmres.SetRelTol(internal_rtol);
-            gmres.SetAbsTol(internal_atol);
+            gmres.SetAbsTol(internal_atol > 0.0 ? internal_atol * inv_rhs_scale : 0.0);
             gmres.SetMaxIter(config.maximum_iterations);
             gmres.SetPrintLevel(0);
             gmres.SetOperator(matrix_copy);
             gmres.SetPreconditioner(*block_amg);
             solution = 0.0;
-            gmres.Mult(rhs, solution);
+            gmres.Mult(scaled_rhs, solution);
+            solution *= rhs_scale;
 
             long double res_norm = 0.0L;
             long double rhs_norm = 0.0L;
@@ -1776,16 +1847,17 @@ struct SparseLinearSolver::Impl {
         std::string err;
 
         std::vector<double> scaled_rhs(static_cast<std::size_t>(n), 0.0);
-        const double inv_scale = 1.0 / cudss_matrix_scale;
         auto run_single_solve = [&](const double *rhs_host, double *sol_host) -> void {
-            const double *upload_ptr = rhs_host;
-            if (cudss_matrix_scale != 1.0) {
-                for (int i = 0; i < n; ++i) {
-                    scaled_rhs[static_cast<std::size_t>(i)] = rhs_host[i] * inv_scale;
-                }
-                upload_ptr = scaled_rhs.data();
+            const double rhs_scale = max_abs_vector(rhs_host, n);
+            if (!std::isfinite(rhs_scale) || rhs_scale == 0.0) {
+                std::fill(sol_host, sol_host + n, 0.0);
+                return;
             }
-            if (!cuda_check(cudaMemcpy(d_rhs, upload_ptr,
+            const double inv_rhs_scale = 1.0 / rhs_scale;
+            for (int i = 0; i < n; ++i) {
+                scaled_rhs[static_cast<std::size_t>(i)] = rhs_host[i] * inv_rhs_scale;
+            }
+            if (!cuda_check(cudaMemcpy(d_rhs, scaled_rhs.data(),
                                        static_cast<std::size_t>(n) * sizeof(double),
                                        cudaMemcpyHostToDevice),
                             "rhs upload", err) ||
@@ -1802,6 +1874,10 @@ struct SparseLinearSolver::Impl {
                                        cudaMemcpyDeviceToHost),
                             "solution download", err)) {
                 throw std::runtime_error(err);
+            }
+            const double out_scale = rhs_scale / cudss_matrix_scale;
+            for (int i = 0; i < n; ++i) {
+                sol_host[i] *= out_scale;
             }
         };
 
@@ -2182,6 +2258,33 @@ double sparse_independent_relative_residual(
         return std::numeric_limits<double>::infinity();
     }
     return relative_residual_from_norms(res_norm, rhs_norm, denominator_floor);
+}
+
+ScopedHypreSingleThread::ScopedHypreSingleThread() noexcept
+{
+#if defined(__unix__)
+    using GetFn = int (*)();
+    using SetFn = void (*)(int);
+    static const GetFn get_fn =
+        reinterpret_cast<GetFn>(::dlsym(RTLD_DEFAULT, "omp_get_max_threads"));
+    static const SetFn set_fn =
+        reinterpret_cast<SetFn>(::dlsym(RTLD_DEFAULT, "omp_set_num_threads"));
+    if (get_fn != nullptr && set_fn != nullptr) {
+        const int prev = get_fn();
+        if (prev > 1) {
+            previous_threads_ = prev;
+            set_threads_fn_ = set_fn;
+            set_fn(1);
+        }
+    }
+#endif
+}
+
+ScopedHypreSingleThread::~ScopedHypreSingleThread()
+{
+    if (set_threads_fn_ != nullptr && previous_threads_ > 0) {
+        set_threads_fn_(previous_threads_);
+    }
 }
 
 } // namespace fullmag::fem::multiphysics

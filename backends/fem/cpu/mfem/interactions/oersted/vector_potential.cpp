@@ -762,6 +762,8 @@ bool try_solve_saddle_point_hypre_ams(
     }
 
     fullmag::fem::ensure_mpi_initialized();
+    mfem::Hypre::Init();
+    fullmag::fem::multiphysics::ScopedHypreSingleThread omp_guard;
     MPI_Comm comm = fullmag::fem::fullmag_serial_comm();
 
     const int nd_dofs = nd_space.GetVSize();

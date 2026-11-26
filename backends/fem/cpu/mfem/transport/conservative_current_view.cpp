@@ -1769,6 +1769,8 @@ public:
             return;
         }
         fullmag::fem::ensure_mpi_initialized();
+        mfem::Hypre::Init();
+        fullmag::fem::multiphysics::ScopedHypreSingleThread omp_guard;
         row_starts_[0] = 0;
         row_starts_[1] = static_cast<HYPRE_BigInt>(size_);
         schur_matrix.HostReadI();
@@ -1793,6 +1795,7 @@ public:
 
     void Mult(const mfem::Vector &x, mfem::Vector &y) const override
     {
+        fullmag::fem::multiphysics::ScopedHypreSingleThread omp_guard;
         mfem::HypreParVector b_par(
             fullmag::fem::fullmag_serial_comm(),
             static_cast<HYPRE_BigInt>(size_),
