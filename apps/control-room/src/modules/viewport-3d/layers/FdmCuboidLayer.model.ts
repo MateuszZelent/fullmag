@@ -30,6 +30,63 @@ export const fdmVectorSegmentCacheCounter = {
 
 export const FDM_CUBOID_UPLOAD_BATCH_SIZE = 2048;
 
+/**
+ * Three.js InstancedMesh raycasts visit every cell. Above this count, FDM is
+ * removed from R3F's per-move hit test and sampled only after a one-second pause.
+ */
+export const FDM_CUBOID_INSPECT_STATIONARY_HOVER_THRESHOLD = 5_000;
+export const FDM_CUBOID_INSPECT_STATIONARY_HOVER_DELAY_MS = 1_000;
+
+export function shouldUseStationaryFdmCuboidInspectHover(
+  instanceCount: number,
+): boolean {
+  return instanceCount >= FDM_CUBOID_INSPECT_STATIONARY_HOVER_THRESHOLD;
+}
+
+export function shouldAttachFdmCuboidNativeInspectHover({
+  inspectEnabled,
+  instanceCount,
+}: {
+  inspectEnabled: boolean;
+  instanceCount: number;
+}): boolean {
+  return (
+    inspectEnabled &&
+    !shouldUseStationaryFdmCuboidInspectHover(instanceCount)
+  );
+}
+
+export function createFdmCuboidInspectHoverDebouncer<T>(
+  onInspect: (event: T) => void,
+  delayMs = FDM_CUBOID_INSPECT_STATIONARY_HOVER_DELAY_MS,
+): {
+  cancel: () => void;
+  schedule: (event: T) => void;
+} {
+  let timeoutId: ReturnType<typeof setTimeout> | null = null;
+  let pendingEvent: T | undefined;
+
+  const cancel = () => {
+    if (timeoutId !== null) clearTimeout(timeoutId);
+    timeoutId = null;
+    pendingEvent = undefined;
+  };
+
+  return {
+    cancel,
+    schedule: (event) => {
+      cancel();
+      pendingEvent = event;
+      timeoutId = setTimeout(() => {
+        const eventToInspect = pendingEvent;
+        timeoutId = null;
+        pendingEvent = undefined;
+        if (eventToInspect !== undefined) onInspect(eventToInspect);
+      }, delayMs);
+    },
+  };
+}
+
 export interface FdmCuboidUploadBatch {
   end: number;
   start: number;

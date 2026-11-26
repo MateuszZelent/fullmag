@@ -107,6 +107,11 @@ The canvas renders only for dirty reasons:
 
 Idle workspace must show zero viewport frames after settling. Status ticks, logs, tree expansion, unrelated inspector drafts, and unrelated resource invalidations must not invalidate the 3D canvas.
 
+FDM cell hover picking is active only in Inspect mode. A displayed carrier of
+5,000 or more instances samples once after the pointer stays still for one
+second. Dragging, leaving the canvas, or changing the displayed topology
+cancels a pending sample. Click selection remains available separately.
+
 ## 6. Resource Lifecycle
 
 Every module-owned resource must have an owner and release trigger:

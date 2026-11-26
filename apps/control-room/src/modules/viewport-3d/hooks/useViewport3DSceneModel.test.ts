@@ -6261,19 +6261,26 @@ describe("useViewport3DSceneModel", () => {
     expect(enablement).not.toContain("resolveFdmCuboidPassPlan");
   });
 
+  it("derives magnetic FDM topology independently of live conductor field refreshes", () => {
+    const source = readFileSync(sceneModelSourceUrl, "utf8");
+    const start = source.indexOf("const fdmMagneticTargetViews = useMemo(");
+    const end = source.indexOf("const fdmTargetViewsResult = useMemo(", start);
+    expect(start).toBeGreaterThan(0);
+    expect(end).toBeGreaterThan(start);
+    const magneticBuild = source.slice(start, end);
+    expect(magneticBuild).toContain("buildViewport3DFdmTargetViews");
+    expect(magneticBuild).not.toMatch(/fdmConductorBuild|targetQuantityFieldVectors/);
+  });
+
   it("passes the FDM target Surface scope and lift settings to the vector builder", () => {
     const source = readFileSync(sceneModelSourceUrl, "utf8");
     const targetBlock = source.slice(
-      source.indexOf("const fdmTargetViews:"),
+      source.indexOf("const fdmTargetRenderState ="),
       source.indexOf("const fdmMultilayerVoxelFillRatio"),
     );
     expect(targetBlock).toContain("geometryScope: settings.geometryScope");
-    expect(targetBlock).toContain(
-      "surfaceOffsetEnabled:\n                          settings.vectorSurfaceOffsetEnabled",
-    );
-    expect(targetBlock).toContain(
-      "surfaceOffsetScale:\n                          settings.vectorSurfaceOffsetScale",
-    );
+    expect(targetBlock).toMatch(/surfaceOffsetEnabled:\s*settings.vectorSurfaceOffsetEnabled/);
+    expect(targetBlock).toMatch(/surfaceOffsetScale:\s*settings.vectorSurfaceOffsetScale/);
 
     const airboxBuildBlock = source.slice(
       source.indexOf("const fdmAirboxBuildState ="),
@@ -6355,10 +6362,11 @@ describe("useViewport3DSceneModel", () => {
   it("exposes revision quad and threads tracker to field collections in scene model (LR-14)", () => {
     const source = readFileSync(sceneModelSourceUrl, "utf8");
 
-    expect(source).toContain("requestedRevision: fieldVectorRevisionString");
-    expect(source).toContain("receivedRevision: fieldVectorPayloadRevisionString");
-    expect(source).toContain("preparedRevision: fieldVectorPreparedRevision");
-    expect(source).toContain("displayedRevision: fieldVectorDisplayedRevision");
+    expect(source).toContain("requestedRevision: reportedFieldRequestedRevision");
+    expect(source).toContain("receivedRevision: reportedFieldReceivedRevision");
+    expect(source).toContain("preparedRevision: reportedFieldPreparedRevision");
+    expect(source).toContain("displayedRevision: reportedFieldDisplayedRevision");
+    expect(source).toContain("const reportedFieldResource = scopedFdmFieldResource ?? fieldVector");
     expect(source).toContain("selectedTargetId: selectedVisualizationTargetId, tracker");
   });
 });

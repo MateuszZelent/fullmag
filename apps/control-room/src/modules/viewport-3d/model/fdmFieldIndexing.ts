@@ -19,6 +19,16 @@ export type FdmFieldIndexingResult =
 
 const DEFAULT_FDM_FIELD_INDEXING = "legacy_count_only" as const;
 
+// Decoded payloads own immutable index lists. Multiple view consumers can
+// share one validated mapping without keeping an obsolete field alive.
+const explicitIndexResolvers = new WeakMap<
+  NonNullable<DecodedFieldVector["nodeIndices"]>,
+  {
+    domainCellCount: number;
+    result: Extract<FdmFieldIndexingResult, { status: "compatible" }>;
+  }
+>();
+
 export function buildFdmFieldIndexResolver(
   fieldVector: Pick<
     DecodedFieldVector,
@@ -52,6 +62,32 @@ export function buildFdmFieldIndexResolver(
     return { reason: "missing-node-indices", status: "degraded" };
   }
 
+  const known = explicitIndexResolvers.get(nodeIndices);
+  if (known?.domainCellCount === safeDomainCellCount && known.result.indexing === indexing) {
+    return known.result;
+  }
+
+  const rememberResolver = (
+    resolve: (cellOrdinal: number) => number | null,
+  ): FdmFieldIndexingResult => {
+    const result = { indexing, resolve, status: "compatible" as const };
+    explicitIndexResolvers.set(nodeIndices, { domainCellCount: safeDomainCellCount, result });
+    return result;
+  };
+
+  // A thin-film object often occupies consecutive global ordinals. Verify
+  // the entire run before using direct arithmetic, with no per-cell map.
+  const first = nodeIndices[0];
+  const last = nodeIndices[nodeIndices.length - 1];
+  if (first !== undefined && Number.isInteger(first) && first >= 0 &&
+      last !== undefined && last < safeDomainCellCount &&
+      last - first + 1 === nodeIndices.length &&
+      nodeIndices.findIndex((ordinal, index) => ordinal !== first + index) === -1) {
+    return rememberResolver((ordinal) =>
+      Number.isInteger(ordinal) && ordinal >= first && ordinal <= last ? ordinal - first : null,
+    );
+  }
+
   const fieldIndexByCell = new Map<number, number>();
   for (let fieldIndex = 0; fieldIndex < nodeIndices.length; fieldIndex += 1) {
     const cellOrdinal = nodeIndices[fieldIndex];
@@ -69,9 +105,5 @@ export function buildFdmFieldIndexResolver(
     fieldIndexByCell.set(cellOrdinal, fieldIndex);
   }
 
-  return {
-    indexing,
-    resolve: (cellOrdinal) => fieldIndexByCell.get(cellOrdinal) ?? null,
-    status: "compatible",
-  };
+  return rememberResolver((cellOrdinal) => fieldIndexByCell.get(cellOrdinal) ?? null);
 }

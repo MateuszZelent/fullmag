@@ -1212,6 +1212,37 @@ describe("viewport3DFieldDataPlan", () => {
     }
   });
 
+  it("plans only visible FDM owner fields and shares one carrier across their passes", () => {
+    const visible = {
+      ...DEFAULT_OBJECT_VISUALIZATION,
+      activeQuantityId: "m",
+      shaderVisible: true,
+      vectorsVisible: false,
+      visible: true,
+    };
+    const plan = resolveViewport3DTargetQuantityFieldDemandPlan({
+      availableQuantityIds: new Set(["m", "H_ex", "H_demag"]),
+      fdmObjectFieldsActive: true,
+      fdmSettings: { ...visible, activeQuantityId: "H_demag" },
+      fdmTargetSettings: [
+        { label: "Film", objectScopeId: "film", settings: visible, targetId: "object:film" },
+        { label: "Film edge", objectScopeId: "film", settings: visible, targetId: "region:film:edge" },
+        { label: "Hidden", objectScopeId: "hidden",
+          settings: { ...visible, activeQuantityId: "H_ex", visible: false }, targetId: "object:hidden" },
+      ],
+      getPartSettings: () => DEFAULT_OBJECT_VISUALIZATION,
+      magneticPartScopedFieldIds: new Set(),
+      magneticParts: [],
+      maxVectorGlyphs: 256,
+      primaryFieldQuantityId: "m",
+    });
+    expect([...plan.requests.values()]).toEqual([expect.objectContaining({
+      quantityId: "m",
+      query: { component: "full", scope_kind: "object", scope_id: "film" },
+      consumers: expect.arrayContaining(["object:film:surface", "region:film:edge:surface"]),
+    })]);
+  });
+
   it("requests a complete carrier owned by the conductor even when the same quantity is primary", () => {
     const plan = resolveViewport3DTargetQuantityFieldDemandPlan({
       availableQuantityIds: new Set(["J_charge"]),

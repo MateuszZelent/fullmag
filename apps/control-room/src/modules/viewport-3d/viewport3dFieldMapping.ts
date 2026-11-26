@@ -290,6 +290,7 @@ export function buildFdmSampledScalarColors(
   scalarRange?: ScalarRange | null,
   domainGridShape?: readonly [number, number, number] | null,
   rangeSource?: NonNullable<ScalarColorBuffer["rangeSource"]> | null,
+  rangeDiagnostics?: ScalarRangeDiagnostics | null,
 ): ScalarColorBuffer | null {
   const resolvedColorMode = normalizeViewport3DVectorColorMode(
     colorMode,
@@ -351,10 +352,10 @@ export function buildFdmSampledScalarColors(
       rangeSource === null
         ? undefined
         : rangeSource ?? (scalarRange ? "manual" : undefined),
-    rangeDiagnostics: resolveScalarRangeDiagnostics(
-      fieldVector,
-      resolvedColorMode,
-    ),
+    rangeDiagnostics:
+      rangeDiagnostics === undefined
+        ? resolveScalarRangeDiagnostics(fieldVector, resolvedColorMode)
+        : rangeDiagnostics ?? undefined,
     scalarValues,
   };
 }
@@ -1949,6 +1950,27 @@ function* tensorSurfaceColorBufferSteps(
   scalarRange?: ScalarRange | null,
 ): Generator<void, ScalarColorBuffer | null> {
   if (!isTensorFrobeniusSurfaceField(field)) return null;
+  if (target.kind === "fdm-sampled") {
+    const indexing = buildFdmFieldIndexResolver(
+      field,
+      target.domainCellCount,
+      target.domainGridShape,
+    );
+    if (indexing.status !== "compatible") return null;
+    const pointIndices = new Uint32Array(target.cellOrdinals.length);
+    for (let index = 0; index < target.cellOrdinals.length; index += 1) {
+      if (index > 0 && index % 8192 === 0) yield;
+      const fieldIndex = indexing.resolve(target.cellOrdinals[index] ?? -1);
+      if (fieldIndex === null) return null;
+      pointIndices[index] = fieldIndex;
+    }
+    return yield* tensorSurfaceColorBufferSteps(
+      field,
+      { kind: "sampled", pointIndices },
+      colorPalette,
+      scalarRange,
+    );
+  }
   const key = JSON.stringify([target.kind, "vertexCount" in target ? target.vertexCount : 0,
     tensorTargetId("pointIndices" in target ? target.pointIndices : null),
     tensorTargetId("targetNodeIndices" in target ? target.targetNodeIndices : null),

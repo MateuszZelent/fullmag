@@ -1,13 +1,16 @@
 import { isTensorFrobeniusSurfaceField } from "@/kernel/api/tensorFieldProjection";
 import { srgbToLinearChannel } from "../viewport3dColorSpace";
 import {
+  buildFdmSampledScalarColors,
   buildSurfaceFaceScalarColors,
   buildTensorSurfaceColorBufferChunked,
   buildThicknessAverageZScalarColors,
   buildVertexScalarColorsChunked,
   fieldVectorSupportsScalarColorMode,
+  resolveScalarRangeDiagnostics,
   type ChunkedFieldTransformOptions,
   type ScalarColorBuffer,
+  type ScalarRangeDiagnostics,
   type ScalarRange,
   type Viewport3DFieldVector,
 } from "../viewport3dFieldMapping";
@@ -34,6 +37,13 @@ export type Viewport3DFieldColorBuildTarget =
   | {
       kind: "sampled";
       pointIndices: Uint32Array;
+    }
+  | {
+      kind: "fdm-sampled";
+      cellOrdinals: Uint32Array;
+      diagnosticsCacheKey?: string;
+      domainCellCount: number;
+      domainGridShape?: readonly [number, number, number] | null;
     }
   | {
       kind: "surface-faces";
@@ -68,8 +78,33 @@ export async function buildViewport3DFieldColorBuffer({
   ...options
 }: Viewport3DFieldColorBuildModelInput): Promise<ScalarColorBuffer | null> {
   if (fieldVector.pointCount === 0) return null;
-  if (isTensorFrobeniusSurfaceField(fieldVector)) return buildTensorSurfaceColorBufferChunked(fieldVector, target, options);
-
+  if (isTensorFrobeniusSurfaceField(fieldVector)) {
+    return buildTensorSurfaceColorBufferChunked(fieldVector, target, options);
+  }
+  if (target.kind === "fdm-sampled") {
+    const colorMode = normalizeViewport3DVectorColorMode(
+      options.colorMode,
+      "magnitude",
+    );
+    const diagnostics = target.diagnosticsCacheKey
+      ? resolveCachedFdmFieldRangeDiagnostics(
+          target.diagnosticsCacheKey,
+          fieldVector,
+          colorMode,
+        )
+      : resolveScalarRangeDiagnostics(fieldVector, colorMode);
+    return buildFdmSampledScalarColors(
+      fieldVector,
+      target.cellOrdinals,
+      target.domainCellCount,
+      colorMode,
+      options.colorPalette,
+      options.scalarRange,
+      target.domainGridShape,
+      undefined,
+      diagnostics,
+    );
+  }
   switch (target.kind) {
     case "full-domain":
       if (target.vertexCount < fieldVector.pointCount) return null;
@@ -118,6 +153,8 @@ export function estimateViewport3DFieldColorBuildInputBytes({
       return fieldVector.values.byteLength + target.targetNodeIndices.byteLength;
     case "sampled":
       return fieldVector.values.byteLength + target.pointIndices.byteLength;
+    case "fdm-sampled":
+      return fieldVector.values.byteLength + target.cellOrdinals.byteLength;
     case "surface-faces":
       return (
         fieldVector.values.byteLength +
@@ -369,10 +406,40 @@ function resolveTargetVertexCount(
       return target.vertexCount;
     case "sampled":
       return target.pointIndices.length;
+    case "fdm-sampled":
+      return target.cellOrdinals.length;
     case "surface-faces":
     case "thickness-average-z":
       return target.surfaceIndices.length;
   }
+}
+
+const fdmRangeDiagnosticsCache = new Map<
+  string,
+  ScalarRangeDiagnostics
+>();
+const FDM_RANGE_DIAGNOSTICS_CACHE_LIMIT = 32;
+
+function resolveCachedFdmFieldRangeDiagnostics(
+  cacheKey: string,
+  fieldVector: Viewport3DFieldVector,
+  colorMode: string,
+): ScalarRangeDiagnostics {
+  const key = `${cacheKey}|${colorMode}`;
+  const cached = fdmRangeDiagnosticsCache.get(key);
+  if (cached) {
+    fdmRangeDiagnosticsCache.delete(key);
+    fdmRangeDiagnosticsCache.set(key, cached);
+    return cached;
+  }
+
+  const diagnostics = resolveScalarRangeDiagnostics(fieldVector, colorMode);
+  fdmRangeDiagnosticsCache.set(key, diagnostics);
+  if (fdmRangeDiagnosticsCache.size > FDM_RANGE_DIAGNOSTICS_CACHE_LIMIT) {
+    const oldestKey = fdmRangeDiagnosticsCache.keys().next().value;
+    if (oldestKey !== undefined) fdmRangeDiagnosticsCache.delete(oldestKey);
+  }
+  return diagnostics;
 }
 
 function resolveShaderOnly(
