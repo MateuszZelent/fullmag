@@ -104,7 +104,7 @@ and certifies both blocks independently against the unscaled system without dupl
 r_q = f - (K_{qq} + \sigma_{\mathrm{conv}}\,\mathrm{i}\omega_k M_{qq})q - K_{q\phi}\delta\phi,\qquad
 r_\phi = R_{\phi q} q - P\delta\phi,\qquad
 \rho_q = \frac{\lVert r_q\rVert_2}{\max(\lVert f\rVert_2,\, \tau_{\mathrm{abs}})} \le \tau_{\mathrm{rel}},\qquad
-\rho_\phi = \frac{\lVert r_\phi\rVert_2}{\max(\lVert R_{\phi q} q\rVert_2,\, \lVert P\delta\phi\rVert_2,\, a_\phi)} \le \tau_{\mathrm{rel}}
+\rho_\phi = \frac{\lVert r_\phi\rVert_2}{\max(\lVert R_{\phi q} q\rVert_2,\, \lVert P\delta\phi\rVert_2,\, a_\phi / \tau_{\mathrm{rel}})} \le \tau_{\mathrm{rel}}
 ```
 
 When a divergence-free magnetic mode produces $R_{\phi q} q = 0$ and $\delta\phi = 0$, the Poisson denominator uses a

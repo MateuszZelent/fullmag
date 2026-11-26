@@ -1790,11 +1790,12 @@ FrequencyDomainStatus solve_driven_response_gpu_cudss(
                 });
                 const double phi_tol = std::max(rtol * phi_scale, atol_phi);
                 phi_ok = !any_nonfinite && (norm_r_phi <= phi_tol);
-                if (phi_scale > 0.0) {
-                    rel_r_phi = norm_r_phi / phi_scale;
-                } else {
-                    rel_r_phi = (norm_r_phi <= atol_phi) ? 0.0 : (norm_r_phi / atol_phi);
-                }
+                const double rel_phi_denom = std::max({
+                    phi_scale,
+                    atol_phi / std::max(rtol, 1.0e-300),
+                    1.0e-300,
+                });
+                rel_r_phi = norm_r_phi / rel_phi_denom;
             }
 
             if (any_nonfinite || !q_ok || !phi_ok) {
