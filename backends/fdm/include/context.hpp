@@ -2278,15 +2278,19 @@ inline bool context_local_pipeline_graph_is_resolved(const Context &ctx) {
          ctx.integrator == FULLMAG_FDM_INTEGRATOR_DP45) &&
         ctx.temperature <= 0.0 &&
         !(ctx.has_oersted_field && ctx.oersted_time_dep_kind != 0) &&
+        !ctx.regional_field_drive_time_dependent &&
+        ctx.slonczewski_time_program.empty() &&
         !ctx.gpu_transport_rhs.active &&
         !ctx.gpu_transport_test_force_adaptive_retry;
 }
 
 inline bool context_local_pipeline_fusion_is_resolved(const Context &ctx) {
+    const bool local_spin_fusion =
+        ctx.integrator == FULLMAG_FDM_INTEGRATOR_DP45 &&
+        ctx.precision == FULLMAG_FDM_PRECISION_DOUBLE;
     return !ctx.local_pipeline_force_unfused_for_testing &&
         !ctx.has_zhang_li_stt &&
-        !ctx.has_slonczewski_stt &&
-        !ctx.has_sot;
+        (local_spin_fusion || (!ctx.has_slonczewski_stt && !ctx.has_sot));
 }
 
 inline fullmag_fdm_local_pipeline_realization_v1

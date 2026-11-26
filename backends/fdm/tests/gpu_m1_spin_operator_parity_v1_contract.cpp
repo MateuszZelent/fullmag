@@ -780,6 +780,9 @@ GpuResult solve_gpu(const Scenario &scenario) {
     std::vector<fullmag_fdm_gpu_transport_charge_face_v1> charge_faces;
     std::vector<fullmag_fdm_gpu_transport_spin_boundary_face_v1> spin_faces;
     append_external_faces(scenario, charge_faces, spin_faces);
+    // Exercise lookup against caller order that differs from the device order,
+    // including cases with specified spin potentials and sink boundaries.
+    std::reverse(spin_faces.begin(), spin_faces.end());
     fullmag_fdm_gpu_transport_formula_ids_v1 formula{};
     init_record(formula, kCharge);
     formula.formula_id = FULLMAG_FDM_GPU_TRANSPORT_CHARGE_FORMULA_OHMIC_FV_V1;

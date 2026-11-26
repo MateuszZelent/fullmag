@@ -6,6 +6,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <limits>
+#include <cub/block/block_reduce.cuh>
 #include <thrust/execution_policy.h>
 #include <thrust/sort.h>
 #include <vector>
@@ -32,8 +33,10 @@ struct DeviceDiagnostics {
 };
 
 struct MaterializationDiagnostics {
-    double interface_balance;
-    double torque_balance;
+    unsigned long long interface_error_bits;
+    unsigned long long interface_scale_bits;
+    unsigned long long torque_error_bits;
+    unsigned long long torque_scale_bits;
 };
 
 struct Workspace {
@@ -242,27 +245,46 @@ __device__ const fullmag_fdm_gpu_transport_formula_ids_v1 *formula_ids(
 
 __device__ const fullmag_fdm_gpu_transport_spin_boundary_face_v1 *boundary(
     const SolveInput &in, uint32_t axis, int32_t side, uint64_t cell) {
-    for (uint64_t i = 0; i < in.views[4].element_count; ++i) {
-        const auto *face =
-            record_at<fullmag_fdm_gpu_transport_spin_boundary_face_v1>(in, 4, i);
-        if (face->axis == axis && face->side == side &&
-            face->adjacent_cell == cell)
-            return face;
+    using BoundaryFace = fullmag_fdm_gpu_transport_spin_boundary_face_v1;
+    uint64_t begin = 0;
+    uint64_t end = in.views[4].element_count;
+    while (begin < end) {
+        const uint64_t middle = begin + (end - begin) / 2;
+        const auto *face = record_at<BoundaryFace>(in, 4, middle);
+        const bool precedes = face->axis < axis ||
+            (face->axis == axis && (face->side < side ||
+                (face->side == side && face->adjacent_cell < cell)));
+        if (precedes) {
+            begin = middle + 1;
+        } else {
+            end = middle;
+        }
     }
-    return nullptr;
+    if (begin == in.views[4].element_count) return nullptr;
+    const auto *face = record_at<BoundaryFace>(in, 4, begin);
+    return face->axis == axis && face->side == side && face->adjacent_cell == cell
+        ? face : nullptr;
 }
 
 __device__ const fullmag_fdm_gpu_transport_spin_interface_v1 *interface_at(
-    const SolveInput &in, uint32_t axis, uint64_t negative, uint64_t positive) {
-    for (uint64_t i = 0; i < in.views[2].element_count; ++i) {
-        const auto *interface_record =
-            record_at<fullmag_fdm_gpu_transport_spin_interface_v1>(in, 2, i);
-        if (interface_record->axis == axis &&
-            interface_record->negative_cell == negative &&
-            interface_record->positive_cell == positive)
-            return interface_record;
+    const SolveInput &in, uint32_t axis, uint64_t face_index) {
+    using Interface = fullmag_fdm_gpu_transport_spin_interface_v1;
+    uint64_t begin = 0;
+    uint64_t end = in.views[2].element_count;
+    while (begin < end) {
+        const uint64_t middle = begin + (end - begin) / 2;
+        const auto *face = record_at<Interface>(in, 2, middle);
+        if (face->axis < axis ||
+            (face->axis == axis && face->canonical_face_index < face_index)) {
+            begin = middle + 1;
+        } else {
+            end = middle;
+        }
     }
-    return nullptr;
+    if (begin == in.views[2].element_count) return nullptr;
+    const auto *face = record_at<Interface>(in, 2, begin);
+    return face->axis == axis && face->canonical_face_index == face_index
+        ? face : nullptr;
 }
 
 __device__ double harmonic(double left, double right) {
@@ -518,10 +540,10 @@ __device__ double apply_row(const SolveInput &in, const double *vector,
                 const auto *neighbor_material =
                     spin_material(in, neighbor_cell->material_index);
                 if (neighbor_material == nullptr) continue;
-                const uint64_t negative = side < 0 ? neighbor : cell;
-                const uint64_t positive = side < 0 ? cell : neighbor;
-                const auto *interface_record =
-                    interface_at(in, axis, negative, positive);
+                const uint64_t face = face_index(
+                    in, axis, x, y, z,
+                    side < 0 ? coordinate[axis] : coordinate[axis] + 1);
+                const auto *interface_record = interface_at(in, axis, face);
                 if (interface_record != nullptr && interface_record->kind ==
                     FULLMAG_FDM_GPU_TRANSPORT_SPIN_INTERFACE_MIXING_CONDUCTANCE_V2) {
                     double negative_flux[3]{}, positive_flux[3]{}, incoming[3]{},
@@ -631,7 +653,7 @@ __device__ void build_rhs(const SolveInput &in, double *rhs, uint64_t unknowns) 
                         in, axis, x, y, z,
                         side < 0 ? coordinate[axis] : coordinate[axis] + 1);
                     const auto *interface_record =
-                        interface_at(in, axis, negative, positive);
+                        interface_at(in, axis, face);
                     if (interface_record != nullptr && interface_record->kind ==
                         FULLMAG_FDM_GPU_TRANSPORT_SPIN_INTERFACE_MIXING_CONDUCTANCE_V2) {
                         double negative_flux[3]{}, positive_flux[3]{}, incoming[3]{},
@@ -746,7 +768,7 @@ __global__ void assemble_sparse_cells_kernel(SolveInput in, uint8_t *active,
                 const uint64_t positive=side<0?cell:neighbor;
                 const uint64_t face=face_index(in,axis,x,y,z,
                     side<0?coordinate[axis]:coordinate[axis]+1);
-                const auto *iface=interface_at(in,axis,negative,positive);
+                const auto *iface=interface_at(in,axis,face);
                 if (iface != nullptr && iface->kind ==
                     FULLMAG_FDM_GPU_TRANSPORT_SPIN_INTERFACE_MIXING_CONDUCTANCE_V2) {
                     double nf[3]{},pf[3]{},incoming[3]{},backflow[3]{},absorbed[3]{};
@@ -1302,7 +1324,7 @@ __global__ void materialize_faces_kernel(SolveInput in, const double *solution,
         const auto *negative_material = spin_material(in, negative_cell->material_index);
         const auto *positive_material = spin_material(in, positive_cell->material_index);
         if (negative_material == nullptr || positive_material == nullptr) continue;
-        const auto *interface_record = interface_at(in, axis, negative, positive);
+        const auto *interface_record = interface_at(in, axis, face);
         if (interface_record != nullptr && interface_record->kind ==
             FULLMAG_FDM_GPU_TRANSPORT_SPIN_INTERFACE_MIXING_CONDUCTANCE_V2) {
             double negative_flux[3]{}, positive_flux[3]{}, incoming[3]{},
@@ -1398,13 +1420,11 @@ __global__ void materialize_interfaces_kernel(SolveInput in,
     }
 }
 
-__global__ void materialize_kernel(SolveInput in, const double *solution,
-                                   const double *rhs, Buffers buffers,
-                                   MaterializationDiagnostics *diagnostics,
-                                   uint32_t mode) {
-    if (mode == 2 && (blockIdx.x != 0 || threadIdx.x != 0)) return;
+__global__ void materialize_cells_kernel(
+    SolveInput in, const double *solution, Buffers buffers)
+{
     const uint64_t cells = buffers.cells;
-    if (mode == 0) for (uint64_t cell = uint64_t(blockIdx.x) * blockDim.x + threadIdx.x;
+    for (uint64_t cell = uint64_t(blockIdx.x) * blockDim.x + threadIdx.x;
          cell < cells; cell += uint64_t(blockDim.x) * gridDim.x) {
         buffers.mu_x[cell] = solution[cell];
         buffers.mu_y[cell] = solution[cells + cell];
@@ -1454,253 +1474,108 @@ __global__ void materialize_kernel(SolveInput in, const double *solution,
             buffers.torque_total[index] = torque;
         }
     }
-    if (mode == 0) return;
-    if (mode == 3) for (uint32_t axis = 0; axis < 3; ++axis) {
-        const uint64_t faces = face_count(in, axis);
-        double *target = axis == 0 ? buffers.qx : axis == 1 ? buffers.qy : buffers.qz;
-        const uint64_t nx = in.grid[0], ny = in.grid[1], nz = in.grid[2];
-        for (uint64_t z = 0; z < nz + (axis == 2); ++z) {
-            for (uint64_t y = 0; y < ny + (axis == 1); ++y) {
-                for (uint64_t x = 0; x < nx + (axis == 0); ++x) {
-                    const uint64_t plane = axis == 0 ? x : axis == 1 ? y : z;
-                    const uint64_t face = face_index(in, axis,
-                        x < nx ? x : nx - 1, y < ny ? y : ny - 1,
-                        z < nz ? z : nz - 1, plane);
-                    const uint64_t rank=uint64_t(blockIdx.x)*blockDim.x+threadIdx.x;
-                    const uint64_t stride=uint64_t(blockDim.x)*gridDim.x;
-                    if (face % stride != rank) continue;
-                    const bool has_negative = plane > 0;
-                    const bool has_positive = plane < in.grid[axis];
-                    if (!has_negative || !has_positive) {
-                        uint64_t adjacent_coordinate[3] = {
-                            x < nx ? x : nx - 1,
-                            y < ny ? y : ny - 1,
-                            z < nz ? z : nz - 1};
-                        adjacent_coordinate[axis] = has_positive ? 0 : in.grid[axis] - 1;
-                        const uint64_t adjacent = cell_index(
-                            in, adjacent_coordinate[0], adjacent_coordinate[1],
-                            adjacent_coordinate[2]);
-                        const int32_t side = has_positive ? -1 : 1;
-                        const auto *boundary_face = boundary(in, axis, side, adjacent);
-                        if (boundary_face == nullptr || boundary_face->kind ==
-                            FULLMAG_FDM_GPU_TRANSPORT_SPIN_BOUNDARY_INSULATING)
-                            continue;
-                        double value[3]{};
-                        constitutive_source(in, axis, adjacent,
-                                            accepted_current(in, axis)[face], value);
-                        const auto *adjacent_cell = spin_cell(in, adjacent);
-                        const auto *adjacent_material = adjacent_cell != nullptr
-                            ? spin_material(in, adjacent_cell->material_index) : nullptr;
-                        if (adjacent_material == nullptr) continue;
-                        const double boundary_mu[3] = {
-                            boundary_face->kind ==
-                                    FULLMAG_FDM_GPU_TRANSPORT_SPIN_BOUNDARY_SPECIFIED_POTENTIAL
-                                ? boundary_face->potential_xyz[0] : 0.0,
-                            boundary_face->kind ==
-                                    FULLMAG_FDM_GPU_TRANSPORT_SPIN_BOUNDARY_SPECIFIED_POTENTIAL
-                                ? boundary_face->potential_xyz[1] : 0.0,
-                            boundary_face->kind ==
-                                    FULLMAG_FDM_GPU_TRANSPORT_SPIN_BOUNDARY_SPECIFIED_POTENTIAL
-                                ? boundary_face->potential_xyz[2] : 0.0};
-                        for (uint32_t component = 0; component < 3; ++component) {
-                            const double difference = has_positive
-                                ? solution[component * cells + adjacent] -
-                                      boundary_mu[component]
-                                : boundary_mu[component] -
-                                      solution[component * cells + adjacent];
-                            value[component] -= adjacent_material->spin_conductivity *
-                                difference / in.cell_size[axis];
-                            target[component * faces + face] = value[component];
-                        }
-                        continue;
-                    }
-                    uint64_t negative_coord[3] = {x, y, z};
-                    uint64_t positive_coord[3] = {x, y, z};
-                    negative_coord[axis] = plane - 1;
-                    positive_coord[axis] = plane;
-                    const uint64_t negative = cell_index(in, negative_coord[0],
-                        negative_coord[1], negative_coord[2]);
-                    const uint64_t positive = cell_index(in, positive_coord[0],
-                        positive_coord[1], positive_coord[2]);
-                    const auto *negative_cell = spin_cell(in, negative);
-                    const auto *positive_cell = spin_cell(in, positive);
-                    if (negative_cell == nullptr || positive_cell == nullptr) continue;
-                    const auto *negative_material =
-                        spin_material(in, negative_cell->material_index);
-                    const auto *positive_material =
-                        spin_material(in, positive_cell->material_index);
-                    if (negative_material == nullptr || positive_material == nullptr) continue;
-                    const auto *interface_record =
-                        interface_at(in, axis, negative, positive);
-                    if (interface_record != nullptr && interface_record->kind ==
-                        FULLMAG_FDM_GPU_TRANSPORT_SPIN_INTERFACE_MIXING_CONDUCTANCE_V2) {
-                        double negative_flux[3]{}, positive_flux[3]{}, incoming[3]{},
-                            backflow[3]{}, absorbed[3]{};
-                        mixing_flux(in, *interface_record, solution, true,
-                                    negative_flux, positive_flux, incoming, backflow, absorbed,
-                                    nullptr);
-                        for (uint32_t component = 0; component < 3; ++component)
-                            target[component * faces + face] = negative_flux[component];
-                        const uint64_t torque_cell = interface_record->to_cell;
-                        const auto *torque_record = spin_cell(in, torque_cell);
-                        if (torque_record != nullptr && torque_record->torque_target != 0 &&
-                            torque_record->saturation_magnetization > 0.0) {
-                            const double face_area = in.cell_size[(axis + 1) % 3] *
-                                in.cell_size[(axis + 2) % 3];
-                            const double volume = in.cell_size[0] * in.cell_size[1] *
-                                in.cell_size[2];
-                            const auto *formula = formula_ids(in);
-                            const double factor = formula == nullptr ? 0.0 :
-                                -(formula->gamma_e * kHbar /
-                                (2.0 * kElementaryCharge *
-                                 torque_record->saturation_magnetization)) *
-                                face_area / volume;
-                            for (uint32_t component = 0; component < 3; ++component) {
-                                const uint64_t index = component * cells + torque_cell;
-                                const double surface = factor * absorbed[component];
-                                atomicAdd(buffers.torque_surface + index, surface);
-                                atomicAdd(buffers.torque_total + index, surface);
-                            }
-                        }
-                        continue;
-                    }
-                    const double sigma = harmonic(negative_material->spin_conductivity,
-                                                  positive_material->spin_conductivity);
-                    double source[3]{};
-                    source_flux(in, axis, negative, positive, face, source);
-                    for (uint32_t component = 0; component < 3; ++component)
-                        target[component * faces + face] = source[component] - 0.5 * sigma *
-                            (solution[component * cells + positive] -
-                             solution[component * cells + negative]) /
-                            in.cell_size[axis];
-                }
-            }
+}
+
+struct ClosureMaxima {
+    double interface_error;
+    double interface_scale;
+    double torque_error;
+    double torque_scale;
+};
+
+struct MaxClosure {
+    __device__ ClosureMaxima operator()(ClosureMaxima a, ClosureMaxima b) const {
+        return {fmax(a.interface_error, b.interface_error),
+                fmax(a.interface_scale, b.interface_scale),
+                fmax(a.torque_error, b.torque_error),
+                fmax(a.torque_scale, b.torque_scale)};
+    }
+};
+
+constexpr int kClosureThreads = 256;
+
+__global__ void measure_materialized_closure_kernel(
+    SolveInput in, Buffers buffers, const uint64_t *interface_offsets,
+    const uint32_t *interface_indices, const uint8_t *interface_roles,
+    MaterializationDiagnostics *diagnostics)
+{
+    const uint64_t cells = buffers.cells;
+    const uint64_t interface_count = buffers.interface_observation_count;
+    const uint64_t first = uint64_t(blockIdx.x) * blockDim.x + threadIdx.x;
+    const uint64_t stride = uint64_t(blockDim.x) * gridDim.x;
+    const auto *observations = buffers.interface_observations;
+    ClosureMaxima local{};
+
+    for (uint64_t i = first; i < interface_count; i += stride) {
+        const auto &observation = observations[i];
+        for (uint32_t component = 0; component < 3; ++component) {
+            const double from = observation.lane3_xyz[component];
+            const double to = observation.lane4_xyz[component];
+            const double absorbed = observation.lane2_xyz[component];
+            local.interface_error = fmax(local.interface_error, fabs(from - to - absorbed));
+            local.interface_scale = fmax(
+                local.interface_scale, fabs(from) + fabs(to) + fabs(absorbed));
         }
     }
-    if (mode == 3) return;
-    const uint64_t interface_count = in.views[2].element_count;
-    auto *interface_records = buffers.interface_observations;
-    if (mode == 3) for (uint64_t interface_index = 0; interface_index < interface_count;
-         ++interface_index) {
-        const auto *interface_record =
-            record_at<fullmag_fdm_gpu_transport_spin_interface_v1>(in, 2, interface_index);
-        auto *observation = interface_records + interface_index;
-        *observation = {};
-        observation->abi_version = FULLMAG_FDM_GPU_TRANSPORT_ABI_V1;
-        observation->struct_version = 1;
-        observation->struct_size = sizeof(*observation);
-        observation->required_features =
-            FULLMAG_FDM_GPU_TRANSPORT_FEATURE_STEADY_SPIN |
-            FULLMAG_FDM_GPU_TRANSPORT_FEATURE_ARTIFACT_READBACK;
-        observation->kind = FULLMAG_FDM_GPU_TRANSPORT_SPIN_OBSERVATION_INTERFACE;
-        observation->axis = interface_record->axis;
-        observation->orientation = interface_record->orientation;
-        observation->source_id = interface_record->source_id;
-        observation->topology_id = interface_record->topology_id;
-        observation->canonical_face_index = interface_record->canonical_face_index;
-        observation->negative_cell = interface_record->negative_cell;
-        observation->positive_cell = interface_record->positive_cell;
-        observation->from_cell = interface_record->from_cell;
-        observation->to_cell = interface_record->to_cell;
-        if (interface_record->kind ==
-            FULLMAG_FDM_GPU_TRANSPORT_SPIN_INTERFACE_MIXING_CONDUCTANCE_V2) {
-            double charge_traces[3]{};
-            mixing_flux(in, *interface_record, solution, true,
-                        observation->lane3_xyz, observation->lane4_xyz,
-                        observation->lane0_xyz, observation->lane1_xyz,
-                        observation->lane2_xyz, charge_traces);
-            observation->charge_from_trace_v = charge_traces[0];
-            observation->charge_to_trace_v = charge_traces[1];
-            observation->charge_delta_trace_v = charge_traces[2];
-        } else {
-            const uint64_t faces = face_count(in, interface_record->axis);
-            const double *flux = interface_record->axis == 0 ? buffers.qx
-                : interface_record->axis == 1 ? buffers.qy : buffers.qz;
-            for (uint32_t component = 0; component < 3; ++component) {
-                const double value = flux[component * faces +
-                                          interface_record->canonical_face_index];
-                observation->lane3_xyz[component] = value;
-                observation->lane4_xyz[component] = value;
-            }
-        }
-    }
-    if (mode == 3) for (uint64_t i = 1; i < interface_count; ++i) {
-        const auto value = interface_records[i];
-        uint64_t position = i;
-        while (position != 0 &&
-               observation_identity_less(value, interface_records[position - 1])) {
-            interface_records[position] = interface_records[position - 1];
-            --position;
-        }
-        interface_records[position] = value;
-    }
-    double closure[3]{};
-    double global_scale = 0.0;
-    double local_max = 0.0;
+
     const double volume = in.cell_size[0] * in.cell_size[1] * in.cell_size[2];
-    if (cells <= 4096) for (uint32_t component = 0; component < 3; ++component) {
-        for (uint64_t cell = 0; cell < cells; ++cell) {
-            const uint64_t row = component * cells + cell;
-            double operator_scale = 0.0;
-            const double applied =
-                apply_row(in, solution, cell, component, &operator_scale) / volume;
-            operator_scale /= volume;
-            const double defect = applied - rhs[row];
-            closure[component] += defect;
-            global_scale += operator_scale + fabs(rhs[row]);
-            const double local_scale =
-                fmax(operator_scale + fabs(rhs[row]), 1.0e-30);
-            local_max = fmax(local_max, fabs(defect) / local_scale);
-        }
-    }
-    double interface_error = 0.0;
-    double interface_scale = 0.0;
-    for (uint64_t i = 0; i < interface_count; ++i) {
-        const auto &observation = interface_records[i];
-        for (uint32_t component = 0; component < 3; ++component) {
-            const double defect = observation.lane3_xyz[component] -
-                observation.lane4_xyz[component] - observation.lane2_xyz[component];
-            interface_error = fmax(interface_error, fabs(defect));
-            interface_scale = fmax(interface_scale,
-                fabs(observation.lane3_xyz[component]) +
-                fabs(observation.lane4_xyz[component]) +
-                fabs(observation.lane2_xyz[component]));
-        }
-    }
-    diagnostics->interface_balance = interface_count == 0 ? 0.0
-        : interface_error / fmax(interface_scale, 1.0e-300);
-    if (cells > 4096) {
-        diagnostics->torque_balance = 0.0;
-        return;
-    }
-    double torque_error = 0.0;
-    double torque_scale = 0.0;
     const auto *formula = formula_ids(in);
-    for (uint64_t cell = 0; cell < cells; ++cell) {
-        const auto *cell_record = spin_cell(in, cell);
+    for (uint64_t cell = first; cell < cells; cell += stride) {
+        double sink[3]{};
         for (uint32_t component = 0; component < 3; ++component) {
             const uint64_t row = component * cells + cell;
-            double magnetic_sink = buffers.reaction_j[row] + buffers.reaction_phi[row];
-            for (uint64_t i = 0; i < interface_count; ++i) {
-                const auto &observation = interface_records[i];
-                if (observation.to_cell != cell) continue;
-                const double area = in.cell_size[(observation.axis + 1) % 3] *
-                                    in.cell_size[(observation.axis + 2) % 3];
-                magnetic_sink += observation.lane2_xyz[component] * area / volume;
-            }
-            const double expected = formula != nullptr && cell_record != nullptr &&
-                    cell_record->torque_target != 0 &&
-                    cell_record->saturation_magnetization > 0.0
-                ? -(formula->gamma_e * kHbar /
-                    (2.0 * kElementaryCharge * cell_record->saturation_magnetization)) *
-                    magnetic_sink
-                : 0.0;
-            torque_error = fmax(torque_error, fabs(buffers.torque_total[row] - expected));
-            torque_scale = fmax(torque_scale,
-                                fabs(buffers.torque_total[row]) + fabs(expected));
+            sink[component] = buffers.reaction_j[row] + buffers.reaction_phi[row];
+        }
+        // Each incident interface has a self block and a neighbor block in
+        // this row. Inspect its observation once, before publication sorting.
+        for (uint64_t entry = interface_offsets[cell]; entry < interface_offsets[cell + 1];
+             ++entry) {
+            if ((interface_roles[entry] & 1u) != 0) continue;
+            const auto &observation = observations[interface_indices[entry]];
+            if (observation.to_cell != cell) continue;
+            const double area = in.cell_size[(observation.axis + 1) % 3] *
+                                in.cell_size[(observation.axis + 2) % 3];
+            for (uint32_t component = 0; component < 3; ++component)
+                sink[component] += observation.lane2_xyz[component] * area / volume;
+        }
+        const auto *record = spin_cell(in, cell);
+        const double prefactor = formula != nullptr && record != nullptr &&
+                record->torque_target != 0 && record->saturation_magnetization > 0.0
+            ? -(formula->gamma_e * kHbar /
+                (2.0 * kElementaryCharge * record->saturation_magnetization))
+            : 0.0;
+        for (uint32_t component = 0; component < 3; ++component) {
+            const double expected = prefactor == 0.0 ? 0.0 : prefactor * sink[component];
+            const double actual = buffers.torque_total[component * cells + cell];
+            local.torque_error = fmax(local.torque_error, fabs(actual - expected));
+            local.torque_scale = fmax(local.torque_scale, fabs(actual) + fabs(expected));
         }
     }
-    diagnostics->torque_balance = torque_error / fmax(torque_scale, 1.0e-300);
+
+    using BlockReduce = cub::BlockReduce<ClosureMaxima, kClosureThreads>;
+    __shared__ typename BlockReduce::TempStorage storage;
+    const ClosureMaxima block = BlockReduce(storage).Reduce(local, MaxClosure{});
+    if (threadIdx.x == 0) {
+        // The representation of nonnegative FP64 values preserves order as
+        // unsigned integers, including infinity.
+        atomicMax(&diagnostics->interface_error_bits,
+                  static_cast<unsigned long long>(__double_as_longlong(block.interface_error)));
+        atomicMax(&diagnostics->interface_scale_bits,
+                  static_cast<unsigned long long>(__double_as_longlong(block.interface_scale)));
+        atomicMax(&diagnostics->torque_error_bits,
+                  static_cast<unsigned long long>(__double_as_longlong(block.torque_error)));
+        atomicMax(&diagnostics->torque_scale_bits,
+                  static_cast<unsigned long long>(__double_as_longlong(block.torque_scale)));
+    }
+}
+
+double closure_ratio(unsigned long long error_bits, unsigned long long scale_bits) {
+    double error = 0.0;
+    double scale = 0.0;
+    static_assert(sizeof(error) == sizeof(error_bits));
+    std::memcpy(&error, &error_bits, sizeof(error));
+    std::memcpy(&scale, &scale_bits, sizeof(scale));
+    return error / std::fmax(scale, 1.0e-300);
 }
 
 __global__ void materialize_observation_range_kernel(
@@ -2091,8 +1966,14 @@ uint32_t solve_device(const SolveInput &input, SolveOutput *output) noexcept {
         release(candidate);
         return FULLMAG_FDM_GPU_TRANSPORT_ERROR_OUT_OF_MEMORY;
     }
-    materialize_kernel<<<blocks,256,0,input.stream>>>(
-        input, s.solution_soa, s.rhs_soa, candidate, device_diagnostics,0);
+    if (cudaMemsetAsync(device_diagnostics, 0, sizeof(*device_diagnostics),
+                        input.stream) != cudaSuccess) {
+        cudaFree(device_diagnostics);
+        release(candidate);
+        return FULLMAG_FDM_GPU_TRANSPORT_ERROR_CUDA_RUNTIME_ERROR;
+    }
+    materialize_cells_kernel<<<blocks,256,0,input.stream>>>(
+        input, s.solution_soa, candidate);
     for (uint32_t axis = 0; axis < 3; ++axis) {
         const uint64_t faces = axis == 0 ? qx_faces : axis == 1 ? qy_faces : qz_faces;
         const uint32_t face_blocks = uint32_t(
@@ -2106,6 +1987,15 @@ uint32_t solve_device(const SolveInput &input, SolveOutput *output) noexcept {
                 ? 65535 : (interface_count + 255) / 256);
         materialize_interfaces_kernel<<<interface_blocks,256,0,input.stream>>>(
             input, s.solution_soa, candidate);
+    }
+    const uint64_t closure_elements = cells > interface_count ? cells : interface_count;
+    const uint64_t closure_grid = (closure_elements + kClosureThreads - 1) / kClosureThreads;
+    const uint32_t closure_blocks =
+        static_cast<uint32_t>(closure_grid > 65535 ? 65535 : closure_grid);
+    measure_materialized_closure_kernel<<<closure_blocks, kClosureThreads, 0, input.stream>>>(
+        input, candidate, s.interface_row_offsets, s.interface_record_indices,
+        s.interface_roles, device_diagnostics);
+    if (interface_count != 0) {
         try {
             thrust::sort(thrust::cuda::par.on(input.stream),
                          candidate.interface_observations,
@@ -2117,8 +2007,6 @@ uint32_t solve_device(const SolveInput &input, SolveOutput *output) noexcept {
             return FULLMAG_FDM_GPU_TRANSPORT_ERROR_CUDA_RUNTIME_ERROR;
         }
     }
-    materialize_kernel<<<1,1,0,input.stream>>>(
-        input, s.solution_soa, s.rhs_soa, candidate, device_diagnostics,2);
     if (cudaPeekAtLastError() != cudaSuccess ||
         cudaStreamSynchronize(input.stream) != cudaSuccess) {
         cudaFree(device_diagnostics); release(candidate);
@@ -2183,8 +2071,10 @@ uint32_t solve_device(const SolveInput &input, SolveOutput *output) noexcept {
     output->algebraic_residual = metrics.relative_residual;
     output->local_balance = metrics.relative_residual;
     output->global_balance = metrics.relative_residual;
-    output->interface_balance = diagnostics.interface_balance;
-    output->torque_balance = diagnostics.torque_balance;
+    output->interface_balance =
+        closure_ratio(diagnostics.interface_error_bits, diagnostics.interface_scale_bits);
+    output->torque_balance =
+        closure_ratio(diagnostics.torque_error_bits, diagnostics.torque_scale_bits);
     output->control_d2h_count = build.control_transfer_count +
         metrics.control_transfer_count + 3;
     output->control_d2h_bytes = build.control_transfer_bytes +
