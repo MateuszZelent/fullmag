@@ -84,8 +84,6 @@ PHYSICS_REFERENCE_PAGES = frozenset(
         "physics/interactions/zeeman/index.md",
         "physics/interactions/oersted-field/index.md",
         "physics/interactions/magnetoelastic/index.md",
-        "physics/interactions/magnetoelastic/boundary-conditions-and-meshing.md",
-        "physics/interactions/magnetoelastic/numerical-methods-and-libraries.md",
         "physics/interactions/spin-transfer-torque/index.md",
         "physics/interactions/spin-orbit-torque/index.md",
         "physics/interactions/drift-diffusion-spin-torque/index.md",
@@ -121,10 +119,6 @@ DMI_SUBPAGES = (
     "validation",
 )
 ANISOTROPY_SUBPAGES = ("uniaxial", "cubic")
-MAGNETOELASTIC_SUBPAGES = (
-    "boundary-conditions-and-meshing",
-    "numerical-methods-and-libraries",
-)
 
 _CANONICAL_INTERACTION_PATHS = {
     "exchange": "physics/interactions/exchange/index.md",
@@ -222,8 +216,6 @@ REFERENCE_PAGE_TITLES = {
     "physics/interactions/dmi/boundary-conditions.md": "DMI boundary conditions",
     "physics/interactions/dmi/validation.md": "DMI validation",
     "physics/interactions/magnetoelastic/index.md": "Magnetoelastic interaction",
-    "physics/interactions/magnetoelastic/boundary-conditions-and-meshing.md": "Magnetoelastic boundary conditions and spatial meshing",
-    "physics/interactions/magnetoelastic/numerical-methods-and-libraries.md": "Magnetoelastic numerical methods, HPC optimization, and solver libraries",
     "physics/interactions/spin-transfer-torque/index.md": "Spin-transfer torque",
     "physics/interactions/spin-orbit-torque/index.md": "Spin-orbit torque",
     "physics/interactions/drift-diffusion-spin-torque/index.md": "Spin Hall drift-diffusion transport",
@@ -610,9 +602,6 @@ PAGE_SPECS: tuple[PageSpec, ...] = (
     ),
     *_interaction_subtree("anisotropy", "Anisotropy", ANISOTROPY_SUBPAGES),
     *_interaction_subtree("dmi", "DMI", DMI_SUBPAGES),
-    *_interaction_subtree(
-        "magnetoelastic", "Magnetoelastic", MAGNETOELASTIC_SUBPAGES
-    ),
     *(
             (_reference if f"physics/interactions/{slug}/index.md" in PHYSICS_REFERENCE_PAGES else _scaffold)(
             f"physics/interactions/{slug}/index.md",
@@ -625,7 +614,7 @@ PAGE_SPECS: tuple[PageSpec, ...] = (
             ),
         )
         for slug in INTERACTION_SLUGS
-        if slug not in {"exchange", "demagnetization", "anisotropy", "dmi", "magnetoelastic"}
+        if slug not in {"exchange", "demagnetization", "anisotropy", "dmi"}
     ),
     _reference(
         "numerical-methods/index.md",

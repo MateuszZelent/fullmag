@@ -1,10 +1,10 @@
 {
-  "document": {"path": "public_docs/site/numerical-methods/relaxation/llg-relaxation.md", "reviewed_revision": "5e99782acbb7fb3f65d0cad872e102bf67733103"},
+  "document": {"path": "public_docs/site/numerical-methods/relaxation/llg-relaxation.md", "reviewed_revision": "752450f8d259ab97c76c36fe666d5474b02abe9a"},
   "backend_matrix": [
-    {"solver": "FEM", "device": "CPU", "status": "source-backed"},
-    {"solver": "FEM", "device": "GPU", "status": "source-backed", "reason": "Native GPU sources exist; executed-device qualification is reported separately."},
-    {"solver": "FDM", "device": "CPU", "status": "source-backed"},
-    {"solver": "FDM", "device": "GPU", "status": "source-backed", "reason": "CUDA path exists; device availability and parity evidence are separate gates."}
+    {"solver": "FEM", "device": "CPU", "status": "implemented"},
+    {"solver": "FEM", "device": "GPU", "status": "implemented"},
+    {"solver": "FDM", "device": "CPU", "status": "implemented"},
+    {"solver": "FDM", "device": "GPU", "status": "implemented"}
   ],
   "equations": [
     {"id": "eq-relax-llg-damping", "symbols": ["m", "gamma0", "alpha", "H_eff"], "sources": ["physics-llg", "runner-mode"]},
@@ -19,7 +19,7 @@
     {"id": "Ms", "latex": "M_s", "meaning": "saturation magnetization", "si_unit": "\\mathrm{A\\,m^{-1}}"},
     {"id": "H_eff", "latex": "\\mathbf H_{\\mathrm{eff}}", "meaning": "total effective magnetic field", "si_unit": "\\mathrm{A\\,m^{-1}}"},
     {"id": "E", "latex": "E", "meaning": "total micromagnetic energy", "si_unit": "\\mathrm{J}"},
-    {"id": "gamma0", "latex": "\\gamma_0", "meaning": "Fullmag reduced gyromagnetic ratio", "si_unit": "\\mathrm{m\\,A^{-1}\\,s^{-1}}"},
+    {"id": "gamma0", "latex": "\\gamma_0", "meaning": "FullMag reduced gyromagnetic ratio", "si_unit": "\\mathrm{m\\,A^{-1}\\,s^{-1}}"},
     {"id": "alpha", "latex": "\\alpha", "meaning": "Gilbert damping parameter", "si_unit": "1"},
     {"id": "t", "latex": "t", "meaning": "relaxation integration coordinate", "si_unit": "\\mathrm{s}"},
     {"id": "tau", "latex": "\\boldsymbol\\tau_i", "meaning": "local effective-field torque residual", "si_unit": "\\mathrm{A\\,m^{-1}}"},
@@ -33,21 +33,21 @@
     {"id": "dt_min", "latex": "\\Delta t_{\\min}", "meaning": "adaptive lower timestep bound", "si_unit": "\\mathrm{s}"},
     {"id": "dt_max", "latex": "\\Delta t_{\\max}", "meaning": "adaptive upper timestep bound", "si_unit": "\\mathrm{s}"},
     {"id": "shrink_limit", "latex": "q_{\\min}", "meaning": "minimum adaptive step-size factor", "si_unit": "1"},
-    {"id": "growth_limit", "latex": "q_{\\max}", "meaning": "maximum adaptive step-size factor", "si_unit": "1"}
-    ,{"id": "e", "latex": "\\mathbf e_i", "meaning": "embedded high-minus-low vector error", "si_unit": "1"}
-    ,{"id": "k_stage", "latex": "\\mathbf k_{s,i}", "meaning": "stage right-hand side", "si_unit": "\\mathrm{s^{-1}}"}
-    ,{"id": "b_hi", "latex": "b_s^{\\mathrm{hi}}", "meaning": "high-order tableau weight", "si_unit": "1"}
-    ,{"id": "b_lo", "latex": "b_s^{\\mathrm{lo}}", "meaning": "low-order tableau weight", "si_unit": "1"}
-    ,{"id": "S", "latex": "S", "meaning": "number of stages in the embedded tableau", "si_unit": "1"}
-    ,{"id": "m_old", "latex": "\\mathbf m_i^{\\mathrm{old}}", "meaning": "state at the beginning of the attempted step", "si_unit": "1"}
-    ,{"id": "m_high", "latex": "\\mathbf m_i^{\\mathrm{high}}", "meaning": "high-order candidate state", "si_unit": "1"}
-    ,{"id": "atol", "latex": "\\mathrm{atol}", "meaning": "absolute normalized-state error scale", "si_unit": "1"}
-    ,{"id": "rtol", "latex": "\\mathrm{rtol}", "meaning": "relative normalized-state error scale", "si_unit": "1"}
-    ,{"id": "sigma", "latex": "\\sigma_i", "meaning": "mixed absolute/relative local error scale", "si_unit": "1"}
-    ,{"id": "active_set", "latex": "\\mathcal A", "meaning": "active magnetic cell/node index set", "si_unit": "1"}
-    ,{"id": "rho_previous", "latex": "\\rho_{k-1}", "meaning": "previous accepted non-zero error ratio", "si_unit": "1"}
-    ,{"id": "q_raw", "latex": "q_k", "meaning": "raw adaptive step-size factor", "si_unit": "1"}
-    ,{"id": "q_clamped", "latex": "\\widehat q_k", "meaning": "clamped adaptive step-size factor", "si_unit": "1"}
+    {"id": "growth_limit", "latex": "q_{\\max}", "meaning": "maximum adaptive step-size factor", "si_unit": "1"},
+    {"id": "e", "latex": "\\mathbf e_i", "meaning": "embedded high-minus-low vector error", "si_unit": "1"},
+    {"id": "k_stage", "latex": "\\mathbf k_{s,i}", "meaning": "stage right-hand side", "si_unit": "\\mathrm{s^{-1}}"},
+    {"id": "b_hi", "latex": "b_s^{\\mathrm{hi}}", "meaning": "high-order tableau weight", "si_unit": "1"},
+    {"id": "b_lo", "latex": "b_s^{\\mathrm{lo}}", "meaning": "low-order tableau weight", "si_unit": "1"},
+    {"id": "S", "latex": "S", "meaning": "number of stages in the embedded tableau", "si_unit": "1"},
+    {"id": "m_old", "latex": "\\mathbf m_i^{\\mathrm{old}}", "meaning": "state at the beginning of the attempted step", "si_unit": "1"},
+    {"id": "m_high", "latex": "\\mathbf m_i^{\\mathrm{high}}", "meaning": "high-order candidate state", "si_unit": "1"},
+    {"id": "atol", "latex": "\\mathrm{atol}", "meaning": "absolute normalized-state error scale", "si_unit": "1"},
+    {"id": "rtol", "latex": "\\mathrm{rtol}", "meaning": "relative normalized-state error scale", "si_unit": "1"},
+    {"id": "sigma", "latex": "\\sigma_i", "meaning": "mixed absolute/relative local error scale", "si_unit": "1"},
+    {"id": "active_set", "latex": "\\mathcal A", "meaning": "active magnetic cell/node index set", "si_unit": "1"},
+    {"id": "rho_previous", "latex": "\\rho_{k-1}", "meaning": "previous accepted non-zero error ratio", "si_unit": "1"},
+    {"id": "q_raw", "latex": "q_k", "meaning": "raw adaptive step-size factor", "si_unit": "1"},
+    {"id": "q_clamped", "latex": "\\widehat q_k", "meaning": "clamped adaptive step-size factor", "si_unit": "1"}
   ],
   "sources": [
     {"id": "physics-llg", "path": "packages/fullmag-py/src/fullmag/model/study.py", "symbol": "class Relaxation", "responsibility": "Canonical relaxation equilibrium payload and algorithm semantics."},
@@ -62,6 +62,7 @@
     {"id": "fem-adaptive-native", "path": "backends/fem/cpu/mfem/integrators/adaptive_dt.cpp", "symbol": "compute_adaptive_error_norm", "responsibility": "Native FEM nodewise mixed error norm and fail-closed guards."},
     {"id": "fem-adaptive-native-controller", "path": "backends/fem/cpu/mfem/integrators/adaptive_dt.cpp", "symbol": "adaptive_pi_step", "responsibility": "Native FEM history-aware scalar controller and rejection accounting."},
     {"id": "fem-adaptive-gpu", "path": "backends/fem/gpu/cuda/integrators/rk/adaptive_error_kernels.cu", "symbol": "adaptive_error_norm_blocks_kernel", "responsibility": "Native FEM GPU device reduction of the nodewise error norm."},
+    {"id": "fem-adaptive-gpu-pi", "path": "backends/fem/gpu/cuda/integrators/rk/rk_adaptive_runtime.cu", "symbol": "gpu_rk_adaptive_pi_step", "responsibility": "Native FEM GPU device-lane PI decision and history tracking."},
     {"id": "fdm-adaptive", "path": "crates/fullmag-engine/src/fdm/cpu/integrators.rs", "symbol": "max_error_norm_buf", "responsibility": "FDM CPU cell error norm, absolute/mixed tolerance mode, and reduction."},
     {"id": "fdm-adaptive-controller", "path": "crates/fullmag-engine/src/fdm/cpu/integrators.rs", "symbol": "decide_adaptive_step", "responsibility": "FDM CPU history-aware bounded proposal and dt-min decision."},
     {"id": "fdm-adaptive-gpu", "path": "backends/fdm/gpu/cuda/runtime/reductions_fp64.cu", "symbol": "reduce_adaptive_error_policy", "responsibility": "FDM GPU reduction and typed dt-min failure."},
@@ -70,10 +71,10 @@
   ],
   "public_api": {
     "parameters": [
-      {"python": "StudyStagesBuilder.add_relax(algorithm=...)", "type": "str", "default": "\"llg_overdamped\"", "si_unit": "$1$", "validation": "one supported algorithm identifier", "meaning": "selects relaxation realization", "backend_support": "FEM/FDM; planner decides lane", "problem_ir": "study.algorithm"},
-      {"python": "StudyStagesBuilder.add_relax(tolT=...)", "type": "float", "default": "$10^{-6}$", "si_unit": "$\\mathrm{T}$", "validation": "finite and positive; mutually exclusive with `tolA`", "meaning": "user torque threshold", "backend_support": "FEM/FDM relaxation lanes", "problem_ir": "study.stop.torque_tolerance_apm"},
-      {"python": "StudyStagesBuilder.add_relax(tolA=...)", "type": "float", "default": "canonical default equivalent", "si_unit": "$\\mathrm{A\\,m^{-1}}$", "validation": "finite and positive; mutually exclusive with `tolT`", "meaning": "field-residual threshold", "backend_support": "FEM/FDM relaxation lanes", "problem_ir": "study.stop.torque_tolerance_apm"},
-      {"python": "StudyStagesBuilder.add_relax(max_steps=...)", "type": "int", "default": "$50,000$", "si_unit": "$1$", "validation": "positive integer", "meaning": "hard iteration budget", "backend_support": "FEM/FDM relaxation lanes", "problem_ir": "study.stop.max_steps"}
+      {"python": "StudyStagesBuilder.add_relax(algorithm=...)", "type": "str", "default": "\"llg_overdamped\"", "si_unit": "$1$", "validation": "supported algorithm identifier", "meaning": "selects relaxation realization", "backend_support": "FEM/FDM CPU/GPU", "problem_ir": "study.algorithm"},
+      {"python": "StudyStagesBuilder.add_relax(tolT=...)", "type": "float", "default": "$10^{-6}$", "si_unit": "$\\mathrm{T}$", "validation": "finite and positive; exclusive with `tolA`", "meaning": "user torque threshold", "backend_support": "FEM/FDM lanes", "problem_ir": "study.stop.torque_tolerance_apm"},
+      {"python": "StudyStagesBuilder.add_relax(tolA=...)", "type": "float", "default": "canonical equivalent", "si_unit": "$\\mathrm{A\\,m^{-1}}$", "validation": "finite and positive; exclusive with `tolT`", "meaning": "field-residual threshold", "backend_support": "FEM/FDM lanes", "problem_ir": "study.stop.torque_tolerance_apm"},
+      {"python": "StudyStagesBuilder.add_relax(max_steps=...)", "type": "int", "default": "$50{,}000$", "si_unit": "$1$", "validation": "positive integer", "meaning": "hard accepted-step budget", "backend_support": "FEM/FDM lanes", "problem_ir": "study.stop.max_steps"}
     ]
   }
 }

@@ -1,7 +1,7 @@
 {
   "document": {
     "path": "public_docs/site/python-api/discretization/hybrid.md",
-    "reviewed_revision": "ab3c8802a691a535063102c12f9a79bb0043b367"
+    "reviewed_revision": "752450f8d259ab97c76c36fe666d5474b02abe9a"
   },
   "backend_matrix": [
     {
@@ -47,7 +47,7 @@
         "python": "Hybrid.demag",
         "type": "`str`",
         "default": "`required`",
-        "si_unit": "1",
+        "si_unit": "$1$",
         "validation": "Non-empty",
         "meaning": "Hybrid demag strategy",
         "backend_support": "FEM/FDM CPU/GPU; planner and runtime capability checks remain authoritative",
@@ -57,7 +57,7 @@
         "python": "DiscretizationHints.fdm",
         "type": "`FDM | None`",
         "default": "`None`",
-        "si_unit": "1",
+        "si_unit": "$1$",
         "validation": "`FDM` instance or `None`",
         "meaning": "FDM-lane discretization hints",
         "backend_support": "FDM CPU/GPU; FEM lanes are not applicable",
@@ -67,7 +67,7 @@
         "python": "DiscretizationHints.fem",
         "type": "`FEM | None`",
         "default": "`None`",
-        "si_unit": "1",
+        "si_unit": "$1$",
         "validation": "`FEM` instance or `None`",
         "meaning": "FEM-lane discretization hints",
         "backend_support": "FEM CPU/GPU; FDM lanes are not applicable",
@@ -77,7 +77,7 @@
         "python": "DiscretizationHints.hybrid",
         "type": "`Hybrid | None`",
         "default": "`None`",
-        "si_unit": "1",
+        "si_unit": "$1$",
         "validation": "`Hybrid` instance or `None`",
         "meaning": "Mixed-lane discretization hints",
         "backend_support": "FEM/FDM CPU/GPU; planner and runtime capability checks remain authoritative",

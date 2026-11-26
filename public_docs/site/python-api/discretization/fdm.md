@@ -11,7 +11,7 @@ owner: fullmag-public-docs
 
 (python-api-discretization-fdm-problem-statement)=
 ## Contract
-This page records the current public Python authoring contract and canonical lowering; it does not redefine solver physics.
+This page records the current public Python authoring contract and canonical lowering for `FDM` and `FDMDemag`; it does not redefine solver physics. For CUDA and CPU FDM acceleration details (batched cuFFT, device-resident PG-BB, and fused kernels), see {ref}`numerical-methods-performance-fdm-core`.
 
 (python-api-discretization-fdm-governing-equations)=
 ## Governing equations
@@ -27,16 +27,19 @@ Constructor checks run immediately. Lowering and planning additionally check mes
 
 (python-api-discretization-fdm-python-api)=
 ## Python API
+
 | Python | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR |
 |---|---|---|---|---|---|---|---|
-| `FDM.cell` | `tuple[float, float, float] \| None` | `None` | $\mathrm{m}$ | Canonical uniform cell size; it also becomes `default_cell` when supplied. | Canonical uniform cell size; it also becomes `default_cell` when supplied. | FEM/FDM CPU/GPU; planner checks combinations | `backend_policy.discretization_hints.fdm.cell` |
-| `FDM.default_cell` | `tuple[float, float, float] \| None` | `None` | $\mathrm{m}$ | Default cell size when per-magnet grids are present. | Default cell size when per-magnet grids are present. | FEM/FDM CPU/GPU; planner checks combinations | `backend_policy.discretization_hints.fdm.default_cell` |
-| `FDM.per_magnet` | `Mapping[str, Any] \| None` | `None` | $1$ | Optional explicit per-magnet FDM grids. | Optional explicit per-magnet FDM grids. | FEM/FDM CPU/GPU; planner checks combinations | `backend_policy.discretization_hints.fdm.per_magnet` |
-| `FDM.demag` | `FDMDemag \| None` | `None` | $1$ | Demagnetization hint. | Demagnetization hint. | FEM/FDM CPU/GPU; planner checks combinations | `backend_policy.discretization_hints.fdm.demag` |
-| `FDM.boundary_correction` | `str \| None` | `None` | $1$ | Optional `T0`/`T1`-family sub-cell policy. Support differs by precision and device. | Optional `T0`/`T1`-family sub-cell policy. Support differs by precision and device. | FEM/FDM CPU/GPU; planner checks combinations | `backend_policy.discretization_hints.fdm.boundary_correction` |
-| `FDM.boundary_phi_floor` | `float \| None` | `None` | $1$ | Optional lower bound $\varphi_{\mathrm{floor}}$ with strict domain $0<\varphi_{\mathrm{floor}}<1$. | Optional lower bound $\varphi_{\mathrm{floor}}$ with strict domain $0<\varphi_{\mathrm{floor}}<1$. | FEM/FDM CPU/GPU; planner checks combinations | `backend_policy.discretization_hints.fdm.boundary_phi_floor` |
-| `FDM.boundary_delta_min` | `float \| None` | `None` | $\mathrm{m}$ | Optional T1 distance floor $\delta_{\min}\geq0$; zero is accepted. | Optional T1 distance floor $\delta_{\min}\geq0$; zero is accepted. | FEM/FDM CPU/GPU; planner checks combinations | `backend_policy.discretization_hints.fdm.boundary_delta_min` |
-
+| `FDM.cell` | `tuple[float, float, float] \| None` | `None` | $\mathrm{m}$ | Three finite positive values; cannot coexist with `default_cell`. | Canonical uniform cell size; also populates `default_cell` when supplied. | FDM CPU/GPU; planner checks combinations | `backend_policy.discretization_hints.fdm.cell` |
+| `FDM.default_cell` | `tuple[float, float, float] \| None` | `None` | $\mathrm{m}$ | Three finite positive values; required unless `per_magnet` is nonempty. | Default cell size when per-magnet grids are present. | FDM CPU/GPU; planner checks combinations | `backend_policy.discretization_hints.fdm.default_cell` |
+| `FDM.per_magnet` | `dict[str, FDMGrid] \| None` | `None` | $1$ | Nonempty string keys and `FDMGrid` values. | Optional explicit per-magnet FDM grids. | FDM CPU/GPU; planner checks combinations | `backend_policy.discretization_hints.fdm.per_magnet` |
+| `FDM.demag` | `FDMDemag \| None` | `None` | $1$ | Typed `FDMDemag` policy. | Demagnetization strategy, common-grid, and FFT backend hint. | FDM CPU/GPU; planner checks combinations | `backend_policy.discretization_hints.fdm.demag` |
+| `FDM.projection_policy` | `str \| None` | `None` | $1$ | `None` or `"unit_sphere"`. | Projected-RK state constraint policy; `None` selects the qualified default. | FDM CPU/GPU; planner checks combinations | `backend_policy.discretization_hints.fdm.projection_policy` |
+| `FDM.boundary_correction` | `str \| None` | `None` | $1$ | `"none"`, `"volume"`, or `"full"`. | Optional `T0`/`T1`-family sub-cell policy; support differs by precision and device. | FDM CPU/GPU; planner checks combinations | `backend_policy.discretization_hints.fdm.boundary_correction` |
+| `FDM.boundary_phi_floor` | `float \| None` | `None` | $1$ | Strict domain $0<\varphi_{\mathrm{floor}}<1$. | Optional lower volume-fraction bound $\varphi_{\mathrm{floor}}$. | FDM CPU/GPU; planner checks combinations | `backend_policy.discretization_hints.fdm.boundary_phi_floor` |
+| `FDM.boundary_delta_min` | `float \| None` | `None` | $\mathrm{m}$ | Nonnegative $\delta_{\min}\geq0$; zero is accepted. | Optional T1 distance floor $\delta_{\min}$. | FDM CPU/GPU; planner checks combinations | `backend_policy.discretization_hints.fdm.boundary_delta_min` |
+| `FDMDemag.common_cell_size` | `tuple[float, float, float] \| None` | `None` | $\mathrm{m}$ | Three finite positive values; mutually exclusive with `common_cells` and `common_cells_xy`. | Explicit 3-D common convolution-grid cell size. | FDM CPU/GPU multilayer lanes | `backend_policy.discretization_hints.fdm.demag.common_cell_size` |
+| `FDMDemag.fft_backend` | `Literal["auto", "rustfft", "fftw", "mkl", "cufft"]` | `"auto"` | $1$ | One of `"auto"`, `"rustfft"`, `"fftw"`, `"mkl"`, or `"cufft"`. | Requested FFT realization; unsupported realizations are preserved in IR and rejected fail-closed by capability planning. | FDM CPU/GPU; capability-gated per device | `backend_policy.discretization_hints.fdm.demag.fft_backend` |
 
 ### Complete FDM stage scenario
 
@@ -72,15 +75,15 @@ Requested intent is preserved in Python and IR. Resolved execution is selected b
 
 (python-api-discretization-fdm-discrete-realization)=
 ## Discrete realization
-This page owns authoring and lowering only; numerical realization belongs to solver-lane documentation.
+This page owns authoring and lowering only; numerical realization belongs to solver-lane documentation and {ref}`numerical-methods-performance-fdm-core`.
 
 (python-api-discretization-fdm-implementation-mapping)=
 ## Implementation mapping
-`FDM` is implemented in `packages/fullmag-py/src/fullmag/model/discretization.py` (`class FDM`).
+`FDM` and `FDMDemag` are implemented in `packages/fullmag-py/src/fullmag/model/discretization.py` (`class FDM`, `class FDMDemag`).
 
 (python-api-discretization-fdm-validation)=
 ## Validation
-Contract tests compare this inventory with live `FDM` signatures and `ProblemIR` lowering.
+Contract tests compare this inventory with live `FDM` and `FDMDemag` signatures and `ProblemIR` lowering.
 
 (python-api-discretization-fdm-limitations)=
 ## Limitations
@@ -92,19 +95,21 @@ No physical model is introduced. Primary references belong to consuming interact
 
 ## Control Room support
 
-Status: Advertised global/object mesh controls are partial; compatibility-only fields remain Python-only.
+Interactive FDM structured-grid sizing is live in `apps/control-room/src/modules/inspector/inspectors/mesh/MeshRootSpec.tsx` (`MeshRootInspectorSpecPanel`), providing cell-size and cell-count editing, single 3-D vs multilayer Z-slice mode, live $l_{\mathrm{ex}}$ resolution checks, 7-smooth FFT snapping, and Save & Build Grid. Per-grid diagnostics are inspected through `apps/control-room/src/modules/inspector/inspectors/mesh/fdm/FdmGridSpec.tsx` (`FdmGridInspectorSpecPanel`). Low-level fields without a dedicated UI widget (such as `projection_policy`, `fft_backend`, and embedded-boundary floors) remain Python-only.
 
 | Python/API surface | Control Room path | Status | Transaction |
 |---|---|---|---|
-| Parameters documented on this page | `Model Explorer -> Study or Objects -> <object> -> Mesh` | `partial` | Apply mesh policy or Build Mesh; mesh resources become stale |
-| Parameters without a dedicated UI field | `Model Explorer -> Study or Objects -> <object> -> Mesh` | `Python-only` | Authored in Python scripts |
+| Default FDM grid sizing and build | `Model Explorer -> Mesh` (`MeshRootSpec.tsx`) | `supported` | Edit cell size or cell count and run Save & Build Grid |
+| Realized grid, layer, and cell inspection | `Model Explorer -> Mesh -> <grid>` (`FdmGridSpec.tsx`) | `inspection-only` | Read-only grid dimensions, spacing, origins, and masks |
+| `projection_policy`, `fft_backend`, boundary-correction floors | — | `Python-only` | Authored in Python scripts |
 
-Discretization parameters not represented in the mesh panels are configured in Python scripts.
-See the [Control Room capability register](/frontend/capability-register) for UI coverage details.
-Frontend component: `apps/control-room/src/modules/inspector/panels/ObjectMeshPolicyPanel.tsx` (`ObjectMeshPolicyPanel`).
+See {doc}`/frontend/meshing/fdm-grid-view` and the [Control Room capability register](/frontend/capability-register) for UI coverage details.
 
 (python-api-discretization-fdm-source-code-index)=
 ## Source-code index
+
 | Claim | Path | Stable symbol | Responsibility | Evidence |
 |---|---|---|---|---|
-| Constructor, validation, lowering | [`packages/fullmag-py/src/fullmag/model/discretization.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/discretization.py#L19) | [`class FDM`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/discretization.py#L19) | Canonical Python API behavior | Signature and IR lowering contract tests |
+| Constructor, validation, lowering | [`packages/fullmag-py/src/fullmag/model/discretization.py`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/model/discretization.py#L220) | [`class FDM`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/model/discretization.py#L220) | Canonical FDM Python API behavior and lowering | Signature and IR lowering contract tests |
+| FDM demag policy and FFT backend | [`packages/fullmag-py/src/fullmag/model/discretization.py`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/model/discretization.py#L51) | [`class FDMDemag`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/model/discretization.py#L51) | Strategy, mode, common-grid sizing, and `fft_backend` validation/lowering | Signature and IR lowering contract tests |
+| Control Room interactive FDM grid sizing | [`apps/control-room/src/modules/inspector/inspectors/mesh/MeshRootSpec.tsx`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/apps/control-room/src/modules/inspector/inspectors/mesh/MeshRootSpec.tsx#L52) | [`MeshRootInspectorSpecPanel`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/apps/control-room/src/modules/inspector/inspectors/mesh/MeshRootSpec.tsx#L52) | Interactive FDM cell-size/count sizing and grid build workflow | Control Room mesh inspector tests |

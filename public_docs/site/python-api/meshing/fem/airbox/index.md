@@ -81,12 +81,12 @@ film.mesh(minimum_element_size=2.5 * nm, maximum_element_size=5 * nm)
 study.exchange()
 study.demag(model="airbox", variant="robin")
 study.build_domain_mesh()
-study.stages.add_relax(stage_id="equilibrium", tolT=1.0e-6)
+study.stages.add_relax(stage_id="equilibrium", algorithm="projected_gradient_bb", tolT=1.0e-6)
 ```
 
 ## 4. Exact API
 
-`study.universe.mesh(**kwargs)` (`StudyUniverseMeshHandle`, `world.py`):
+`study.universe.mesh(**kwargs)` (`StudyUniverseHandle.mesh`, `packages/fullmag-py/src/fullmag/world.py`):
 
 | Parameter | Type | Default | Unit | Validation | Meaning |
 |---|---|---|---|---|---|
@@ -96,7 +96,9 @@ study.stages.add_relax(stage_id="equilibrium", tolT=1.0e-6)
 | `grading` | `str \| None` | `None` | $1$ | e.g. `"geometric"`, `"linear"` | grading type |
 
 Advanced policy (universe resource advanced policy) additionally covers curvature
-and narrow-region resolution.
+and narrow-region resolution. For FEM GPU demagnetization solver strategies
+(`cg_amg` vs `cudss`) on airbox domains, see
+{ref}`numerical-methods-performance-fem-gpu-demag`.
 
 Failure behavior: `cell_size` (FDM) cannot be combined with FEM controls and vice
 versa → `ValueError`; non-positive sizes → `ValueError`. Values are **targets**,
@@ -113,7 +115,7 @@ Model Explorer
 └── Universe / Airbox      → selection kinds: airbox.* 
 ```
 
-The **Airbox Mesh Parameters** inspector (`AirboxMeshParametersPanel`) edits air sizing, growth rate, grading, curvature, and narrow-region resolution, and exposes **Apply Airbox Policy** and **Apply & Build Shared-Domain Mesh** (`mesh.build-shared-domain`) alongside read-only `effective_config`; exterior geometry (size/padding/center) lives in the universe geometry panels; the magnetostatic realization choice (`study.demag`) is made in the Physics/Demag panel. Full description: {doc}`../../../../frontend/meshing/airbox-mesh`.
+The **Airbox Mesh Parameters** inspector (`apps/control-room/src/modules/inspector/inspectors/universe/AirboxMeshSizingSpecs.tsx`, `AirboxMeshParametersInspectorSpecPanel`) edits air sizing, growth rate, grading, curvature, and narrow-region resolution, and exposes **Apply Airbox Policy** and **Apply & Build Shared-Domain Mesh** (`mesh.build-shared-domain`) alongside read-only `effective_config`; exterior geometry (size/padding/center) lives in `apps/control-room/src/modules/inspector/inspectors/universe/UniverseAndAirboxSpec.tsx` (`AirboxRootInspectorSpecPanel`) and `apps/control-room/src/modules/inspector/inspectors/universe/AirboxMeshOverviewSpec.tsx`; the magnetostatic realization choice (`study.demag`) is made in the Physics/Demag panel. Full description: {doc}`../../../../frontend/meshing/airbox-mesh`.
 
 ```{image} /_static/images/ui/inspector-fem-mesh-and-airbox.png
 :alt: Semantic Inspector panel configuring FEM airbox padding, element sizing, and grading
@@ -148,9 +150,9 @@ The **Airbox Mesh Parameters** inspector (`AirboxMeshParametersPanel`) edits air
 
 | Claim | Path | Symbol | Evidence |
 |---|---|---|---|
-| air sizing | `packages/fullmag-py/src/fullmag/world.py` | `StudyUniverseMeshHandle.mesh` | validation and `_configure_study_universe` |
-| universe geometry | `packages/fullmag-py/src/fullmag/world.py` | `StudyBuilder.universe` | facade signature |
-| FDM/FEM mutual exclusion | `packages/fullmag-py/src/fullmag/world.py` | `StudyUniverseMeshHandle.mesh` | `cell_size` vs FEM controls branch |
+| air sizing | [`packages/fullmag-py/src/fullmag/world.py`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/world.py#L5730) | `StudyUniverseHandle.mesh` | validation and `_configure_study_universe` |
+| universe geometry | [`packages/fullmag-py/src/fullmag/world.py`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/world.py#L5693) | `StudyUniverseHandle.__call__` | facade signature |
+| FDM/FEM mutual exclusion | [`packages/fullmag-py/src/fullmag/world.py`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/world.py#L5751) | `StudyUniverseHandle.mesh` | `cell_size` vs FEM controls branch |
 
 ```{toctree}
 :maxdepth: 2

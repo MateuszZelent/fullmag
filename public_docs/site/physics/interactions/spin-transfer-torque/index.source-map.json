@@ -1,6 +1,7 @@
 {
   "document": {
-    "reviewed_revision": "ab3c8802a691a535063102c12f9a79bb0043b367",
+    "reviewed_revision": "752450f8d259ab97c76c36fe666d5474b02abe9a",
+    "reviewed_at": "2026-11-26",
     "path": "public_docs/site/physics/interactions/spin-transfer-torque/index.md",
     "title": "Spin-transfer torque",
     "interaction": "spin transfer torque"
@@ -10,38 +11,85 @@
       "solver": "FDM",
       "device": "CPU",
       "status": "partial",
-      "reason": "Authoring, planning, runtime, and scientific qualification are reported separately on the page."
+      "reason": "Reference Slonczewski and Zhang-Li evaluators execute with SP5 and analytic checks; target/source/formula-version gates apply."
     },
     {
       "solver": "FDM",
       "device": "GPU",
       "status": "partial",
-      "reason": "Device source presence does not replace executed-device evidence and precision-specific qualification."
+      "reason": "Native CUDA STT kernels execute with fused FP64 RK45 Slonczewski accumulation and dedicated Zhang-Li stencils; device/precision qualification remains separate."
     },
     {
       "solver": "FEM",
       "device": "CPU",
       "status": "partial",
-      "reason": "The exact weak/discrete realization and bounded capability envelope remain lane-specific."
+      "reason": "MFEM Slonczewski and Zhang-Li weak-gradient realizations exist with bounded target and current-source scope."
     },
     {
       "solver": "FEM",
       "device": "GPU",
       "status": "partial",
-      "reason": "Strict device residency and executed-device qualification remain separate evidence gates."
+      "reason": "Native CUDA Slonczewski and Zhang-Li RHS kernels exist; strict device residency and broad qualification remain separate gates."
     }
   ],
   "sources": [
-    {
-      "id": "python-owner",
-      "path": "packages/fullmag-py/src/fullmag/model/spin_torque.py",
-      "symbol": "class SlonczewskiSTT",
-      "responsibility": "Own the public interaction constructor, validation, or canonical IR lowering boundary."
-    }
+    {"id": "python-slonczewski", "path": "packages/fullmag-py/src/fullmag/model/spin_torque.py", "symbol": "class SlonczewskiSTT", "responsibility": "Slonczewski constructor, formula version, and IR lowering."},
+    {"id": "python-zhang-li", "path": "packages/fullmag-py/src/fullmag/model/spin_torque.py", "symbol": "class ZhangLiSTT", "responsibility": "Zhang-Li constructor, current-source binding, and IR lowering."},
+    {"id": "python-toggle", "path": "packages/fullmag-py/src/fullmag/world.py", "symbol": "set_spin_torque_enabled", "responsibility": "Stage-level spin-torque activation toggle."},
+    {"id": "planner-stt", "path": "crates/fullmag-plan/src/spin_torque.rs", "symbol": "resolve_legacy_spin_torque", "responsibility": "Variant, current-source, target, and formula-version planner gate."},
+    {"id": "fdm-cpu-sl", "path": "crates/fullmag-engine/src/fdm/cpu/fields/direct_torques.rs", "symbol": "slonczewski_torque_from_config", "responsibility": "FDM CPU reference Slonczewski evaluator."},
+    {"id": "fdm-cpu-zl", "path": "crates/fullmag-engine/src/fdm/cpu/fields/direct_torques.rs", "symbol": "zhang_li_stt_torque", "responsibility": "FDM CPU reference Zhang-Li evaluator."},
+    {"id": "fdm-gpu-fused", "path": "backends/fdm/gpu/cuda/integrators/prescribed_spin_torques_fp64.cuh", "symbol": "add_prescribed_spin_torques_fp64", "responsibility": "FDM GPU fused FP64 RK45 Slonczewski and SOT device helper."},
+    {"id": "fem-cpu-sl", "path": "backends/fem/cpu/mfem/interactions/stt_slonczewski.cpp", "symbol": "add_slonczewski_stt_rhs_aos", "responsibility": "FEM CPU Slonczewski realization."},
+    {"id": "fem-cpu-zl", "path": "backends/fem/cpu/mfem/interactions/stt_zhang_li.hpp", "symbol": "prepare_zhang_li_stt_workspace", "responsibility": "FEM CPU Zhang-Li weak-gradient workspace and RHS."},
+    {"id": "fem-gpu-sl", "path": "backends/fem/gpu/cuda/interactions/stt/stt_kernels.cu", "symbol": "fullmag_cuda_add_slonczewski_stt_rhs", "responsibility": "FEM GPU CUDA Slonczewski RHS launch."},
+    {"id": "fem-gpu-zl", "path": "backends/fem/gpu/cuda/interactions/stt/stt_kernels.cu", "symbol": "fullmag_cuda_add_zhang_li_stt_rhs", "responsibility": "FEM GPU CUDA Zhang-Li RHS launch."}
   ],
-  "symbols": [],
-  "equations": [],
+  "symbols": [
+    {"id": "m", "latex": "$\\mathbf m$", "meaning": "unit magnetization vector", "si_unit": "$1$"},
+    {"id": "Jc", "latex": "$\\mathbf J_c$", "meaning": "signed conventional charge-current density", "si_unit": "$\\mathrm{A\\,m^{-2}}$"},
+    {"id": "Jperp", "latex": "$J_\\perp$", "meaning": "signed current density normal to stack", "si_unit": "$\\mathrm{A\\,m^{-2}}$"},
+    {"id": "nstack", "latex": "$\\hat{\\mathbf n}_{\\mathrm{stack}}$", "meaning": "unit stack normal", "si_unit": "$1$"},
+    {"id": "phat", "latex": "$\\hat{\\mathbf p}$", "meaning": "spin-polarization direction", "si_unit": "$1$"},
+    {"id": "P", "latex": "$P$", "meaning": "spin polarization degree", "si_unit": "$1$"},
+    {"id": "Lambda", "latex": "$\\Lambda$", "meaning": "Slonczewski angular asymmetry parameter", "si_unit": "$1$"},
+    {"id": "eps_dl", "latex": "$\\epsilon_{\\mathrm{DL}}$", "meaning": "Slonczewski angular efficiency", "si_unit": "$1$"},
+    {"id": "eps_prime", "latex": "$\\epsilon'$", "meaning": "secondary field-like Slonczewski coefficient", "si_unit": "$1$"},
+    {"id": "beta", "latex": "$\\beta$", "meaning": "Zhang–Li non-adiabaticity", "si_unit": "$1$"},
+    {"id": "g", "latex": "$g$", "meaning": "Landé $g$-factor", "si_unit": "$1$"},
+    {"id": "muB", "latex": "$\\mu_{\\mathrm B}$", "meaning": "Bohr magneton", "si_unit": "$\\mathrm{J\\,T^{-1}}$"},
+    {"id": "gamma_e", "latex": "$\\gamma_e$", "meaning": "positive magnitude of electron gyromagnetic ratio", "si_unit": "$\\mathrm{s^{-1}\\,T^{-1}}$"},
+    {"id": "hbar", "latex": "$\\hbar$", "meaning": "reduced Planck constant", "si_unit": "$\\mathrm{J\\,s}$"},
+    {"id": "e", "latex": "$e$", "meaning": "positive elementary charge", "si_unit": "$\\mathrm{C}$"},
+    {"id": "Ms", "latex": "$M_s$", "meaning": "saturation magnetization", "si_unit": "$\\mathrm{A\\,m^{-1}}$"},
+    {"id": "tF", "latex": "$t_F$", "meaning": "physical free-layer thickness", "si_unit": "$\\mathrm{m}$"},
+    {"id": "alpha", "latex": "$\\alpha$", "meaning": "Gilbert damping", "si_unit": "$1$"},
+    {"id": "u", "latex": "$\\mathbf u$", "meaning": "spin-drift velocity", "si_unit": "$\\mathrm{m\\,s^{-1}}$"},
+    {"id": "OmegaJ", "latex": "$\\Omega_J$", "meaning": "Slonczewski base torque frequency", "si_unit": "$\\mathrm{s^{-1}}$"},
+    {"id": "OmegaDLFL", "latex": "$\\Omega_{\\mathrm{DL}},\\Omega_{\\mathrm{FL}}$", "meaning": "torque rates", "si_unit": "$\\mathrm{s^{-1}}$"},
+    {"id": "TG", "latex": "$\\mathbf T_G,\\mathbf T_{\\mathrm{explicit}}$", "meaning": "Gilbert-source and explicit RHS torques", "si_unit": "$\\mathrm{s^{-1}}$"}
+  ],
+  "equations": [
+    {"id": "eq-public-spin-transfer-torque-stt-gilbert-explicit", "symbols": ["TG", "alpha", "m"], "sources": ["fdm-cpu-sl", "fem-cpu-sl", "fdm-gpu-fused"]},
+    {"id": "eq-public-spin-transfer-torque-stt-slonczewski", "symbols": ["OmegaDLFL", "m", "phat"], "sources": ["fdm-cpu-sl", "fem-cpu-sl", "fem-gpu-sl", "fdm-gpu-fused"]},
+    {"id": "eq-public-spin-transfer-torque-stt-slonczewski-rates", "symbols": ["OmegaJ", "gamma_e", "hbar", "Jperp", "Jc", "nstack", "e", "Ms", "tF", "eps_dl", "P", "Lambda", "m", "phat"], "sources": ["python-slonczewski", "fdm-cpu-sl", "fem-cpu-sl"]},
+    {"id": "eq-public-spin-transfer-torque-stt-zhang-li-velocity", "symbols": ["u", "g", "muB", "P", "e", "Ms", "Jc"], "sources": ["python-zhang-li", "fdm-cpu-zl", "fem-cpu-zl"]},
+    {"id": "eq-public-spin-transfer-torque-stt-zhang-li", "symbols": ["u", "m", "beta"], "sources": ["fdm-cpu-zl", "fem-cpu-zl", "fem-gpu-zl"]}
+  ],
   "public_api": {
-    "parameters": []
+    "parameters": [
+      {"python": "SlonczewskiSTT.current_density", "type": "Sequence[float] | None", "default": "None", "si_unit": "$\\mathrm{A\\,m^{-2}}$", "validation": "finite 3-vector; exclusive with `current_source`", "meaning": "signed prescribed charge-current density $\\mathbf{J}_c$", "backend_support": "FDM/FEM CPU/GPU", "problem_ir": "spin_torque_modules[].current_density"},
+      {"python": "SlonczewskiSTT.spin_polarization", "type": "Sequence[float]", "default": "(0.0, 0.0, 1.0)", "si_unit": "$1$", "validation": "finite nonzero 3-vector; normalized to $\\hat{\\mathbf{p}}$", "meaning": "fixed-layer spin-polarization direction", "backend_support": "FDM/FEM CPU/GPU", "problem_ir": "spin_torque_modules[].spin_polarization"},
+      {"python": "SlonczewskiSTT.degree", "type": "float", "default": "0.4", "si_unit": "$1$", "validation": "finite in $[0, 1]$", "meaning": "spin polarization magnitude $P$", "backend_support": "FDM/FEM CPU/GPU", "problem_ir": "spin_torque_modules[].degree"},
+      {"python": "SlonczewskiSTT.lambda_asymmetry", "type": "float", "default": "1.0", "si_unit": "$1$", "validation": "finite and $\\ge 1$", "meaning": "Slonczewski angular asymmetry parameter $\\Lambda$", "backend_support": "FDM/FEM CPU/GPU", "problem_ir": "spin_torque_modules[].lambda_asymmetry"},
+      {"python": "SlonczewskiSTT.epsilon_prime", "type": "float", "default": "0.0", "si_unit": "$1$", "validation": "finite", "meaning": "secondary field-like Slonczewski coefficient $\\epsilon'$", "backend_support": "FDM/FEM CPU/GPU", "problem_ir": "spin_torque_modules[].epsilon_prime"},
+      {"python": "SlonczewskiSTT.free_layer_thickness_m", "type": "float | None", "default": "None", "si_unit": "$\\mathrm{m}$", "validation": "finite and $> 0$ when set", "meaning": "physical free-layer thickness $t_F$", "backend_support": "FDM/FEM CPU/GPU", "problem_ir": "spin_torque_modules[].free_layer_thickness_m"},
+      {"python": "SlonczewskiSTT.stack_normal", "type": "Sequence[float] | None", "default": "None", "si_unit": "$1$", "validation": "finite nonzero 3-vector when set", "meaning": "oriented unit stack normal $\\hat{\\mathbf{n}}_{\\mathrm{stack}}$", "backend_support": "canonical v2 lanes", "problem_ir": "spin_torque_modules[].stack_normal"},
+      {"python": "ZhangLiSTT.current_density", "type": "Sequence[float] | None", "default": "None", "si_unit": "$\\mathrm{A\\,m^{-2}}$", "validation": "finite 3-vector; exclusive with `current_source`", "meaning": "signed prescribed in-plane charge-current density $\\mathbf{J}_c$", "backend_support": "FDM/FEM CPU/GPU", "problem_ir": "spin_torque_modules[].current_density"},
+      {"python": "ZhangLiSTT.degree", "type": "float", "default": "0.4", "si_unit": "$1$", "validation": "finite in $[0, 1]$", "meaning": "spin polarization degree $P$", "backend_support": "FDM/FEM CPU/GPU", "problem_ir": "spin_torque_modules[].degree"},
+      {"python": "ZhangLiSTT.beta", "type": "float", "default": "0.0", "si_unit": "$1$", "validation": "finite", "meaning": "Zhang–Li non-adiabaticity parameter $\\beta$", "backend_support": "FDM/FEM CPU/GPU", "problem_ir": "spin_torque_modules[].beta"},
+      {"python": "ZhangLiSTT.current_source", "type": "str | None", "default": "None", "si_unit": "$1$", "validation": "non-empty resolvable named current module", "meaning": "bound solved-current source replacing constant current", "backend_support": "planner-gated FDM/FEM lanes", "problem_ir": "spin_torque_modules[].current_source_id"},
+      {"python": "ZhangLiSTT.lande_g", "type": "float | None", "default": "None", "si_unit": "$1$", "validation": "finite and $> 0$ when set", "meaning": "Landé $g$-factor entering spin-drift velocity $\\mathbf{u}$", "backend_support": "canonical lanes", "problem_ir": "spin_torque_modules[].lande_g"}
+    ]
   }
 }

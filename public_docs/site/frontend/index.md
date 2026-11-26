@@ -23,11 +23,11 @@ mesh certification or solver qualification.
 
 Use this branch for:
 
-- Start Screen hub (`/home`), multi-instance tabs (`/session/<slug>`, `?port=`, `/instance/<port>`), Catppuccin Mocha/Latte themes, Ribbon tabs, and five-tab Explorer (`Model`, `Resources`, `Results`, `Jobs`, `Diagnostics`);
-- Semantic Inspector panels, isolated draft editing (`staged`, `liveViewport`, `immediate`), Apply/Reset transactions, and stale-resource semantics;
-- FEM object, airbox, and region mesh policies alongside read-only FDM structured-grid inspection;
-- 3D WebGL viewport (surface projections, clipping, studio lighting/PNG capture, eigenmode overlays), 2D planar field map, and interactive charts/playback;
-- client state, command palette (`Ctrl+Shift+P`), binary HTTP codecs, live Python presence, and explicit capability boundaries (`capability-register`).
+- Start Screen hub (`/home`), multi-instance tabs (`/session/<slug>`, `?port=`, `/instance/<port>`), Catppuccin Mocha/Latte themes, Ribbon tabs, and seven-tab Explorer (`Model`, `Resources`, `Results`, `Jobs`, `Diagnostics`, `Helper`, `Errors`);
+- Semantic Inspector panels (162 declarative spec routes across 4 domain registries), isolated draft editing (`staged`, `liveViewport`, `immediate`), Apply/Reset transactions, and stale-resource semantics;
+- FEM object, airbox, and region mesh policies alongside interactive FDM structured-grid sizing (`MeshRootSpec.tsx`) and read-only grid/cell evidence inspectors;
+- 3D WebGL viewport (surface projections, clipping, studio lighting/PNG capture, eigenmode overlays, prepared-field previews), 2D planar field map, and interactive charts/playback;
+- client state, command palette (`Ctrl+Shift+P`), 12 versioned binary HTTP codecs, live Python presence, and explicit capability boundaries (`capability-register`).
 
 Backend algorithms live under {doc}`../backend/index`; Python constructors and parameters under
 {doc}`../python-api/index`.

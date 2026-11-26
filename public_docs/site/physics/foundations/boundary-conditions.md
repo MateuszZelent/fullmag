@@ -4,6 +4,8 @@ status: implemented
 doc_kind: reference
 audience: user
 owner: fullmag-public-docs
+last_updated: 2026-11-26
+reviewed_revision: 752450f8d259ab97c76c36fe666d5474b02abe9a
 source_of_truth: docs/physics/0600-periodic-boundary-conditions.md
 ---
 
@@ -15,8 +17,9 @@ source_of_truth: docs/physics/0600-periodic-boundary-conditions.md
 
 Boundary conditions close the variational or finite-difference problem at every physical and
 auxiliary-field boundary. FullMag keeps the physical boundary law, discretisation realization,
-selected backend, and resolved boundary markers distinct. A periodic magnetization seam, a natural
-exchange boundary, a DMI surface law, and an FEM airbox closure are different contracts.
+selected backend, and resolved boundary markers distinct. A periodic or Floquet magnetization
+seam, a natural exchange boundary, a DMI surface law, an absorbing damping layer, a frozen-spin
+constraint, and an FEM airbox closure are separate contracts.
 
 (boundary-conditions-governing-equations)=
 ## Governing equations
@@ -32,8 +35,10 @@ The free exchange surface law, periodic identification, and airbox closure are r
 
 The DMI term is present only for the corresponding interfacial realization (with unit
 interface-symmetry normal $\hat{\mathbf{n}}$ and outward boundary normal $\boldsymbol{\nu}$;
-for bulk DMI the chiral term is $D\,\mathbf{m}\times\boldsymbol{\nu}$) and $\beta$ is the
-resolved Robin coefficient. A Dirichlet airbox closure $u=0$ is a different discrete problem.
+for bulk DMI the chiral term is $D\,\mathbf{m}\times\boldsymbol{\nu}$, and rotated interfacial
+DMI replaces the interfacial axis by the rotated in-plane chiral vector; see
+{doc}`../interactions/dmi/boundary-conditions`) and $\beta$ is the resolved Robin coefficient. A
+Dirichlet airbox closure $u=0$ is a different discrete problem.
 
 ```{figure} /_static/diagrams/micromagnetic-boundary-conditions-overview.svg
 :alt: Four-panel boundary-condition overview showing (a) free-surface Neumann A d_n m = 0 via FEM natural weak integral and FDM clamped ghost cells, (b) chiral DMI boundary condition 2A d_nu m + D[(n_hat x nu) x m] = 0 with numerically computed edge canting profile, (c) periodic boundary conditions via FDM wrapped neighbor indices vs FEM reduced P^T A P system, and (d) FEM Dirichlet vs Robin airbox demagnetization closures and mechanical boundary conditions.
@@ -46,7 +51,8 @@ Summary of Fullmag boundary-condition contracts: **(a)** free-surface Neumann ($
 
 Boundary conditions define how the magnetization and auxiliary fields (scalar potential,
 displacement) behave at the edges of the computational domain. FullMag implements
-several boundary-condition types, each owned by the relevant interaction or solver module.
+several boundary-condition and edge-damping types, each owned by the relevant interaction or
+solver module.
 
 ## Free-surface Neumann (natural exchange boundary)
 
@@ -81,15 +87,16 @@ $\partial\Omega_m$ is modified. The exchange-plus-DMI surface term becomes
 \qquad\text{(interfacial DMI)},
 ```
 
-or $2A\,\partial_{\boldsymbol{\nu}}\mathbf{m} + D\,(\mathbf{m}\times\boldsymbol{\nu}) = \mathbf{0}$ for
-isotropic bulk DMI. This boundary condition arises naturally from the variational principle when the
+$2A\,\partial_{\boldsymbol{\nu}}\mathbf{m} + D\,(\mathbf{m}\times\boldsymbol{\nu}) = \mathbf{0}$
+for isotropic bulk DMI, and the corresponding rotated-axis chiral boundary law for Göbel rotated
+interfacial DMI. This boundary condition arises naturally from the variational principle when the
 DMI weak form is included (see {doc}`../interactions/dmi/boundary-conditions`). FullMag enforces it
 through the FEM weak formulation; FDM implementations handle it through stencil-boundary
 modifications (bulk DMI requires periodic BCs in the non-periodic FDM planner).
 
 See {doc}`../interactions/dmi/index` for the full DMI boundary-condition documentation.
 
-## Periodic boundary conditions
+## Periodic and Floquet–Bloch boundary conditions
 
 Periodic boundary conditions (PBC) impose translational symmetry along one or more Cartesian
 axes. For the magnetization:
@@ -100,20 +107,28 @@ axes. For the magnetization:
 \qquad\text{for periodic axis } d,
 ```
 
-where $L_d$ is the period length along direction $d$.
+where $L_d$ is the period length along direction $d$. For linear spin-wave eigenmodes and
+frequency-domain dispersion studies with non-zero Bloch wavevector $\mathbf{k}$, `fm.FloquetBC`
+generalizes the seam identification to the phase-twisted Bloch law
+$\delta\mathbf{m}(\mathbf{r} + L_d\hat{\mathbf{e}}_d) = e^{\mathrm{i} k_d L_d}\delta\mathbf{m}(\mathbf{r})$
+(including single-$k$ GPU Floquet eigensolves; see
+{ref}`numerical-methods-performance-fem-spectral-multiphysics`).
 
 ### PBC in FDM
 
 The FDM grid wraps neighbour indices along periodic axes. Exchange stencils use wrapped
 neighbours instead of open-boundary clamping. Demagnetization uses convolution with
-periodically replicated sources (multilayer convolution or Ewald-like summation).
+periodically replicated sources (single-layer mixed dipolar-image kernels, multilayer convolution,
+or periodic image summation; see {doc}`../interactions/demagnetization/periodic-demag`).
 
 ### PBC in FEM
 
 FEM periodicity reduces the finite-element space by identifying periodic boundary-node
-pairs. The Poisson-demag operator uses the reduced $P^T A P$ system. Exchange and DMI
-stiffness matrices are assembled on the reduced space. The field is lifted back from reduced
-to full nodes after the solve.
+pairs. The Poisson-demag operator uses the reduced $A_{\mathrm{red}} = P_{\mathrm{pbc}}^T A_{\mathrm{full}} P_{\mathrm{pbc}}$
+system (supported on both CPU and GPU, including `cuDSS` direct Cholesky solves for 1D Robin and
+2D pinned-Neumann periodic films; see {ref}`numerical-methods-performance-fem-gpu-demag`). Exchange
+and DMI stiffness matrices (including unified CSR GPU DMI) are assembled on the reduced space and
+lifted back to full nodes after each solve.
 
 ### Python API
 
@@ -126,21 +141,34 @@ study = fm.study("periodic-boundary-example")
 study.engine("fem")
 study.device("cpu", precision="double")
 study.mode("strict")
-study.objects.mesh.defaults(cell_size=(2 * nm, 2 * nm, 2 * nm))
+study.objects.mesh.defaults(hmax=4 * nm)
 study.pbc(x=True, y=True, demag="open")
 study.exchange()
 body = study.geometry(fm.Box(40 * nm, 40 * nm, 2 * nm), name="film")
 body.Ms = 800.0e3
 body.Aex = 13.0e-12
 body.alpha = 0.01
-body.m = fm.init.UniformMagnetization((1.0, 0.0, 0.0))
+body.m = fm.texture.uniform(1.0, 0.0, 0.0)
 study.stages.add_relax(stage_id="relax", dt=1.0e-15, max_steps=10, tolT=1.0e-6)
 study.stages.add_run(stage_id="run", until=1.0e-12)
 ```
 
 `study.pbc(...)` is the public stage-first declaration of periodicity. It records the requested
-axis pairs and demagnetization policy; it does not construct a second `Problem` object in the
+axis pairs and demagnetization policy; it does not construct a second problem object in the
 user script.
+
+## Frozen-spin constraints and absorbing boundary layers
+
+- **Frozen spins (`fm.FrozenSpins`)**: Fixes a selected subset of magnetic degrees of freedom
+  ($\partial_t\mathbf{m}_i = \mathbf{0}$ after effective-field and spin-torque assembly) while
+  keeping those spins active as exchange, DMI, and magnetostatic field sources. Frozen masks are
+  stage-scoped, exported via the `frozen_spins` canonical quantity, and enforce zero velocity on
+  both CPU and GPU steppers.
+- **Absorbing boundary layers (`fm.AbsorbingBoundaryLayer`)**: Suppresses artificial spin-wave
+  reflections at open waveguide ends by ramping local Gilbert damping $\alpha(\mathbf{x})$ smoothly
+  (e.g., `smootherstep` or custom expression) up to `max_damping` across a boundary ramp zone of
+  width `ramp_width_m` inside `total_width_m` on selected faces (`x-`, `x+`, `y-`, `y+`, `z-`,
+  `z+`).
 
 ## Airbox boundary conditions (demagnetization)
 
@@ -198,7 +226,8 @@ See {doc}`../interactions/magnetoelastic/index` for details.
 
 - Normals are outward normals of the resolved physical boundary marker, not of an arbitrary mesh
   face selected after meshing.
-- PBC pairs must be complete, orientation-consistent, and compatible with the selected mesh.
+- PBC and Floquet pairs must be complete, orientation-consistent, and compatible with the selected
+  mesh.
 - Natural FEM conditions arise from the weak form; they are not interchangeable with strong nodal
   clamps.
 - Dirichlet and Robin demagnetization closures require separate convergence studies.
@@ -206,14 +235,17 @@ See {doc}`../interactions/magnetoelastic/index` for details.
 (boundary-conditions-python-api)=
 ## Python API
 
-The stage-first declaration records periodic axes and the demagnetization boundary policy. The
-interaction-specific pages own the detailed parameter contracts.
+The stage-first declaration records periodic axes, Floquet wavevectors, frozen-spin constraints,
+absorbing boundary layers, and demagnetization boundary policies. Interaction-specific pages own
+their detailed parameter contracts.
 
 | Python parameter | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR |
 |---|---|---|---|---|---|---|---|
 | `PeriodicBC.axes` | `tuple[bool, bool, bool]` | required | $1$ | exactly three boolean axes | periodic directions | FDM and FEM planners subject to mesh support | `pbc.axes` |
 | `PeriodicBC.demag` | `str` | `open` | $1$ | supported demagnetization policy | closure for periodic demag | FDM/FEM lane-dependent | `pbc.demag` |
 | `study.pbc(...)` | callable | — | $1$ | rejects incomplete or incompatible pairs | stage-first periodicity request | public authoring surface | `pbc` |
+| `FrozenSpins.selector` | `Selection` | required | $1$ | non-empty selection unless policy overrides | region/selection frozen to $\partial_t\mathbf{m}=\mathbf{0}$ | FDM/FEM CPU/GPU | `constraints.frozen_spins[].selector` |
+| `AbsorbingBoundaryLayer.max_damping` | `float` | required | $1$ | finite and $> 0$ | peak Gilbert damping in absorbing ramp zone | FDM/FEM CPU/GPU | `materials[].alpha_field` |
 
 (boundary-conditions-problem-ir)=
 ## Canonical ProblemIR
@@ -233,68 +265,61 @@ and the backend-specific operator. Those are recorded in the resolved plan and p
 (boundary-conditions-round-trip-and-failure-semantics)=
 ## Round-trip and failure semantics
 
-Requested intent includes axis policy, demag closure, and mechanical boundary choice. Resolved execution
-includes paired nodes/faces, operator reduction, boundary marker, solver, device, and
-precision. Validation errors cover malformed axes, incomplete pairs, incompatible periodic mesh
-topology, and conflicting strong/natural conditions. Unsupported combinations fail closed; no
-periodicity or boundary law is silently dropped.
+Requested intent includes axis policy, Floquet wavevector, frozen-spin mask, absorbing ramp,
+demag closure, and mechanical boundary choice. Resolved execution includes paired nodes/faces,
+operator reduction, boundary marker, solver, device, and precision. Validation errors cover
+malformed axes, incomplete pairs, incompatible periodic mesh topology, and conflicting
+strong/natural conditions. Unsupported combinations fail closed; no periodicity or boundary law
+is silently dropped.
 
 (boundary-conditions-discrete-realization)=
 ## Discrete realization
 
-### FDM CPU
-
-Periodic neighbors are wrapped by the canonical neighbor-index policy; open faces use the selected
-finite-difference closure.
-
-### FDM GPU
-
-The CUDA lane must use the same resolved boundary policy and pair ordering as the CPU reference;
-device parity is not established by source inspection alone.
-
-### FEM CPU
-
-Periodic constraints reduce the finite-element system through explicit node/face pairing. Natural
-exchange/DMI terms enter the weak residual, while essential constraints are applied to the reduced
-space.
-
-### FEM GPU
-
-The GPU realization must preserve reduced-space ordering, boundary markers, gauge treatment, and
-device transfer provenance. Host assembly is not itself GPU qualification.
+| Solver | Device | Boundary realization |
+|---|---|---|
+| FDM | CPU | Wrapped `neighbor_index` along periodic axes, open-face clamping/DMI stencil closures, frozen-spin RHS projection, and spatial $\alpha$ absorbing ramps. |
+| FDM | GPU | CUDA kernels consume the resolved periodic neighbor policy, frozen-spin mask (applied after fused torque assembly), and absorbing $\alpha$ array; FP32+PBC demag is intentionally rejected by the qualification gate. |
+| FEM | CPU | Periodic and Floquet reductions via explicit node/face pairing (`P^T A P`), weak-form natural exchange/DMI boundary terms, and essential airbox/mechanical constraints on the reduced space. |
+| FEM | GPU | Device-resident reduced-space operators supporting PBC-reduced 1D Robin and 2D pinned-Neumann `cuDSS` direct solves (`26.8×–35.5×` speedup vs baseline with FSAL reuse), unified CSR periodic GPU DMI, and single-$k$ GPU Floquet eigensolves (see {ref}`numerical-methods-performance-fem-gpu-demag` and {ref}`numerical-methods-performance-fem-spectral-multiphysics`). |
 
 (boundary-conditions-implementation-mapping)=
 ## Implementation mapping
 
-Python owns the requested policy, the planner resolves legality and pairs, FDM owns wrapped
-neighbors, and FEM owns weak-form/constraint realization. Demagnetization-specific closures remain
-under the demagnetization subtree. No dedicated Control Room equation editor exists for boundary
-laws; use the applicable Geometry, Physics, or Study panel where exposed in
+Python owns the requested policy (`PeriodicBC`, `FloquetBC`, `FrozenSpins`,
+`AbsorbingBoundaryLayer`), the planner resolves legality and pairs, FDM owns wrapped neighbors,
+and FEM owns weak-form/constraint realization. Demagnetization-specific closures remain under the
+demagnetization subtree. No dedicated Control Room equation editor exists for boundary laws; use
+the applicable Geometry, Absorbing Boundaries, Physics, or Study panel where exposed in
 {doc}`/frontend/capability-register`.
 
 (boundary-conditions-validation)=
 ## Validation
 
 Validate pair completeness and residuals, zero exchange flux on free surfaces, DMI boundary
-variation, periodic seam equality, gauge/airbox convergence, FEM reduced-system consistency, FDM
-CPU/GPU parity, and CPU/GPU device identity. Compare Dirichlet and Robin demag only as separate
-qualification cases.
+variation, periodic seam equality, gauge/airbox convergence, frozen-spin invariance, absorbing
+layer reflection suppression, FEM reduced-system consistency, FDM CPU/GPU parity, and CPU/GPU
+device identity. Compare Dirichlet and Robin demag only as separate qualification cases.
 
 (boundary-conditions-limitations)=
 ## Limitations
 
-Not every combination of periodicity, FEM airbox, DMI, and mechanical constraints is executable.
-The planner status is authoritative for a concrete request; this shared page does not promote a
-planned combination to implemented status.
+Not every combination of periodicity, Floquet wavevector, FEM airbox, DMI, and mechanical
+constraints is executable (for example, unpinned pure-Neumann periodic potentials remain excluded
+from SPD Cholesky factorization and FDM CUDA rejects FP32+PBC). The planner status is
+authoritative for a concrete request; this shared page does not promote a planned combination to
+implemented status.
 
 (boundary-conditions-source-code-index)=
 ## Source-code index
 
 | Responsibility | Repository path | Stable symbol |
 |---|---|---|
-| Periodic Python contract | `packages/fullmag-py/src/fullmag/model/study.py` | `PeriodicBC` |
-| Stage-first declaration | [`packages/fullmag-py/src/fullmag/world.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/world.py#L6887) | [`study`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/world.py#L6887) |
-| FDM neighbor policy | [`crates/fullmag-engine/src/fdm/shared/types.rs`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-engine/src/fdm/shared/types.rs#L262) | [`neighbor_index`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-engine/src/fdm/shared/types.rs#L262) |
-| FEM periodic reduction | [`backends/fem/cpu/mfem/interactions/exchange_mass_projection.cpp`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/backends/fem/cpu/mfem/interactions/exchange_mass_projection.cpp#L38) | [`apply_periodic_consistent_mass_component`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/backends/fem/cpu/mfem/interactions/exchange_mass_projection.cpp#L38) |
-| FEM interfacial DMI boundary field | [`backends/fem/cpu/mfem/interactions/dmi_interfacial.cpp`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/backends/fem/cpu/mfem/interactions/dmi_interfacial.cpp#L29) | [`compute_interfacial_dmi_field`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/backends/fem/cpu/mfem/interactions/dmi_interfacial.cpp#L29) |
-| FEM demag closure | [`backends/fem/cpu/mfem/interactions/demag.hpp`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/backends/fem/cpu/mfem/interactions/demag.hpp#L135) | [`compute_demag_field_for_magnetization`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/backends/fem/cpu/mfem/interactions/demag.hpp#L135) |
+| Periodic Python contract | [`packages/fullmag-py/src/fullmag/model/study.py`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/model/study.py#L659) | [`class PeriodicBC`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/model/study.py#L659) |
+| Floquet–Bloch contract | [`packages/fullmag-py/src/fullmag/model/study.py`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/model/study.py#L676) | [`class FloquetBC`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/model/study.py#L676) |
+| Frozen-spin constraint | [`packages/fullmag-py/src/fullmag/model/constraints.py`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/model/constraints.py#L137) | [`class FrozenSpins`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/model/constraints.py#L137) |
+| Absorbing boundary layer | [`packages/fullmag-py/src/fullmag/model/absorbing_boundary.py`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/model/absorbing_boundary.py#L149) | [`class AbsorbingBoundaryLayer`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/model/absorbing_boundary.py#L149) |
+| Stage-first declaration | [`packages/fullmag-py/src/fullmag/world.py`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/world.py#L7612) | [`study`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/world.py#L7612) |
+| FDM neighbor policy | [`crates/fullmag-engine/src/fdm/shared/types.rs`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-engine/src/fdm/shared/types.rs#L267) | [`neighbor_index`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-engine/src/fdm/shared/types.rs#L267) |
+| FEM periodic reduction | [`backends/fem/cpu/mfem/interactions/exchange_mass_projection.cpp`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/backends/fem/cpu/mfem/interactions/exchange_mass_projection.cpp#L39) | [`apply_periodic_consistent_mass_component`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/backends/fem/cpu/mfem/interactions/exchange_mass_projection.cpp#L39) |
+| FEM interfacial DMI boundary field | [`backends/fem/cpu/mfem/interactions/dmi_interfacial.cpp`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/backends/fem/cpu/mfem/interactions/dmi_interfacial.cpp#L31) | [`compute_interfacial_dmi_field`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/backends/fem/cpu/mfem/interactions/dmi_interfacial.cpp#L31) |
+| FEM demag closure | [`backends/fem/cpu/mfem/interactions/demag.hpp`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/backends/fem/cpu/mfem/interactions/demag.hpp#L135) | [`compute_demag_field_for_magnetization`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/backends/fem/cpu/mfem/interactions/demag.hpp#L135) |

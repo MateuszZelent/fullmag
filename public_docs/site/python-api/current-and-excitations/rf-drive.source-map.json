@@ -1,32 +1,32 @@
 {
   "document": {
     "path": "public_docs/site/python-api/current-and-excitations/rf-drive.md",
-    "reviewed_revision": "ab3c8802a691a535063102c12f9a79bb0043b367"
+    "reviewed_revision": "752450f8d259ab97c76c36fe666d5474b02abe9a"
   },
   "backend_matrix": [
     {
       "solver": "FEM",
       "device": "CPU",
       "status": "documented",
-      "reason": "authoring and IR documented; runtime qualification separate"
+      "reason": "authoring, IR, and waveform time evaluation documented"
     },
     {
       "solver": "FEM",
       "device": "GPU",
       "status": "documented",
-      "reason": "authoring and IR documented; runtime qualification separate"
+      "reason": "authoring, IR, and GPU waveform evaluation documented"
     },
     {
       "solver": "FDM",
       "device": "CPU",
       "status": "documented",
-      "reason": "authoring and IR documented; runtime qualification separate"
+      "reason": "authoring, IR, and waveform time evaluation documented"
     },
     {
       "solver": "FDM",
       "device": "GPU",
       "status": "documented",
-      "reason": "authoring and IR documented; runtime qualification separate"
+      "reason": "authoring, IR, and CUDA waveform evaluation documented"
     }
   ],
   "equations": [],
@@ -36,7 +36,43 @@
       "id": "source_rf_drive",
       "path": "packages/fullmag-py/src/fullmag/model/antenna.py",
       "symbol": "class RfDrive",
-      "responsibility": "public constructor and IR lowering"
+      "responsibility": "public RF drive constructor and IR lowering"
+    },
+    {
+      "id": "source_antenna_field_source",
+      "path": "packages/fullmag-py/src/fullmag/model/antenna.py",
+      "symbol": "class AntennaFieldSource",
+      "responsibility": "attaches RfDrive and antenna geometry into an excitation field source"
+    },
+    {
+      "id": "source_sinusoidal",
+      "path": "packages/fullmag-py/src/fullmag/model/energy.py",
+      "symbol": "class Sinusoidal",
+      "responsibility": "sinusoidal temporal waveform TimeDependence"
+    },
+    {
+      "id": "source_sinc_pulse",
+      "path": "packages/fullmag-py/src/fullmag/model/energy.py",
+      "symbol": "class SincPulse",
+      "responsibility": "broadband sinc-pulse temporal waveform TimeDependence"
+    },
+    {
+      "id": "source_pulse",
+      "path": "packages/fullmag-py/src/fullmag/model/energy.py",
+      "symbol": "class Pulse",
+      "responsibility": "rectangular time-window waveform TimeDependence"
+    },
+    {
+      "id": "source_piecewise_linear",
+      "path": "packages/fullmag-py/src/fullmag/model/energy.py",
+      "symbol": "class PiecewiseLinear",
+      "responsibility": "tabulated piecewise-linear temporal waveform TimeDependence"
+    },
+    {
+      "id": "source_constant",
+      "path": "packages/fullmag-py/src/fullmag/model/energy.py",
+      "symbol": "class Constant",
+      "responsibility": "unit constant temporal waveform TimeDependence"
     }
   ],
   "public_api": {
@@ -47,38 +83,38 @@
         "type": "float",
         "default": "required",
         "si_unit": "$\\mathrm{A}$",
-        "validation": "finite",
-        "meaning": "drive current",
+        "validation": "cast to `float`",
+        "meaning": "reference drive current amplitude",
         "backend_support": "FEM/FDM CPU/GPU: IR; resolver-specific",
-        "problem_ir": "current"
+        "problem_ir": "current_a"
       },
       {
         "python": "frequency_hz",
-        "type": "float or None",
+        "type": "float | None",
         "default": "None",
         "si_unit": "$\\mathrm{Hz}$",
-        "validation": "positive when supplied",
-        "meaning": "frequency for convenience waveform",
+        "validation": "finite and `> 0` when supplied",
+        "meaning": "frequency for convenience sinusoidal waveform",
         "backend_support": "FEM/FDM CPU/GPU: IR; resolver-specific",
-        "problem_ir": "waveform.frequency"
+        "problem_ir": "waveform.frequency_hz"
       },
       {
         "python": "phase_rad",
         "type": "float",
         "default": "0.0",
         "si_unit": "$\\mathrm{rad}$",
-        "validation": "finite",
-        "meaning": "phase offset",
+        "validation": "finite when used in convenience `Sinusoidal`",
+        "meaning": "phase offset for convenience sinusoidal waveform",
         "backend_support": "FEM/FDM CPU/GPU: IR; resolver-specific",
-        "problem_ir": "waveform.phase"
+        "problem_ir": "waveform.phase_rad"
       },
       {
         "python": "waveform",
-        "type": "Waveform or None",
+        "type": "TimeDependence | None",
         "default": "None",
         "si_unit": "$1$",
-        "validation": "typed when supplied",
-        "meaning": "explicit waveform override",
+        "validation": "typed waveform object with `to_ir()` when supplied; overrides `frequency_hz`/`phase_rad`",
+        "meaning": "explicit temporal waveform override",
         "backend_support": "FEM/FDM CPU/GPU: IR; resolver-specific",
         "problem_ir": "waveform"
       }

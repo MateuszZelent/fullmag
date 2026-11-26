@@ -6,9 +6,9 @@ status: implemented
 doc_kind: reference
 audience: user
 owner: fullmag-public-docs
-last_updated: 2026-08-31
-reviewed_revision: 969efa0941905825ac569d525f4bdaefc059e2af
-source_of_truth: "AirboxOptions, periodic OCC groups, and demag authoring"
+last_updated: 2026-11-26
+reviewed_revision: 752450f8d259ab97c76c36fe666d5474b02abe9a
+source_of_truth: "AirboxOptions, periodic OCC groups, 2D-periodic pure-Neumann gauge pin, open-airbox k=0 Robin modal closure, PBC cuDSS, and demag authoring"
 ---
 
 (public-docs-numerical-methods-meshing-fem-airbox-boundary-closure)=
@@ -47,8 +47,8 @@ system can still have truncation error.
 
 | Solver lane | Status | Limit |
 | --- | --- | --- |
-| FEM CPU | source-backed | No runtime closure result is claimed. |
-| FEM GPU | capability-gated | No GPU closure receipt is claimed. |
+| FEM CPU | implemented | Open-airbox Poisson Robin/Dirichlet, 2D-periodic pure-Neumann ($\beta = 0$) + singleton gauge pin, and isolated `open_airbox_k0` Robin modal closure (`demag_kind="open_airbox_k0"`) |
+| FEM GPU | implemented (capability-gated) | Open-airbox and 1D/2D PBC-reduced `cuDSS` / `cg_amg` static Poisson demagnetization, plus single-$k$ GPU Floquet modal closure (`augmented_floquet_cudss_cuda`); see {ref}`numerical-methods-performance-fem-gpu-demag` |
 | FDM CPU | not applicable | FEM shared-domain marker contract. |
 | FDM GPU | not applicable | FEM shared-domain marker contract. |
 
@@ -75,8 +75,7 @@ body.m = fm.texture.uniform(1.0, 0.0, 0.0)
 
 # %%
 study.demag(model="airbox", variant="robin")
-study.build_domain_mesh()
-study.stages.add_relax(stage_id="equilibrium", algorithm="llg_overdamped", max_steps=1000)
+study.stages.add_relax(stage_id="equilibrium", algorithm="llg_overdamped", dt=5.0e-13, max_steps=1000)
 ```
 
 | Python | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR |
@@ -139,17 +138,21 @@ In validator vocabulary, unsupported combinations are rejected rather than lower
 (airbox-boundary-closure-discrete-realization)=
 ## Discrete realization
 
-The OCC path assigns periodic physical surfaces first, then adds remaining `gamma_out` faces using `boundary_marker` and name `Gamma_out`; interface faces are separate.
+The OCC path assigns periodic physical surfaces first, then adds remaining `gamma_out` faces using `boundary_marker` and name `Gamma_out`; interface faces are separate. Native MFEM boundary closure applies three specialized rules on top of the realized outer marker:
+
+1. **2D-periodic thin-film pure-Neumann closure ($\beta = 0$) with singleton gauge pin:** When a planned Poisson–Robin airbox runs on a mesh with **exactly two periodic axes**, a nonzero Robin coefficient $\beta > 0$ leaks a uniform stray field ($N_{zz} = (1+\beta d)/(1+\beta L) \ne 1$). Native demagnetization therefore resolves $\Gamma_{\mathrm{out}}$ to pure Neumann ($\beta = 0$) and eliminates the constant nullspace by pinning one open-boundary potential true-DOF whose periodic equivalence class is a singleton (`film_neumann_gauge_pin_tdof`), zeroing eliminated classes in the RHS on both CPU and GPU reduced periodic solves.
+2. **Open-airbox $k=0$ Robin modal closure (`magnetostatic_bc="open_airbox_k0"`):** Isolated bodies inside a Robin airbox can request dynamic Poisson demagnetization for $k=0$ eigenmodes (`demag_kind="open_airbox_k0"`). The v6 mesh certificate accepts identity views (zero periodic boundary nodes/pairs) strictly when paired with a Robin outer boundary, reusing the CPU Schur/SLEPc modal solver while keeping GPU fail-closed for that CPU Schur lane.
+3. **GPU direct `cuDSS` and single-$k$ Floquet modal solves:** For open and 1D/2D PBC-reduced static Poisson matrices, `try_initialize_demag_cudss_direct` resolves the three-state `auto | cg_amg | cudss` strategy with VRAM budget preflight. For periodic nonzero-$\mathbf{k}$ modal solves on GPU, `solve_floquet_airbox_augmented_ritz` executes the augmented Floquet `cuDSS` shift-invert path (`augmented_floquet_cudss_cuda`). See {ref}`numerical-methods-performance-fem-gpu-demag`.
 
 (airbox-boundary-closure-implementation-mapping)=
 ## Implementation mapping
 
 | Responsibility | Repository path | Stable symbol |
 | --- | --- | --- |
-| marker default | [`packages/fullmag-py/src/fullmag/meshing/_gmsh_types.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/meshing/_gmsh_types.py#L655) | [`class AirboxOptions`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/meshing/_gmsh_types.py#L655) |
-| periodic marker allocation | [`packages/fullmag-py/src/fullmag/meshing/_gmsh_occ.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/meshing/_gmsh_occ.py#L350) | [`def _add_periodic_boundary_physical_groups`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/meshing/_gmsh_occ.py#L350) |
-| periodic exclusion | [`packages/fullmag-py/src/fullmag/meshing/_gmsh_occ.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/meshing/_gmsh_occ.py#L210) | [`def _configure_axis_periodic_surfaces`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/meshing/_gmsh_occ.py#L210) |
-| demag authoring | [`packages/fullmag-py/src/fullmag/world.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/world.py#L5775) | [`class StudyBuilder`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/world.py#L5775) |
+| marker default | [`packages/fullmag-py/src/fullmag/meshing/_gmsh_types.py`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/meshing/_gmsh_types.py#L927) | [`class AirboxOptions`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/meshing/_gmsh_types.py#L927) |
+| periodic marker allocation | [`packages/fullmag-py/src/fullmag/meshing/_gmsh_occ.py`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/meshing/_gmsh_occ.py#L384) | [`def _add_periodic_boundary_physical_groups`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/meshing/_gmsh_occ.py#L384) |
+| periodic exclusion | [`packages/fullmag-py/src/fullmag/meshing/_gmsh_occ.py`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/meshing/_gmsh_occ.py#L244) | [`def _configure_axis_periodic_surfaces`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/meshing/_gmsh_occ.py#L244) |
+| demag authoring | [`packages/fullmag-py/src/fullmag/world.py`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/world.py#L6437) | [`class StudyBuilder`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/world.py#L6437) |
 
 (airbox-boundary-closure-validation)=
 ## Validation
@@ -171,8 +174,11 @@ The marker default is not a global uniqueness proof and no public coefficient AP
 
 | Claim | Repository path | Stable symbol | Evidence |
 | --- | --- | --- | --- |
-| marker default | [`packages/fullmag-py/src/fullmag/meshing/_gmsh_types.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/meshing/_gmsh_types.py#L655) | [`class AirboxOptions`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/meshing/_gmsh_types.py#L655) | source-backed |
-| periodic groups | [`packages/fullmag-py/src/fullmag/meshing/_gmsh_occ.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/meshing/_gmsh_occ.py#L350) | [`def _add_periodic_boundary_physical_groups`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/meshing/_gmsh_occ.py#L350) | source-backed |
-| outer pairing | [`packages/fullmag-py/src/fullmag/meshing/_gmsh_occ.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/meshing/_gmsh_occ.py#L210) | [`def _configure_axis_periodic_surfaces`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/meshing/_gmsh_occ.py#L210) | source-backed |
-| canonical realization validation/lowering | [`packages/fullmag-py/src/fullmag/model/energy.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/energy.py#L51) | [`class Demag`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/energy.py#L51) | source-backed |
-| direct demag request | [`packages/fullmag-py/src/fullmag/world.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/world.py#L5775) | [`class StudyBuilder`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/world.py#L5775) | Public `StudyBuilder.demag` delegates to `world.demag`; world state owns enabled-state and resolved-realization lowering. |
+| marker default | [`packages/fullmag-py/src/fullmag/meshing/_gmsh_types.py`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/meshing/_gmsh_types.py#L927) | [`class AirboxOptions`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/meshing/_gmsh_types.py#L927) | source-backed |
+| periodic groups | [`packages/fullmag-py/src/fullmag/meshing/_gmsh_occ.py`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/meshing/_gmsh_occ.py#L384) | [`def _add_periodic_boundary_physical_groups`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/meshing/_gmsh_occ.py#L384) | source-backed |
+| outer pairing | [`packages/fullmag-py/src/fullmag/meshing/_gmsh_occ.py`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/meshing/_gmsh_occ.py#L244) | [`def _configure_axis_periodic_surfaces`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/meshing/_gmsh_occ.py#L244) | source-backed |
+| canonical realization validation/lowering | [`packages/fullmag-py/src/fullmag/model/energy.py`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/model/energy.py#L51) | [`class Demag`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/model/energy.py#L51) | source-backed |
+| 2D-periodic pure-Neumann gauge pin | [`backends/fem/cpu/mfem/interactions/demag_poisson_boundary.cpp`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/backends/fem/cpu/mfem/interactions/demag_poisson_boundary.cpp#L88) | [`film_neumann_gauge_pin_tdof`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/backends/fem/cpu/mfem/interactions/demag_poisson_boundary.cpp#L88) | Resolves 2D-periodic films to $\beta=0$ Neumann and pins one singleton-class open-boundary potential DOF. |
+| GPU open/PBC `cuDSS` strategy | [`backends/fem/gpu/cuda/demag_poisson/cudss_direct_solver.hpp`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/backends/fem/gpu/cuda/demag_poisson/cudss_direct_solver.hpp#L158) | [`try_initialize_demag_cudss_direct`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/backends/fem/gpu/cuda/demag_poisson/cudss_direct_solver.hpp#L158) | Three-state `auto \| cg_amg \| cudss` resolver for open and 1D/2D PBC-reduced SPD Poisson systems. |
+| single-$k$ GPU Floquet modal solve | [`backends/fem/gpu/frequency_domain/modal_augmented_ritz.cu`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/backends/fem/gpu/frequency_domain/modal_augmented_ritz.cu#L829) | [`solve_floquet_airbox_augmented_ritz`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/backends/fem/gpu/frequency_domain/modal_augmented_ritz.cu#L829) | Guarded `cuDSS` shift-invert Floquet modal solve (`augmented_floquet_cudss_cuda`). |
+| direct demag request | [`packages/fullmag-py/src/fullmag/world.py`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/world.py#L6437) | [`class StudyBuilder`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/world.py#L6437) | Public `StudyBuilder.demag` delegates to `world.demag`; world state owns enabled-state and resolved-realization lowering. |

@@ -3,7 +3,8 @@ title: Geometry, regions, materials and meshes
 status: partial
 audience: user
 owner: fullmag-public-docs
-last_updated: 2026-08-31
+last_updated: 2026-11-26
+reviewed_revision: 752450f8d259ab97c76c36fe666d5474b02abe9a
 source_of_truth: packages/fullmag-py/src/fullmag/model/geometry.py, structure.py, and fields.py
 ---
 
@@ -53,20 +54,22 @@ Boolean operands may overlap by design, and object-owned region policies may ove
 are being resolved. Such cases require explicit priority and conflict policy; insertion order is
 not a physical rule.
 
-For a material parameter `p`, the object scalar is the default value and a scoped field is an
-override evaluated only where its owning object and optional region have support. A resolved
-operator consumes the material value at its own cells, nodes, elements, or quadrature points. The
-Python field declaration does not by itself prove that a particular backend, interpolation rule,
-precision, or device can materialize it.
+For a material parameter (such as $M_s$, $A$, or $\alpha$), the object scalar is the default value
+and a scoped field is an override evaluated only where its owning object and optional region have
+support. A resolved operator consumes the material value at its own cells, nodes, elements, or
+quadrature points. The Python field declaration does not by itself prove that a particular backend,
+interpolation rule, precision, or device can materialize it.
 
 (geometry-and-materials-symbols-and-si-units)=
 ## Symbols and SI units
 
 | Symbol | Meaning | SI unit |
-|---|---|---|
+|---|---|---:|
 | $\Omega_{\mathrm{mag}}$ | resolved magnetic domain | $\mathrm{m^3}$ |
 | $\Omega_i$ | authored magnetic region | $\mathrm{m^3}$ |
-| $p$ | material parameter | parameter-dependent |
+| $M_s$ | saturation magnetization | $\mathrm{A\,m^{-1}}$ |
+| $A$ | exchange stiffness | $\mathrm{J\,m^{-1}}$ |
+| $\alpha$ | Gilbert damping parameter | $1$ |
 
 (geometry-and-materials-assumptions-and-validity)=
 ## Assumptions and validity
@@ -82,33 +85,50 @@ mesh conformity, and solver qualification remain separate checks.
 
 ### 1. Geometry object
 
-Use a typed primitive, an imported geometry, or a composition of typed objects. Dimensions are in
-metres. Primitive objects are centered at the origin unless a transform or centered shape helper
-is used.
+Use a typed primitive, an antenna layout, an imported geometry, or a composition of typed objects.
+Dimensions are in metres. Primitive objects are centered at the origin unless a transform or
+centered shape helper is used.
 
-The public constructors implemented in `fullmag.model.geometry` are:
+The public geometry constructors implemented in `fullmag.model.geometry` include:
 
 | Constructor | Physical meaning | Main dimensional arguments |
 |---|---|---|
-| `fm.Box(...)` | axis-aligned box | `size=(dx, dy, dz)` or `dx, dy, dz` in `m` |
-| `fm.Cylinder(...)` | circular cylinder | `radius`, `height` in `m`; optional unit `axis` |
-| `fm.Ellipsoid(...)` | ellipsoid | semi-axes `rx`, `ry`, `rz` in `m` |
-| `fm.Sphere(...)` | uniform ellipsoid convenience function | `radius` in `m` |
-| `fm.Ellipse(...)` | extruded elliptical disk | `rx`, `ry`, `height` in `m` |
+| `fm.Box(...)` | axis-aligned box | `size=(dx, dy, dz)` or `dx, dy, dz` in $\mathrm{m}$ |
+| `fm.Cylinder(...)` | circular cylinder | `radius`, `height` in $\mathrm{m}$; optional unit `axis` |
+| `fm.Ellipsoid(...)` | ellipsoid | semi-axes `rx`, `ry`, `rz` in $\mathrm{m}$ |
+| `fm.Sphere(...)` | uniform ellipsoid convenience function | `radius` in $\mathrm{m}$ |
+| `fm.Ellipse(...)` | extruded elliptical disk | `rx`, `ry`, `height` in $\mathrm{m}$ |
+| `fm.Cone(...)` | circular cone or frustum | `bottom_radius`, `top_radius`, `height` in $\mathrm{m}$ |
+| `fm.Torus(...)` | circular torus | `major_radius`, `minor_radius` in $\mathrm{m}$ |
+| `fm.PolygonPrism(...)` | extruded 2D polygon | 2D vertices and `height` in $\mathrm{m}$ |
 | `fm.SinWaveguide(...)` | sinusoidal waveguide | `length`, `width`, `height`, `period`, `amplitude` |
 | `fm.ArchWaveguide(...)` | arched waveguide | `length`, `width`, `height`, `arch_height` |
 | `fm.ImportedGeometry(...)` | imported CAD or mask source | `source`, `scale`, optional `units` |
 
+Dedicated 3D microwave antenna layouts (`CPWAntennaLayout`, `MicrostripAntennaLayout`,
+`MeanderAntennaLayout`, `InductiveLoopLayout`, and `PiecewisePath3DLayout`) share the same
+SI coordinate convention and serialize cleanly to `ProblemIR`.
+
 Every typed geometry exposes `geometry_name` and `to_ir()`. `to_ir()` is the object-level
-serialization boundary: it emits a typed record such as `kind="box"`, `kind="cylinder"`, or
-`kind="imported_geometry"`; it does not generate a mesh.
+serialization boundary: it emits a typed record such as `kind="box"`, `kind="cylinder"`,
+`kind="cone"`, `kind="torus"`, `kind="polygon_prism"`, or `kind="imported_geometry"`; it does not
+generate a mesh.
 
-### 2. Magnetic object
+### 2. Magnetic object and non-magnetic conductor
 
-`study.geometry(shape, name=...)` or `fm.geometry(shape, name=...)` creates the object handle used
-to attach magnetic parameters. The handle stores the physical object name and the base material
-values. A magnetic object must have `Ms` and `Aex` before it can be lowered to a ferromagnet;
-`alpha` defaults to `0.01` on the flat handle and can be set explicitly.
+`study.geometry(shape, name=...)` or `fm.geometry(shape, name=...)` creates the magnetic object
+handle (`MagnetHandle`) used to attach magnetic parameters and initial magnetization textures. A
+magnetic object must have strictly positive `Ms` and `Aex` before lowering to a ferromagnet;
+`alpha` defaults to `0.01` on the flat handle and can be set explicitly. Non-magnetic conducting
+bodies (such as heavy-metal layers in spin-Hall stacks or Oersted conductors) are registered via
+`study.conductor(shape, name=...)` so they participate in transport and shared-domain meshing
+without requiring $M_s > 0$.
+
+Initial magnetization textures on `body.m` can be authored with the 21 typed `fm.texture.*`
+presets (`uniform`, `random`, `random_seeded`, `two_domain`, `domain_wall`, `vortex`, `antivortex`,
+`vortex_wall`, `bloch_skyrmion`, `neel_skyrmion`, `antiskyrmion`, `skyrmionium`, `skyrmion_lattice`,
+`bimeron`, `bloch_point`, `helical`, `conical`, `spiral`, `hopfion`, `hopfion_compact_support`,
+`artificial_spin_ice`) or imported OVF/NPZ field assets.
 
 ### 3. Object-owned region
 
@@ -119,6 +139,9 @@ required. `frame` accepts `object` or `world`, `priority` controls overlap prece
 
 The region is not a second independent solver object. It contributes membership, material
 overrides, optional texture override, and local mesh intent to the owning object and shared domain.
+Region selectors also drive stage-scoped constraints such as `fm.FrozenSpins` (freezing selected
+magnetic degrees of freedom) and `fm.AbsorbingBoundaryLayer` (ramped boundary Gilbert damping; see
+{doc}`foundations/boundary-conditions`).
 
 ### 4. Material assignment
 
@@ -129,32 +152,36 @@ object can register a scoped field with `body.set_material_field(...)`.
 ### 5. Discretization and mesh
 
 FDM realizes the geometry through structured cells, active masks, and grid ownership. FEM realizes
-the same physical intent through a shared domain, element topology, material markers, and boundary
+the same physical intent through a shared domain, element topology (`tet4`, `prism6` including
+`pure_prism` thin films, or mixed `prism6`/`pyramid5`/`tet4`), material markers, and boundary
 markers. An object-region mesh policy refines a region in that shared realization; it never creates
 an overlapping independent submesh.
 
 ## Geometry operations
 
-### Boolean operations
+### Boolean, cutting, and array operations
 
-The geometry mixin implements these operators:
+The geometry mixin and explicit constructors support set operations, cuts, rigid transforms, and
+periodic arrays:
 
-| Python expression | Set operation | Canonical IR kind |
+| Python expression / constructor | Geometric operation | Canonical IR kind |
 |---|---|---|
-| `a - b` | difference $a \setminus b$ | `difference` |
-| `a + b` | union $a \cup b$ | `union` |
-| `a & b` | intersection $a \cap b$ | `intersection` |
+| `a - b` / `fm.Difference(a, b)` | difference $a \setminus b$ | `difference` |
+| `a + b` / `fm.Union(a, b)` | union $a \cup b$ | `union` |
+| `a & b` / `fm.Intersection(a, b)` | intersection $a \cap b$ | `intersection` |
+| `a ^ b` / `fm.Xor(a, b)` | symmetric difference $a \triangle b$ | `xor` |
+| `fm.SlicePlane(...)` | planar half-space / slice cut | `slice_plane` |
+| `fm.ThroughObjectExtrusion(...)` | through-body mask extrusion | `through_object_extrusion` |
+| `fm.Array3D(...)` | 3D lattice replication (`ArrayAxisSpec`) | `array_3d` |
 
-The explicit constructors `fm.Difference(base, tool)`, `fm.Union(a, b)`, and
-`fm.Intersection(a, b)` produce the same typed records. Operands remain nested in `to_ir()`;
-the operation is not silently converted to a triangulated mesh during authoring.
+Operands remain nested in `to_ir()`; boolean and array operations are not silently converted to a
+triangulated mesh during authoring.
 
-### Translation
+### Transforms
 
 `geometry.translate((dx, dy, dz))` creates a `Translate` record with the nested base geometry and
-the `by` vector. It preserves any existing center or transform in the nested object. The vector is
-finite and has three components; the derived name is stable unless `Translate(..., name=...)` is
-used.
+the `by` vector. General rotations, scalings, and rigid placements are authored via `fm.Transform`
+and `fm.RigidTransform`, preserving any existing transform hierarchy in the nested object.
 
 ### Imported geometry
 
@@ -188,20 +215,23 @@ Detailed constructor and failure semantics: {doc}`/python-api/geometry/imported-
 ## Materials and units
 
 `fm.Material` stores magnetic constitutive parameters in SI units only. The class implemented in
-`fullmag.model.structure` validates positive `Ms` and `A`, non-negative `alpha`, finite anisotropy
-and DMI constants, and three-component anisotropy directions when supplied.
+`fullmag.model.structure` validates strictly positive `Ms` and `A`, non-negative `alpha`, finite
+anisotropy and DMI constants, and three-component anisotropy directions when supplied. Every scalar
+constitutive parameter also has a paired spatial field slot on `fm.Material` (`Ms_field`, `A_field`,
+`alpha_field`, `Ku_field`, `Ku2_field`, `Kc1_field`, `Kc2_field`, `Kc3_field`, `Dind_field`,
+`Dbulk_field`).
 
 | Python field | Meaning | SI unit | Lowered ProblemIR field |
 |---|---|---:|---|
-| `Ms` | saturation magnetization | `A/m` | `saturation_magnetisation` / `ms` |
-| `A` on `fm.Material` or `Aex` on an object handle | exchange stiffness | `J/m` | `exchange_stiffness` / `aex` |
-| `alpha` | Gilbert damping | `1` | `damping` / `alpha` |
-| `Ku1`, `Ku2` | uniaxial anisotropy constants | `J/m^3` | `uniaxial_anisotropy`, `uniaxial_anisotropy_k2` |
-| `anisU` | uniaxial axis or easy-plane normal | `1` | `anisotropy_axis` |
-| `Kc1`, `Kc2`, `Kc3` | cubic anisotropy constants | `J/m^3` | `cubic_anisotropy_kc1..3` |
-| `anisC1`, `anisC2` | cubic anisotropy axes | `1` | `cubic_anisotropy_axis1..2` |
-| `Dind` | interfacial DMI coefficient | `J/m^2` | `interfacial_dmi` / `dind` |
-| `Dbulk` | bulk DMI coefficient | `J/m^2` in the current material contract | `bulk_dmi` / `dbulk` |
+| `Ms` | saturation magnetization | $\mathrm{A\,m^{-1}}$ | `saturation_magnetisation` / `ms` |
+| `A` on `fm.Material` or `Aex` on an object handle | exchange stiffness | $\mathrm{J\,m^{-1}}$ | `exchange_stiffness` / `aex` |
+| `alpha` (and `alpha_field`) | Gilbert damping | $1$ | `damping` / `alpha` |
+| `Ku1`, `Ku2` | uniaxial anisotropy constants | $\mathrm{J\,m^{-3}}$ | `uniaxial_anisotropy`, `uniaxial_anisotropy_k2` |
+| `anisU` | uniaxial axis or easy-plane normal | $1$ | `anisotropy_axis` |
+| `Kc1`, `Kc2`, `Kc3` | cubic anisotropy constants | $\mathrm{J\,m^{-3}}$ | `cubic_anisotropy_kc1..3` |
+| `anisC1`, `anisC2` | cubic anisotropy axes | $1$ | `cubic_anisotropy_axis1..2` |
+| `Dind` | interfacial DMI coefficient | $\mathrm{J\,m^{-2}}$ | `interfacial_dmi` / `dind` |
+| `Dbulk` | bulk DMI coefficient | $\mathrm{J\,m^{-2}}$ | `bulk_dmi` / `dbulk` |
 
 `unit` values on spatial fields are non-empty metadata. The current Python factories preserve that
 metadata but do not convert it or check that it matches the selected parameter. Authors must pass
@@ -230,9 +260,10 @@ body.Aex = permalloy.A
 study.stages.add_run(stage_id="inspect_material", until=1.0e-15)
 ```
 
-For the high-level object handle, the equivalent assignments are `body.Ms`, `body.Aex`,
-`body.alpha`, `body.Ku1`, `body.anisU`, `body.Kc1`, `body.Dind`, and `body.Dbulk`. The handle
-converts these values to the `Material` record during `Problem` lowering.
+For the high-level object handle (`MagnetHandle`), the equivalent assignments are `body.Ms`,
+`body.Aex`, `body.alpha`, `body.Ku1`, `body.Ku2`, `body.anisU`, `body.Kc1`, `body.Kc2`,
+`body.Kc3`, `body.anisC1`, `body.anisC2`, `body.Dind`, and `body.Dbulk`. The handle converts these
+values into the canonical `fm.Material` record during problem lowering.
 
 ## Regions, fields and interfaces
 
@@ -268,7 +299,7 @@ core.mesh(
 study.stages.add_run(stage_id="inspect_region", until=1.0e-15)
 ```
 
-`ObjectRegion.mesh` has exactly this signature:
+`ObjectRegion.mesh` has this signature:
 
 ```text
 mesh(*, maximum_element_size=None, minimum_element_size=None,
@@ -281,7 +312,7 @@ under the owning object region and is resolved together with the shared mesh.
 
 ### Spatial material fields
 
-`MaterialParameterField` provides four typed factories:
+`MaterialParameterField` provides five typed factories via `fm.fields`:
 
 | Factory | Required arguments | Meaning |
 |---|---|---|
@@ -289,17 +320,13 @@ under the owning object region and is resolved together with the shared mesh.
 | `linear(base=, gradient=, frame="object", unit=None)` | finite base and 3-vector gradient | affine spatial profile |
 | `radial(center=, radius=, inside=, outside=, frame="object", unit=None)` | finite center/values and positive radius | inside/outside radial profile |
 | `sampled(asset_id=, component_count=, location=, unit=)` | non-empty asset, count >= 1, valid location and unit | immutable asset reference |
+| `function(source, frame="object", unit=None, **values)` | scalar expression of `x, y, z` or `def` callable | analytic spatial expression (e.g., graded damping) |
 
-`fm.fields.function(source, frame="object", unit=None, **values)` builds a fifth, scalar kind: an
-equation of `x, y, z` given as a string (for example
-`fm.fields.function("a0 + a_max*max(0.0, (x - x_edge)/L)**3", a0=0.01, a_max=0.5, x_edge=2e-6, L=600e-9)`)
-or as a mumax3-style `def`. See
-{ref}`python-api-materials-spatial-parameter-fields-python-api` for the full contract.
-
-For `linear`, `radial`, and `function`, `frame` is exactly `object` or `world`. Object-frame coordinates follow
-the object; world-frame coordinates remain fixed in the laboratory frame. Supported material
+For `linear`, `radial`, and `function`, `frame` is `object` or `world`. Object-frame coordinates
+follow the object; world-frame coordinates remain fixed in the laboratory frame. Supported material
 parameter names are `Ms`, `Aex`, `Alpha`, `Ku1`, `Ku2`, `AnisotropyAxis`, `Kc1`, `Kc2`, `Kc3`,
-`Dind`, and `Dbulk`; ProblemIR normalizes them to lower-case canonical names.
+`Dind`, and `Dbulk`; `ProblemIR` normalizes them to lower-case canonical names. See
+{ref}`python-api-materials-spatial-parameter-fields-python-api` for the full factory contract.
 
 ```python
 # %%
@@ -390,21 +417,14 @@ at construction, planning, or materialization rather than silently changing back
 (geometry-and-materials-discrete-realization)=
 ## Discrete realization
 
-### FDM realization
+| Solver | Device | Geometry and material realization | Evidence boundary |
+|---|---|---|---|
+| FDM | CPU | Structured Cartesian cells, active masks, region indices, and cell-evaluated material distributions | Periodicity, boundary correction, per-magnet grids, and multilayer demag policies are separate contracts |
+| FDM | GPU | Device-resident structured masks and material arrays mirroring the resolved FDM grid | Executed-device qualification and precision checks are reported per run |
+| FEM | CPU | Single shared conforming domain (`tet4`, `prism6`, mixed `prism6`/`pyramid5`/`tet4`) with element/face markers and region size grading | Mesh conformity reports and convergence studies are separate from authoring |
+| FEM | GPU | Device-resident mesh state supporting `tet4`, `pure_prism` (with P2 potential via `pure_prism_p2`), and mixed-element meshes (see {ref}`numerical-methods-performance-fem-gpu-demag`) | Device residency and per-interaction kernel support are planner-gated fail-closed |
 
-FDM uses structured cells and active masks. Geometry defines cell ownership and region membership;
-material values are evaluated at the locations consumed by the stencil. FDM periodicity, demagnetizing
-boundary correction, per-magnet grids, and multilayer policies are separate contracts and must not
-be inferred from a successful primitive construction.
-
-### FEM realization
-
-FEM uses a shared domain with typed element topology, material markers, and boundary markers.
-Object-region mesh policies participate in that shared domain. Thin-film swept layers, prism or
-tetrahedral topology, airbox extent, periodic pairs, and boundary layers are resolver-specific
-choices that require their own mesh report and convergence evidence.
-
-The physics page therefore claims authoring and ProblemIR semantics only. It does not claim that
+The physics page therefore claims authoring and `ProblemIR` semantics only. It does not claim that
 every legal geometry/material combination is supported by every backend, device, precision, mesh
 topology, or Control Room path.
 
@@ -484,17 +504,13 @@ qualification for this section must include at least:
 5. interaction-specific observables and refinement or convergence evidence;
 6. device and execution-mode evidence when CPU/GPU behavior is claimed.
 
-The current page does not qualify adaptive refinement, arbitrary Python geometry callables, every
-boolean/import format, every periodic boundary combination, sampled material-field materialization,
-or every mixed FEM topology. Unsupported combinations must fail explicitly rather than silently
-fall back to another backend or device.
-
 (geometry-and-materials-limitations)=
 ## Known limits
 
 The current public contract does not qualify adaptive refinement, arbitrary Python geometry
 callables, every boolean or import format, every periodic boundary combination, sampled
-material-field materialization, or every mixed FEM topology.
+material-field materialization, or every mixed FEM topology. Unsupported combinations fail closed
+rather than silently falling back to another backend or device.
 
 ## Terminal API pages
 
@@ -532,13 +548,13 @@ device-specific support.
 
 | Claim or API | Repository path | Stable symbol | Responsibility |
 |---|---|---|---|
-| primitives, imports, booleans, transforms | [`packages/fullmag-py/src/fullmag/model/geometry.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/geometry.py#L111) | `class Box`, `class Cylinder`, `class Ellipsoid`, [`class ImportedGeometry`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/geometry.py#L111), `class Difference`, `class Union`, `class Intersection`, `class Translate` | typed geometry and `to_ir()` |
-| high-level geometry handle | `packages/fullmag-py/src/fullmag/world.py` | `MagnetHandle`, `StudyBuilder.geometry` | object creation and base material properties |
-| object regions and overrides | `packages/fullmag-py/src/fullmag/model/structure.py` | `ObjectRegion` | region identity, material proxy, transitions, local mesh policy |
-| base material | `packages/fullmag-py/src/fullmag/model/structure.py` | `Material` | SI validation and material IR |
-| analytic and sampled fields | `packages/fullmag-py/src/fullmag/model/structure.py` | `MaterialParameterField`, `MaterialParameterAssignment` | field payload and scoped assignment |
-| full problem lowering | [`packages/fullmag-py/src/fullmag/model/problem.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/problem.py#L2601) | [`class Problem`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/problem.py#L2601), `build_geometry_assets_for_request` | ProblemIR and optional geometry assets |
-| shared-domain mesh policy | `packages/fullmag-py/src/fullmag/model/structure.py` and `world.py` | `ObjectRegion.mesh`, `GeometryMeshHandle` | mesh intent before backend realization |
+| primitives, booleans, transforms | [`packages/fullmag-py/src/fullmag/model/geometry.py`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/model/geometry.py#L2035) | [`class Box`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/model/geometry.py#L2035), `class Cone`, `class Torus`, `class PolygonPrism`, `class Xor`, `class RigidTransform`, `class Array3D` | typed geometry primitives, operations, and `to_ir()` |
+| imported CAD and masks | [`packages/fullmag-py/src/fullmag/model/geometry.py`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/model/geometry.py#L457) | [`class ImportedGeometry`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/model/geometry.py#L457) | imported geometry source, scale, units, and volume contract |
+| high-level geometry handle | [`packages/fullmag-py/src/fullmag/world.py`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/world.py#L570) | [`class MagnetHandle`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/world.py#L570) | object creation, base/anisotropy material properties, regions, and scoped fields |
+| object regions and overrides | [`packages/fullmag-py/src/fullmag/model/structure.py`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/model/structure.py#L386) | [`class ObjectRegion`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/model/structure.py#L386) | region identity, material proxy, transitions, local mesh policy |
+| base material | [`packages/fullmag-py/src/fullmag/model/structure.py`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/model/structure.py#L16) | [`class Material`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/model/structure.py#L16) | SI validation, spatial field slots, and material IR |
+| analytic and sampled fields | [`packages/fullmag-py/src/fullmag/model/structure.py`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/model/structure.py#L199) | [`class MaterialParameterField`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/model/structure.py#L199) | five typed field factories (`constant`, `linear`, `radial`, `sampled`, `function`) |
+| full problem lowering | [`packages/fullmag-py/src/fullmag/model/problem.py`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/model/problem.py#L2733) | [`class Problem`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/model/problem.py#L2733) | ProblemIR collection and optional geometry asset requests |
 
 Focused public API evidence includes the region-lowering, boolean-difference, centered-shape,
 material-field, and ProblemIR tests in `packages/fullmag-py/tests/test_api.py`. These tests establish

@@ -270,6 +270,8 @@ resolved execution remain separately inspectable.
 
 ### FDM CPU
 
+In `crates/fullmag-engine/src/fdm/cpu/fields/dmi.rs`, the double-precision reference computes:
+
 ```{math}
 :label: eq-bulk-dmi-fdm-derivative
 (\delta_xm_\alpha)_i=\frac{m_{\alpha,i+\hat x}-m_{\alpha,i-\hat x}}{2\Delta x},
@@ -323,38 +325,48 @@ H_{b,a}=-\frac{g_{b,a}}{\mu_0M_{s,a}M_a^{\mathrm{lump}}}.
 ```
 
 The native loop uses the arithmetic mean of nodal `Dbulk_field`, periodic
-reduced-node projection, MFEM quadrature, and lumped projection.
+reduced-node projection, MFEM quadrature, and lumped projection across `tet4`, `prism6`, and
+`mixed` meshes.
 
 ### FEM GPU
 
-The CUDA `dmi_element_residual_kernel` has a bulk mode for tetrahedral
-gradients, coefficient, curl, residual, and energy blocks. RK dispatch uses
-resident `h_bulk_dmi`, geometry, saturation, lumped-mass, and residual buffers.
-Final reduction owns a separate Bulk DMI energy slot. Atomic accumulation and
-reduction order differ from CPU.
+Production FEM GPU dynamics and relaxation evaluate bulk DMI through the **unified preassembled
+skew-symmetric CSR GPU DMI operator** (`dmi_csr_operator.cpp::build_gpu_dmi_csr_from_mfem` and
+`dmi_csr_kernels.cu::fullmag_cuda_dmi_csr_field_energy`) with bulk edge vectors
+$\mathbf d_{ij}^{\mathrm{bulk}} = +\mathbf g_{ij}^{\mathrm{bulk}}$ across `tet4`, 2D periodic
+`tet4` ($P^{\mathsf T} D P$), `prism6` (including `pure_prism_p2`), and `mixed`
+(`prism6 + pyramid5 + tet4`) meshes. Intermediate RK stages launch zero-atomic row-wise SpMV
+into `h_bulk_dmi` with `energy_block_sums = nullptr` (`2.54×` speedup on short-range RK
+microbenchmarks), final accepted-step bulk DMI energies reduce into a dedicated bulk slot via
+deadlock-free predicated `cub::BlockReduce`, PGBB/NCG relaxation evaluates exact polarized
+Armijo energy differences with `gpu_relax_dd` double-double arithmetic, and single-launch fused
+`H_eff` accumulates `h_bulk_dmi` in IEEE-754 order. The legacy `tet4`-only
+`dmi_element_residual_kernel` remains intact solely for standalone oracle unit tests. See
+{ref}`numerical-methods-performance-fem-gpu-demag` and
+{ref}`numerical-methods-performance-fem-gpu-kernels`.
 
 (bulk-dmi-implementation-mapping)=
 ## 9. Implementation mapping
 
 | Layer | FDM CPU | FDM GPU | FEM CPU | FEM GPU |
 |---|---|---|---|---|
-| coefficient | explicit scalar | device `D_bulk` | scalar or nodal mean | resident material field |
-| field | centered curl | FP64/FP32 centered curl | weak residual + lumped projection | CUDA residual + RK projection |
-| energy | active-cell volume sum | CUDA reduction | quadrature sum | element blocks + final slot |
-| boundary | all-axis periodic gate | same gate | weak residual term | same weak form |
-| failure | non-periodic/multilayer rejection | same gate | invalid context/buffers | missing resources/evidence |
+| coefficient | explicit scalar | device `D_bulk` | scalar or nodal mean | preassembled CSR edge vectors (`dmi_csr.bulk`) |
+| field | centered curl (`fields/dmi.rs`) | FP64/FP32 centered curl | weak residual + lumped projection | zero-atomic CSR SpMV (`tet4`/`prism6`/`mixed`/2D periodic) + fused `H_eff` |
+| energy | active-cell volume sum | CUDA reduction | quadrature sum | predicated `cub::BlockReduce` (`energy_out=nullptr` on RK stages) + `gpu_relax_dd` Armijo |
+| boundary | all-axis periodic gate | same gate | weak residual term | exact weak-form boundary in CSR operator |
+| failure | non-periodic/multilayer rejection | same gate | invalid context/buffers | missing resources fail closed (no CPU fallback) |
 
 (bulk-dmi-validation)=
 ## 10. Validation
 
 | Check | Expected result | Evidence boundary |
 |---|---|---|
-| constant m | zero curl, field, energy | analytical/unit test |
-| linear Cartesian field | analytic curl components | analytical/unit test |
+| constant $\mathbf m$ | zero curl, field, energy | analytical/unit test |
+| transverse Bloch helix $(0,\sin kx,\cos kx)$ | $\nabla\times\mathbf m=+k\mathbf m$, $w_b=+D_b k$ | analytical/unit test (see {doc}`validation`) |
 | $D_b \to -D_b$ | field and energy sign reverse | CPU/backend test |
 | FDM CPU/GPU | same periodic FP64 grid within tolerance | managed device run |
-| FEM weak residual | tetrahedral reference agreement | weak-residual test |
-| FEM CPU/GPU | field and final energy agreement | managed native runtime |
+| FEM weak residual | tetrahedral/prism/mixed reference agreement | weak-residual test |
+| FEM CPU/GPU CSR parity | $h_{\mathrm{rel}} \le 8.67 \times 10^{-16}$, $E_{\mathrm{rel}} \le 3.27 \times 10^{-14}$ across `tet4`, 2D periodic `tet4`, `prism6`, `mixed` (`2,787×–4,812×` vs CPU MFEM; `2.51×–4.57×` vs legacy `tet4` GPU) | RTX 4080 SUPER (`fem_cuda_csr_dmi_prism_contract` + `compute-sanitizer` 0 errors) |
 | planner gate | non-periodic/multilayer fails closed | planner test |
 | Python round-trip | explicit/material routes distinct | Python/IR test |
 
@@ -384,21 +396,22 @@ executed-device parity.
 
 | Equation or claim | Repository path | Stable symbol | Responsibility | Lane/evidence |
 |---|---|---|---|---|
-| explicit constructor and IR | `packages/fullmag-py/src/fullmag/model/energy.py` | `class BulkDMI` | finite scalar and serialization | Python contract |
-| material route | `packages/fullmag-py/src/fullmag/model/structure.py` | `class Material` | scalar/field serialization | Python contract |
-| FDM periodicity | `packages/fullmag-py/src/fullmag/model/problem.py` | `class FdmPbc` | axes/policy validation | Python contract |
-| IR explicit validation | `crates/fullmag-ir/src/validation.rs` | `validate_dmi_energy_terms` | finite explicit value | IR contract |
-| IR material validation | `crates/fullmag-ir/src/validation.rs` | `validate_material_dmi_values` | finite material values | IR contract |
-| FDM planner | `crates/fullmag-plan/src/fdm.rs` | `plan_fdm` | periodic gate and lowering | FDM planning |
-| FEM planner | `crates/fullmag-plan/src/fem.rs` | `plan_fem` | material/explicit resolution | FEM planning |
-| FDM CPU density | `crates/fullmag-engine/src/fdm/cpu/fields.rs` | `dmi_energy_density_from_vectors` | centered curl density | FDM CPU |
-| FDM CPU field | `crates/fullmag-engine/src/fdm/cpu/fields.rs` | `bulk_dmi_field` | negative-curl field | FDM CPU |
-| FDM CPU SoA energy | `crates/fullmag-engine/src/fdm/cpu/fields.rs` | `dmi_energy_from_soa` | volume reduction | FDM CPU |
-| FDM CUDA field | `backends/fdm/gpu/cuda/interactions/demag_fp64.cu` | `combine_effective_field_fp64_kernel` | FP64 bulk field | FDM GPU |
-| FEM CPU realization | `backends/fem/cpu/mfem/interactions/dmi_bulk.cpp` | `compute_bulk_dmi_field` | quadrature/residual/projection/energy | FEM CPU |
-| FEM weak residual | `backends/fem/src/dmi_weak_residual.cpp` | `dmi_accumulate_bulk_residual` | residual algebra | FEM CPU/GPU |
-| FEM projection | `backends/fem/src/dmi_weak_residual.cpp` | `dmi_project_lumped_field` | residual-to-field | FEM CPU/GPU |
-| FEM CUDA kernel | `backends/fem/gpu/cuda/interactions/dmi/dmi_kernels.cu` | `dmi_element_residual_kernel` | residual/energy blocks | FEM GPU |
-| FEM CUDA dispatch | `backends/fem/gpu/cuda/integrators/rk/rk_dmi_fields.cu` | `gpu_rk_compute_dmi_field_contributions` | resident field dispatch | FEM GPU |
-| FEM CUDA reduction | `backends/fem/gpu/cuda/integrators/rk/rk_dmi_energy_reductions.cu` | `gpu_rk_reduce_final_dmi_energy_terms` | final energy slot | FEM GPU |
-
+| explicit constructor and IR | [`packages/fullmag-py/src/fullmag/model/energy.py`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/model/energy.py#L187) | [`class BulkDMI`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/model/energy.py#L187) | finite scalar and serialization | Python contract |
+| material route | [`packages/fullmag-py/src/fullmag/model/structure.py`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/model/structure.py#L16) | [`class Material`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/model/structure.py#L16) | scalar/field serialization | Python contract |
+| FDM periodicity | [`packages/fullmag-py/src/fullmag/model/problem.py`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/model/problem.py#L220) | [`class FdmPbc`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/model/problem.py#L220) | axes/policy validation | Python contract |
+| IR explicit validation | [`crates/fullmag-ir/src/validation.rs`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-ir/src/validation.rs#L2346) | [`validate_dmi_energy_terms`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-ir/src/validation.rs#L2346) | finite explicit value | IR contract |
+| IR material validation | [`crates/fullmag-ir/src/validation.rs`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-ir/src/validation.rs#L2481) | [`validate_material_dmi_values`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-ir/src/validation.rs#L2481) | finite material values | IR contract |
+| FDM planner | [`crates/fullmag-plan/src/fdm.rs`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-plan/src/fdm.rs#L2512) | [`plan_fdm`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-plan/src/fdm.rs#L2512) | periodic gate and lowering | FDM planning |
+| FEM planner | [`crates/fullmag-plan/src/fem.rs`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-plan/src/fem.rs#L4287) | [`plan_fem`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-plan/src/fem.rs#L4287) | material/explicit resolution | FEM planning |
+| FDM CPU density | [`crates/fullmag-engine/src/fdm/cpu/fields/dmi.rs`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-engine/src/fdm/cpu/fields/dmi.rs#L24) | [`dmi_energy_density_from_vectors`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-engine/src/fdm/cpu/fields/dmi.rs#L24) | centered curl density | FDM CPU |
+| FDM CPU field | [`crates/fullmag-engine/src/fdm/cpu/fields/dmi.rs`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-engine/src/fdm/cpu/fields/dmi.rs#L565) | [`bulk_dmi_field`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-engine/src/fdm/cpu/fields/dmi.rs#L565) | negative-curl field | FDM CPU |
+| FDM CPU SoA energy | [`crates/fullmag-engine/src/fdm/cpu/fields/dmi.rs`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-engine/src/fdm/cpu/fields/dmi.rs#L86) | [`dmi_energy_from_soa`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-engine/src/fdm/cpu/fields/dmi.rs#L86) | volume reduction | FDM CPU |
+| FDM CUDA field | [`backends/fdm/gpu/cuda/interactions/demag_fp64.cu`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/backends/fdm/gpu/cuda/interactions/demag_fp64.cu#L244) | [`combine_effective_field_fp64_kernel`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/backends/fdm/gpu/cuda/interactions/demag_fp64.cu#L244) | FP64 bulk field | FDM GPU |
+| FEM CPU realization | [`backends/fem/cpu/mfem/interactions/dmi_bulk.cpp`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/backends/fem/cpu/mfem/interactions/dmi_bulk.cpp#L28) | [`compute_bulk_dmi_field`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/backends/fem/cpu/mfem/interactions/dmi_bulk.cpp#L28) | quadrature/residual/projection/energy | FEM CPU |
+| FEM weak residual | [`backends/fem/src/dmi_weak_residual.cpp`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/backends/fem/src/dmi_weak_residual.cpp#L61) | [`dmi_accumulate_bulk_residual`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/backends/fem/src/dmi_weak_residual.cpp#L61) | residual algebra | FEM CPU/GPU |
+| FEM projection | [`backends/fem/src/dmi_weak_residual.cpp`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/backends/fem/src/dmi_weak_residual.cpp#L114) | [`dmi_project_lumped_field`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/backends/fem/src/dmi_weak_residual.cpp#L114) | residual-to-field | FEM CPU/GPU |
+| FEM CUDA CSR operator | [`backends/fem/gpu/cuda/interactions/dmi/dmi_csr_operator.cpp`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/backends/fem/gpu/cuda/interactions/dmi/dmi_csr_operator.cpp#L138) | [`build_gpu_dmi_csr_from_mfem`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/backends/fem/gpu/cuda/interactions/dmi/dmi_csr_operator.cpp#L138) | unified CSR edge-vector assembly across `tet4`/`prism6`/`mixed`/periodic | FEM GPU |
+| FEM CUDA CSR kernel | [`backends/fem/gpu/cuda/interactions/dmi/dmi_csr_kernels.cu`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/backends/fem/gpu/cuda/interactions/dmi/dmi_csr_kernels.cu#L331) | [`fullmag_cuda_dmi_csr_field_energy`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/backends/fem/gpu/cuda/interactions/dmi/dmi_csr_kernels.cu#L331) | zero-atomic CSR SpMV, CUB block energy, and `energy_out=nullptr` RK gating | FEM GPU |
+| FEM CUDA `tet4` oracle | [`backends/fem/gpu/cuda/interactions/dmi/dmi_kernels.cu`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/backends/fem/gpu/cuda/interactions/dmi/dmi_kernels.cu#L116) | [`dmi_element_residual_kernel`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/backends/fem/gpu/cuda/interactions/dmi/dmi_kernels.cu#L116) | standalone `tet4` oracle residual/energy kernel | FEM GPU |
+| FEM CUDA dispatch | [`backends/fem/gpu/cuda/integrators/rk/rk_dmi_fields.cu`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/backends/fem/gpu/cuda/integrators/rk/rk_dmi_fields.cu#L173) | [`gpu_rk_compute_dmi_field_contributions`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/backends/fem/gpu/cuda/integrators/rk/rk_dmi_fields.cu#L173) | intermediate RK CSR field dispatch (`energy_block_sums=nullptr`) | FEM GPU |
+| FEM CUDA reduction | [`backends/fem/gpu/cuda/integrators/rk/rk_dmi_energy_reductions.cu`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/backends/fem/gpu/cuda/integrators/rk/rk_dmi_energy_reductions.cu#L67) | [`gpu_rk_reduce_final_dmi_energy_terms`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/backends/fem/gpu/cuda/integrators/rk/rk_dmi_energy_reductions.cu#L67) | final accepted-step bulk DMI energy slot reduction | FEM GPU |

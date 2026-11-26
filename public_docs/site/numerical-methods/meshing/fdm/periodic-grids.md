@@ -6,9 +6,9 @@ status: partial
 doc_kind: reference
 audience: user
 owner: fullmag-public-docs
-last_updated: 2026-08-31
-reviewed_revision: 5db00ccf0113b9756fec2d46feb36ade762b12c2
-source_of_truth: "FdmPbc, runner resolution, CPU periodic spectra"
+last_updated: 2026-11-26
+reviewed_revision: 752450f8d259ab97c76c36fe666d5474b02abe9a
+source_of_truth: "FdmPbc, runner resolution, half-spectrum D2Z/R2C cuFFT workspace preflight, CPU periodic spectra"
 ---
 
 (public-docs-numerical-methods-meshing-fdm-periodic-grids)=
@@ -88,12 +88,21 @@ where resolved open-axis counts are zero. Resolution rejects more than 1,000,000
 (fdm-periodic-grids-discrete-realization)=
 ## Discrete realization
 
-`resolve_demag_boundary` owns the resolved boundary policy, axis-specific image counts, and 1,000,000-term budget. `resolve_periodic_images` owns execution padding and workspace accounting: a periodic axis uses padding `N`, an open axis uses `2N`, and the estimate includes three real buffers plus twelve complex spectral buffers. A workspace estimate above 8 GiB is rejected before allocation. CPU `compute_periodic_newell_kernel_spectra` owns finite Newell image spectra, while the runner consumes and validates the resolved metadata.
+`resolve_demag_boundary` owns the resolved boundary policy, axis-specific image counts, and the 1,000,000-term budget. `resolve_periodic_images` owns execution padding and workspace accounting: a periodic axis uses padding `N` and an open axis uses `2N`, estimating **three real-domain buffers** on `padded_cells` plus **twelve Hermitian half-spectrum complex buffers** (six half-spectrum Newell kernels and six half-spectrum spectral work buffers) on `(padded_x / 2 + 1) * padded_y * padded_z` (`spectral_cells`), rejecting estimates above 8 GiB before allocation.
+
+On CUDA FDM GPU, demagnetization uses Hermitian half-spectrum **D2Z/Z2D** (FP64) and **R2C/C2R** (FP32) `cuFFT` plans with shared forward/inverse work area (`max(work_fwd, work_inv)`) and **exact cuFFT workspace preflight** (`alloc_fft_workspace` with `cufftSetAutoAllocation(..., 0)` and exact `cufftMakePlanMany` sizing before allocation). Across the 15 audited RTX 4080 SUPER geometries, half-spectrum transforms reduce `gpu_workspace.peak_vram_bytes` by **12.0–23.1%** (e.g., `-12.0%` on `pbcxy_128x128x2` FP64 from `25.34 MB` to `22.29 MB` and `-22%` to `-23%` on open 3D grids). XY-periodic multilayer PG-BB relaxation is also supported on FP64 CUDA. CPU `compute_periodic_newell_kernel_spectra` owns finite Newell image spectra, while the runner validates resolved metadata. See {ref}`numerical-methods-performance-fdm-core` for full CUDA benchmark evidence.
+
+| Solver | Device | Status | Reason / Limit |
+| --- | --- | --- | --- |
+| FDM | CPU | implemented | Open and `truncated_images` finite Newell spectra via `compute_periodic_newell_kernel_spectra` |
+| FDM | GPU | implemented (FP64; FP32+PBC gated) | D2Z/Z2D half-spectrum cuFFT with exact workspace preflight (`-12.0%` VRAM on `pbcxy_128x128x2`) and XY-periodic multilayer FP64 PG-BB; FP32 + PBC remains fail-closed |
+| FEM | CPU | not applicable | Periodic FEM airbox meshes use [Periodic FEM airbox mesh](../fem/airbox/periodic-airbox.md) |
+| FEM | GPU | not applicable | Periodic FEM airbox meshes use [Periodic FEM airbox mesh](../fem/airbox/periodic-airbox.md) |
 
 (fdm-periodic-grids-implementation-mapping)=
 ## Implementation mapping
 
-`StudyBuilder.pbc` applies the public setting; `FdmPbc` owns normalization, schema, and lowering; `resolve_demag_boundary` owns resolved counts and the image-term budget; `resolve_periodic_images` owns padding and workspace accounting; the runner validates the resolved metadata; and CPU FFT owns periodic spectra.
+`StudyBuilder.pbc` applies the public setting; `FdmPbc` owns normalization, schema, and lowering; `resolve_demag_boundary` owns resolved counts and the image-term budget; `resolve_periodic_images` owns half-spectrum padding and workspace accounting; `alloc_fft_workspace` owns exact CUDA cuFFT workspace preflight and allocation; the runner validates resolved metadata; and CPU FFT owns periodic spectra.
 
 (fdm-periodic-grids-validation)=
 ## Validation
@@ -116,9 +125,10 @@ Finite images require convergence and are not an Ewald implementation. The defau
 
 | Source | Stable symbol | Evidence |
 | --- | --- | --- |
-| [`packages/fullmag-py/src/fullmag/world.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/world.py#L5775) | [`class StudyBuilder`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/world.py#L5775) | public `fdm(...)` and `pbc(...)` application routes |
-| [`packages/fullmag-py/src/fullmag/model/problem.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/problem.py#L208) | [`class FdmPbc`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/problem.py#L208) | policy validation and IR |
-| [`crates/fullmag-ir/src/execution.rs`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-ir/src/execution.rs#L289) | [`resolve_demag_boundary`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-ir/src/execution.rs#L289) | default/resolved image counts and image-term budget |
-| [`crates/fullmag-ir/src/execution.rs`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-ir/src/execution.rs#L341) | [`resolve_periodic_images`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-ir/src/execution.rs#L341) | periodic padding and workspace accounting |
-| [`crates/fullmag-runner/src/fdm/mod.rs`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-runner/src/fdm/mod.rs#L90) | [`resolve_fdm_demag_boundary_for_periodicity`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-runner/src/fdm/mod.rs#L90) | runtime policy resolution |
-| [`crates/fullmag-engine/src/fdm/cpu/fft.rs`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-engine/src/fdm/cpu/fft.rs#L676) | [`compute_periodic_newell_kernel_spectra`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-engine/src/fdm/cpu/fft.rs#L676) | CPU periodic spectra |
+| [`packages/fullmag-py/src/fullmag/world.py`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/world.py#L6437) | [`class StudyBuilder`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/world.py#L6437) | public `fdm(...)` and `pbc(...)` application routes |
+| [`packages/fullmag-py/src/fullmag/model/problem.py`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/model/problem.py#L220) | [`class FdmPbc`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/model/problem.py#L220) | policy validation and IR |
+| [`crates/fullmag-ir/src/execution.rs`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-ir/src/execution.rs#L357) | [`resolve_demag_boundary`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-ir/src/execution.rs#L357) | default/resolved image counts and image-term budget |
+| [`crates/fullmag-ir/src/execution.rs`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-ir/src/execution.rs#L409) | [`resolve_periodic_images`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-ir/src/execution.rs#L409) | periodic padding and workspace accounting |
+| [`crates/fullmag-runner/src/fdm/mod.rs`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-runner/src/fdm/mod.rs#L102) | [`resolve_fdm_demag_boundary_for_periodicity`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-runner/src/fdm/mod.rs#L102) | runtime policy resolution |
+| [`backends/fdm/gpu/cuda/runtime/context.cu`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/backends/fdm/gpu/cuda/runtime/context.cu#L2886) | [`alloc_fft_workspace`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/backends/fdm/gpu/cuda/runtime/context.cu#L2886) | exact cuFFT half-spectrum workspace preflight and shared forward/inverse work area |
+| [`crates/fullmag-engine/src/fdm/cpu/fft.rs`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-engine/src/fdm/cpu/fft.rs#L712) | [`compute_periodic_newell_kernel_spectra`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-engine/src/fdm/cpu/fft.rs#L712) | CPU periodic spectra |

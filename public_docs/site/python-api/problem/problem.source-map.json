@@ -1,6 +1,6 @@
 {
   "document": {
-    "reviewed_revision": "9ff9370eaf3561af814fe124e41f3219f859d694",
+    "reviewed_revision": "752450f8d259ab97c76c36fe666d5474b02abe9a",
     "path": "public_docs/site/python-api/problem/problem.md"
   },
   "backend_matrix": [
@@ -33,6 +33,24 @@
       "path": "packages/fullmag-py/src/fullmag/model/problem.py",
       "symbol": "class Problem",
       "responsibility": "Owns aggregate public API, reference validation, selections, constraints, and lowering."
+    },
+    {
+      "id": "physics-graph",
+      "path": "packages/fullmag-py/src/fullmag/model/physics_scope.py",
+      "symbol": "class PhysicsGraph",
+      "responsibility": "Owns multiphysics module, edge, scope, and activation dependency graph."
+    },
+    {
+      "id": "parameter-definition",
+      "path": "packages/fullmag-py/src/fullmag/model/parameters.py",
+      "symbol": "class ParameterDefinition",
+      "responsibility": "Owns SI parameter definitions, expressions, and dimensional resolution."
+    },
+    {
+      "id": "authoring-model",
+      "path": "packages/fullmag-py/src/fullmag/model/authoring.py",
+      "symbol": "class ModelDefinition",
+      "responsibility": "Owns versioned component and multi-component authoring model records."
     }
   ],
   "public_api": {
@@ -371,7 +389,7 @@
         "python": "Problem.auxiliary_geometry_names",
         "type": "Mapping[str, str]",
         "default": "{}",
-        "si_unit": "1",
+        "si_unit": "$1$",
         "validation": "Keys must identify existing auxiliary geometry and labels must be nonempty",
         "meaning": "Editable auxiliary-object display labels",
         "backend_support": "Shared FDM/FEM CPU/GPU authoring",
@@ -381,7 +399,7 @@
         "python": "Problem.auxiliary_geometry_object_ids",
         "type": "Mapping[str, str]",
         "default": "{}",
-        "si_unit": "1",
+        "si_unit": "$1$",
         "validation": "non-empty names and IDs; keys belong to auxiliary_geometry_roles; unique object_ids across magnets",
         "meaning": "immutable auxiliary-entity identity, independent of display name",
         "backend_support": "shared FDM/FEM CPU/GPU authoring; execution follows explicit capabilities",
@@ -391,7 +409,7 @@
         "python": "Problem.antenna_port_modes",
         "type": "Sequence[AntennaPortMode]",
         "default": "()",
-        "si_unit": "1",
+        "si_unit": "$1$",
         "validation": "AntennaPortMode entries; unique id within collection",
         "meaning": "port current-basis declarations without automatic solve",
         "backend_support": "shared FDM/FEM CPU/GPU authoring; execution follows explicit capabilities",
@@ -401,7 +419,7 @@
         "python": "Problem.antenna_field_solve_stages",
         "type": "Sequence[AntennaFieldSolveStage]",
         "default": "()",
-        "si_unit": "1",
+        "si_unit": "$1$",
         "validation": "AntennaFieldSolveStage entries; unique id within collection",
         "meaning": "field-solve declarations separated from explicit stage action",
         "backend_support": "shared FDM/FEM CPU/GPU authoring; execution follows explicit capabilities",
@@ -411,7 +429,7 @@
         "python": "Problem.antenna_target_projections",
         "type": "Sequence[AntennaTargetProjection]",
         "default": "()",
-        "si_unit": "1",
+        "si_unit": "$1$",
         "validation": "AntennaTargetProjection entries; unique id within collection",
         "meaning": "requested basis projections onto a selected target",
         "backend_support": "shared FDM/FEM CPU/GPU authoring; execution follows explicit capabilities",
@@ -421,7 +439,7 @@
         "python": "Problem.solved_antenna_drives",
         "type": "Sequence[SolvedAntennaDrive]",
         "default": "()",
-        "si_unit": "1",
+        "si_unit": "$1$",
         "validation": "SolvedAntennaDrive entries; unique id within collection",
         "meaning": "time-domain consumption of a previously solved basis",
         "backend_support": "shared FDM/FEM CPU/GPU authoring; execution follows explicit capabilities",
@@ -431,7 +449,7 @@
         "python": "Problem.antenna_spectrum_requests",
         "type": "Sequence[AntennaSpectrumRequest]",
         "default": "()",
-        "si_unit": "1",
+        "si_unit": "$1$",
         "validation": "AntennaSpectrumRequest entries; unique id within collection",
         "meaning": "source-spectrum requests rather than magnetization response",
         "backend_support": "shared FDM/FEM CPU/GPU authoring; execution follows explicit capabilities",

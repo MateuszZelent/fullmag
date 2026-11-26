@@ -13,11 +13,12 @@ Meshing controls are split by selected semantic owner rather than placed in one 
 
 | Selection | Canonical panel | Writable lane |
 |---|---|---|
-| magnetic object | Object Mesh Policy | FEM |
-| universe / airbox | Airbox Mesh Parameters | FEM; geometry-only subset for FDM |
-| object-owned region | Region Mesh | FEM |
-| FDM object or region | structured-grid inspector | read-only |
-| realized mesh | Quality / History | read-only evidence |
+| study mesh root (`Discretization & Mesh`) | `MeshRootInspectorSpecPanel` | FEM (global defaults) and FDM (grid sizing, Z-stack mode, FFT snap, build) |
+| magnetic object | `ObjectMeshInspectorSpecPanel` | FEM |
+| universe / airbox | `AirboxMeshParametersInspectorSpecPanel` | FEM; geometry-only subset for FDM |
+| object-owned region | `ObjectRegionMeshInspectorPanel` | FEM |
+| FDM grid, layer, or cell node | `FdmGridInspectorSpecPanel`, `FdmGridLayerInspectorSpecPanel`, `FdmCellInspectorSpecPanel` | read-only evidence |
+| realized mesh | `MeshQualityInspectorSpecPanel`, `MeshBuildsInspectorSpecPanel` | read-only evidence |
 
 The following pages document each panel, its exact transaction boundary, and its mapping to backend
 resources and Python.

@@ -1,7 +1,7 @@
 {
   "document": {
     "path": "public_docs/site/python-api/meshing/fem/ferromagnet/imported-mesh.md",
-    "reviewed_revision": "ab3c8802a691a535063102c12f9a79bb0043b367"
+    "reviewed_revision": "752450f8d259ab97c76c36fe666d5474b02abe9a"
   },
   "backend_matrix": [
     {
@@ -34,10 +34,73 @@
       "id": "source-1",
       "path": "packages/fullmag-py/src/fullmag/model/discretization.py",
       "symbol": "class FEM",
-      "responsibility": "Imported FEM mesh request and lowering."
+      "responsibility": "Study-level imported FEM mesh request and lowering."
+    },
+    {
+      "id": "source-2",
+      "path": "packages/fullmag-py/src/fullmag/model/discretization.py",
+      "symbol": "class PerObjectMeshRecipe",
+      "responsibility": "Fail-closed rejection of per-object mesh source."
+    },
+    {
+      "id": "source-3",
+      "path": "packages/fullmag-py/src/fullmag/world.py",
+      "symbol": "class StudyMeshHandle",
+      "responsibility": "Study-level Gmsh/COMSOL mesh import_ and artifact persistence."
     }
   ],
   "public_api": {
-    "parameters": []
+    "parameters": [
+      {
+        "python": "FEM.mesh",
+        "type": "`str | None`",
+        "default": "`None`",
+        "si_unit": "$1$",
+        "validation": "nonempty when present; revalidated at extraction",
+        "meaning": "study-level imported/prebuilt shared-domain FEM mesh reference",
+        "backend_support": "FEM CPU/GPU",
+        "problem_ir": "`backend_policy.discretization_hints.fem.mesh`"
+      },
+      {
+        "python": "fullmag.world.StudyMeshHandle.import_",
+        "type": "`(path: str | Path, *, region_map=None, boundary_map=None, region_entity_map=None, boundary_entity_map=None, coordinate_unit=None) -> MeshPersistenceResult`",
+        "default": "optional maps",
+        "si_unit": "$1$",
+        "validation": "validates Gmsh `.msh` or COMSOL `.mphtxt`, units, and semantic marker maps (`region_entity_map`/`boundary_entity_map` are COMSOL-only)",
+        "meaning": "imports and binds an external shared-domain mesh (`study.mesh.import_(...)`)",
+        "backend_support": "FEM CPU/GPU",
+        "problem_ir": "`backend_policy.discretization_hints.fem.mesh`"
+      },
+      {
+        "python": "domain_mesh",
+        "type": "`(source: str | Path, *, region_markers, object_region_markers=None, marker_owners=None) -> None`",
+        "default": "`None`",
+        "si_unit": "$1$",
+        "validation": "nonempty `.json` MeshIR path and non-colliding marker tables (`fm.domain_mesh` / `study.domain_mesh`)",
+        "meaning": "attaches a precomputed shared-domain MeshIR asset",
+        "backend_support": "FEM CPU/GPU",
+        "problem_ir": "`mesh_workflow.shared_domain_mesh_source`"
+      },
+      {
+        "python": "frozen_magnetic_submesh",
+        "type": "`(source: str | Path, *, region_markers, air_mesh_source=None) -> None`",
+        "default": "`air_mesh_source=None`",
+        "si_unit": "$1$",
+        "validation": "nonempty path and valid magnetic region markers (`fm.frozen_magnetic_submesh` / `study.frozen_magnetic_submesh`)",
+        "meaning": "freezes a magnetic submesh while building the surrounding airbox",
+        "backend_support": "FEM CPU/GPU",
+        "problem_ir": "`mesh_workflow.frozen_magnetic_submesh`"
+      },
+      {
+        "python": "fullmag.model.discretization.PerObjectMeshRecipe.source",
+        "type": "`str | None`",
+        "default": "`None`",
+        "si_unit": "$1$",
+        "validation": "any non-`None` value raises `ValueError`",
+        "meaning": "reserved per-object source field; unavailable (use study-level `FEM(mesh=...)` or `study.mesh.import_(...)`)",
+        "backend_support": "Unavailable (fail-closed)",
+        "problem_ir": "`none`"
+      }
+    ]
   }
 }

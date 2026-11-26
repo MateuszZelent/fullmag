@@ -6,8 +6,8 @@ status: implemented
 doc_kind: reference
 audience: user
 owner: fullmag-public-docs
-last_updated: 2026-08-31
-reviewed_revision: 969efa0941905825ac569d525f4bdaefc059e2af
+last_updated: 2026-11-26
+reviewed_revision: 752450f8d259ab97c76c36fe666d5474b02abe9a
 source_of_truth: "StudyUniverseHandle.mesh and StudyUniverseConfig"
 ---
 
@@ -29,7 +29,7 @@ source_of_truth: "StudyUniverseHandle.mesh and StudyUniverseConfig"
 
 ```{math}
 :label: eq-airbox-grading-growth
-0 < g \leq 2.5.
+1.0 < g \leq 2.5.
 ```
 
 (airbox-grading-symbols-and-si-units)=
@@ -44,9 +44,12 @@ source_of_truth: "StudyUniverseHandle.mesh and StudyUniverseConfig"
 (airbox-grading-assumptions-and-validity)=
 ## Assumptions and validity
 
-Controls are input constraints, not a quality or convergence certificate. The public validator
-accepts a finite growth rate only when $0<g\leq2.5$; despite the error text naming the practical
-range `1.0-2.5`, the code does not reject values in $(0,1)$. `asset_pipeline` lowers authored
+Controls are input constraints, not a quality or convergence certificate. Both
+`_validate_mesh_control_values` and `StudyUniverseConfig.__post_init__` require a finite growth
+rate satisfying $1.0 < g \leq 2.5$ (omit `maximum_element_growth_rate` or pass `None` to disable
+geometric grading). Optional `curvature_factor` and `narrow_region_resolution` must be finite and
+strictly positive and require `maximum_element_size` (`airbox_hmax`) to be set so air feature
+refinement relaxes cleanly toward the far-field cap. `asset_pipeline` lowers authored
 `airbox_grading="auto"` to the realized `AirboxOptions.grading_mode="geometric"`. Gmsh
 narrow-region fields restrict body-surface/body-volume refinement so outer airbox faces are not
 treated as magnetic narrow-region walls.
@@ -72,7 +75,14 @@ study.mode("strict")
 study.universe(mode="manual", size=(600 * nm, 400 * nm, 200 * nm))
 
 # %%
-study.universe.mesh(maximum_element_size=80 * nm, minimum_element_size=10 * nm, maximum_element_growth_rate=1.3, grading="geometric")
+study.universe.mesh(
+    maximum_element_size=80 * nm,
+    minimum_element_size=10 * nm,
+    maximum_element_growth_rate=1.3,
+    grading="geometric",
+    curvature_factor=0.5,
+    narrow_region_resolution=1.0,
+)
 body = study.geometry(fm.Box(size=(200 * nm, 100 * nm, 10 * nm), name="film"), name="film")
 body.mesh(maximum_element_size=8 * nm, minimum_element_size=4 * nm, order=1)
 body.Ms = 800e3
@@ -82,8 +92,7 @@ body.m = fm.texture.uniform(1.0, 0.0, 0.0)
 # %%
 study.exchange()
 study.demag(model="airbox", variant="robin")
-study.build_domain_mesh()
-study.stages.add_relax(stage_id="equilibrium", algorithm="llg_overdamped", max_steps=1000)
+study.stages.add_relax(stage_id="equilibrium", algorithm="llg_overdamped", dt=5.0e-13, max_steps=1000)
 ```
 
 | Python | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR |
@@ -93,19 +102,19 @@ study.stages.add_relax(stage_id="equilibrium", algorithm="llg_overdamped", max_s
 | `study.universe.mesh.hmin` | `float \| None` | `None` | $\mathrm{m}$ | positive; ignored when canonical minimum is supplied | compatibility alias for airbox minimum | FEM authoring/lowering is source-backed; runtime lane requires separate qualification | `study.universe.airbox_hmin` |
 | `study.universe.mesh.maximum_element_size` | `float \| None` | `None` | $\mathrm{m}$ | positive; canonical value wins over `hmax` | far-airbox size | FEM authoring/lowering is source-backed; runtime lane requires separate qualification | `study.universe.airbox_hmax` |
 | `study.universe.mesh.minimum_element_size` | `float \| None` | `None` | $\mathrm{m}$ | positive and not greater than resolved maximum; canonical value wins over `hmin` | near-airbox size | FEM authoring/lowering is source-backed; runtime lane requires separate qualification | `study.universe.airbox_hmin` |
-| `study.universe.mesh.growth_rate` | `float \| None` | `None` | $1$ | Finite and `0 < value <= 2.5` | compatibility growth alias | FEM authoring/lowering is source-backed; runtime lane requires separate qualification | `study.universe.airbox_growth_rate` |
-| `study.universe.mesh.maximum_element_growth_rate` | `float \| None` | `None` | $1$ | Finite and `0 < value <= 2.5`; ignored when `growth_rate` is supplied | growth control | FEM authoring/lowering is source-backed; runtime lane requires separate qualification | `study.universe.airbox_growth_rate` |
+| `study.universe.mesh.growth_rate` | `float \| None` | `None` | $1$ | Finite and `1.0 < value <= 2.5`; ignored when `maximum_element_growth_rate` is supplied | compatibility growth alias | FEM authoring/lowering is source-backed; runtime lane requires separate qualification | `study.universe.airbox_growth_rate` |
+| `study.universe.mesh.maximum_element_growth_rate` | `float \| None` | `None` | $1$ | Finite and `1.0 < value <= 2.5`; canonical value wins over `growth_rate` | growth control | FEM authoring/lowering is source-backed; runtime lane requires separate qualification | `study.universe.airbox_growth_rate` |
 | `study.universe.mesh.grading` | `str \| None` | `None` | $1$ | `auto`, `geometric`, or `linear`; `auto` resolves to `geometric`; `None` and `"auto"` both resolve to `"geometric"` | grading vocabulary | FEM authoring/lowering is source-backed; runtime lane requires separate qualification | `AirboxOptions.grading_mode` |
+| `study.universe.mesh.curvature_factor` | `float \| None` | `None` | $1$ | Finite and `> 0`; requires `maximum_element_size` (`airbox_hmax`) | air curvature refinement factor next to curved magnetic faces | FEM authoring/lowering is source-backed; runtime lane requires separate qualification | `study.universe.airbox_curvature_factor` |
+| `study.universe.mesh.narrow_region_resolution` | `float \| None` | `None` | $1$ | Finite and `> 0`; requires `maximum_element_size` (`airbox_hmax`) | air-gap refinement between bodies or body and outer boundary | FEM authoring/lowering is source-backed; runtime lane requires separate qualification | `study.universe.airbox_narrow_region_resolution` |
 
 ### Realized defaults and asymmetric `cell_size` state
 
-The Python signature exposes authored defaults of `None`. Asset-pipeline realization is more specific: an absent growth control resolves to `grading_ratio=1.3`, and both absent `grading` and authored `grading="auto"` resolve to `grading="geometric"`. Every supplied growth value must be finite and satisfy $0 < \mathrm{growth\_rate} \leq 2.5$.
-
-The source permits values below `1.0`; the narrower interval sometimes described as practical guidance is not a validation bound.
+The Python signature exposes authored defaults of `None`. Asset-pipeline realization is more specific: an absent growth control resolves to `grading_ratio=1.3`, and both absent `grading` and authored `grading="auto"` resolve to `grading="geometric"`. Every supplied growth value must be finite and satisfy $1.0 < g \leq 2.5$; omit the argument (`None`) to disable geometric grading. Both `curvature_factor` and `narrow_region_resolution` are emitted to `StudyUniverseConfig.to_ir()` only when authored, keeping serialized IR bytes unchanged when omitted.
 
 | Call/state ordering | Actual validation or mutation |
 | --- | --- |
-| One `mesh(...)` call supplies `cell_size` together with any FEM size, growth, or grading control. | Rejected before either route is applied. |
+| One `mesh(...)` call supplies `cell_size` together with any FEM size, growth, grading, curvature, or narrow-region control. | Rejected before either route is applied. |
 | FDM `cell_size` is already stored, then a later `mesh(...)` call supplies FEM controls. | Rejected because the prior FDM state blocks the FEM route. |
 | FEM controls are already stored, then a later `mesh(cell_size=...)` call is made. | Accepted by the current code: it writes `_common_fdm_cell_size` and returns without checking or clearing the prior FEM controls. |
 
@@ -116,19 +125,22 @@ The third case can leave contradictory authored state. This is a source-backed l
 
 The facade resolves each canonical name over its alias, validates values, and
 `StudyUniverseConfig.to_ir` stores `airbox_hmax`, `airbox_hmin`,
-`airbox_growth_rate`, and `airbox_grading`. `cell_size` takes the separate FDM branch and writes
-`_state._common_fdm_cell_size`. The asset pipeline maps `auto` grading to `geometric` and passes
-the resolved values to `AirboxOptions`; these remain requested/effective controls, not measured
-edge lengths.
+`airbox_growth_rate`, and `airbox_grading`, plus optional `airbox_curvature_factor` and
+`airbox_narrow_region_resolution` when authored. `cell_size` takes the separate FDM branch and
+writes `_state._common_fdm_cell_size`. The asset pipeline maps `auto` grading to `geometric` and
+passes the resolved values to `AirboxOptions`; these remain requested/effective controls, not
+measured edge lengths.
 
 (airbox-grading-round-trip-and-failure-semantics)=
 ## Round-trip and failure semantics
 
-**Requested intent** is the full eight-parameter call. **Resolved execution** separates the FDM
+**Requested intent** is the full ten-parameter call. **Resolved execution** separates the FDM
 `cell_size` branch from normalized FEM controls, then records effective `AirboxOptions`, Gmsh
 field plan, and elements. **Validation errors** include non-positive sizes, non-finite growth,
-growth above `2.5`, `hmin > hmax`, invalid grading, and the documented same-call and prior-state
-conflict branches for `cell_size` and FEM controls.
+growth outside $(1.0, 2.5]$, `hmin > hmax`, invalid grading, non-positive or non-finite
+`curvature_factor`/`narrow_region_resolution`, supplying either feature control without
+`maximum_element_size`, and the documented same-call and prior-state conflict branches for
+`cell_size` and FEM controls.
 **Unsupported combinations** include retaining a prior common FDM `cell_size` while configuring
 FEM universe controls or treating growth as a guaranteed layer sequence.
 
@@ -142,12 +154,12 @@ Gmsh receives mesh options after shared-domain assembly. The narrow-region field
 
 | Responsibility | Repository path | Stable symbol |
 | --- | --- | --- |
-| public mesh controls | [`packages/fullmag-py/src/fullmag/world.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/world.py#L5240) | [`class StudyUniverseHandle`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/world.py#L5240) |
-| normalized controls | [`packages/fullmag-py/src/fullmag/world.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/world.py#L2406) | [`class StudyUniverseConfig`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/world.py#L2406) |
-| generic validation | [`packages/fullmag-py/src/fullmag/world.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/world.py#L285) | [`def _validate_mesh_control_values`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/world.py#L285) |
-| auto grading realization | [`packages/fullmag-py/src/fullmag/meshing/asset_pipeline.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/meshing/asset_pipeline.py#L1570) | [`def _study_universe_airbox_options`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/meshing/asset_pipeline.py#L1570) |
-| Gmsh options | [`packages/fullmag-py/src/fullmag/meshing/_gmsh_fields.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/meshing/_gmsh_fields.py#L158) | [`def _apply_mesh_options`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/meshing/_gmsh_fields.py#L158) |
-| body-only field restriction | [`packages/fullmag-py/src/fullmag/meshing/_gmsh_fields.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/meshing/_gmsh_fields.py#L368) | [`def _add_narrow_region_field`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/meshing/_gmsh_fields.py#L368) |
+| public mesh controls | [`packages/fullmag-py/src/fullmag/world.py`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/world.py#L5691) | [`class StudyUniverseHandle`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/world.py#L5691) |
+| normalized controls | [`packages/fullmag-py/src/fullmag/world.py`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/world.py#L2591) | [`class StudyUniverseConfig`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/world.py#L2591) |
+| generic validation | [`packages/fullmag-py/src/fullmag/world.py`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/world.py#L295) | [`def _validate_mesh_control_values`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/world.py#L295) |
+| auto grading realization | [`packages/fullmag-py/src/fullmag/meshing/asset_pipeline.py`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/meshing/asset_pipeline.py#L1726) | [`def _study_universe_airbox_options`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/meshing/asset_pipeline.py#L1726) |
+| Gmsh options | [`packages/fullmag-py/src/fullmag/meshing/_gmsh_fields.py`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/meshing/_gmsh_fields.py#L158) | [`def _apply_mesh_options`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/meshing/_gmsh_fields.py#L158) |
+| body-only field restriction | [`packages/fullmag-py/src/fullmag/meshing/_gmsh_fields.py`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/meshing/_gmsh_fields.py#L370) | [`def _add_narrow_region_field`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/meshing/_gmsh_fields.py#L370) |
 
 (airbox-grading-validation)=
 ## Validation
@@ -170,9 +182,9 @@ Current code bounds `g` and resolves the grading vocabulary, but has no universa
 
 | Claim | Repository path | Stable symbol | Evidence |
 | --- | --- | --- | --- |
-| API and aliases | [`packages/fullmag-py/src/fullmag/world.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/world.py#L5240) | [`class StudyUniverseHandle`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/world.py#L5240) | source-backed |
-| constraints and IR | [`packages/fullmag-py/src/fullmag/world.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/world.py#L2406) | [`class StudyUniverseConfig`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/world.py#L2406) | source-backed |
-| input validation | [`packages/fullmag-py/src/fullmag/world.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/world.py#L285) | [`def _validate_mesh_control_values`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/world.py#L285) | source-backed |
-| `auto` to `geometric` realization | [`packages/fullmag-py/src/fullmag/meshing/asset_pipeline.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/meshing/asset_pipeline.py#L1570) | [`def _study_universe_airbox_options`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/meshing/asset_pipeline.py#L1570) | source-backed |
-| Gmsh application | [`packages/fullmag-py/src/fullmag/meshing/_gmsh_fields.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/meshing/_gmsh_fields.py#L158) | [`def _apply_mesh_options`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/meshing/_gmsh_fields.py#L158) | source-backed |
-| airbox-safe refinement | [`packages/fullmag-py/src/fullmag/meshing/_gmsh_fields.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/meshing/_gmsh_fields.py#L368) | [`def _add_narrow_region_field`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/meshing/_gmsh_fields.py#L368) | source-backed |
+| API and aliases | [`packages/fullmag-py/src/fullmag/world.py`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/world.py#L5691) | [`class StudyUniverseHandle`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/world.py#L5691) | source-backed |
+| constraints and IR | [`packages/fullmag-py/src/fullmag/world.py`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/world.py#L2591) | [`class StudyUniverseConfig`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/world.py#L2591) | source-backed |
+| input validation | [`packages/fullmag-py/src/fullmag/world.py`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/world.py#L295) | [`def _validate_mesh_control_values`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/world.py#L295) | source-backed |
+| `auto` to `geometric` realization | [`packages/fullmag-py/src/fullmag/meshing/asset_pipeline.py`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/meshing/asset_pipeline.py#L1726) | [`def _study_universe_airbox_options`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/meshing/asset_pipeline.py#L1726) | source-backed |
+| Gmsh application | [`packages/fullmag-py/src/fullmag/meshing/_gmsh_fields.py`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/meshing/_gmsh_fields.py#L158) | [`def _apply_mesh_options`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/meshing/_gmsh_fields.py#L158) | source-backed |
+| airbox-safe refinement | [`packages/fullmag-py/src/fullmag/meshing/_gmsh_fields.py`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/meshing/_gmsh_fields.py#L370) | [`def _add_narrow_region_field`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/meshing/_gmsh_fields.py#L370) | source-backed |

@@ -1,6 +1,7 @@
 {
   "document": {
-    "reviewed_revision": "e46c18b1f3415b8c38a2d8c8bf4afa1a439cbdcf",
+    "reviewed_revision": "752450f8d259ab97c76c36fe666d5474b02abe9a",
+    "reviewed_at": "2026-11-26",
     "path": "public_docs/site/physics/interactions/dmi/index.md",
     "title": "Dzyaloshinskii–Moriya interaction",
     "interaction": "dmi"
@@ -9,39 +10,77 @@
     {
       "solver": "FDM",
       "device": "CPU",
-      "status": "partial",
-      "reason": "Authoring, planning, runtime, and scientific qualification are reported separately on the page."
+      "status": "reference",
+      "reason": "Double-precision centered-difference stencils implemented for interfacial (+z), bulk (3D PBC), and rotated interfacial DMI."
     },
     {
       "solver": "FDM",
       "device": "GPU",
-      "status": "partial",
-      "reason": "Device source presence does not replace executed-device evidence and precision-specific qualification."
+      "status": "implemented",
+      "reason": "FP64 and FP32 fused effective-field DMI kernels and separate energy reductions are implemented; device qualification is variant-specific."
     },
     {
       "solver": "FEM",
       "device": "CPU",
-      "status": "partial",
-      "reason": "The exact weak/discrete realization and bounded capability envelope remain lane-specific."
+      "status": "implemented",
+      "reason": "MFEM weak-residual assembly and lumped-mass projection cover interfacial (arbitrary non-zero normal), bulk, and rotated interfacial DMI across tet4, prism6, and mixed meshes."
     },
     {
       "solver": "FEM",
       "device": "GPU",
-      "status": "partial",
-      "reason": "Strict device residency and executed-device qualification remain separate evidence gates."
+      "status": "implemented",
+      "reason": "Unified preassembled skew-symmetric CSR GPU DMI (dmi_csr_*) covers tet4, prism6, mixed, and 2D periodic meshes at machine precision on RTX 4080 SUPER."
     }
   ],
   "sources": [
-    {
-      "id": "python-owner",
-      "path": "packages/fullmag-py/src/fullmag/model/energy.py",
-      "symbol": "class RotatedInterfacialDMI",
-      "responsibility": "Own the public interaction constructor, validation, or canonical IR lowering boundary."
-    }
+    {"id": "python-interfacial", "path": "packages/fullmag-py/src/fullmag/model/energy.py", "symbol": "class InterfacialDMI", "responsibility": "Explicit interfacial DMI constructor and IR lowering."},
+    {"id": "python-bulk", "path": "packages/fullmag-py/src/fullmag/model/energy.py", "symbol": "class BulkDMI", "responsibility": "Explicit bulk DMI constructor and IR lowering."},
+    {"id": "python-rotated", "path": "packages/fullmag-py/src/fullmag/model/energy.py", "symbol": "class RotatedInterfacialDMI", "responsibility": "Explicit rotated interfacial DMI constructor and IR lowering."},
+    {"id": "python-material", "path": "packages/fullmag-py/src/fullmag/model/structure.py", "symbol": "class Material", "responsibility": "Canonical material-owned Dind/Dbulk coefficients and spatial fields."},
+    {"id": "python-handle", "path": "packages/fullmag-py/src/fullmag/world.py", "symbol": "class MagnetHandle", "responsibility": "Stage-first material DMI attribute facade."},
+    {"id": "planner-fdm", "path": "crates/fullmag-plan/src/fdm.rs", "symbol": "plan_fdm", "responsibility": "FDM DMI normal, periodicity, and field legality resolution."},
+    {"id": "planner-fem", "path": "crates/fullmag-plan/src/fem.rs", "symbol": "plan_fem", "responsibility": "FEM DMI coefficient and normal resolution."},
+    {"id": "fdm-cpu-idmi", "path": "crates/fullmag-engine/src/fdm/cpu/fields/dmi.rs", "symbol": "interfacial_dmi_field", "responsibility": "FDM CPU interfacial DMI stencil field."},
+    {"id": "fdm-cpu-bdmi", "path": "crates/fullmag-engine/src/fdm/cpu/fields/dmi.rs", "symbol": "bulk_dmi_field", "responsibility": "FDM CPU bulk DMI curl stencil field."},
+    {"id": "fdm-cpu-rdmi", "path": "crates/fullmag-engine/src/fdm/cpu/fields/dmi.rs", "symbol": "rotated_interfacial_dmi_field", "responsibility": "FDM CPU rotated interfacial DMI stencil field."},
+    {"id": "fdm-gpu-field", "path": "backends/fdm/gpu/cuda/interactions/demag_fp64.cu", "symbol": "combine_effective_field_fp64_kernel", "responsibility": "FDM GPU FP64 fused DMI field kernels."},
+    {"id": "fem-cpu-idmi", "path": "backends/fem/cpu/mfem/interactions/dmi_interfacial.cpp", "symbol": "compute_interfacial_dmi_field", "responsibility": "FEM CPU interfacial and rotated DMI weak residual and projection."},
+    {"id": "fem-cpu-bdmi", "path": "backends/fem/cpu/mfem/interactions/dmi_bulk.cpp", "symbol": "compute_bulk_dmi_field", "responsibility": "FEM CPU bulk DMI weak residual and projection."},
+    {"id": "fem-gpu-csr-op", "path": "backends/fem/gpu/cuda/interactions/dmi/dmi_csr_operator.cpp", "symbol": "build_gpu_dmi_csr_from_mfem", "responsibility": "Unified CSR GPU DMI operator assembly across tet4, prism6, mixed, and periodic meshes."},
+    {"id": "fem-gpu-csr-kernel", "path": "backends/fem/gpu/cuda/interactions/dmi/dmi_csr_kernels.cu", "symbol": "fullmag_cuda_dmi_csr_field_energy", "responsibility": "Unified CSR GPU DMI SpMV and CUB block energy reduction."}
   ],
-  "symbols": [],
-  "equations": [],
+  "symbols": [
+    {"id": "Di", "latex": "$D_{\\mathrm i}$", "meaning": "interfacial DMI coefficient", "si_unit": "$\\mathrm{J\\,m^{-2}}$"},
+    {"id": "Db", "latex": "$D_{\\mathrm b}$", "meaning": "bulk DMI coefficient", "si_unit": "$\\mathrm{J\\,m^{-2}}$"},
+    {"id": "Drot", "latex": "$D_{\\mathrm{rot}}$", "meaning": "rotated interfacial DMI coefficient", "si_unit": "$\\mathrm{J\\,m^{-2}}$"},
+    {"id": "nhat", "latex": "$\\hat{\\mathbf n}$", "meaning": "oriented interface normal", "si_unit": "$1$"},
+    {"id": "m", "latex": "$\\mathbf m$", "meaning": "reduced magnetization", "si_unit": "$1$"},
+    {"id": "Ms", "latex": "$M_s$", "meaning": "saturation magnetization", "si_unit": "$\\mathrm{A\\,m^{-1}}$"},
+    {"id": "mu0", "latex": "$\\mu_0$", "meaning": "vacuum permeability", "si_unit": "$\\mathrm{N\\,A^{-2}}$"},
+    {"id": "wi", "latex": "$w_{\\mathrm i}$", "meaning": "interfacial DMI energy density", "si_unit": "$\\mathrm{J\\,m^{-3}}$"},
+    {"id": "wb", "latex": "$w_{\\mathrm b}$", "meaning": "bulk DMI energy density", "si_unit": "$\\mathrm{J\\,m^{-3}}$"},
+    {"id": "wrot", "latex": "$w_{\\mathrm{rot}}$", "meaning": "rotated interfacial DMI energy density", "si_unit": "$\\mathrm{J\\,m^{-3}}$"},
+    {"id": "Hi", "latex": "$\\mathbf H_{\\mathrm i}$", "meaning": "interfacial DMI effective field", "si_unit": "$\\mathrm{A\\,m^{-1}}$"},
+    {"id": "Hb", "latex": "$\\mathbf H_{\\mathrm b}$", "meaning": "bulk DMI effective field", "si_unit": "$\\mathrm{A\\,m^{-1}}$"},
+    {"id": "Hrot", "latex": "$\\mathbf H_{\\mathrm{rot}}$", "meaning": "rotated interfacial DMI effective field", "si_unit": "$\\mathrm{A\\,m^{-1}}$"}
+  ],
+  "equations": [
+    {"id": "eq-public-dmi-dmi-interfacial-energy", "symbols": ["wi", "Di", "nhat", "m"], "sources": ["python-interfacial", "fem-cpu-idmi", "fem-gpu-csr-kernel"]},
+    {"id": "eq-public-dmi-dmi-interfacial-field", "symbols": ["Hi", "Di", "mu0", "Ms", "nhat", "m"], "sources": ["fdm-cpu-idmi", "fdm-gpu-field", "fem-cpu-idmi", "fem-gpu-csr-kernel"]},
+    {"id": "eq-public-dmi-dmi-bulk-energy", "symbols": ["wb", "Db", "m"], "sources": ["python-bulk", "fem-cpu-bdmi", "fem-gpu-csr-kernel"]},
+    {"id": "eq-public-dmi-dmi-bulk-field", "symbols": ["Hb", "Db", "mu0", "Ms", "m"], "sources": ["fdm-cpu-bdmi", "fdm-gpu-field", "fem-cpu-bdmi", "fem-gpu-csr-kernel"]},
+    {"id": "eq-public-dmi-dmi-rotated-energy", "symbols": ["wrot", "Drot", "m"], "sources": ["python-rotated", "fem-cpu-idmi", "fem-gpu-csr-kernel"]},
+    {"id": "eq-public-dmi-dmi-rotated-field", "symbols": ["Hrot", "Drot", "mu0", "Ms", "m"], "sources": ["fdm-cpu-rdmi", "fdm-gpu-field", "fem-cpu-idmi", "fem-gpu-csr-kernel"]}
+  ],
   "public_api": {
-    "parameters": []
+    "constructors": ["fullmag.InterfacialDMI", "fullmag.BulkDMI", "fullmag.RotatedInterfacialDMI", "fullmag.Material"],
+    "parameters": [
+      {"python": "InterfacialDMI.D", "type": "float", "default": "required", "si_unit": "$\\mathrm{J\\,m^{-2}}$", "validation": "finite; signed", "meaning": "scalar interfacial DMI coefficient", "backend_support": "FDM/FEM CPU/GPU", "problem_ir": "energy_terms[].D"},
+      {"python": "InterfacialDMI.interface_normal", "type": "Sequence[float] | None", "default": "None", "si_unit": "$1$", "validation": "length 3; finite; FEM non-zero; FDM canonical +z only", "meaning": "interface-symmetry normal", "backend_support": "FDM +z; FEM arbitrary non-zero", "problem_ir": "energy_terms[].interface_normal"},
+      {"python": "BulkDMI.D", "type": "float", "default": "required", "si_unit": "$\\mathrm{J\\,m^{-2}}$", "validation": "finite; signed", "meaning": "scalar isotropic bulk DMI coefficient", "backend_support": "FDM 3D PBC / FEM CPU/GPU", "problem_ir": "energy_terms[].D"},
+      {"python": "RotatedInterfacialDMI.D", "type": "float", "default": "required", "si_unit": "$\\mathrm{J\\,m^{-2}}$", "validation": "finite; signed", "meaning": "rotated interfacial (Göbel) DMI coefficient", "backend_support": "FDM/FEM CPU/GPU", "problem_ir": "energy_terms[].D"},
+      {"python": "Material.Dind", "type": "float | None", "default": "None", "si_unit": "$\\mathrm{J\\,m^{-2}}$", "validation": "finite when supplied", "meaning": "material-owned scalar interfacial DMI coefficient", "backend_support": "FEM CPU/GPU", "problem_ir": "materials[].interfacial_dmi"},
+      {"python": "Material.Dbulk", "type": "float | None", "default": "None", "si_unit": "$\\mathrm{J\\,m^{-2}}$", "validation": "finite when supplied", "meaning": "material-owned scalar bulk DMI coefficient", "backend_support": "FEM CPU/GPU; FDM planner-dependent", "problem_ir": "materials[].bulk_dmi"}
+    ]
   }
 }

@@ -1,7 +1,7 @@
 {
   "document": {
     "path": "public_docs/site/python-api/meshing/fem/study-defaults.md",
-    "reviewed_revision": "ab3c8802a691a535063102c12f9a79bb0043b367"
+    "reviewed_revision": "752450f8d259ab97c76c36fe666d5474b02abe9a"
   },
   "backend_matrix": [
     {
@@ -34,16 +34,129 @@
       "id": "source-1",
       "path": "packages/fullmag-py/src/fullmag/model/discretization.py",
       "symbol": "class FEM",
-      "responsibility": "Study-level FEM mesh policy."
+      "responsibility": "Study-level FEM mesh and GPU BB policy."
     },
     {
       "id": "source-2",
       "path": "packages/fullmag-py/src/fullmag/model/discretization.py",
+      "symbol": "class FemLinearSolverPolicy",
+      "responsibility": "FEM Poisson linear-solver tolerances, print_level, and gpu_strategy."
+    },
+    {
+      "id": "source-3",
+      "path": "packages/fullmag-py/src/fullmag/model/discretization.py",
       "symbol": "class SharedMeshAssemblyPolicy",
       "responsibility": "Shared-domain assembly defaults."
+    },
+    {
+      "id": "source-4",
+      "path": "packages/fullmag-py/src/fullmag/world.py",
+      "symbol": "class StudyBuilder",
+      "responsibility": "Stage-first FEM defaults, demag solver, and GPU BB preconditioner setters."
     }
   ],
   "public_api": {
-    "parameters": []
+    "parameters": [
+      {
+        "python": "FEM.order",
+        "type": "`int`",
+        "default": "required",
+        "si_unit": "$1$",
+        "validation": "integer `>= 1`",
+        "meaning": "finite-element order",
+        "backend_support": "FEM CPU/GPU",
+        "problem_ir": "`backend_policy.discretization_hints.fem.order`"
+      },
+      {
+        "python": "FEM.maximum_element_size",
+        "type": "`float`",
+        "default": "required",
+        "si_unit": "$\\mathrm{m}$",
+        "validation": "strictly positive",
+        "meaning": "global hmax target",
+        "backend_support": "FEM CPU/GPU",
+        "problem_ir": "`backend_policy.discretization_hints.fem.hmax`"
+      },
+      {
+        "python": "FEM.hmax",
+        "type": "`float | None`",
+        "default": "`None`",
+        "si_unit": "$\\mathrm{m}$",
+        "validation": "compatibility alias equal to `maximum_element_size` when both provided",
+        "meaning": "compatibility spelling of global hmax",
+        "backend_support": "FEM CPU/GPU",
+        "problem_ir": "`backend_policy.discretization_hints.fem.hmax`"
+      },
+      {
+        "python": "FEM.demag_solver_policy",
+        "type": "`FemLinearSolverPolicy | None`",
+        "default": "`None`",
+        "si_unit": "$1$",
+        "validation": "typed `FemLinearSolverPolicy`",
+        "meaning": "algebraic Poisson solver request",
+        "backend_support": "FEM CPU/GPU demag lanes",
+        "problem_ir": "`backend_policy.discretization_hints.fem.demag_solver_policy`"
+      },
+      {
+        "python": "FEM.gpu_bb_preconditioner",
+        "type": "`str | None`",
+        "default": "`None`",
+        "si_unit": "$1$",
+        "validation": "`\"auto\"`, `\"none\"`, or `\"exchange_mass\"`; explicit values require FEM GPU `projected_gradient_bb`",
+        "meaning": "GPU BB search-direction preconditioner (`\"auto\"` and omission resolve to qualified `exchange_mass` default)",
+        "backend_support": "FEM GPU `projected_gradient_bb` qualified",
+        "problem_ir": "`backend_policy.discretization_hints.fem.gpu_bb_preconditioner`"
+      },
+      {
+        "python": "FemLinearSolverPolicy.gpu_strategy",
+        "type": "`Literal[\"auto\", \"cg_amg\", \"cudss\"]`",
+        "default": "`\"auto\"`",
+        "si_unit": "$1$",
+        "validation": "one of `\"auto\"`, `\"cg_amg\"`, or `\"cudss\"`",
+        "meaning": "GPU Poisson realization strategy (`\"auto\"` chooses cuDSS when available within VRAM budget, else hypre CG+AMG)",
+        "backend_support": "FEM GPU demag lanes",
+        "problem_ir": "`backend_policy.discretization_hints.fem.demag_solver_policy.gpu_strategy`"
+      },
+      {
+        "python": "StudyBuilder.fem_demag_solver",
+        "type": "`(*, solver=\"CG\", preconditioner=\"AMG\", rtol=1e-8, atol=None, max_iterations=500, print_level=0, gpu_strategy=\"auto\") -> StudyBuilder`",
+        "default": "defaults",
+        "si_unit": "$1$",
+        "validation": "delegates to `FemLinearSolverPolicy`",
+        "meaning": "stage-first FEM Poisson solver policy setter (`fm.fem_demag_solver` mirrors the same kwargs)",
+        "backend_support": "FEM CPU/GPU demag lanes",
+        "problem_ir": "`backend_policy.discretization_hints.fem.demag_solver_policy`"
+      },
+      {
+        "python": "StudyBuilder.fem_bb_preconditioner",
+        "type": "`(policy: str) -> StudyBuilder`",
+        "default": "`None`",
+        "si_unit": "$1$",
+        "validation": "`\"auto\"`, `\"none\"`, or `\"exchange_mass\"`",
+        "meaning": "stage-first GPU BB preconditioner setter (`fm.fem_bb_preconditioner` mirrors the same signature)",
+        "backend_support": "FEM GPU `projected_gradient_bb` qualified",
+        "problem_ir": "`backend_policy.discretization_hints.fem.gpu_bb_preconditioner`"
+      },
+      {
+        "python": "StudyBuilder.fem_order",
+        "type": "`(order_value: int) -> StudyBuilder`",
+        "default": "current state",
+        "si_unit": "$1$",
+        "validation": "delegated validation",
+        "meaning": "stage-first order setter",
+        "backend_support": "FEM CPU/GPU",
+        "problem_ir": "`backend_policy.discretization_hints.fem.order`"
+      },
+      {
+        "python": "StudyBuilder.hmax",
+        "type": "`(value: float | str) -> StudyBuilder`",
+        "default": "current state",
+        "si_unit": "$\\mathrm{m}$",
+        "validation": "delegated validation",
+        "meaning": "stage-first size setter",
+        "backend_support": "FEM CPU/GPU",
+        "problem_ir": "`backend_policy.discretization_hints.fem.hmax`"
+      }
+    ]
   }
 }

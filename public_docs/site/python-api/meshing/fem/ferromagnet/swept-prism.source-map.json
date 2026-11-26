@@ -1,7 +1,7 @@
 {
   "document": {
     "path": "public_docs/site/python-api/meshing/fem/ferromagnet/swept-prism.md",
-    "reviewed_revision": "ab3c8802a691a535063102c12f9a79bb0043b367"
+    "reviewed_revision": "752450f8d259ab97c76c36fe666d5474b02abe9a"
   },
   "backend_matrix": [
     {
@@ -35,9 +35,78 @@
       "path": "packages/fullmag-py/src/fullmag/model/discretization.py",
       "symbol": "class PerObjectMeshRecipe",
       "responsibility": "Swept-prism object policy and lowering."
+    },
+    {
+      "id": "source-2",
+      "path": "packages/fullmag-py/src/fullmag/model/discretization.py",
+      "symbol": "class SweptMeshControls",
+      "responsibility": "Typed swept-prism transition policy (pyramid_to_tetrahedra, pure_prism, reject) and layer controls."
+    },
+    {
+      "id": "source-3",
+      "path": "packages/fullmag-py/src/fullmag/world.py",
+      "symbol": "class GeometryMeshHandle",
+      "responsibility": "Stage-first thin_film and swept prism authoring facades."
+    },
+    {
+      "id": "source-4",
+      "path": "packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py",
+      "symbol": "_chebyshev_center_3d",
+      "responsibility": "Chebyshev mixed-tet untangler for multi-layer swept prism meshes."
     }
   ],
   "public_api": {
-    "parameters": []
+    "parameters": [
+      {
+        "python": "topology",
+        "type": "`str | None`",
+        "default": "`None`",
+        "si_unit": "$1$",
+        "validation": "`\"prismatic\"`",
+        "meaning": "selects the prism mode",
+        "backend_support": "FEM CPU/GPU; FDM not applicable to this mesh policy",
+        "problem_ir": "`mesh_workflow`"
+      },
+      {
+        "python": "order",
+        "type": "`int | None`",
+        "default": "`None`",
+        "si_unit": "$1$",
+        "validation": "`1` (P1 magnetization; `transition=\"pure_prism\"` automatically elevates scalar potential $\\phi$ to P2 `H1_WedgeElement(2)` via `pure_prism_p2`)",
+        "meaning": "user-authored magnetization basis order",
+        "backend_support": "FEM CPU/GPU (`tet4`/mixed P1 and `pure_prism_p2`); FDM not applicable",
+        "problem_ir": "`mesh_workflow`"
+      },
+      {
+        "python": "exact_layers",
+        "type": "`bool | None`",
+        "default": "`None`",
+        "si_unit": "$1$",
+        "validation": "`True` in strict (`False` only in extended)",
+        "meaning": "require the exact layer count",
+        "backend_support": "FEM CPU/GPU; FDM not applicable to this mesh policy",
+        "problem_ir": "`mesh_workflow`"
+      },
+      {
+        "python": "transition",
+        "type": "`Literal[\"pyramid_to_tetrahedra\", \"pure_prism\", \"reject\"] | None`",
+        "default": "`\"pyramid_to_tetrahedra\"`",
+        "si_unit": "$1$",
+        "validation": "`\"pyramid_to_tetrahedra\"` or `\"pure_prism\"` for `topology=\"prismatic\"` (`\"reject\"` also accepted on `SweptMeshControls` / `swept()`)",
+        "meaning": "transition into surrounding domain (`\"pyramid_to_tetrahedra\"` uses Chebyshev mixed-tet untangler for `layers >= 2`; `\"pure_prism\"` activates `pure_prism_p2`)",
+        "backend_support": "FEM CPU/GPU; FDM not applicable to this mesh policy",
+        "problem_ir": "`mesh_workflow`"
+      },
+      {
+        "python": "layers",
+        "type": "`int | None`",
+        "default": "`None`",
+        "si_unit": "$1$",
+        "validation": "positive integer",
+        "meaning": "prism layer count",
+        "backend_support": "FEM CPU/GPU; FDM not applicable to this mesh policy",
+        "problem_ir": "`mesh_workflow`"
+      }
+    ]
   }
 }

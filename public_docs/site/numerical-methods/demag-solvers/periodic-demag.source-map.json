@@ -1,19 +1,19 @@
 {
   "document": {
     "path": "public_docs/site/numerical-methods/demag-solvers/periodic-demag.md",
-    "reviewed_revision": "5e99782acbb7fb3f65d0cad872e102bf67733103",
+    "reviewed_revision": "752450f8d259ab97c76c36fe666d5474b02abe9a",
     "source_of_truth": "Current repository source declarations and public Python API contracts."
   },
   "backend_matrix": [
-    {"solver": "FDM", "device": "CPU", "status": "source-backed"},
-    {"solver": "FDM", "device": "GPU", "status": "partial", "reason": "The periodic CUDA lane requires policy-specific qualification."},
-    {"solver": "FEM", "device": "CPU", "status": "source-backed"},
-    {"solver": "FEM", "device": "GPU", "status": "partial", "reason": "A source-visible CPU reduction does not establish GPU parity."}
+    {"solver": "FDM", "device": "CPU", "status": "implemented"},
+    {"solver": "FDM", "device": "GPU", "status": "implemented"},
+    {"solver": "FEM", "device": "CPU", "status": "implemented"},
+    {"solver": "FEM", "device": "GPU", "status": "implemented"}
   ],
   "equations": [
-    {"id": "eq-numerical-periodic-demag-reduction", "symbols": ["Ap", "P", "Ao", "bp", "b", "up"], "sources": ["fem"]},
-    {"id": "eq-numerical-periodic-demag-field-energy", "symbols": ["Hd", "P", "up", "Ed", "mu0", "Omega", "M"], "sources": ["fem"]},
-    {"id": "eq-numerical-periodic-demag-fdm-sum", "symbols": ["Hd", "ri", "I", "N", "M", "t", "nx", "ny", "nz"], "sources": ["fdm"]}
+    {"id": "eq-numerical-periodic-demag-reduction", "symbols": ["Ap", "P", "Ao", "bp", "b", "up"], "sources": ["fem", "fem-pin", "fem-gpu-cudss"]},
+    {"id": "eq-numerical-periodic-demag-field-energy", "symbols": ["Hd", "P", "up", "Ed", "mu0", "Omega", "M"], "sources": ["fem", "fem-gpu-cudss"]},
+    {"id": "eq-numerical-periodic-demag-fdm-sum", "symbols": ["Hd", "ri", "I", "N", "M", "t", "nx", "ny", "nz"], "sources": ["fdm", "fdm-mixed-single", "fdm-ml-bb"]}
   ],
   "symbols": [
     {"id": "Ap", "latex": "$A_p$", "meaning": "reduced periodic FEM stiffness operator", "si_unit": "$\\mathrm{m}$"},
@@ -38,13 +38,17 @@
   "sources": [
     {"id": "pbc", "path": "packages/fullmag-py/src/fullmag/model/problem.py", "symbol": "class FdmPbc", "responsibility": "Periodic policy validation and IR lowering."},
     {"id": "fdm", "path": "crates/fullmag-engine/src/fdm/cpu/fft.rs", "symbol": "compute_periodic_newell_kernel_spectra", "responsibility": "FDM periodic kernel spectra."},
-    {"id": "fem", "path": "backends/fem/cpu/mfem/interactions/demag_poisson_periodic.cpp", "symbol": "solve_demag_periodic_poisson_reduced", "responsibility": "FEM periodic representative reduction and solve."}
+    {"id": "fdm-mixed-single", "path": "crates/fullmag-fdm-demag/src/newell/mixed_single_layer.rs", "symbol": "compute_single_layer_mixed_newell_kernels", "responsibility": "Point-dipole stabilized single-layer mixed dipolar image tensor."},
+    {"id": "fdm-ml-bb", "path": "backends/fdm/gpu/cuda/runtime/multilayer_bb.cu", "symbol": "context_multilayer_bb", "responsibility": "XY-periodic multilayer FP64 CUDA PG-BB relaxation."},
+    {"id": "fem-pin", "path": "backends/fem/cpu/mfem/interactions/demag_poisson_boundary.cpp", "symbol": "film_neumann_gauge_pin_tdof", "responsibility": "Singleton open-boundary gauge pin for 2D-periodic pure-Neumann films."},
+    {"id": "fem", "path": "backends/fem/cpu/mfem/interactions/demag_poisson_periodic.cpp", "symbol": "solve_demag_periodic_poisson_reduced", "responsibility": "FEM periodic representative reduction and solve."},
+    {"id": "fem-gpu-cudss", "path": "backends/fem/gpu/cuda/demag_poisson/cudss_direct_solver.cpp", "symbol": "try_initialize_demag_cudss_direct", "responsibility": "FEM GPU PBC-reduced 1D Robin and 2D film-pin cuDSS direct Cholesky solve."}
   ],
   "public_api": {
     "parameters": [
       {"python": "FdmPbc.axes", "type": "tuple[bool,bool,bool]", "default": "required", "si_unit": "$1$", "validation": "exactly three Boolean values", "meaning": "periodic status of x, y, z", "backend_support": "FDM planner; FEM mesh planner consumes the same intent", "problem_ir": "`pbc.axes`"},
-      {"python": "FdmPbc.demag", "type": "str", "default": "open", "si_unit": "$1$", "validation": "`open`, `truncated_images`, or `periodic_airbox_k0`", "meaning": "demagnetization boundary policy", "backend_support": "FDM supports `open`/`truncated_images`; FEM supports the periodic airbox policy subject to qualification", "problem_ir": "`pbc.demag`"},
-      {"python": "FdmPbc.image_counts", "type": "tuple[int,int,int] | None", "default": "None", "si_unit": "$1$", "validation": "exactly three non-negative integers; only with `truncated_images`", "meaning": "finite image counts $n_x,n_y,n_z$", "backend_support": "FDM CPU/GPU image policies as qualified", "problem_ir": "`pbc.image_counts`"}
+      {"python": "FdmPbc.demag", "type": "str", "default": "open", "si_unit": "$1$", "validation": "`open`, `truncated_images`, or `periodic_airbox_k0`", "meaning": "demagnetization boundary policy", "backend_support": "FDM supports `open`/`truncated_images`; FEM supports 1D/2D periodic airbox and `periodic_airbox_k0`", "problem_ir": "`pbc.demag`"},
+      {"python": "FdmPbc.image_counts", "type": "tuple[int,int,int] | None", "default": "None", "si_unit": "$1$", "validation": "exactly three non-negative integers; only with `truncated_images`", "meaning": "finite image counts $n_x,n_y,n_z$", "backend_support": "FDM CPU and FP64 CUDA (including mixed single-layer and XY-periodic multilayer)", "problem_ir": "`pbc.image_counts`"}
     ]
   }
 }

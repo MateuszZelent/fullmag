@@ -1,6 +1,7 @@
 {
   "document": {
-    "reviewed_revision": "752450f8d259ab97c76c36fe666d5474b02abe9a",
+    "reviewed_revision": "9dee602ba086f95b1ae7477f1b0ea69e2d9cef50",
+    "reviewed_at": "2026-11-26",
     "path": "public_docs/site/physics/interactions/magnetoelastic/numerical-methods-and-libraries.md",
     "title": "Magnetoelastic numerical methods, HPC optimization, and solver libraries",
     "interaction": "magnetoelastic"
@@ -48,7 +49,13 @@
       "id": "fem-gpu-kernel",
       "path": "backends/fem/gpu/cuda/interactions/magnetoelastic/magnetoelastic_kernels.cu",
       "symbol": "fullmag_cuda_magnetoelastic_field_energy_blocks",
-      "responsibility": "Execute FEM GPU CUDA prescribed-strain field and block-reduction energy kernel."
+      "responsibility": "Execute FEM GPU CUDA prescribed-strain field and block-reduction energy kernel with ComputeEnergy gating and non-contracted FP64 parity."
+    },
+    {
+      "id": "fem-gpu-fused-heff",
+      "path": "backends/fem/gpu/cuda/fields/vector_field_kernels.cu",
+      "symbol": "fullmag_cuda_accumulate_heff_fused_xyz",
+      "responsibility": "Combine active FEM GPU effective fields including H_mel in a single launch."
     },
     {
       "id": "fdm-gpu-reduce",

@@ -1,7 +1,7 @@
 {
   "document": {
     "path": "public_docs/site/python-api/geometry/universe-and-domain.md",
-    "reviewed_revision": "ab3c8802a691a535063102c12f9a79bb0043b367"
+    "reviewed_revision": "752450f8d259ab97c76c36fe666d5474b02abe9a"
   },
   "backend_matrix": [
     {
@@ -33,74 +33,186 @@
   "symbols": [],
   "sources": [
     {
+      "id": "source_universe_config",
+      "path": "packages/fullmag-py/src/fullmag/world.py",
+      "symbol": "class StudyUniverseConfig",
+      "responsibility": "universe bounds, padding, and airbox mesh sizing defaults"
+    },
+    {
       "id": "source_universe_domain",
       "path": "packages/fullmag-py/src/fullmag/world.py",
       "symbol": "class StudyUniverseHandle",
-      "responsibility": "public constructor and IR lowering"
+      "responsibility": "study-level universe mesh configuration handle"
+    },
+    {
+      "id": "source_fdm_pbc",
+      "path": "packages/fullmag-py/src/fullmag/model/problem.py",
+      "symbol": "class FdmPbc",
+      "responsibility": "periodic axes, demag mode, and image-count validation and IR lowering"
     }
   ],
   "public_api": {
-    "owner": "fm.pbc(...) and StudyUniverseHandle.mesh(...)",
+    "owner": "fm.StudyUniverseConfig, fm.FdmPbc, fm.pbc, StudyUniverseHandle.mesh",
     "parameters": [
       {
-        "python": "pbc.x/y/z",
+        "python": "pbc.x",
         "type": "bool",
         "default": "False",
         "si_unit": "$1$",
         "validation": "boolean",
-        "meaning": "periodic axis flags",
+        "meaning": "periodic boundary flag along $x$",
         "backend_support": "FEM/FDM CPU/GPU: IR; resolver-specific",
-        "problem_ir": "periodic axes"
+        "problem_ir": "backend_policy.pbc.axes[0]"
       },
       {
-        "python": "pbc.demag",
+        "python": "pbc.y",
+        "type": "bool",
+        "default": "False",
+        "si_unit": "$1$",
+        "validation": "boolean",
+        "meaning": "periodic boundary flag along $y$",
+        "backend_support": "FEM/FDM CPU/GPU: IR; resolver-specific",
+        "problem_ir": "backend_policy.pbc.axes[1]"
+      },
+      {
+        "python": "pbc.z",
+        "type": "bool",
+        "default": "False",
+        "si_unit": "$1$",
+        "validation": "boolean",
+        "meaning": "periodic boundary flag along $z$",
+        "backend_support": "FEM/FDM CPU/GPU: IR; resolver-specific",
+        "problem_ir": "backend_policy.pbc.axes[2]"
+      },
+      {
+        "python": "FdmPbc.demag",
+        "type": "Literal[\"open\", \"truncated_images\", \"periodic_airbox_k0\"]",
+        "default": "\"open\"",
+        "si_unit": "$1$",
+        "validation": "`\"open\"`, `\"truncated_images\"`, or `\"periodic_airbox_k0\"` (requires `x,y` periodic, `z` open)",
+        "meaning": "periodic magnetostatic closure mode",
+        "backend_support": "FEM/FDM CPU/GPU: IR; planner validates backend match",
+        "problem_ir": "backend_policy.pbc.demag"
+      },
+      {
+        "python": "FdmPbc.image_counts",
+        "type": "tuple[int, int, int] | None",
+        "default": "None",
+        "si_unit": "$1$",
+        "validation": "three non-negative integers; requires `demag=\"truncated_images\"`",
+        "meaning": "per-axis MuMax-style periodic image counts (`images=` kwarg on `fm.pbc`)",
+        "backend_support": "FDM CPU/GPU: IR; planner-validated",
+        "problem_ir": "backend_policy.pbc.image_counts"
+      },
+      {
+        "python": "StudyUniverseConfig.mode",
         "type": "str",
-        "default": "open",
+        "default": "\"auto\"",
         "si_unit": "$1$",
-        "validation": "supported demag mode",
-        "meaning": "open-domain demag choice",
-        "backend_support": "FEM/FDM CPU/GPU: IR; resolver-specific",
-        "problem_ir": "demag"
+        "validation": "`\"auto\"` or `\"manual\"`",
+        "meaning": "automatic bounding box vs explicit exterior domain",
+        "backend_support": "FEM/FDM CPU/GPU: IR",
+        "problem_ir": "problem_meta.runtime_metadata.domain_frame.declared_universe.mode"
       },
       {
-        "python": "pbc.images",
-        "type": "int or None",
-        "default": "None",
-        "si_unit": "$1$",
-        "validation": "positive when supplied",
-        "meaning": "periodic image count",
-        "backend_support": "FEM/FDM CPU/GPU: IR; resolver-specific",
-        "problem_ir": "images"
-      },
-      {
-        "python": "mesh.cell_size",
-        "type": "tuple[float,float,float] or None",
+        "python": "StudyUniverseConfig.size",
+        "type": "tuple[float, float, float] | None",
         "default": "None",
         "si_unit": "$\\mathrm{m}$",
-        "validation": "positive components",
-        "meaning": "structured cell size",
-        "backend_support": "FDM CPU/GPU: IR; FEM resolver-specific",
-        "problem_ir": "cell_size"
+        "validation": "three positive finite lengths when supplied",
+        "meaning": "explicit exterior domain extents",
+        "backend_support": "FEM/FDM CPU/GPU: IR",
+        "problem_ir": "problem_meta.runtime_metadata.domain_frame.declared_universe.size"
       },
       {
-        "python": "mesh.hmax/hmin",
-        "type": "float or None",
+        "python": "StudyUniverseConfig.center",
+        "type": "tuple[float, float, float]",
+        "default": "(0.0, 0.0, 0.0)",
+        "si_unit": "$\\mathrm{m}$",
+        "validation": "three finite coordinates",
+        "meaning": "exterior domain center",
+        "backend_support": "FEM/FDM CPU/GPU: IR",
+        "problem_ir": "problem_meta.runtime_metadata.domain_frame.declared_universe.center"
+      },
+      {
+        "python": "StudyUniverseConfig.padding",
+        "type": "tuple[float, float, float]",
+        "default": "(0.0, 0.0, 0.0)",
+        "si_unit": "$\\mathrm{m}$",
+        "validation": "three non-negative lengths",
+        "meaning": "exterior padding added around magnetic objects",
+        "backend_support": "FEM/FDM CPU/GPU: IR",
+        "problem_ir": "problem_meta.runtime_metadata.domain_frame.declared_universe.padding"
+      },
+      {
+        "python": "StudyUniverseHandle.mesh.cell_size",
+        "type": "Sequence[float] | None",
         "default": "None",
         "si_unit": "$\\mathrm{m}$",
-        "validation": "positive when supplied; hmin <= hmax",
-        "meaning": "unstructured size bounds",
-        "backend_support": "FEM CPU/GPU: IR; FDM resolver-specific",
-        "problem_ir": "hmax/hmin"
+        "validation": "three positive finite components",
+        "meaning": "structured FDM grid cell size",
+        "backend_support": "FDM CPU/GPU: IR",
+        "problem_ir": "backend_policy.discretization_hints.fdm.cell"
       },
       {
-        "python": "mesh.growth_rate",
-        "type": "float or None",
+        "python": "StudyUniverseHandle.mesh.hmax",
+        "type": "float | None",
+        "default": "None",
+        "si_unit": "$\\mathrm{m}$",
+        "validation": "positive finite; `hmin <= hmax` (alias `maximum_element_size`)",
+        "meaning": "maximum exterior/airbox FEM element size",
+        "backend_support": "FEM CPU/GPU: IR",
+        "problem_ir": "airbox_hmax"
+      },
+      {
+        "python": "StudyUniverseHandle.mesh.hmin",
+        "type": "float | None",
+        "default": "None",
+        "si_unit": "$\\mathrm{m}$",
+        "validation": "positive finite; `hmin <= hmax` (alias `minimum_element_size`)",
+        "meaning": "minimum exterior/airbox FEM element size",
+        "backend_support": "FEM CPU/GPU: IR",
+        "problem_ir": "airbox_hmin"
+      },
+      {
+        "python": "StudyUniverseHandle.mesh.maximum_element_growth_rate",
+        "type": "float | None",
         "default": "None",
         "si_unit": "$1$",
-        "validation": "positive when supplied",
-        "meaning": "mesh grading growth",
-        "backend_support": "FEM/FDM CPU/GPU: IR; resolver-specific",
-        "problem_ir": "growth_rate"
+        "validation": "positive finite (alias `growth_rate`)",
+        "meaning": "maximum FEM element size growth rate",
+        "backend_support": "FEM CPU/GPU: IR",
+        "problem_ir": "airbox_growth_rate"
+      },
+      {
+        "python": "StudyUniverseHandle.mesh.grading",
+        "type": "str | None",
+        "default": "None",
+        "si_unit": "$1$",
+        "validation": "`\"auto\"`, `\"geometric\"`, or `\"linear\"`",
+        "meaning": "exterior FEM airbox mesh grading policy",
+        "backend_support": "FEM CPU/GPU: IR",
+        "problem_ir": "airbox_grading"
+      },
+      {
+        "python": "StudyUniverseHandle.mesh.curvature_factor",
+        "type": "float | None",
+        "default": "None",
+        "si_unit": "$1$",
+        "validation": "positive finite",
+        "meaning": "FEM curved-surface resolution factor",
+        "backend_support": "FEM CPU/GPU: IR",
+        "problem_ir": "airbox_curvature_factor"
+      },
+      {
+        "python": "StudyUniverseHandle.mesh.narrow_region_resolution",
+        "type": "float | None",
+        "default": "None",
+        "si_unit": "$1$",
+        "validation": "positive finite",
+        "meaning": "FEM thin-gap / narrow-region refinement factor",
+        "backend_support": "FEM CPU/GPU: IR",
+        "problem_ir": "airbox_narrow_region_resolution"
       }
     ],
     "returns": "typed ProblemIR record at to_ir()"

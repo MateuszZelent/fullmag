@@ -45,10 +45,10 @@ separate build or study command materializes backend resources.
 | `StartScreen` (`/home`) | Launch tiles (FDM/FEM/Template/Import/Script), checkpoint resume, active sessions, sibling instances |
 | `AppMenuBar` & `CommandPaletteModule` | File/Edit/View/Simulation/Tools/Help menus, quick Save/Apply/Undo/Redo, transport controls, `Ctrl+Shift+P` command search |
 | `RibbonModule` | Discretization- and lane-aware tabs (`Workspace`, `View`, `Geometry`, `Materials`, `Physics`, `Mesh`, `Study`, `Results`, contextual `analysis-context`) |
-| `ExplorerModule` | Five semantic dock tabs: `Model`, `Resources`, `Results`, `Jobs`, `Diagnostics` |
-| `InspectorRegistry` | Context-routed semantic property panels with draft isolation and validation |
+| `ExplorerModule` | Seven semantic dock tabs: `Model`, `Resources`, `Results`, `Jobs`, `Diagnostics`, `Helper`, `Errors` |
+| `InspectorRegistry` | 162 context-routed semantic property panels (`inspectors/*Spec.tsx`) with draft isolation and validation |
 | `Viewport3DModule`, `FieldMapModule`, Charts | Unified 3D WebGL scene, 2D planar probe map, live ECharts traces, dispersion/FMR plots, and saved playback |
-| `FooterModule` & `StatusBarModule` | `Logs`, `Telemetry`, `Diagnostics`, `Engine`, `Operations` (including Mesh Jobs), `Problems`, `Quick Chart`, plus live status strip |
+| `FooterModule` & `StatusBarModule` | `Logs`, `Telemetry` (`Overview` / `Antenna` / `Eigensolve`), `Diagnostics`, `Engine`, `Operations` (`RunProgressPanel`), `Problems`, `Quick Chart`, plus live status strip |
 | Script export | `File -> Save canonical copy as…` exports editable stage-first Python DSL scripts |
 
 ```{image} /_static/images/ui/status-bar-footer.png

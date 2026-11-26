@@ -1,7 +1,7 @@
 {
   "document": {
     "path": "public_docs/site/python-api/studies/relaxation.md",
-    "reviewed_revision": "5e99782acbb7fb3f65d0cad872e102bf67733103"
+    "reviewed_revision": "752450f8d259ab97c76c36fe666d5474b02abe9a"
   },
   "backend_matrix": [
     {"solver": "FEM", "device": "CPU", "status": "documented"},
@@ -96,7 +96,7 @@
         "type": "`RelaxStop`",
         "default": "`RelaxStop()`",
         "si_unit": "mixed",
-        "validation": "Positive tolerances and step counts; one time bound at most",
+        "validation": "Positive tolerances and step counts; at most one time bound",
         "meaning": "Canonical stop contract",
         "backend_support": "FEM/FDM CPU/GPU",
         "problem_ir": "`stop`"
@@ -132,14 +132,54 @@
         "problem_ir": "`stop.max_steps`"
       },
       {
+        "python": "Relaxation.max_relaxation_time_s",
+        "type": "`float | None`",
+        "default": "`None`",
+        "si_unit": "\\mathrm{s}",
+        "validation": "Positive finite; mutually exclusive with `max_pseudotime_s`/`max_physical_time_s`",
+        "meaning": "Relaxation time cap (legacy alias)",
+        "backend_support": "FEM/FDM CPU/GPU",
+        "problem_ir": "`stop.max_relaxation_time_s`"
+      },
+      {
+        "python": "Relaxation.max_pseudotime_s",
+        "type": "`float | None`",
+        "default": "`None`",
+        "si_unit": "\\mathrm{s}",
+        "validation": "Positive finite; mutually exclusive with other time bounds",
+        "meaning": "Pseudotime horizon for overdamped LLG relaxation",
+        "backend_support": "FEM/FDM CPU/GPU",
+        "problem_ir": "`stop.max_pseudotime_s`"
+      },
+      {
+        "python": "Relaxation.max_physical_time_s",
+        "type": "`float | None`",
+        "default": "`None`",
+        "si_unit": "\\mathrm{s}",
+        "validation": "Positive finite; mutually exclusive with other time bounds",
+        "meaning": "Physical time cap for relaxation",
+        "backend_support": "FEM/FDM CPU/GPU",
+        "problem_ir": "`stop.max_physical_time_s`"
+      },
+      {
         "python": "Relaxation.dynamics",
         "type": "`LLG | None`",
         "default": "`None`",
         "si_unit": "mixed",
-        "validation": "Required by `llg_overdamped` only; direct minimizers reject it",
+        "validation": "Allowed by `llg_overdamped` only; direct minimizers reject it",
         "meaning": "LLG parameters for the overdamped lane",
         "backend_support": "FDM/FEM CPU/GPU",
         "problem_ir": "`dynamics`"
+      },
+      {
+        "python": "Relaxation.constraints",
+        "type": "`Sequence[FrozenSpins]`",
+        "default": "`()`",
+        "si_unit": "1",
+        "validation": "Typed `FrozenSpins` constraints",
+        "meaning": "Stage-applicable frozen-spin constraints",
+        "backend_support": "Capability-gated by target and lane",
+        "problem_ir": "`constraints`"
       },
       {
         "python": "Relaxation.table_autosave",
@@ -150,6 +190,16 @@
         "meaning": "Tabular autosave policy",
         "backend_support": "FEM/FDM CPU/GPU",
         "problem_ir": "`sampling.table_autosave`"
+      },
+      {
+        "python": "Relaxation.torque_tolerance_unit",
+        "type": "`str`",
+        "default": "`\"T\"`",
+        "si_unit": "1",
+        "validation": "`\"T\"` (tesla) or `\"A/m\"`",
+        "meaning": "Unit applied when interpreting legacy `torque_tolerance`",
+        "backend_support": "FEM/FDM CPU/GPU",
+        "problem_ir": "`stop.torque_tolerance_apm`"
       }
     ]
   }

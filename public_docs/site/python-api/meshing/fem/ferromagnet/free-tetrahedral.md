@@ -97,7 +97,7 @@ film.mesh(
 study.exchange()
 study.demag(model="airbox", variant="robin")
 study.build_domain_mesh()
-study.stages.add_relax(stage_id="equilibrium", tolT=1.0e-6)
+study.stages.add_relax(stage_id="equilibrium", algorithm="projected_gradient_bb", tolT=1.0e-6)
 ```
 
 (python-api-meshing-fem-ferromagnet-free-tetrahedral-python-api)=
@@ -113,18 +113,19 @@ Signature: `object.mesh(**kwargs)` — `GeometryMeshHandle.__call__`
 | `order` | `int \| None` | `None` | $1$ | `>= 1` | element order | FEM CPU/GPU; FDM not applicable to this mesh policy | `mesh_workflow` |
 | `growth_rate` / `maximum_element_growth_rate` | `float \| None` | `None` | $1$ | positive | maximum size growth rate | FEM CPU/GPU; FDM not applicable to this mesh policy | `mesh_workflow` |
 | `curvature_factor`, `size_from_curvature` | `float \| int \| None` | `None` | $1$ | positive | curvature fitting | FEM CPU/GPU; FDM not applicable to this mesh policy | `mesh_workflow` |
-| `narrow_regions`, `narrow_region_resolution` | `int \| float \| None` | `None` | $1/\mathrm{m}$ | positive | narrow-region resolution | FEM CPU/GPU; FDM not applicable to this mesh policy | `mesh_workflow` |
+| `narrow_regions`, `narrow_region_resolution` | `int \| float \| None` | `None` | $1$ | nonnegative / positive | narrow-region resolution | FEM CPU/GPU; FDM not applicable to this mesh policy | `mesh_workflow` |
 | `algorithm_2d`, `algorithm_3d` | `int \| None` | `None` | $1$ | Gmsh algorithm numbers | mesher algorithm selection | FEM CPU/GPU; FDM not applicable to this mesh policy | `mesh_workflow` |
 | `optimize`, `optimize_iterations` | `str \| int \| None` | `None` | $1$ | Gmsh optimizer name | mesh post-optimization | FEM CPU/GPU; FDM not applicable to this mesh policy | `mesh_workflow` |
 | `smoothing_steps` | `int \| None` | `None` | $1$ | non-negative | node smoothing | FEM CPU/GPU; FDM not applicable to this mesh policy | `mesh_workflow` |
 | `calibrate_for`, `size_preset`, `size_factor` | `str \| float \| None` | `None` | $1$ | preset names | calibrated size presets | FEM CPU/GPU; FDM not applicable to this mesh policy | `mesh_workflow` |
-| `source` | `str \| None` | `None` | $1$ | non-empty | import a prebuilt object mesh | FEM CPU/GPU; FDM not applicable to this mesh policy | `mesh_workflow` |
+| `source` | `str \| None` | `None` | $1$ | unavailable on `PerObjectMeshRecipe` (raises `ValueError`); use study-level `FEM(mesh=...)` or `study.mesh.import_(...)` | reserved per-object mesh source (fail-closed) | Unavailable (fail-closed) | `none` |
 | `compute_quality`, `per_element_quality` | `bool \| None` | `None` | $1$ | bool | quality statistics request | FEM CPU/GPU; FDM not applicable to this mesh policy | `mesh_workflow` |
 
 Advanced recipes (`PerObjectMeshRecipe`) additionally expose
 `mesh_strategy="free_tetrahedral"`, Gmsh algorithms, size fields (`size_field`),
-ordered operations, and boundary layers — see {doc}`boundary-layers` and the
-source index below.
+ordered operations (currently fail-closed on build), and boundary layers — see
+{doc}`boundary-layers` and the source index below. For FEM GPU demagnetization
+performance on tetrahedral meshes see {ref}`numerical-methods-performance-fem-gpu-demag`.
 
 Failure behavior: non-positive sizes, `order < 1`, and contradictory aliases raise
 `ValueError` immediately, before any mesh is built.
@@ -153,7 +154,7 @@ Model Explorer
         └── Mesh            → selection kind: object.mesh
 ```
 
-The **Object Mesh Policy** inspector (`ObjectMeshPolicyPanel.tsx`): the
+The **Object Mesh Policy** inspector (`apps/control-room/src/modules/inspector/panels/mesh-details/ObjectMeshSpecPanel.tsx`, `ObjectMeshInspectorSpecPanel`): the
 *Element Size Parameters*, *Mesh Size Presets*, and *Backend Mesh Parameters*
 groups (Gmsh algorithms, optimizer, quality). **Apply Object Policy** writes the
 recipe; **Build Mesh** materializes it. Full description:
@@ -191,6 +192,6 @@ Focused constructor, lowering, and mesh-report tests are the evidence boundary f
 
 | Claim | Path | Symbol | Evidence |
 |---|---|---|---|
-| free-tetrahedral object policy and lowering | [`packages/fullmag-py/src/fullmag/model/discretization.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/discretization.py#L679) | [`class PerObjectMeshRecipe`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/discretization.py#L679) | validation tests |
-| `object.mesh(...)` facade | `packages/fullmag-py/src/fullmag/world.py` | `GeometryMeshHandle.__call__` / `configure` | signature and validation in code |
-| size fields | `packages/fullmag-py/src/fullmag/world.py` | `GeometryMeshHandle.size_field` | method signature |
+| free-tetrahedral object policy and lowering | [`packages/fullmag-py/src/fullmag/model/discretization.py`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/model/discretization.py#L694) | [`class PerObjectMeshRecipe`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/model/discretization.py#L694) | validation tests |
+| `object.mesh(...)` facade | [`packages/fullmag-py/src/fullmag/world.py`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/world.py#L1681) | `GeometryMeshHandle.__call__` / `configure` | signature and validation in code |
+| size fields | [`packages/fullmag-py/src/fullmag/world.py`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/world.py#L2169) | `GeometryMeshHandle.size_field` | method signature |

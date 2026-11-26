@@ -1,7 +1,7 @@
 {
   "document": {
     "path": "public_docs/site/python-api/meshing/fem/airbox/grading.md",
-    "reviewed_revision": "ab3c8802a691a535063102c12f9a79bb0043b367"
+    "reviewed_revision": "752450f8d259ab97c76c36fe666d5474b02abe9a"
   },
   "backend_matrix": [
     {
@@ -43,7 +43,7 @@
         "python": "minimum_element_size",
         "type": "`float | None`",
         "default": "`None`",
-        "si_unit": "\\mathrm{m}",
+        "si_unit": "$\\mathrm{m}$",
         "validation": "positive",
         "meaning": "size near bodies",
         "backend_support": "FEM CPU/GPU; FDM not applicable to this mesh policy",
@@ -53,7 +53,7 @@
         "python": "hmin",
         "type": "`float | None`",
         "default": "`None`",
-        "si_unit": "\\mathrm{m}",
+        "si_unit": "$\\mathrm{m}$",
         "validation": "positive",
         "meaning": "size near bodies",
         "backend_support": "FEM CPU/GPU; FDM not applicable to this mesh policy",
@@ -63,7 +63,7 @@
         "python": "maximum_element_size",
         "type": "`float | None`",
         "default": "`None`",
-        "si_unit": "\\mathrm{m}",
+        "si_unit": "$\\mathrm{m}$",
         "validation": "positive",
         "meaning": "size far from bodies",
         "backend_support": "FEM CPU/GPU; FDM not applicable to this mesh policy",
@@ -73,7 +73,7 @@
         "python": "hmax",
         "type": "`float | None`",
         "default": "`None`",
-        "si_unit": "\\mathrm{m}",
+        "si_unit": "$\\mathrm{m}$",
         "validation": "positive",
         "meaning": "size far from bodies",
         "backend_support": "FEM CPU/GPU; FDM not applicable to this mesh policy",
@@ -83,7 +83,7 @@
         "python": "maximum_element_growth_rate",
         "type": "`float | None`",
         "default": "`None`",
-        "si_unit": "1",
+        "si_unit": "$1$",
         "validation": "positive",
         "meaning": "maximum growth rate",
         "backend_support": "FEM CPU/GPU; FDM not applicable to this mesh policy",
@@ -93,7 +93,7 @@
         "python": "growth_rate",
         "type": "`float | None`",
         "default": "`None`",
-        "si_unit": "1",
+        "si_unit": "$1$",
         "validation": "positive",
         "meaning": "maximum growth rate",
         "backend_support": "FEM CPU/GPU; FDM not applicable to this mesh policy",
@@ -103,7 +103,7 @@
         "python": "grading",
         "type": "`str | None`",
         "default": "`None`",
-        "si_unit": "1",
+        "si_unit": "$1$",
         "validation": "`\"geometric\"`, `\"linear\"`",
         "meaning": "grading type",
         "backend_support": "FEM CPU/GPU; FDM not applicable to this mesh policy",

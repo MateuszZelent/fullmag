@@ -1,32 +1,32 @@
 {
   "document": {
     "path": "public_docs/site/python-api/current-and-excitations/microstrip-antenna.md",
-    "reviewed_revision": "ab3c8802a691a535063102c12f9a79bb0043b367"
+    "reviewed_revision": "752450f8d259ab97c76c36fe666d5474b02abe9a"
   },
   "backend_matrix": [
     {
       "solver": "FEM",
       "device": "CPU",
       "status": "documented",
-      "reason": "authoring and IR documented; runtime qualification separate"
+      "reason": "2.5D and 3D quasistatic conduction + Biot-Savart antenna pipeline documented"
     },
     {
       "solver": "FEM",
       "device": "GPU",
       "status": "documented",
-      "reason": "authoring and IR documented; runtime qualification separate"
+      "reason": "IR lowering and projected field-basis consumption on FEM GPU documented"
     },
     {
       "solver": "FDM",
       "device": "CPU",
       "status": "documented",
-      "reason": "authoring and IR documented; runtime qualification separate"
+      "reason": "IR lowering and projected field-basis consumption on FDM CPU documented"
     },
     {
       "solver": "FDM",
       "device": "GPU",
       "status": "documented",
-      "reason": "authoring and IR documented; runtime qualification separate"
+      "reason": "IR lowering and projected field-basis consumption on FDM GPU documented"
     }
   ],
   "equations": [],
@@ -36,7 +36,55 @@
       "id": "source_microstrip_antenna",
       "path": "packages/fullmag-py/src/fullmag/model/antenna.py",
       "symbol": "class MicrostripAntenna",
-      "responsibility": "public constructor and IR lowering"
+      "responsibility": "2.5D microstrip constructor and IR lowering"
+    },
+    {
+      "id": "source_microstrip_antenna_layout",
+      "path": "packages/fullmag-py/src/fullmag/model/geometry.py",
+      "symbol": "class MicrostripAntennaLayout",
+      "responsibility": "3D conductor-backed microstrip signal + return layout"
+    },
+    {
+      "id": "source_microstrip_width_station",
+      "path": "packages/fullmag-py/src/fullmag/model/geometry.py",
+      "symbol": "class MicrostripWidthStation",
+      "responsibility": "longitudinal width station for MicrostripAntennaLayout"
+    },
+    {
+      "id": "source_meander_antenna_layout",
+      "path": "packages/fullmag-py/src/fullmag/model/geometry.py",
+      "symbol": "class MeanderAntennaLayout",
+      "responsibility": "3D periodic multi-finger meander conductor layout"
+    },
+    {
+      "id": "source_inductive_loop_layout",
+      "path": "packages/fullmag-py/src/fullmag/model/geometry.py",
+      "symbol": "class InductiveLoopLayout",
+      "responsibility": "3D circular, rectangular, or omega inductive loop layout"
+    },
+    {
+      "id": "source_piecewise_path_3d_layout",
+      "path": "packages/fullmag-py/src/fullmag/model/geometry.py",
+      "symbol": "class PiecewisePath3DLayout",
+      "responsibility": "3D routed conductor ribbon swept along Path3DWaypoint vertices"
+    },
+    {
+      "id": "source_path_3d_waypoint",
+      "path": "packages/fullmag-py/src/fullmag/model/geometry.py",
+      "symbol": "class Path3DWaypoint",
+      "responsibility": "3D centerline waypoint descriptor"
+    },
+    {
+      "id": "source_antenna_field_solve_stage",
+      "path": "packages/fullmag-py/src/fullmag/model/antenna.py",
+      "symbol": "class AntennaFieldSolveStage",
+      "responsibility": "3D quasi-static conduction + Biot-Savart field-basis solve stage"
+    },
+    {
+      "id": "source_study_builder",
+      "path": "packages/fullmag-py/src/fullmag/world.py",
+      "symbol": "class StudyBuilder",
+      "responsibility": "study registration methods antenna_object, antenna_field_source, add_antenna_port_mode, add_solved_antenna_drive"
     }
   ],
   "public_api": {
@@ -47,8 +95,8 @@
         "type": "float",
         "default": "required",
         "si_unit": "$\\mathrm{m}$",
-        "validation": "positive",
-        "meaning": "signal width",
+        "validation": "finite and `> 0`",
+        "meaning": "signal trace width",
         "backend_support": "FEM/FDM CPU/GPU: IR; preview/resolver-specific",
         "problem_ir": "width"
       },
@@ -57,7 +105,7 @@
         "type": "float",
         "default": "required",
         "si_unit": "$\\mathrm{m}$",
-        "validation": "positive",
+        "validation": "finite and `> 0`",
         "meaning": "conductor thickness",
         "backend_support": "FEM/FDM CPU/GPU: IR; preview/resolver-specific",
         "problem_ir": "thickness"
@@ -67,8 +115,8 @@
         "type": "float",
         "default": "required",
         "si_unit": "$\\mathrm{m}$",
-        "validation": "non-negative",
-        "meaning": "height over magnet",
+        "validation": "finite and `>= 0`",
+        "meaning": "vertical standoff above magnetic film",
         "backend_support": "FEM/FDM CPU/GPU: IR; preview/resolver-specific",
         "problem_ir": "height_above_magnet"
       },
@@ -77,28 +125,38 @@
         "type": "float",
         "default": "required",
         "si_unit": "$\\mathrm{m}$",
-        "validation": "positive",
-        "meaning": "preview length",
+        "validation": "finite and `> 0`",
+        "meaning": "preview extrusion length",
         "backend_support": "FEM/FDM CPU/GPU: IR; preview/resolver-specific",
         "problem_ir": "preview_length"
       },
       {
-        "python": "center_x/center_y",
+        "python": "center_x",
         "type": "float",
         "default": "0.0",
         "si_unit": "$\\mathrm{m}$",
         "validation": "finite",
-        "meaning": "in-plane position",
+        "meaning": "in-plane $x$ center offset",
         "backend_support": "FEM/FDM CPU/GPU: IR; preview/resolver-specific",
-        "problem_ir": "center"
+        "problem_ir": "center_x"
+      },
+      {
+        "python": "center_y",
+        "type": "float",
+        "default": "0.0",
+        "si_unit": "$\\mathrm{m}$",
+        "validation": "finite",
+        "meaning": "in-plane $y$ center offset",
+        "backend_support": "FEM/FDM CPU/GPU: IR; preview/resolver-specific",
+        "problem_ir": "center_y"
       },
       {
         "python": "current_distribution",
         "type": "str",
-        "default": "uniform",
+        "default": "\"uniform\"",
         "si_unit": "$1$",
-        "validation": "only uniform currently accepted",
-        "meaning": "current distribution",
+        "validation": "currently accepts `\"uniform\"` only",
+        "meaning": "cross-section current distribution model",
         "backend_support": "FEM/FDM CPU/GPU: IR; resolver-specific",
         "problem_ir": "current_distribution"
       }

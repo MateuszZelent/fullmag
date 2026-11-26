@@ -4,6 +4,8 @@ status: partial
 doc_kind: reference
 audience: user
 owner: fullmag-public-docs
+last_updated: 2026-11-26
+reviewed_revision: 752450f8d259ab97c76c36fe666d5474b02abe9a
 ---
 
 (public-docs-physics-interactions-drift-diffusion-stt)=
@@ -14,7 +16,7 @@ algebraic torque coefficient. A charge solution drives vector spin accumulation,
 spin-current tensor transports angular momentum, and a named torque consumer transfers absorbed
 transverse spin to magnetization.
 
-This terminal page collects the physical model, public Python API, capability envelope, and source index in one reference. Jump to [equations](#governing-equations), [interfaces](#boundaries-and-interfaces), [Python](#python-api), [numerics](#discrete-realization), or [validation](#validation).
+This terminal page collects the physical model, public Python API, capability envelope, and source index in one reference. Jump to [equations](#physics-drift-diffusion-spin-torque-governing-equations), [interfaces](#boundaries-and-interfaces), [Python](#physics-drift-diffusion-spin-torque-python-api), [numerics](#physics-drift-diffusion-spin-torque-discrete-realization), or [validation](#physics-drift-diffusion-spin-torque-validation).
 
 (physics-drift-diffusion-spin-torque-problem-statement)=
 ## Physical problem
@@ -90,7 +92,8 @@ Only exchange rotation and dephasing torque the FM:
 ```
 
 Absorbed transverse interface flux uses the same negative convention after area-to-volume
-conversion.
+conversion. Backends convert the Gilbert-form source $\mathbf T_{\mathrm{tr},G}$ to the explicit
+LLG right-hand side exactly once via $(\mathbf T_{\mathrm{tr},G}+\alpha\,\mathbf m\times\mathbf T_{\mathrm{tr},G})/(1+\alpha^2)$ (including FEM CPU `add_transport_stage_rhs`, masked strictly to `magnetic_node_mask`).
 
 ### M2 reciprocal FDM block
 
@@ -117,21 +120,21 @@ symmetric anisotropic term contains AMR/PHE and the cross product contains AHE.
 ## Symbols and SI units
 
 | Symbol | Meaning | SI unit |
-|---|---|---|
+|---|---|---:|
 | $V$ | charge electrochemical potential | $\mathrm{V}$ |
 | $\boldsymbol\mu_s$ | full spin-channel splitting | $\mathrm{V}$ |
-| $E_i$ | electric field | $\mathrm{V\,m^{-1}}$ (V/m) |
-| $G_{ia}$ | negative half-gradient of spin voltage | $\mathrm{V\,m^{-1}}$ (V/m) |
-| $J_{c,i}$ | conventional charge-current density | $\mathrm{A\,m^{-2}}$ (A/m^2) |
-| $Q_{ia}$ | charge-equivalent spin-current tensor; flow index first | $\mathrm{A\,m^{-2}}$ (A/m^2) |
-| $\sigma_s$ | spin conductivity and implemented M2 reciprocal coefficient | $\mathrm{S\,m^{-1}}$ (S/m) |
+| $E_i$ | electric field | $\mathrm{V\,m^{-1}}$ |
+| $G_{ia}$ | negative half-gradient of spin voltage | $\mathrm{V\,m^{-1}}$ |
+| $J_{c,i}$ | conventional charge-current density | $\mathrm{A\,m^{-2}}$ |
+| $Q_{ia}$ | charge-equivalent spin-current tensor; flow index first | $\mathrm{A\,m^{-2}}$ |
+| $\sigma_s$ | spin conductivity and implemented M2 reciprocal coefficient | $\mathrm{S\,m^{-1}}$ |
 | $P$ | signed transport polarization | $1$ |
 | $\theta_{\mathrm{SH}}$ | signed spin Hall angle in the Fullmag convention | $1$ |
 | $\lambda_{\mathrm{sf}},\lambda_J,\lambda_\phi$ | active reaction lengths | $\mathrm{m}$ |
-| $\mathbf R_{\mathrm{sf}},\mathbf R_J,\mathbf R_\phi$ | reaction densities | $\mathrm{A\,m^{-3}}$ (A/m^3) |
-| $G_\uparrow,G_\downarrow,G_r,G_i$ | interface conductances per area | $\mathrm{S\,m^{-2}}$ (S/m^2) |
-| $M_s$ | saturation magnetization | $\mathrm{A\,m^{-1}}$ (A/m) |
-| $\mathbf T_{\mathrm{tr},G}$ | Gilbert-form transport torque source | $\mathrm{s^{-1}}$ (1/s) |
+| $\mathbf R_{\mathrm{sf}},\mathbf R_J,\mathbf R_\phi$ | reaction densities | $\mathrm{A\,m^{-3}}$ |
+| $G_\uparrow,G_\downarrow,G_r,G_i$ | interface conductances per area | $\mathrm{S\,m^{-2}}$ |
+| $M_s$ | saturation magnetization | $\mathrm{A\,m^{-1}}$ |
+| $\mathbf T_{\mathrm{tr},G}$ | Gilbert-form transport torque source | $\mathrm{s^{-1}}$ |
 
 ## Boundaries and interfaces
 
@@ -192,8 +195,10 @@ Canonical `fm.DriftDiffusionSpinTorque(id, solve_id, target)` consumes a named s
 ## Assumptions and validity
 
 The model is diffusive and continuum-scale. Active conductivities and lengths are positive; absent
-reactions use `None`. A realistic HM/FM model needs separate regions, oriented interface, charge contacts/gauge, HM `theta_sh`, FM $M_s$ and $\mathbf m$, and complete materials.
-FDM cells must resolve each layer and shortest active length. FEM needs a conforming interface and
+reactions use `None`. A realistic HM/FM model needs separate regions (non-magnetic conductor via
+`study.conductor(...)` and magnetic free layer via `study.geometry(...)`), an oriented interface,
+complete charge contacts/gauge, HM `theta_sh`, FM $M_s$ and $\mathbf m$, and complete materials.
+FDM cells must resolve each layer and the shortest active length. FEM needs a conforming interface and
 local refinement. Mesh convergence must be demonstrated.
 
 (physics-drift-diffusion-spin-torque-python-api)=
@@ -210,7 +215,7 @@ study = fm.study("hm_fm_m1")
 study.engine("fdm")
 study.device("cpu", precision="double")
 study.mode("strict")
-hm_body = study.geometry(
+hm_body = study.conductor(
     fm.Box(size=(80 * nm, 40 * nm, 3 * nm), name="hm").translate((0, 0, 1.5 * nm)),
     name="hm",
 )
@@ -221,20 +226,30 @@ fm_body = study.geometry(
 fm_body.Ms, fm_body.Aex, fm_body.alpha = 5.8e5, 1.5e-11, 0.03
 fm_body.m = fm.texture.uniform(1.0, 0.0, 0.0)
 hm, ferromagnet = fm.RegionRef("hm"), fm.RegionRef("fm")
+left_hm = fm.SurfaceRef("hm", "x-", (-1.0, 0.0, 0.0))
+right_hm = fm.SurfaceRef("hm", "x+", (1.0, 0.0, 0.0))
 
 # %% Solved charge, spin, and named-solve torque
 charge = study.current_transport(
-    name="charge", model="ohmic_poisson", coupling="one_way",
+    name="charge",
+    model="ohmic_poisson",
+    coupling="one_way",
     domain=[hm, ferromagnet],
     materials=[
         fm.ChargeTransportMaterialAssignment(hm, fm.ChargeTransportMaterial(5.0e6)),
         fm.ChargeTransportMaterialAssignment(ferromagnet, fm.ChargeTransportMaterial(1.0e6)),
     ],
-    boundaries=[], gauge=fm.ChargePotentialGauge("zero_mean"),
+    boundaries=[
+        fm.NormalCurrentElectrode("inlet", [left_hm], outward_current_density_Apm2=-1.0e11),
+        fm.NormalCurrentElectrode("outlet", [right_hm], outward_current_density_Apm2=1.0e11),
+    ],
+    gauge=fm.ChargePotentialGauge("zero_mean"),
     solver=fm.ChargeSolverPolicy(engine="cg"),
 )
 spin = study.spin_transport(fm.SpinDriftDiffusion(
-    id="spin", current_source_id=charge.name, domain=[hm, ferromagnet],
+    id="spin",
+    current_source_id=charge.name,
+    domain=[hm, ferromagnet],
     materials=[
         fm.SpinTransportMaterialAssignment(
             hm, fm.SpinTransportMaterial(5.0e6, 0.0, 0.20, 1.5 * nm)
@@ -244,10 +259,14 @@ spin = study.spin_transport(fm.SpinDriftDiffusion(
         ),
     ],
     interfaces=[fm.MixingConductanceSpinInterface(
-        id="hm_fm", normal_to_ferromagnet=(0, 0, 1),
-        normal_side=hm, ferromagnet_side=ferromagnet,
-        g_up_Spm2=2.5e14, g_down_Spm2=2.5e14,
-        g_r_Spm2=5.0e14, g_i_Spm2=5.0e13,
+        id="hm_fm",
+        normal_to_ferromagnet=(0, 0, 1),
+        normal_side=hm,
+        ferromagnet_side=ferromagnet,
+        g_up_Spm2=2.5e14,
+        g_down_Spm2=2.5e14,
+        g_r_Spm2=5.0e14,
+        g_i_Spm2=5.0e13,
     )],
     requested_execution=fm.TransportExecution("fdm", "cpu", "double", "strict"),
 ))
@@ -255,8 +274,7 @@ study.spin_torque(fm.DriftDiffusionSpinTorque("transport_torque", spin.id, ferro
 study.stages.add_run(1.0e-15, stage_id="m1_run")
 ```
 
-This is an authoring/planner graph. Execution also requires complete face ownership accepted by the
-selected lane.
+This is a runnable stage-first authoring graph that lowers cleanly into `ProblemIR`. Full solver execution additionally requires a complete external face partition accepted by the selected lane.
 
 ### B. Bounded FEM M2 pattern
 
@@ -274,16 +292,32 @@ body.m = fm.texture.uniform(1.0, 0.0, 0.0)
 region = fm.RegionRef("film")
 operator = "fem_charge_spin_conforming_h1_p1.reciprocal_m2.v1"
 charge = study.current_transport(
-    name="m2_charge", model="ohmic_poisson", coupling="bidirectional",
+    name="m2_charge",
+    model="ohmic_poisson",
+    coupling="bidirectional",
     domain=[region],
     materials=[fm.ChargeTransportMaterialAssignment(
         region, fm.ChargeTransportMaterial(4.0e6, 4.0e6, 4.0e6, 0.0)
     )],
-    boundaries=[], gauge=fm.ChargePotentialGauge("dirichlet_reference"),
+    boundaries=[
+        fm.VoltageElectrode(
+            "left",
+            [fm.SurfaceRef("film", "x-", (-1.0, 0.0, 0.0))],
+            potential_V=1.0e-3,
+        ),
+        fm.VoltageElectrode(
+            "right",
+            [fm.SurfaceRef("film", "x+", (1.0, 0.0, 0.0))],
+            potential_V=0.0,
+        ),
+    ],
+    gauge=fm.ChargePotentialGauge("dirichlet_reference"),
     solver=fm.ChargeSolverPolicy(engine="block_gmres", operator_version=operator),
 )
 spin = study.spin_transport(fm.SpinDriftDiffusion(
-    id="m2_spin", current_source_id=charge.name, domain=[region],
+    id="m2_spin",
+    current_source_id=charge.name,
+    domain=[region],
     materials=[fm.SpinTransportMaterialAssignment(
         region, fm.SpinTransportMaterial(3.0e6, 0.2, 0.1, 4e-9, 1e-9, 1e-9)
     )],
@@ -334,17 +368,17 @@ study.stages.add_run(1.0e-15, stage_id="sot_run")
 | `SpinTransportMaterial.polarization_p` | `float` | required | $1$ | finite in $[-1, 1]$ | signed drift polarization | FDM/FEM bounded lanes | `spin_transport_modules[].materials[].material.polarization_p` |
 | `SpinTransportMaterial.theta_sh` | `float` | required | $1$ | finite | signed spin Hall angle | direct SHE; M2 also iSHE | `spin_transport_modules[].materials[].material.theta_sh` |
 | `SpinTransportMaterial.lambda_sf_m` | `float` | required | $\mathrm{m}$ | finite and positive | spin-flip length | FDM/FEM bounded lanes | `spin_transport_modules[].materials[].material.lambda_sf_m` |
-| `SpinDriftDiffusion.mode` | `str` | `steady` | $1$ | `steady` or `transient`; `transient` requires capacitance | temporal model | M3 not production-qualified | `spin_transport_modules[].mode` |
+| `SpinDriftDiffusion.mode` | `str` | `steady` | $1$ | `steady` or `transient`; `transient` requires capacitance | temporal model | M3 transient coupled via `coupled_imex_ark2`, not production-qualified | `spin_transport_modules[].mode` |
 | `SpinSolverPolicy.engine` | `str` | `auto` | $1$ | non-empty; lane whitelist applies | spatial solver | lane-specific | `spin_transport_modules[].solver.engine` |
 | `DriftDiffusionSpinTorque.solve_id` | `str` | required | $1$ | active named spin solve | solved-spin consumer | canonical lane-specific | `spin_torque_modules[].solve_id` |
-| `CurrentTransport.coupling` | `str` | `one_way` | $1$ | `one_way` or `bidirectional` | selects M1/M2 | bounded CPU lanes | `current_modules[].coupling` |
+| `CurrentTransport.coupling` | `str` | `one_way` | $1$ | `one_way` or `bidirectional` | selects M1/M2 | bounded FDM/FEM lanes | `current_modules[].coupling` |
 | `TransportExecution.precision` | `str` | `double` | $1$ | `single` or `double` | requested precision | transport lanes require `double` | `spin_transport_modules[].requested_execution.precision` |
 | `TransportExecution.execution_mode` | `str` | `strict` | $1$ | `strict` or `extended` | fallback policy | strict lanes fail closed | `spin_transport_modules[].requested_execution.execution_mode` |
 | `SpinTransportMaterial.lambda_j_m` | `float \| None` | `None` | $\mathrm{m}$ | positive when enabled | exchange length | magnetic reactions | `spin_transport_modules[].materials[].material.lambda_j_m` |
 | `SpinTransportMaterial.lambda_phi_m` | `float \| None` | `None` | $\mathrm{m}$ | positive when enabled | dephasing length | magnetic reactions | `spin_transport_modules[].materials[].material.lambda_phi_m` |
 | `SpinDriftDiffusion.interfaces` | `Sequence` | empty | $1$ | typed oriented interfaces | internal transfer | lane-specific | `spin_transport_modules[].interfaces` |
 | `SpinDriftDiffusion.boundaries` | `Sequence` | empty | $1$ | typed non-conflicting faces | external spin BC | lane-specific | `spin_transport_modules[].boundaries` |
-| `SpinSolverPolicy.relative_tolerance` | `float` | `1e-8` | $1$ | finite and positive | algebraic tolerance | bounded CPU lanes | `spin_transport_modules[].solver.linear.relative_tolerance` |
+| `SpinSolverPolicy.relative_tolerance` | `float` | `1e-8` | $1$ | finite and positive | algebraic tolerance | bounded FDM/FEM lanes | `spin_transport_modules[].solver.linear.relative_tolerance` |
 | `SpinSolverPolicy.operator_version` | `str` | `fv_spin_upwind_v1` | $1$ | exact lane identifier | discrete operator | lane-specific | `spin_transport_modules[].solver.operator_version` |
 | `DriftDiffusionSpinTorque.target` | `RegionRef` | required | $1$ | magnetic subset with positive $M_s$ | torque target | canonical lane-specific | `spin_torque_modules[].target` |
 | `MixingConductanceSpinInterface.g_r_Spm2` | `float` | required | $\mathrm{S\,m^{-2}}$ | finite and non-negative | real mixing conductance | FDM reference/native subsets | `spin_transport_modules[].interfaces[].g_r_spm2` |
@@ -388,13 +422,18 @@ Opaque round trip is not execution support.
 (physics-drift-diffusion-spin-torque-discrete-realization)=
 ## Discrete realization
 
-| Lane | Executable boundary | Evidence boundary |
-|---|---|---|
-| FDM CPU Rust | M1 reference and bounded CPU-double M2; M3 schema only | unvalidated and not production-qualified |
-| FDM CPU native | strict steady one-way `native_m1_v1` | M2/M3/SML/periodic/specified flux fail closed |
-| FDM GPU | bounded M1 descriptors and CUDA slices | aggregate capability semantic-only/unvalidated; no fallback |
-| FEM CPU | strict steady conforming H1/P1 M1 and bounded M2 | one-way torque fails; M2 torque only; unqualified |
-| FEM GPU | no native transport realization | strict request rejected without CPU rebinding |
+| Solver | Device | Executable boundary | Evidence and acceleration boundary |
+|---|---|---|---|
+| FDM | CPU | Reference M1 (`solve_coupled_module`), native strict steady one-way `native_m1_v1`, bounded CPU-double M2, and coupled M3 (`coupled_imex_ark2`) | M1/M2 verified in unit/contract tests; M3/SML/periodic/specified flux remain restricted and not broadly production-qualified |
+| FDM | GPU | Bounded public steady M1 (`fdm_gpu_double`, gated by `bounded_public_fdm_gpu_m1_scope_reasons`) with CUDA charge AMG-PCG / opt-in `cuDSS` Cholesky and CUDA spin `solve_device` | Parallel CUDA spin field lookup + closure diagnostics, deferred full-SHE observation materialization until requested, zero implicit CPU fallbacks; M2/M3 fail closed |
+| FEM | CPU | Strict steady conforming H1/P1 M1 (`SteadyTransportOracle::solve_spin`) and bounded reciprocal M2 (`SteadyTransportOracle::solve_reciprocal`), with single Gilbert-to-explicit RHS conversion in `add_transport_stage_rhs` | Factor-once multi-RHS charge (`petsc_mumps_cholesky_metis` / `hypre_boomeramg_pcg`) and stiff M1/M2 direct `petsc_mumps_lu` / Tier 2 `hypre_block_amg_gmres`; broad scientific qualification remains separate |
+| FEM | GPU | Optional `cuda_cudss_spd` (charge) and `cuda_cudss_lu` (stiff M1/M2 sparse direct linear solves) inside the bounded FEM transport solver stack; no standalone GPU-resident coupled FEM LLG+transport lane | Strict GPU-resident FEM transport requests fail closed without silent CPU rebinding |
+
+### Recent solver and GPU acceleration contracts
+
+- **FDM GPU M1 charge solver ({ref}`numerical-methods-performance-fdm-transport`)**: The CUDA M1 charge solver uses a multi-block cooperative 6–7 level AMG-PCG preconditioner (`1.46×–7.48×` warm speedup, `-19.5%` peak VRAM) plus an opt-in `cuDSS` Cholesky path (`FULLMAG_FDM_CHARGE_GPU_DIRECT_SOLVER=cudss`, rank-1 center pin + GPU iterative refinement for `zero_mean`, `1.36×–8.53×` warm speedup, physical residual $\le 8.15 \times 10^{-15}$).
+- **FDM GPU M1 spin solver and deferred observations ({ref}`numerical-methods-performance-fdm-transport`)**: CUDA steady-spin lookup uses sorted static face/cell records with parallel binary lookup and parallel closure diagnostics (lifting the former 4096-cell serial diagnostic cap; on RTX 4080 SUPER `32×16×7` 13 RK4 steps improved from `177.58 s` to `3.86 s`, median spin stage `2675.63 ms` to `14.27 ms`, with bit-identical `m`, `V_electric`, `J_charge`, `spin_potential`, `spin_current_tensor`, and `torque_stt`). Full-SHE field reconstruction during CUDA LLG stepping is deferred until accepted observations explicitly request those fields.
+- **FEM M1/M2 sparse direct and preconditioned linear solvers ({ref}`numerical-methods-performance-fem-spectral-multiphysics`)**: Multi-terminal charge solves factor once across RHS columns (`5.82×–8.02×` speedup on 8-terminal `16×16×8` meshes via `petsc_mumps_cholesky_metis`, `hypre_boomeramg_pcg`, and `cuda_cudss_spd`, `err_V <= 2.04e-12`). Stiff M1/M2 precession regimes ($\lambda_J = 0.015 L$, $100\times$ conductivity contrast, AHE) solve in one factorization via Tier 1 `petsc_mumps_lu` (`4.25×` M1 / `5.50×` M2) or GPU `cuda_cudss_lu` (`res <= 5.74e-15`, parity `<= 4.99e-15` vs MUMPS), converging cleanly where unpreconditioned `GMRES(100)` diverged.
 
 FDM M2 requires equal charge/spin domains, Dirichlet voltage gauge, no periodic spin, no transparent
 cross-material interface, explicit mixing laws, reciprocal policy, and complete anisotropic charge
@@ -410,34 +449,29 @@ unknown variants are opaque/read-only.
 
 M1 can carry spin potential, face spin current, reactions, balance diagnostics, torque, and
 telemetry. M2 additionally carries solved charge potential, charge current, spin-current tensor,
-and interface observations. The server recognizes `V_electric`, `J_charge`, `spin_potential`, and `spin_current_tensor`. Dedicated transport visualization/export and browser materialization were not
-verified.
+and interface observations. The canonical quantity catalog registers `V_electric`, `J_charge`, `spin_potential`, `spin_current_tensor` (rank-2 $3\times 3$ flow-major $Q_{ia}$), and `torque_stt` (see {doc}`../../foundations/observables`). Dedicated browser visualization of every transport tensor component remains outside the verified scope of this page.
 
 (physics-drift-diffusion-spin-torque-implementation-mapping)=
 ## Implementation mapping
 
 Python owns typed authoring and serialization. ProblemIR owns canonical intent and graph edges.
-The planner validates domains, policies, and capability. Backend operators own equations and signs.
-API/UI preservation does not prove runtime realization.
+The planner validates domains, policies, and bounded lane capability (including `bounded_public_fdm_gpu_m1_scope_reasons` and `resolve_m1_fem_spin_transport`). Backend operators own equations, signs, and single Gilbert-to-explicit RHS conversion. API/UI preservation does not prove runtime realization.
 
 (physics-drift-diffusion-spin-torque-validation)=
 ## Validation
 
 Python tests verify serialization, named-solve references, material validation, and round trip;
 round-trip tests do not run a solver. FDM CPU tests cover one-dimensional SHE profile/sign, exact
-removal at $\theta_{\mathrm{SH}}=0$, balance, and torque sign. Automated verification suites exist in the repository but are not part of this reference summary.
+removal at $\theta_{\mathrm{SH}}=0$, balance, and torque sign. FDM CUDA M1 contracts verify bit-identical parity against the pre-acceleration CUDA baseline across `m`, `V_electric`, `J_charge`, `spin_potential`, `spin_current_tensor`, and `torque_stt` with zero implicit fallbacks. FEM M1/M2 contracts verify multi-terminal charge parity ($\le 4.25 \times 10^{-12}$), stiff-precession convergence across Tier 1 MUMPS, Tier 2 HYPRE block-AMG GMRES, and GPU `cuda_cudss_lu` ($\le 4.99 \times 10^{-15}$ vs MUMPS), and Gilbert-to-explicit torque conversion in `add_transport_stage_rhs`.
 
-Promotion requires analytic diffusion and mesh convergence; zero-SHE and sign reversal; charge
-conservation/gauge invariance; spin residuals; interface and angular-momentum balance; M1 recovery
-from M2; FDM/FEM common-limit comparison; and actual-device GPU parity with no-fallback provenance.
+Full scientific promotion additionally requires analytic diffusion and mesh convergence across all geometries; zero-SHE and sign reversal; charge conservation/gauge invariance; spin residuals; interface and angular-momentum balance; M1 recovery from M2; and FDM/FEM common-limit comparison.
 
 (physics-drift-diffusion-spin-torque-limitations)=
 ## Limitations
 
-No drift-diffusion lane is documented as scientifically validated or production-qualified. Source,
-schema, planner, unit-test, runtime, and production evidence are separate. Live field publication,
-full FEM/CUDA parity, and browser rendering were not established. Experimental parameters must be
-converted into these units and signs.
+- **Interface jump order**: At a mixing-conductance N/F interface, the FDM discrete jump evaluates cell-center potential differences $\Delta\boldsymbol{\mu}_s$ (and $\Delta V$ in M2) rather than extrapolated face traces, introducing an $\mathcal{O}(Gh/\sigma_s)$ first-order discretization bias that requires vertical mesh refinement near the interface.
+- **Upwinding vs. central stencil**: `fv_spin_upwind_v1` uses first-order $\mathcal{O}(h)$ upwinding for the polarized drift term in domain walls, whereas the M2 reference operator averages face neighbors centrally.
+- **Provenance and qualification boundaries**: M2 and M3 runtime provenance remain narrower than M1, and no drift-diffusion lane is claimed as universally production-qualified across arbitrary meshes, precisions, or browsers. Experimental parameters must be converted explicitly into Fullmag's SI units and sign conventions.
 
 (physics-drift-diffusion-spin-torque-scientific-bibliography)=
 ## Scientific bibliography
@@ -457,14 +491,16 @@ converted into these units and signs.
 
 | Repository path | Stable symbol | Responsibility |
 |---|---|---|
-| [`packages/fullmag-py/src/fullmag/model/spin_transport.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/spin_transport.py#L436) | [`class SpinDriftDiffusion`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/spin_transport.py#L436) | public spin transport and IR lowering |
-| [`packages/fullmag-py/src/fullmag/model/spin_transport.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/spin_transport.py#L497) | [`class DriftDiffusionSpinTorque`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/spin_transport.py#L497) | canonical named-solve torque |
-| [`packages/fullmag-py/src/fullmag/model/current_transport.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/current_transport.py#L1400) | [`class CurrentTransport`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/current_transport.py#L1400) | charge authoring |
-| [`packages/fullmag-py/src/fullmag/model/spin_torque.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/spin_torque.py#L833) | [`class PrescribedSpinOrbitTorque`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/spin_torque.py#L833) | separate prescribed SOT |
-| [`crates/fullmag-plan/src/spin_transport.rs`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-plan/src/spin_transport.rs#L1033) | [`resolve_m1_fem_spin_transport`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-plan/src/spin_transport.rs#L1033) | capability and FEM gates |
-| [`crates/fullmag-runner/src/fdm/cpu/spin_transport.rs`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-runner/src/fdm/cpu/spin_transport.rs#L1902) | [`solve_coupled_module`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-runner/src/fdm/cpu/spin_transport.rs#L1902) | FDM CPU reference |
-| [`backends/fdm/cpu/transport/spin_transport_v1.cpp`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/backends/fdm/cpu/transport/spin_transport_v1.cpp#L1214) | [`solve`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/backends/fdm/cpu/transport/spin_transport_v1.cpp#L1214) | native FDM M1 |
-| [`backends/fdm/cpu/transport/spin_transport_validation_v1.cpp`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/backends/fdm/cpu/transport/spin_transport_validation_v1.cpp#L22) | [`evaluate_local_residual_gate`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/backends/fdm/cpu/transport/spin_transport_validation_v1.cpp#L22) | balance validation |
-| [`backends/fem/cpu/mfem/transport/steady_transport.cpp`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/backends/fem/cpu/mfem/transport/steady_transport.cpp#L1604) | [`SteadyTransportOracle::solve_spin`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/backends/fem/cpu/mfem/transport/steady_transport.cpp#L1604) | FEM M1 |
-| [`backends/fem/cpu/mfem/transport/steady_transport.cpp`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/backends/fem/cpu/mfem/transport/steady_transport.cpp#L1611) | [`SteadyTransportOracle::solve_reciprocal`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/backends/fem/cpu/mfem/transport/steady_transport.cpp#L1611) | FEM M2 |
-| [`backends/fdm/gpu/cuda/transport/spin/device_solver.cu`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/backends/fdm/gpu/cuda/transport/spin/device_solver.cu#L1805) | [`solve_device`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/backends/fdm/gpu/cuda/transport/spin/device_solver.cu#L1805) | bounded CUDA slice |
+| [`packages/fullmag-py/src/fullmag/model/spin_transport.py`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/model/spin_transport.py#L443) | [`class SpinDriftDiffusion`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/model/spin_transport.py#L443) | public spin transport and IR lowering |
+| [`packages/fullmag-py/src/fullmag/model/spin_transport.py`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/model/spin_transport.py#L504) | [`class DriftDiffusionSpinTorque`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/model/spin_transport.py#L504) | canonical named-solve torque |
+| [`packages/fullmag-py/src/fullmag/model/current_transport.py`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/model/current_transport.py#L1467) | [`class CurrentTransport`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/model/current_transport.py#L1467) | charge authoring |
+| [`packages/fullmag-py/src/fullmag/model/spin_torque.py`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/model/spin_torque.py#L902) | [`class PrescribedSpinOrbitTorque`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/model/spin_torque.py#L902) | separate prescribed SOT |
+| [`crates/fullmag-plan/src/spin_transport.rs`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-plan/src/spin_transport.rs#L1144) | [`resolve_m1_fem_spin_transport`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-plan/src/spin_transport.rs#L1144) | capability and FEM gates |
+| [`crates/fullmag-plan/src/spin_transport.rs`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-plan/src/spin_transport.rs#L598) | [`bounded_public_fdm_gpu_m1_scope_reasons`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-plan/src/spin_transport.rs#L598) | bounded public FDM GPU M1 scope gate |
+| [`crates/fullmag-runner/src/fdm/cpu/spin_transport.rs`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-runner/src/fdm/cpu/spin_transport.rs#L2015) | [`solve_coupled_module`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-runner/src/fdm/cpu/spin_transport.rs#L2015) | FDM CPU reference |
+| [`backends/fdm/cpu/transport/spin_transport_v1.cpp`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/backends/fdm/cpu/transport/spin_transport_v1.cpp#L1215) | [`solve`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/backends/fdm/cpu/transport/spin_transport_v1.cpp#L1215) | native FDM M1 |
+| [`backends/fdm/cpu/transport/spin_transport_validation_v1.cpp`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/backends/fdm/cpu/transport/spin_transport_validation_v1.cpp#L23) | [`evaluate_local_residual_gate`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/backends/fdm/cpu/transport/spin_transport_validation_v1.cpp#L23) | balance validation |
+| [`backends/fem/cpu/mfem/transport/steady_transport.cpp`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/backends/fem/cpu/mfem/transport/steady_transport.cpp#L1744) | [`SteadyTransportOracle::solve_spin`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/backends/fem/cpu/mfem/transport/steady_transport.cpp#L1744) | FEM M1 |
+| [`backends/fem/cpu/mfem/transport/steady_transport.cpp`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/backends/fem/cpu/mfem/transport/steady_transport.cpp#L1751) | [`SteadyTransportOracle::solve_reciprocal`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/backends/fem/cpu/mfem/transport/steady_transport.cpp#L1751) | FEM M2 |
+| [`backends/fem/cpu/mfem/interactions/transport_stage.cpp`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/backends/fem/cpu/mfem/interactions/transport_stage.cpp#L183) | [`add_transport_stage_rhs`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/backends/fem/cpu/mfem/interactions/transport_stage.cpp#L183) | FEM CPU Gilbert-to-explicit transport RHS conversion |
+| [`backends/fdm/gpu/cuda/transport/spin/device_solver.cu`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/backends/fdm/gpu/cuda/transport/spin/device_solver.cu#L2089) | [`solve_device`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/backends/fdm/gpu/cuda/transport/spin/device_solver.cu#L2089) | bounded CUDA M1 steady-spin solver |

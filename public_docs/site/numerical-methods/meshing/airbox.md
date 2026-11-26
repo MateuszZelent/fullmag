@@ -6,8 +6,8 @@ status: implemented
 doc_kind: reference
 audience: user
 owner: fullmag-public-docs
-last_updated: 2026-08-31
-reviewed_revision: 969efa0941905825ac569d525f4bdaefc059e2af
+last_updated: 2026-11-26
+reviewed_revision: 752450f8d259ab97c76c36fe666d5474b02abe9a
 source_of_truth: "current public authoring, ProblemIR lowering, mesh realization, and build report"
 ---
 
@@ -63,8 +63,9 @@ h_j=\min(h_{\mathrm{far}},h_0 r^j),\qquad r>1.
 The finite airbox is a truncation of an exterior problem, not proof of an open-boundary
 solution. Converge outer distance separately from magnetic and air-region discretization.
 The OCC shared-domain route realizes an exact sphere only when
-`AirboxOptions.shape == "sphere"`; every other value takes its box branch. The mixed swept
-shared-domain route accepts only normalized `bbox`; a non-bbox request is rejected. In
+`AirboxOptions.shape == "sphere"`; every other value takes its box branch. Both the mixed swept
+(`transition="pyramid_to_tetrahedra"`) and pure-prism (`transition="pure_prism"`) shared-domain
+routes accept only normalized `bbox`; a non-bbox request is rejected. In
 `component_aware` and `concatenated_stl_fallback` modes, a requested sphere is realized as a
 `bbox` and the mesh report records `status="degraded"`, `requested_method="sphere"` and
 `actual_method="bbox"`.
@@ -95,8 +96,10 @@ canonical study API.
 | `study.universe(padding=...)` | `Sequence[float] or None` | `None` | $\mathrm{m}$ | universe configuration validation | requested directional clearance | FEM authoring/lowering; runtime not qualified here | `runtime_metadata.study_universe.padding` |
 | `study.universe.mesh(maximum_element_size=...)` | `float or None` | `None` | $\mathrm{m}$ | positive when supplied | far-field airbox target | FEM authoring/lowering; runtime not qualified here | `runtime_metadata.study_universe.airbox_hmax` |
 | `study.universe.mesh(minimum_element_size=...)` | `float or None` | `None` | $\mathrm{m}$ | positive and no greater than maximum size | near-interface airbox target | FEM authoring/lowering; runtime not qualified here | `runtime_metadata.study_universe.airbox_hmin` |
-| `study.universe.mesh(maximum_element_growth_rate=...)` | `float or None` | `None` | $1$ | positive when supplied | requested neighbor growth limit | FEM authoring/lowering; runtime not qualified here | `runtime_metadata.study_universe.airbox_growth_rate` |
-| `study.universe.mesh(grading=...)` | `str or None` | `None` | $1$ | stored as requested grading mode | requested exterior grading mode | FEM authoring/lowering; runtime not qualified here | `runtime_metadata.study_universe.airbox_grading` |
+| `study.universe.mesh(maximum_element_growth_rate=...)` | `float or None` | `None` | $1$ | finite, strictly greater than `1.0`, and at most `2.5` | requested neighbor growth limit | FEM authoring/lowering; runtime not qualified here | `runtime_metadata.study_universe.airbox_growth_rate` |
+| `study.universe.mesh(grading=...)` | `str or None` | `None` | $1$ | normalized to `auto`, `geometric`, or `linear` | requested exterior grading mode | FEM authoring/lowering; runtime not qualified here | `runtime_metadata.study_universe.airbox_grading` |
+| `study.universe.mesh(curvature_factor=...)` | `float or None` | `None` | $1$ | finite and strictly positive; requires `maximum_element_size` | air curvature-refinement factor next to curved magnetic surfaces | FEM authoring/lowering; runtime not qualified here | `runtime_metadata.study_universe.airbox_curvature_factor` |
+| `study.universe.mesh(narrow_region_resolution=...)` | `float or None` | `None` | $1$ | finite and strictly positive; requires `maximum_element_size` | air gap refinement between bodies or body and outer boundary | FEM authoring/lowering; runtime not qualified here | `runtime_metadata.study_universe.airbox_narrow_region_resolution` |
 | `study.build_domain_mesh()` | `StudyBuilder` | `n/a` | $1$ | requires a realizable shared-domain configuration | public realization boundary | FEM build path; no device-runtime claim | current builder state to shared-domain mesh artifact |
 | `AirboxOptions.padding_factor` | `float` | `3.0` | $1$ | finite and greater than `1` for automatic mixed shared-domain sizing | automatic magnetic-bounding-box scale | FEM realization only | `runtime_metadata.study_universe` to `AirboxOptions.padding_factor` |
 | `AirboxOptions.shape` | `str` | `bbox` | $1$ | OCC: exact `sphere` only for that value; mixed swept route requires `bbox` | requested outer geometry | FEM realization only | `runtime_metadata.study_universe` to route-specific `AirboxOptions.shape` |
@@ -124,6 +127,8 @@ study.universe.mesh(
     minimum_element_size=10 * nm,
     maximum_element_growth_rate=1.3,
     grading="geometric",
+    curvature_factor=0.5,
+    narrow_region_resolution=1.0,
 )
 
 # %%
@@ -135,7 +140,6 @@ film.alpha = 0.02
 film.m = fm.texture.uniform(1.0, 0.0, 0.0)
 study.exchange()
 study.demag(realization="poisson_robin")
-study.build_domain_mesh()
 study.stages.add_relax(stage_id="equilibrium", dt=5.0e-13, max_steps=20_000)
 ```
 
@@ -205,13 +209,13 @@ route-specific, and mixed swept meshing deliberately rejects non-bbox requests.
 
 | ID | Path | Symbol | Responsibility | Evidence |
 | --- | --- | --- | --- | --- |
-| airbox_options | [`packages/fullmag-py/src/fullmag/meshing/_gmsh_types.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/meshing/_gmsh_types.py#L655) | [`class AirboxOptions`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/meshing/_gmsh_types.py#L655) | realization schema and defaults | source-inspected |
-| universe_authoring | [`packages/fullmag-py/src/fullmag/world.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/world.py#L5240) | [`class StudyUniverseHandle`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/world.py#L5240) | public universe and air-mesh authoring | source-inspected |
-| domain_build | [`packages/fullmag-py/src/fullmag/world.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/world.py#L5775) | [`class StudyBuilder`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/world.py#L5775) | public shared-domain build boundary | source-inspected |
-| problem_lowering | [`packages/fullmag-py/src/fullmag/world.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/world.py#L9460) | [`_build_problem`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/world.py#L9460) | builder-state lowering | source-inspected |
-| domain_realization | [`packages/fullmag-py/src/fullmag/meshing/asset_pipeline.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/meshing/asset_pipeline.py#L3647) | [`realize_fem_domain_mesh_asset_from_components_with_report`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/meshing/asset_pipeline.py#L3647) | shared-domain asset realization | source-inspected |
-| occ_airbox | [`packages/fullmag-py/src/fullmag/meshing/_gmsh_occ.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/meshing/_gmsh_occ.py#L502) | [`generate_shared_domain_mesh_via_occ`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/meshing/_gmsh_occ.py#L502) | OCC sphere and box realization | source-inspected |
-| mixed_airbox | [`packages/fullmag-py/src/fullmag/meshing/_gmsh_airbox.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/meshing/_gmsh_airbox.py#L342) | [`_add_conforming_swept_box_airbox_geo`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/meshing/_gmsh_airbox.py#L342) | mixed-route bbox and padding checks | source-inspected |
-| airbox_status | [`packages/fullmag-py/src/fullmag/meshing/mesh_build_report.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/meshing/mesh_build_report.py#L363) | [`_airbox_shape_status`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/meshing/mesh_build_report.py#L363) | requested/effective shape reporting | source-inspected |
-| planner | [`crates/fullmag-plan/src/lib.rs`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-plan/src/lib.rs#L146) | [`plan`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-plan/src/lib.rs#L146) | capability rejection after lowering | source-inspected; runtime unverified |
-| runtime | [`crates/fullmag-runner/src/lib.rs`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-runner/src/lib.rs#L2836) | [`run_planned_problem`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-runner/src/lib.rs#L2836) | resolved-plan execution boundary | source-inspected; device runtime unverified |
+| airbox_options | [`packages/fullmag-py/src/fullmag/meshing/_gmsh_types.py`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/meshing/_gmsh_types.py#L927) | [`class AirboxOptions`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/meshing/_gmsh_types.py#L927) | realization schema and defaults | source-inspected |
+| universe_authoring | [`packages/fullmag-py/src/fullmag/world.py`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/world.py#L5691) | [`class StudyUniverseHandle`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/world.py#L5691) | public universe and air-mesh authoring | source-inspected |
+| domain_build | [`packages/fullmag-py/src/fullmag/world.py`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/world.py#L6437) | [`class StudyBuilder`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/world.py#L6437) | public shared-domain build boundary | source-inspected |
+| problem_lowering | [`packages/fullmag-py/src/fullmag/world.py`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/world.py#L10324) | [`_build_problem`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/world.py#L10324) | builder-state lowering | source-inspected |
+| domain_realization | [`packages/fullmag-py/src/fullmag/meshing/asset_pipeline.py`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/meshing/asset_pipeline.py#L4283) | [`realize_fem_domain_mesh_asset_from_components_with_report`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/meshing/asset_pipeline.py#L4283) | shared-domain asset realization | source-inspected |
+| occ_airbox | [`packages/fullmag-py/src/fullmag/meshing/_gmsh_occ.py`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/meshing/_gmsh_occ.py#L536) | [`generate_shared_domain_mesh_via_occ`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/meshing/_gmsh_occ.py#L536) | OCC sphere and box realization | source-inspected |
+| mixed_airbox | [`packages/fullmag-py/src/fullmag/meshing/_gmsh_airbox.py`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/meshing/_gmsh_airbox.py#L349) | [`_add_conforming_swept_box_airbox_geo`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/meshing/_gmsh_airbox.py#L349) | mixed-route bbox and padding checks | source-inspected |
+| airbox_status | [`packages/fullmag-py/src/fullmag/meshing/mesh_build_report.py`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/meshing/mesh_build_report.py#L363) | [`_airbox_shape_status`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/meshing/mesh_build_report.py#L363) | requested/effective shape reporting | source-inspected |
+| planner | [`crates/fullmag-plan/src/lib.rs`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-plan/src/lib.rs#L183) | [`plan`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-plan/src/lib.rs#L183) | capability rejection after lowering | source-inspected; runtime unverified |
+| runtime | [`crates/fullmag-runner/src/lib.rs`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-runner/src/lib.rs#L3784) | [`run_planned_problem`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-runner/src/lib.rs#L3784) | resolved-plan execution boundary | source-inspected; device runtime unverified |

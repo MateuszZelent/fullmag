@@ -1,7 +1,7 @@
 {
   "document": {
     "path": "public_docs/site/python-api/meshing/fem/build-and-quality.md",
-    "reviewed_revision": "ab3c8802a691a535063102c12f9a79bb0043b367"
+    "reviewed_revision": "752450f8d259ab97c76c36fe666d5474b02abe9a"
   },
   "backend_matrix": [
     {
@@ -41,59 +41,293 @@
       "path": "packages/fullmag-py/src/fullmag/meshing/_gmsh_types.py",
       "symbol": "class MeshRealizationReport",
       "responsibility": "Mesh realization and provenance report."
+    },
+    {
+      "id": "source-3",
+      "path": "packages/fullmag-py/src/fullmag/meshing/_gmsh_types.py",
+      "symbol": "class MeshOptions",
+      "responsibility": "Gmsh mesh generation options."
+    },
+    {
+      "id": "source-4",
+      "path": "packages/fullmag-py/src/fullmag/meshing/_gmsh_types.py",
+      "symbol": "class MeshQualityReport",
+      "responsibility": "Aggregate and per-element mesh quality metrics."
+    },
+    {
+      "id": "source-5",
+      "path": "packages/fullmag-py/src/fullmag/meshing/_gmsh_types.py",
+      "symbol": "resolve_mesh_size_controls",
+      "responsibility": "Resolves size-preset fallbacks from MeshOptions."
+    },
+    {
+      "id": "source-6",
+      "path": "packages/fullmag-py/src/fullmag/meshing/_gmsh_generators.py",
+      "symbol": "generate_mesh",
+      "responsibility": "Standalone tetrahedral mesh generation helper."
+    },
+    {
+      "id": "source-7",
+      "path": "packages/fullmag-py/src/fullmag/meshing/surface_assets.py",
+      "symbol": "export_geometry_to_stl",
+      "responsibility": "STL export helper exposed as fm.export_stl."
+    },
+    {
+      "id": "source-8",
+      "path": "packages/fullmag-py/src/fullmag/world.py",
+      "symbol": "class GeometryMeshHandle",
+      "responsibility": "Object mesh configuration, swept, algorithm, size_field, build, quality, and operation handles."
+    },
+    {
+      "id": "source-9",
+      "path": "packages/fullmag-py/src/fullmag/world.py",
+      "symbol": "class StudyMeshHandle",
+      "responsibility": "Shared-domain mesh save, load, save_or_load, export, and import_ facade."
+    },
+    {
+      "id": "source-10",
+      "path": "packages/fullmag-py/src/fullmag/world.py",
+      "symbol": "class StudyBuilder",
+      "responsibility": "Study-level build_domain_mesh, domain_mesh, frozen_magnetic_submesh, and adaptive_mesh entry points."
+    },
+    {
+      "id": "source-11",
+      "path": "packages/fullmag-py/src/fullmag/model/discretization.py",
+      "symbol": "class PerObjectMeshRecipe",
+      "responsibility": "Per-object quality flags and mesh recipe lowering."
     }
   ],
   "public_api": {
     "parameters": [
       {
         "python": "StudyBuilder.build_domain_mesh",
-        "type": "`build_domain_mesh() -> StudyBuilder`",
+        "type": "`() -> StudyBuilder`",
         "default": "n/a",
-        "si_unit": "1",
-        "validation": "Current facade signature; invalid paths or stale fingerprints are rejected",
+        "si_unit": "$1$",
+        "validation": "Current facade signature; invalid policy or stale fingerprints are rejected",
         "meaning": "materializes shared domain mesh",
         "backend_support": "FEM CPU/GPU; FDM not applicable to this mesh policy",
         "problem_ir": "`mesh_workflow.build`"
       },
       {
         "python": "build_domain_mesh",
-        "type": "`build_domain_mesh() -> None`",
+        "type": "`() -> None`",
         "default": "n/a",
-        "si_unit": "1",
-        "validation": "Current facade signature; invalid paths or stale fingerprints are rejected",
-        "meaning": "module-level materialization",
+        "si_unit": "$1$",
+        "validation": "Current facade signature; invalid policy or stale fingerprints are rejected",
+        "meaning": "module-level shared-domain materialization (`fm.build_domain_mesh`)",
         "backend_support": "FEM CPU/GPU; FDM not applicable to this mesh policy",
         "problem_ir": "`mesh_workflow.build`"
       },
       {
-        "python": "PerObjectMeshRecipe.compute_quality",
+        "python": "fullmag.world.StudyMeshHandle.export",
+        "type": "`(path: str | Path, *, format: str = \"auto\") -> Path`",
+        "default": "`format=\"auto\"`",
+        "si_unit": "$1$",
+        "validation": "`format` must be `\"auto\"`, `\"comsol\"`, or `\"gmsh\"` (`.mphtxt` selects COMSOL under `\"auto\"`)",
+        "meaning": "exports realized shared-domain mesh to Gmsh or COMSOL format (`study.mesh.export(...)`)",
+        "backend_support": "FEM CPU/GPU",
+        "problem_ir": "`mesh_workflow.build`"
+      },
+      {
+        "python": "fullmag.world.StudyMeshHandle.import_",
+        "type": "`(path: str | Path, *, region_map=None, boundary_map=None, region_entity_map=None, boundary_entity_map=None, coordinate_unit=None) -> MeshPersistenceResult`",
+        "default": "optional maps",
+        "si_unit": "$1$",
+        "validation": "validates Gmsh/COMSOL format, coordinate units, and semantic marker maps (`region_entity_map`/`boundary_entity_map` are COMSOL `.mphtxt` only)",
+        "meaning": "imports and binds an external shared-domain mesh (`study.mesh.import_(...)`)",
+        "backend_support": "FEM CPU/GPU",
+        "problem_ir": "`backend_policy.discretization_hints.fem.mesh`"
+      },
+      {
+        "python": "domain_mesh",
+        "type": "`(source: str | Path, *, region_markers, object_region_markers=None, marker_owners=None) -> None`",
+        "default": "`None`",
+        "si_unit": "$1$",
+        "validation": "nonempty source path and non-colliding marker tables (`fm.domain_mesh` / `study.domain_mesh`)",
+        "meaning": "attaches an explicit precomputed shared-domain `.json` MeshIR asset",
+        "backend_support": "FEM CPU/GPU",
+        "problem_ir": "`mesh_workflow.shared_domain_mesh_source`"
+      },
+      {
+        "python": "frozen_magnetic_submesh",
+        "type": "`(source: str | Path, *, region_markers, air_mesh_source=None) -> None`",
+        "default": "`air_mesh_source=None`",
+        "si_unit": "$1$",
+        "validation": "nonempty source path and valid magnetic region markers (`fm.frozen_magnetic_submesh` / `study.frozen_magnetic_submesh`)",
+        "meaning": "freezes the magnetic submesh while building the exterior airbox domain",
+        "backend_support": "FEM CPU/GPU",
+        "problem_ir": "`mesh_workflow.frozen_magnetic_submesh`"
+      },
+      {
+        "python": "adaptive_mesh",
+        "type": "`(enabled: bool = True, *, policy=\"manual\", indicator=\"geometric_only\", target_quantity=\"auto\", convergence_metric=\"energy_delta\", theta=0.3, h_min=None, h_max=None, max_passes=5, error_tolerance=None, chunk_until_seconds=None, steps_per_pass=None) -> None`",
+        "default": "`enabled=True`",
+        "si_unit": "$1$",
+        "validation": "`policy in {\"manual\", \"auto\"}`, `0 < theta <= 1`, `max_passes >= 0`, positive `h_min` (`fm.adaptive_mesh` / `study.adaptive_mesh`)",
+        "meaning": "stores declarative AFEM policy metadata for runtime orchestration",
+        "backend_support": "FEM metadata (declarative; AFEM loop capability-gated)",
+        "problem_ir": "`runtime_metadata.adaptive_mesh`"
+      },
+      {
+        "python": "generate_mesh",
+        "type": "`(geometry, hmax=None, order=1, air_padding=0.0, airbox=None, options=None, maximum_element_size=None, object_id=None) -> MeshData`",
+        "default": "`order=1`",
+        "si_unit": "$\\mathrm{m}$",
+        "validation": "positive target size and valid `MeshOptions`/`AirboxOptions` (`fm.generate_mesh`)",
+        "meaning": "standalone Gmsh tetrahedral mesh generator returning `MeshData`",
+        "backend_support": "FEM CPU/Gmsh host helper",
+        "problem_ir": "`none`"
+      },
+      {
+        "python": "export_stl",
+        "type": "`(geometry, destination: str | Path, *, cylinder_sections: int = 48) -> Path`",
+        "default": "`cylinder_sections=48`",
+        "si_unit": "$1$",
+        "validation": "supported geometry and writable destination path (`fm.export_stl`)",
+        "meaning": "exports analytic/CSG geometry to STL surface mesh",
+        "backend_support": "Host geometry helper",
+        "problem_ir": "`none`"
+      },
+      {
+        "python": "resolve_mesh_size_controls",
+        "type": "`(opts: MeshOptions) -> dict[str, object]`",
+        "default": "required",
+        "si_unit": "$1$",
+        "validation": "accepts a `MeshOptions` instance (`fm.resolve_mesh_size_controls`)",
+        "meaning": "resolves preset fallbacks into effective growth, curvature, and narrow-region parameters",
+        "backend_support": "FEM CPU/Gmsh host helper",
+        "problem_ir": "`mesh_workflow`"
+      },
+      {
+        "python": "MeshOptions",
+        "type": "`dataclass` (`algorithm_2d=6`, `algorithm_3d=1`, `hmin=None`, `size_preset=None`, `optimize=None`, `compute_quality=True`, `per_element_quality=True`, ...)",
+        "default": "defaults",
+        "si_unit": "$1$",
+        "validation": "typed Gmsh generation options (`fm.MeshOptions`)",
+        "meaning": "configures standalone `generate_mesh` and shared-domain Gmsh generation",
+        "backend_support": "FEM CPU/Gmsh",
+        "problem_ir": "`mesh_workflow`"
+      },
+      {
+        "python": "MeshQualityReport",
+        "type": "`dataclass` (`n_elements`, `sicn_min`, `sicn_max`, `sicn_mean`, `sicn_p5`, `gamma_min`, `volume_min`, ..., `quality_by_family=None`)",
+        "default": "required fields",
+        "si_unit": "$1$",
+        "validation": "extracted from realized Gmsh/native mesh (`fm.MeshQualityReport`)",
+        "meaning": "structured aggregate and optional per-element quality metrics",
+        "backend_support": "FEM CPU/GPU provenance",
+        "problem_ir": "`mesh_workflow.quality_report`"
+      },
+      {
+        "python": "fullmag.model.discretization.PerObjectMeshRecipe.compute_quality",
         "type": "`bool | None`",
         "default": "`None`",
-        "si_unit": "1",
-        "validation": "Current facade signature; invalid paths or stale fingerprints are rejected",
+        "si_unit": "$1$",
+        "validation": "boolean when authored; `None` inherits",
         "meaning": "aggregate quality request",
         "backend_support": "FEM CPU/GPU; FDM not applicable to this mesh policy",
         "problem_ir": "`mesh_workflow.per_geometry[]`"
       },
       {
-        "python": "PerObjectMeshRecipe.per_element_quality",
+        "python": "fullmag.model.discretization.PerObjectMeshRecipe.per_element_quality",
         "type": "`bool | None`",
         "default": "`None`",
-        "si_unit": "1",
-        "validation": "Current facade signature; invalid paths or stale fingerprints are rejected",
+        "si_unit": "$1$",
+        "validation": "boolean when authored; `None` inherits",
         "meaning": "per-element quality request",
         "backend_support": "FEM CPU/GPU; FDM not applicable to this mesh policy",
         "problem_ir": "`mesh_workflow.per_geometry[]`"
       },
       {
-        "python": "MagnetHandle.mesh",
-        "type": "`mesh(**kwargs) -> MagnetHandle`",
+        "python": "GeometryMeshHandle.__call__",
+        "type": "`(**kwargs) -> GeometryMeshHandle`",
         "default": "inherited",
-        "si_unit": "1",
-        "validation": "Current facade signature; invalid paths or stale fingerprints are rejected",
-        "meaning": "authors object mesh policy",
-        "backend_support": "FEM CPU/GPU; FDM not applicable to this mesh policy",
-        "problem_ir": "`mesh_workflow`"
+        "si_unit": "$1$",
+        "validation": "delegates to `configure(...)`; rejects invalid sizes, `source` mismatch, or mixing `cell_size` with FEM controls",
+        "meaning": "authors object mesh policy (`body.mesh(...)`)",
+        "backend_support": "FEM CPU/GPU (and `cell_size` on FDM)",
+        "problem_ir": "`mesh_workflow.per_geometry[]`"
+      },
+      {
+        "python": "GeometryMeshHandle.swept",
+        "type": "`(elements=6, distribution=\"fixed\", element_ratio=1.0, symmetric=False, face_meshing=\"triangular\", sweep_direction=\"auto\", transition=None, exact_layers=None) -> GeometryMeshHandle`",
+        "default": "`elements=6`",
+        "si_unit": "$1$",
+        "validation": "`transition in {\"pyramid_to_tetrahedra\", \"pure_prism\", \"reject\"}`; `hex` rejects `\"pyramid_to_tetrahedra\"` and `\"pure_prism\"`",
+        "meaning": "configures swept prismatic or hexahedral through-thickness meshing",
+        "backend_support": "FEM capability-gated",
+        "problem_ir": "`mesh_workflow.per_geometry[]`"
+      },
+      {
+        "python": "GeometryMeshHandle.algorithm",
+        "type": "`(*, dim2: int | None = None, dim3: int | None = None) -> GeometryMeshHandle`",
+        "default": "`None`",
+        "si_unit": "$1$",
+        "validation": "Gmsh 2-D/3-D algorithm IDs",
+        "meaning": "selects Gmsh surface and volume meshing algorithms",
+        "backend_support": "FEM/Gmsh",
+        "problem_ir": "`mesh_workflow.per_geometry[].algorithm_2d/3d`"
+      },
+      {
+        "python": "GeometryMeshHandle.size_field",
+        "type": "`(kind: str, **params: object) -> GeometryMeshHandle`",
+        "default": "required",
+        "si_unit": "$1$",
+        "validation": "finite JSON-serializable Gmsh field parameters (e.g., `\"Ball\"`, `\"Box\"`)",
+        "meaning": "appends an explicit Gmsh size field to the object recipe",
+        "backend_support": "FEM/Gmsh",
+        "problem_ir": "`mesh_workflow.per_geometry[].size_fields`"
+      },
+      {
+        "python": "GeometryMeshHandle.build",
+        "type": "`() -> GeometryMeshHandle`",
+        "default": "n/a",
+        "si_unit": "$1$",
+        "validation": "marks `build_requested=True` and materializes shared-domain mesh assets",
+        "meaning": "explicitly triggers mesh generation from the object facade",
+        "backend_support": "FEM CPU/GPU",
+        "problem_ir": "`mesh_workflow.build`"
+      },
+      {
+        "python": "GeometryMeshHandle.quality",
+        "type": "`() -> object | None`",
+        "default": "`None`",
+        "si_unit": "$1$",
+        "validation": "returns cached `MeshQualityReport` or `None` if `compute_quality` was disabled",
+        "meaning": "retrieves the most recent quality report for this object",
+        "backend_support": "FEM CPU/GPU",
+        "problem_ir": "`mesh_workflow.quality_report`"
+      },
+      {
+        "python": "GeometryMeshHandle.optimize",
+        "type": "`(method: str | None = None, iterations: int = 1) -> GeometryMeshHandle`",
+        "default": "`iterations=1`",
+        "si_unit": "$1$",
+        "validation": "records an authored `optimize` mesh operation (shared-domain build currently fails closed on nonempty `operations`)",
+        "meaning": "queues a post-mesh optimization operation; prefer `body.mesh(optimize=..., optimize_iterations=...)` for executable builds",
+        "backend_support": "Authored intent only (build fails closed on nonempty `operations`)",
+        "problem_ir": "`mesh_workflow.per_geometry[].operations`"
+      },
+      {
+        "python": "GeometryMeshHandle.refine",
+        "type": "`(steps: int = 1) -> GeometryMeshHandle`",
+        "default": "`steps=1`",
+        "si_unit": "$1$",
+        "validation": "records an authored `refine` mesh operation (shared-domain build currently fails closed on nonempty `operations`)",
+        "meaning": "queues a uniform h-refinement operation",
+        "backend_support": "Authored intent only (build fails closed on nonempty `operations`)",
+        "problem_ir": "`mesh_workflow.per_geometry[].operations`"
+      },
+      {
+        "python": "GeometryMeshHandle.smooth",
+        "type": "`(iterations: int = 1) -> GeometryMeshHandle`",
+        "default": "`iterations=1`",
+        "si_unit": "$1$",
+        "validation": "records an authored `smooth` mesh operation (shared-domain build currently fails closed on nonempty `operations`)",
+        "meaning": "queues a Laplacian smoothing operation; prefer `body.mesh(smoothing_steps=...)` for executable builds",
+        "backend_support": "Authored intent only (build fails closed on nonempty `operations`)",
+        "problem_ir": "`mesh_workflow.per_geometry[].operations`"
       }
     ]
   }

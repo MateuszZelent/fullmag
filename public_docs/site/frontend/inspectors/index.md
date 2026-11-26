@@ -10,10 +10,13 @@ owner: fullmag-public-docs
 # Semantic Inspectors
 
 Every selection in the Explorer, 3D Viewport, 2D Field Map, or Results Navigator routes through
-`InspectorRegistry` and `inspectorRouteCatalog.tsx` (`apps/control-room/src/modules/inspector/`) to
-a dedicated semantic panel. Rather than building one generic key-value property grid, each domain
-owner exposes typed controls, unit-aware SI inputs, lane-filtered validation, and explicit save
-transactions.
+`resolveInspectorPanel` (`inspectorRegistry.tsx`) and `inspectorRouteCatalog.tsx`
+(`apps/control-room/src/modules/inspector/`) to one of **162 canonical routes** composed across
+four domain registries (`MAGNETIC_TEXTURE_ROUTES`, `MODEL_PHYSICS_ROUTES`, `MESH_ANTENNA_ROUTES`,
+and `STUDY_RESULTS_START_ROUTES`, plus `FALLBACK_INSPECTOR_ROUTE`). Rather than building one
+generic key-value property grid, each declarative spec (`inspectors/*Spec.tsx` rendered via
+`InspectorTemplate` and `PropertyRow`) exposes typed controls, unit-aware SI inputs, lane-filtered
+validation, and explicit save transactions.
 
 ```{image} /_static/images/ui/inspector-panel-draft.png
 :alt: Staged Geometry inspector showing STATE modified badge, SI Size X edit, active Revert and Apply buttons, and Draft ready to apply footer
@@ -52,8 +55,9 @@ analysis-and-frequency-domain
 
 | Responsibility | Repository path | Stable symbol |
 |---|---|---|
-| Selection-to-panel route catalog | `apps/control-room/src/modules/inspector/inspectorRouteCatalog.tsx` | `resolveInspectorRoute` |
-| Panel registry shell | `apps/control-room/src/modules/inspector/inspectorRegistry.tsx` | `InspectorRegistry` |
+| Selection-to-panel route catalog | `apps/control-room/src/modules/inspector/inspectorRouteCatalog.tsx` | `resolveInspectorRoute`, `INSPECTOR_ROUTES` |
+| Panel registry resolver | `apps/control-room/src/modules/inspector/inspectorRegistry.tsx` | `resolveInspectorPanel` |
+| Declarative inspector shell & template | `apps/control-room/src/modules/inspector/template/InspectorTemplate.tsx` | `InspectorTemplate` |
+| Unit-aware scalar & vector draft rows | `apps/control-room/src/modules/inspector/template/PropertyRow.tsx` | `PropertyRow` |
 | Staged / liveViewport / immediate session contract | `apps/control-room/src/modules/inspector/InspectorEditSession.tsx` | `useRegisterInspectorEditSession`, `inspectorActionState` |
-| Unit-aware scalar draft inputs | `apps/control-room/src/modules/inspector/primitives/QuantityField.tsx` | `QuantityField` |
 | Optimistic revision reconciliation | `apps/control-room/src/modules/inspector/panels/objectEditAckReconciliation.ts` | `reconcileObjectEditAck` |

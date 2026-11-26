@@ -1,7 +1,7 @@
 {
   "document": {
     "path": "public_docs/site/numerical-methods/meshing/swept-meshes.md",
-    "reviewed_revision": "a1de38b4d7dad275dccbdbfd937b757d6ca7ee99"
+    "reviewed_revision": "752450f8d259ab97c76c36fe666d5474b02abe9a"
   },
   "backend_matrix": [
     {
@@ -81,6 +81,20 @@
       "path": "crates/fullmag-runner/src/lib.rs",
       "symbol": "run_planned_problem",
       "responsibility": "Planned runtime dispatch; source evidence only here."
+    },
+    {
+      "id": "pure_prism_mesher",
+      "path": "packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py",
+      "symbol": "generate_pure_prism_box_airbox_mesh",
+      "responsibility": "100% prism6 pure-prism P2 shared-domain generator and certificate emitter",
+      "evidence_status": "verified"
+    },
+    {
+      "id": "mixed_untangler",
+      "path": "packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py",
+      "symbol": "_untangle_same_side_mixed_tetrahedra",
+      "responsibility": "Chebyshev-center mixed-tet conformity repair (layers=2)",
+      "evidence_status": "verified"
     }
   ],
   "symbols": [
@@ -92,7 +106,7 @@
     },
     {
       "id": "n_layers",
-      "latex": "n_{layers}",
+      "latex": "$n_{\\mathrm{layers}}$",
       "meaning": "requested layer count",
       "si_unit": "$1$"
     }
@@ -160,7 +174,7 @@
         "owner": "mesh_authoring",
         "lowering": "runtime_metadata.mesh_workflow.per_geometry[].through_thickness_distribution",
         "python": "through_thickness_distribution",
-        "type": "Literal[ fixed, linear, exponential ] | None",
+        "type": "Literal[\"fixed\", \"linear\", \"exponential\"] | None",
         "default": "None",
         "si_unit": "$1$",
         "validation": "must be `fixed`, `linear`, or `exponential`; exact layer count requires `fixed`",
@@ -202,7 +216,7 @@
         "owner": "mesh_authoring",
         "lowering": "runtime_metadata.mesh_workflow.per_geometry[].sweep_face_meshing",
         "python": "sweep_face_meshing",
-        "type": "Literal[ triangular, quadrilateral ] | None",
+        "type": "Literal[\"triangular\", \"quadrilateral\"] | None",
         "default": "None",
         "si_unit": "$1$",
         "validation": "prism requires triangular; hex requires quadrilateral",
@@ -216,7 +230,7 @@
         "owner": "mesh_authoring",
         "lowering": "runtime_metadata.mesh_workflow.per_geometry[].sweep_direction",
         "python": "sweep_direction",
-        "type": "Literal[ auto, x, y, z ] | None",
+        "type": "Literal[\"auto\", \"x\", \"y\", \"z\"] | None",
         "default": "None",
         "si_unit": "$1$",
         "validation": "exact vocabulary; required for layered intent",
@@ -230,7 +244,7 @@
         "owner": "mesh_authoring",
         "lowering": "runtime_metadata.mesh_workflow.per_geometry[].element_family",
         "python": "element_family",
-        "type": "Literal[ prism, hex ] | None",
+        "type": "Literal[\"prism\", \"hex\"] | None",
         "default": "None",
         "si_unit": "$1$",
         "validation": "exact vocabulary and strategy/face consistency checks",
@@ -244,11 +258,11 @@
         "owner": "mesh_authoring",
         "lowering": "runtime_metadata.mesh_workflow.per_geometry[].transition_policy",
         "python": "transition_policy",
-        "type": "Literal[ pyramid_to_tetrahedra, reject ] | None",
+        "type": "Literal[\"pyramid_to_tetrahedra\", \"pure_prism\", \"reject\"] | None",
         "default": "None",
         "si_unit": "$1$",
-        "validation": "prismatic shared route requires `pyramid_to_tetrahedra`",
-        "meaning": "mixed-topology transition",
+        "validation": "prismatic shared route requires `pyramid_to_tetrahedra` or `pure_prism`; hex rejects both",
+        "meaning": "shared-domain transition",
         "backend_support": "FEM CPU/GPU capability-gated",
         "problem_ir": "mesh_workflow.per_geometry[].transition_policy"
       },
@@ -275,7 +289,7 @@
         "type": "int | None",
         "default": "None",
         "si_unit": "$1$",
-        "validation": "prismatic intent supports only `1`; otherwise backend-realization policy applies",
+        "validation": "prismatic magnetization intent supports only `1`; `pure_prism_p2` automatically resolves P2 scalar potential",
         "meaning": "FEM order request",
         "backend_support": "FEM CPU/GPU capability-gated",
         "problem_ir": "mesh_workflow.per_geometry[].order"

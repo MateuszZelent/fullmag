@@ -4,6 +4,8 @@ status: implemented
 doc_kind: reference
 audience: user
 owner: fullmag-public-docs
+last_updated: 2026-11-26
+reviewed_revision: 752450f8d259ab97c76c36fe666d5474b02abe9a
 source_of_truth: docs/physics/0870-active-observable-and-energy-availability.md
 ---
 
@@ -16,8 +18,8 @@ source_of_truth: docs/physics/0870-active-observable-and-energy-availability.md
 An observable is a reproducible projection of the accepted solver state, not an arbitrary label
 attached to an output file. FullMag preserves the requested quantity, spatial support, sampling
 cadence, units, availability prerequisites, resolved backend, and provenance. A field observable
-retains its mesh/grid support; a scalar observable is a reduction over the active magnetic domain
-or an explicitly defined state metric.
+retains its mesh/grid support (or planar-monitor slice); a scalar observable is a reduction over
+the active magnetic domain or an explicitly defined state metric.
 
 (observables-governing-equations)=
 ## Governing equations
@@ -63,50 +65,80 @@ Observables legality, accepted-step sampling, and support-scoped materialisation
 | $N$ | number of active discrete locations | $1$ |
 | $t_n$ | accepted physical time | $\mathrm{s}$ |
 
-An observable in FullMag is a named physical quantity that the solver can compute and
-export during a simulation. Observables are either **fields** (spatially resolved,
-three-component vectors or scalars at every cell/node) or **scalars** (single numbers per
-time step, typically integrated quantities).
+An observable in FullMag is a named physical quantity from the 56-entry canonical `QuantityId`
+catalog (`crates/fullmag-quantities/src/catalog.rs`) or an accepted-step table telemetry column.
+Spatial quantities carry explicit shape metadata (`VectorField`, `SpatialScalar`, or rank-2
+`TensorField`), component count, discretization location, and domain scope (`MagneticOnly` vs.
+`FullDomain`).
 
-## Observable categories
+## Canonical quantity catalog (56 `QuantityId` entries)
 
-### Field observables
+### Vector field observables (23 entries)
 
-Field observables carry spatial resolution and are exported as three-component vector arrays
-or scalar arrays on the simulation grid/mesh.
+| Canonical ID | Symbol | Comp. | SI unit | Domain / enabling contract |
+|---|---|---:|---:|---|
+| `m` | $\mathbf{m}$ | 3 | $1$ | `MagneticOnly`; always available |
+| `H_eff` | $\mathbf{H}_{\mathrm{eff}}$ | 3 | $\mathrm{A\,m^{-1}}$ | `FullDomain`; at least one active field term |
+| `H_ex` | $\mathbf{H}_{\mathrm{ex}}$ | 3 | $\mathrm{A\,m^{-1}}$ | `MagneticOnly`; `Exchange()` |
+| `H_demag` | $\mathbf{H}_{\mathrm{d}}$ | 3 | $\mathrm{A\,m^{-1}}$ | `FullDomain`; `Demag()` |
+| `H_ext` | $\mathbf{H}_{\mathrm{ext}}$ | 3 | $\mathrm{A\,m^{-1}}$ | `FullDomain`; `Zeeman()` |
+| `H_ant` | $\mathbf{H}_{\mathrm{ant}}$ | 3 | $\mathrm{A\,m^{-1}}$ | `FullDomain`; microwave antenna excitation |
+| `H_drive` | $\mathbf{H}_{\mathrm{drive}}$ | 3 | $\mathrm{A\,m^{-1}}$ | `MagneticOnly`; regional time-domain magnetic drive |
+| `H_ani` | $\mathbf{H}_{\mathrm{ani}}$ | 3 | $\mathrm{A\,m^{-1}}$ | `MagneticOnly`; `UniaxialAnisotropy()` |
+| `H_ani_cubic` | $\mathbf{H}_{\mathrm{ani,c}}$ | 3 | $\mathrm{A\,m^{-1}}$ | `MagneticOnly`; `CubicAnisotropy()` |
+| `H_dmi` | $\mathbf{H}_{\mathrm{DMI}}$ | 3 | $\mathrm{A\,m^{-1}}$ | `MagneticOnly`; `InterfacialDMI()` |
+| `H_rotated_dmi` | $\mathbf{H}_{\mathrm{DMI,rot}}$ | 3 | $\mathrm{A\,m^{-1}}$ | `MagneticOnly`; `RotatedInterfacialDMI()` |
+| `H_dmi_bulk` | $\mathbf{H}_{\mathrm{DMI,bulk}}$ | 3 | $\mathrm{A\,m^{-1}}$ | `MagneticOnly`; `BulkDMI()` |
+| `H_oe` | $\mathbf{H}_{\mathrm{oe}}$ | 3 | $\mathrm{A\,m^{-1}}$ | `FullDomain`; `OerstedField()` or `OerstedCylinder()` |
+| `H_mel` | $\mathbf{H}_{\mathrm{mel}}$ | 3 | $\mathrm{A\,m^{-1}}$ | `MagneticOnly`; `Magnetoelastic()` |
+| `H_therm` | $\mathbf{H}_{\mathrm{therm}}$ | 3 | $\mathrm{A\,m^{-1}}$ | `MagneticOnly`; `ThermalNoise()` |
+| `torque` | $\boldsymbol{\tau}/\gamma_0$ | 3 | $\mathrm{T}$ | `MagneticOnly`; total LL torque divided by $\gamma_0$ |
+| `dm_dt` | $\partial_t\mathbf{m}$ | 3 | $\mathrm{s^{-1}}$ | `MagneticOnly`; explicit LLG magnetization rate |
+| `torque_stt` | $\boldsymbol{\tau}_{\mathrm{STT}}$ | 3 | $\mathrm{s^{-1}}$ | `FullDomain`; STT or drift–diffusion transport torque |
+| `torque_sot` | $\boldsymbol{\tau}_{\mathrm{SOT}}$ | 3 | $\mathrm{s^{-1}}$ | `MagneticOnly`; `PrescribedSpinOrbitTorque` |
+| `J_charge` | $\mathbf{J}_c$ | 3 | $\mathrm{A\,m^{-2}}$ | `FullDomain`; `CurrentTransport` solve |
+| `spin_potential` | $\boldsymbol{\mu}_s$ | 3 | $\mathrm{V}$ | `FullDomain`; `SpinDriftDiffusion` solve |
+| `u`, `eps`, `sigma` | $\mathbf{u},\,\boldsymbol{\varepsilon},\,\boldsymbol{\sigma}$ | 3 / 6 / 6 | $\mathrm{m}$, $1$, $\mathrm{Pa}$ | `FullDomain`; mechanical displacement and Voigt strain/stress (planner-gated; not interactively previewed) |
+| `mode_real`, `mode_imag` | $\operatorname{Re}\delta\mathbf{m},\,\operatorname{Im}\delta\mathbf{m}$ | 3 | $1$ | `MagneticOnly`; eigenmode solver outputs |
 
-| Observable | Symbol | SI unit | Requires |
+*(Note: counting `u`, `eps`, `sigma`, `mode_real`, and `mode_imag` individually yields 26 vector/Voigt-field `QuantityId` entries in the catalog.)*
+
+### Spatial scalar and rank-2 tensor field observables (19 entries)
+
+| Canonical ID | Symbol | Comp. | SI unit | Domain / enabling contract |
+|---|---|---:|---:|---|
+| `frozen_spins` | $I_{\mathrm{frozen}}$ | 1 | $1$ | `MagneticOnly`; resolved `FrozenSpins` mask ($1$ frozen, $0$ free) |
+| `demag_phi` | $\phi$ | 1 | $\mathrm{A}$ | `FullDomain`; magnetostatic scalar potential from Poisson demag |
+| `V_electric` | $V$ | 1 | $\mathrm{V}$ | `FullDomain`; electric scalar potential from `CurrentTransport` |
+| `spin_current_tensor` | $Q_{ia}$ | 9 ($3\times 3$) | $\mathrm{A\,m^{-2}}$ | `FullDomain`; `TensorField`, rank-2 flow-major (`Q_xx` … `Q_zz`) from `SpinDriftDiffusion` |
+| `eden_ex`, `eden_demag`, `eden_ext`, `eden_drive`, `eden_ani`, `eden_dmi`, `eden_rotated_dmi`, `eden_total` | $\varepsilon_k$ | 1 | $\mathrm{J\,m^{-3}}$ | `MagneticOnly`; spatial energy densities per interaction and total |
+| `mat_ms`, `mat_aex`, `mat_alpha`, `mat_dind`, `mat_dbulk` | $M_s, A_{\mathrm{ex}}, \alpha, D_{\mathrm{ind}}, D_{\mathrm{bulk}}$ | 1 | $\mathrm{A\,m^{-1}}, \mathrm{J\,m^{-1}}, 1, \mathrm{J\,m^{-2}}$ | `MagneticOnly`; resolved material parameter distributions |
+| `mode_amplitude`, `mode_phase` | $\lvert\delta\mathbf{m}\rvert,\,\arg(\delta\mathbf{m})$ | 1 | $1,\,\mathrm{rad}$ | `MagneticOnly`; eigenmode amplitude and phase |
+
+### Global scalar observables and table telemetry (11 catalog entries + step metrics)
+
+| Canonical ID (table key) | Symbol | SI unit | Enabling contract |
 |---|---|---:|---|
-| `m` | $\mathbf{m}$ | $1$ | always available |
-| `H_eff` | $\mathbf{H}_{\mathrm{eff}}$ | $\mathrm{A\,m^{-1}}$ | at least one energy term |
-| `H_ex` | $\mathbf{H}_{\mathrm{ex}}$ | $\mathrm{A\,m^{-1}}$ | `Exchange()` |
-| `H_demag` | $\mathbf{H}_{\mathrm{d}}$ | $\mathrm{A\,m^{-1}}$ | `Demag()` |
-| `H_ext` | $\mathbf{H}_{\mathrm{ext}}$ | $\mathrm{A\,m^{-1}}$ | `Zeeman()` |
-| `H_ani` | $\mathbf{H}_{\mathrm{ani}}$ | $\mathrm{A\,m^{-1}}$ | `UniaxialAnisotropy()` or `CubicAnisotropy()` |
-| `H_dmi` | $\mathbf{H}_{\mathrm{DMI}}$ | $\mathrm{A\,m^{-1}}$ | `InterfacialDMI()` or `BulkDMI()` |
-| `H_oe` | $\mathbf{H}_{\mathrm{oe}}$ | $\mathrm{A\,m^{-1}}$ | `OerstedField()` or `OerstedCylinder()` |
-| `H_mel` | $\mathbf{H}_{\mathrm{mel}}$ | $\mathrm{A\,m^{-1}}$ | `Magnetoelastic()` |
-| `H_th` | $\mathbf{H}_{\mathrm{th}}$ | $\mathrm{A\,m^{-1}}$ | `ThermalNoise()` |
+| `E_ex` (`e_ex`) | $E_{\mathrm{ex}}$ | $\mathrm{J}$ | `Exchange()` |
+| `E_demag` (`e_demag`) | $E_{\mathrm{d}}$ | $\mathrm{J}$ | `Demag()` |
+| `E_ext` (`e_ext`) | $E_{\mathrm{ext}}$ | $\mathrm{J}$ | `Zeeman()` |
+| `E_drive` (`e_drive`) | $E_{\mathrm{drive}}$ | $\mathrm{J}$ | regional time-domain magnetic drive |
+| `E_ani` (`e_ani`) | $E_{\mathrm{ani}}$ | $\mathrm{J}$ | uniaxial or cubic anisotropy |
+| `E_dmi` (`e_dmi`) | $E_{\mathrm{DMI}}$ | $\mathrm{J}$ | interfacial or bulk DMI |
+| `E_rotated_dmi` (`e_rotated_dmi`) | $E_{\mathrm{DMI,rot}}$ | $\mathrm{J}$ | `RotatedInterfacialDMI()` |
+| `E_el` (`e_el`), `E_kin_el` (`e_kin_el`) | $E_{\mathrm{el}},\,E_{\mathrm{kin,el}}$ | $\mathrm{J}$ | mechanical elastic strain and kinetic energy (planner-gated) |
+| `elastic_residual_norm` | $\|r_{\mathrm{el}}\|$ | $1$ | mechanical solver residual norm (planner-gated) |
+| `E_total` (`e_total`) | $E_{\mathrm{tot}}$ | $\mathrm{J}$ | sum of active energy terms |
 
-### Scalar observables
+In addition to the 11 global scalar `QuantityId` entries above, scalar table autosaves record accepted-step solver telemetry such as `step`, `t` ($\mathrm{s}$), `dt` ($\mathrm{s}$), `max_torque_T` ($\mathrm{T}$, $\max\lvert\mu_0\,\mathbf{m}\times\mathbf{H}_{\mathrm{eff}}\rvert$), `max_torque_Apm` ($\mathrm{A\,m^{-1}}$, $\max\lvert\mathbf{m}\times\mathbf{H}_{\mathrm{eff}}\rvert$), and component averages (`mx`, `my`, `mz`). Note that `E_mel` is not a separate catalog `QuantityId` (magnetoelastic field extraction uses `H_mel`, while elastic energies use `E_el` and `E_kin_el`).
 
-Scalar observables are integrated (global) quantities, typically energies.
+## Planar monitors
 
-| Observable | Symbol | SI unit | Requires |
-|---|---|---:|---|
-| `E_ex` | $E_{\mathrm{ex}}$ | $\mathrm{J}$ | `Exchange()` |
-| `E_demag` | $E_{\mathrm{d}}$ | $\mathrm{J}$ | `Demag()` |
-| `E_zeeman` | $E_{\mathrm{Z}}$ | $\mathrm{J}$ | `Zeeman()` |
-| `E_ani` | $E_{\mathrm{ani}}$ | $\mathrm{J}$ | anisotropy term |
-| `E_dmi` | $E_{\mathrm{DMI}}$ | $\mathrm{J}$ | DMI term |
-| `E_mel` | $E_{\mathrm{mel}}$ | $\mathrm{J}$ | `Magnetoelastic()` |
-| `E_total` | $E_{\mathrm{tot}}$ | $\mathrm{J}$ | at least one energy term |
-| `max_torque` | $\max\lvert\mathbf{m}\times\mathbf{H}_{\mathrm{eff}}\rvert$ | $\mathrm{A\,m^{-1}}$ | at least one field term |
-| `dt` | $\Delta t$ | $\mathrm{s}$ | adaptive integrator |
+In addition to full-volume `FieldAutosave` snapshots and global `TableAutosave` rows, `fm.PlanarMonitor` samples a field observable on a structured 2D plane (`PlanarFrame`) with an explicit sampling operator (`PlanarOperator`, such as a slice or thickness-averaged projection) registered via `study.monitors.add(...)`. Planar monitors preserve plane frame, spatial resolution, target object/region scope, and sampling cadence inside `ProblemIR`, and are validated fail-closed alongside field autosaves.
 
 ## Requesting observables
 
-Observables are requested through the `outputs` parameter of a study:
+Observables are requested through stage autosaves and monitors on a stage-first study:
 
 ```python
 # %% Observable requests in a stage-first study
@@ -123,7 +155,7 @@ body = study.geometry(fm.Box(40 * nm, 20 * nm, 5 * nm), name="film")
 body.Ms = 800.0e3
 body.Aex = 13.0e-12
 body.alpha = 0.01
-body.m = fm.init.UniformMagnetization((1.0, 0.0, 0.0))
+body.m = fm.texture.uniform(1.0, 0.0, 0.0)
 study.stages.add_relax(
     stage_id="relax",
     algorithm="nonlinear_cg",
@@ -163,8 +195,8 @@ the energy reduction) is a planner error, not a silent zero.
 ## Table autosave
 
 FullMag's table autosave captures scalar observables at every accepted step into a CSV or
-structured output. This provides a continuous record of energies, maximum torque, and
-timestep evolution without explicit `SaveScalar` declarations.
+structured output. This provides a continuous record of energies, maximum torque (`max_torque_T`
+and `max_torque_Apm`), and timestep evolution without explicit `SaveScalar` declarations.
 
 (observables-scientific-bibliography)=
 ## Scientific bibliography
@@ -196,6 +228,8 @@ sampling policy; they do not create a second physical problem.
 | `TableAutosave.quantities` | `Sequence[str] \| None` | default registry | $1$ | every name must be a supported scalar quantity | scalar columns to evaluate | FDM/FEM CPU/GPU subject to quantity availability | `study.sampling.outputs[].quantities` |
 | `FieldAutosave.quantity` | `str` | required | $1$ | known field identifier | spatial field to write | lane-dependent; planner rejects unavailable fields | `study.sampling.outputs[].name` |
 | `FieldAutosave.every_steps` | `int \| None` | `None` | $1$ | positive integer; exclusive with `every` | accepted-step field cadence | FDM/FEM CPU/GPU where the field is materialised | `study.sampling.outputs[].every_steps` |
+| `PlanarMonitor.target` | `MonitorTarget` | required | $1$ | valid object or region target | spatial domain sampled by 2D planar monitor | planner-resolved FDM/FEM lanes | `monitors[].target` |
+| `PlanarMonitor.frame` | `PlanarFrame` | required | $\mathrm{m}$ | finite origin, orthonormal basis, positive extents | 2D sampling plane geometry and resolution | planner-resolved FDM/FEM lanes | `monitors[].frame` |
 
 (observables-problem-ir)=
 ## Canonical ProblemIR
@@ -217,64 +251,61 @@ backend, device, precision, support, and materialisation status belong to execut
 (observables-round-trip-and-failure-semantics)=
 ## Round-trip and failure semantics
 
-The round trip preserves requested intent (quantity names, cadence, table identity, field target)
-and records resolved execution (backend, device, precision, support, and actual availability).
-Validation errors include unknown quantities, duplicate field requests, invalid cadence, and a
-field whose enabling interaction is absent. Unsupported combinations are rejected by the planner;
-there is no silent CPU fallback, zero substitution, or hidden unit conversion.
+The round trip preserves requested intent (quantity names, cadence, table identity, field target,
+planar-monitor frame) and records resolved execution (backend, device, precision, support, and
+actual availability). Validation errors include unknown quantities, duplicate field requests,
+invalid cadence, and a field whose enabling interaction is absent. Unsupported combinations are
+rejected by the planner; there is no silent CPU fallback, zero substitution, or hidden unit
+conversion.
 
 (observables-discrete-realization)=
 ## Discrete realization
 
-### FDM CPU
-
-The reference lane evaluates cell fields and volume-weighted reductions in deterministic host
-storage.
-
-### FDM GPU
-
-The CUDA lane evaluates device-resident fields and reductions; a skip-success test is not evidence
-of an executed device. Precision and device identity are part of the artifact.
-
-### FEM CPU
-
-The native FEM lane recovers nodal/vector fields and applies the selected lumped or quadrature
-weights. Airbox values are not included in magnetic energy reductions.
-
-### FEM GPU
-
-The GPU lane may use host-assembled operators but must record device field residency, transfers,
-reduction phase, precision, and executed-device identity separately from setup availability.
+| Solver | Device | Materialisation behavior |
+|---|---|---|
+| FDM | CPU | Reference lane evaluating cell fields, spatial energy densities, and volume-weighted reductions in deterministic host storage. |
+| FDM | GPU | CUDA lane evaluating device-resident fields and reductions; full CUDA SHE steady-spin observation reconstruction is deferred until accepted steps explicitly request those quantities (see {ref}`numerical-methods-performance-fdm-transport`). |
+| FEM | CPU | Native MFEM lane recovering nodal/cell fields and applying selected lumped or quadrature weights (`context_copy_field_f64`); airbox values are excluded from magnetic energy reductions. |
+| FEM | GPU | Device-resident field evaluation with packed AoS/SoA staging kernels and contiguous PCIe transfer (`13.93×` faster `state_io` copies and `40.5×` faster D2H transfers vs strided `cudaMemcpy2D`; see {ref}`numerical-methods-performance-fem-gpu-kernels`). Transfer counts and executed-device identity are recorded in provenance. |
 
 (observables-implementation-mapping)=
 ## Implementation mapping
 
-Python declares sampling, the planner validates legality, the quantity registry evaluates named
-quantities, and backend state I/O copies the resolved fields. Interactive Control Room equation editing is not exposed directly; use the Study and Results panels documented in {doc}`/frontend/capability-register`.
+Python declares sampling (`TableAutosave`, `FieldAutosave`, `PlanarMonitor`), the planner
+validates legality (`validate_executable_outputs`), the quantity catalog and registry define and
+evaluate all 56 canonical `QuantityId` entries (`quantity_catalog`, `evaluate_by_name`), and
+backend state I/O copies resolved fields (`context_copy_field_f64`). Interactive Control Room
+equation editing is not exposed directly; use the Study and Results panels documented in
+{doc}`/frontend/capability-register`.
 
 (observables-validation)=
 ## Validation
 
-Validation must cover quantity-name normalization, enabling-interaction checks, cadence semantics,
-accepted-step ordering, scalar reduction units, FDM CPU/GPU parity, FEM CPU/GPU parity, field
-support/ordering, and fail-closed unavailable quantities. Qualification requires executed-device
-identity for GPU claims.
+Validation covers quantity-name normalization across all 56 catalog entries (including rotated
+interfacial DMI, steady transport tensor/vector fields, energy densities, material distributions,
+and mechanical descriptors), enabling-interaction checks, cadence semantics, accepted-step
+ordering, scalar reduction units, FDM CPU/GPU parity, FEM CPU/GPU parity, field support/ordering,
+and fail-closed unavailable quantities. Qualification requires executed-device identity for GPU
+claims.
 
 (observables-limitations)=
 ## Limitations
 
-Some interaction fields and mechanical quantities remain planner-gated. A quantity listed here
-does not imply that every solver/device lane currently materialises it. Spatial transfer between
-FDM and FEM supports is outside this observable contract.
+Some interaction fields and mechanical quantities (`u`, `eps`, `sigma`, `E_el`, `E_kin_el`,
+`elastic_residual_norm`) remain planner-gated and are not interactively previewed. A quantity
+listed in the catalog does not imply that every solver/device lane currently materialises it.
+Spatial transfer between FDM and FEM supports is outside this observable contract.
 
 (observables-source-code-index)=
 ## Source-code index
 
 | Responsibility | Repository path | Stable symbol |
 |---|---|---|
-| Stage capture | [`packages/fullmag-py/src/fullmag/world.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/world.py#L6887) | [`study`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/world.py#L6887) |
-| Scalar autosave contract | [`packages/fullmag-py/src/fullmag/model/study.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/study.py#L337) | [`class TableAutosave`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/study.py#L337) |
-| Field autosave contract | [`packages/fullmag-py/src/fullmag/model/study.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/study.py#L410) | [`class FieldAutosave`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/study.py#L410) |
-| Planner output legality | [`crates/fullmag-plan/src/validate.rs`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-plan/src/validate.rs#L668) | [`validate_executable_outputs`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-plan/src/validate.rs#L668) |
-| Quantity evaluation registry | [`crates/fullmag-quantities/src/registry.rs`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-quantities/src/registry.rs#L41) | [`evaluate_by_name`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-quantities/src/registry.rs#L41) |
-| FEM field extraction | [`backends/fem/cpu/mfem/runtime/state_io.cpp`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/backends/fem/cpu/mfem/runtime/state_io.cpp#L226) | [`context_copy_field_f64`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/backends/fem/cpu/mfem/runtime/state_io.cpp#L226) |
+| Stage capture | [`packages/fullmag-py/src/fullmag/world.py`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/world.py#L7612) | [`study`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/world.py#L7612) |
+| Scalar autosave contract | [`packages/fullmag-py/src/fullmag/model/study.py`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/model/study.py#L340) | [`class TableAutosave`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/model/study.py#L340) |
+| Field autosave contract | [`packages/fullmag-py/src/fullmag/model/study.py`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/model/study.py#L413) | [`class FieldAutosave`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/model/study.py#L413) |
+| Planar monitor contract | [`packages/fullmag-py/src/fullmag/model/planar_monitor.py`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/model/planar_monitor.py#L393) | [`class PlanarMonitor`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/model/planar_monitor.py#L393) |
+| Planner output legality | [`crates/fullmag-plan/src/validate.rs`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-plan/src/validate.rs#L676) | [`validate_executable_outputs`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-plan/src/validate.rs#L676) |
+| Canonical quantity catalog | [`crates/fullmag-quantities/src/catalog.rs`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-quantities/src/catalog.rs#L1211) | [`quantity_catalog`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-quantities/src/catalog.rs#L1211) |
+| Quantity evaluation registry | [`crates/fullmag-quantities/src/registry.rs`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-quantities/src/registry.rs#L41) | [`evaluate_by_name`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-quantities/src/registry.rs#L41) |
+| FEM field extraction | [`backends/fem/cpu/mfem/runtime/state_io.cpp`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/backends/fem/cpu/mfem/runtime/state_io.cpp#L346) | [`context_copy_field_f64`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/backends/fem/cpu/mfem/runtime/state_io.cpp#L346) |

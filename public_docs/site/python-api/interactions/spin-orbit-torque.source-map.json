@@ -1,32 +1,32 @@
 {
   "document": {
     "path": "public_docs/site/python-api/interactions/spin-orbit-torque.md",
-    "reviewed_revision": "ab3c8802a691a535063102c12f9a79bb0043b367"
+    "reviewed_revision": "752450f8d259ab97c76c36fe666d5474b02abe9a"
   },
   "backend_matrix": [
     {
       "solver": "FEM",
       "device": "CPU",
       "status": "documented",
-      "reason": "authoring and IR documented; runtime qualification separate"
+      "reason": "IR authored and validated; FEM runtime execution is planner capability-gated"
     },
     {
       "solver": "FEM",
       "device": "GPU",
       "status": "documented",
-      "reason": "authoring and IR documented; runtime qualification separate"
+      "reason": "IR authored and validated; FEM GPU runtime execution is planner capability-gated"
     },
     {
       "solver": "FDM",
       "device": "CPU",
-      "status": "documented",
-      "reason": "authoring and IR documented; runtime qualification separate"
+      "status": "implemented",
+      "reason": "PrescribedSpinOrbitTorque executed on FDM CPU"
     },
     {
       "solver": "FDM",
       "device": "GPU",
-      "status": "documented",
-      "reason": "authoring and IR documented; runtime qualification separate"
+      "status": "implemented",
+      "reason": "PrescribedSpinOrbitTorque executed on FDM GPU with fused FP64 CUDA RK45 kernels (PR #562)"
     }
   ],
   "equations": [],
@@ -36,11 +36,77 @@
       "id": "source_spin_orbit_torque",
       "path": "packages/fullmag-py/src/fullmag/model/spin_torque.py",
       "symbol": "class PrescribedSpinOrbitTorque",
-      "responsibility": "public constructor and IR lowering"
+      "responsibility": "canonical prescribed SOT constructor and v1 IR lowering"
+    },
+    {
+      "id": "source_deprecated_sot",
+      "path": "packages/fullmag-py/src/fullmag/model/spin_torque.py",
+      "symbol": "class SpinOrbitTorque",
+      "responsibility": "deprecated compatibility alias lowering to PrescribedSpinOrbitTorque"
+    },
+    {
+      "id": "source_signed_scalar_drive",
+      "path": "packages/fullmag-py/src/fullmag/model/spin_torque.py",
+      "symbol": "class SignedScalarDrive",
+      "responsibility": "signed scalar current density and spin-polarization drive"
+    },
+    {
+      "id": "source_vector_current_drive",
+      "path": "packages/fullmag-py/src/fullmag/model/spin_torque.py",
+      "symbol": "class VectorCurrentDrive",
+      "responsibility": "current-transport source drive with geometric projection axes"
+    },
+    {
+      "id": "source_time_envelope_point",
+      "path": "packages/fullmag-py/src/fullmag/model/spin_torque.py",
+      "symbol": "class TimeEnvelopePoint",
+      "responsibility": "(time_s, value) control point for piecewise-linear envelopes"
+    },
+    {
+      "id": "source_constant_envelope",
+      "path": "packages/fullmag-py/src/fullmag/model/spin_torque.py",
+      "symbol": "class ConstantEnvelope",
+      "responsibility": "constant dimensionless multiplier envelope"
+    },
+    {
+      "id": "source_sinusoidal_envelope",
+      "path": "packages/fullmag-py/src/fullmag/model/spin_torque.py",
+      "symbol": "class SinusoidalEnvelope",
+      "responsibility": "sinusoidal dimensionless multiplier envelope"
+    },
+    {
+      "id": "source_pulse_envelope",
+      "path": "packages/fullmag-py/src/fullmag/model/spin_torque.py",
+      "symbol": "class PulseEnvelope",
+      "responsibility": "rectangular pulse dimensionless multiplier envelope"
+    },
+    {
+      "id": "source_piecewise_linear_envelope",
+      "path": "packages/fullmag-py/src/fullmag/model/spin_torque.py",
+      "symbol": "class PiecewiseLinearEnvelope",
+      "responsibility": "piecewise-linear dimensionless multiplier envelope"
+    },
+    {
+      "id": "source_sinc_envelope",
+      "path": "packages/fullmag-py/src/fullmag/model/spin_torque.py",
+      "symbol": "class SincEnvelope",
+      "responsibility": "normalized sinc dimensionless multiplier envelope"
+    },
+    {
+      "id": "source_tabulated_envelope",
+      "path": "packages/fullmag-py/src/fullmag/model/spin_torque.py",
+      "symbol": "class TabulatedEnvelope",
+      "responsibility": "artifact-backed tabulated multiplier envelope"
+    },
+    {
+      "id": "source_time_envelope",
+      "path": "packages/fullmag-py/src/fullmag/model/spin_torque.py",
+      "symbol": "TimeEnvelope",
+      "responsibility": "union type alias of canonical time-envelope classes"
     }
   ],
   "public_api": {
-    "owner": "fm.PrescribedSpinOrbitTorque(name, target, drive, ..., free_layer_thickness_m)",
+    "owner": "fm.PrescribedSpinOrbitTorque(...), fm.SpinOrbitTorque(...), fm.SignedScalarDrive(...), fm.VectorCurrentDrive(...), fm.TimeEnvelope",
     "parameters": [
       {
         "python": "name",
@@ -49,27 +115,27 @@
         "si_unit": "$1$",
         "validation": "non-empty",
         "meaning": "torque module identifier",
-        "backend_support": "FEM/FDM CPU/GPU: IR; resolver-specific",
-        "problem_ir": "name"
+        "backend_support": "FDM CPU/GPU: executable; FEM: IR",
+        "problem_ir": "id"
       },
       {
         "python": "target",
         "type": "RegionRef",
         "default": "required",
         "si_unit": "$1$",
-        "validation": "typed region reference",
+        "validation": "typed `RegionRef`",
         "meaning": "free-layer target",
-        "backend_support": "FEM/FDM CPU/GPU: IR; resolver-specific",
+        "backend_support": "FDM CPU/GPU: executable; FEM: IR",
         "problem_ir": "target"
       },
       {
         "python": "drive",
-        "type": "SignedScalarDrive or VectorCurrentDrive",
+        "type": "SignedScalarDrive | VectorCurrentDrive",
         "default": "required",
         "si_unit": "$\\mathrm{A\\,m^{-2}}$ or $1$",
-        "validation": "typed drive",
-        "meaning": "prescribed current or vector drive",
-        "backend_support": "FEM/FDM CPU/GPU: IR; resolver-specific",
+        "validation": "typed scalar or vector current drive",
+        "meaning": "prescribed current or solved current-source drive",
+        "backend_support": "FDM CPU/GPU: executable; FEM: IR",
         "problem_ir": "drive"
       },
       {
@@ -78,8 +144,8 @@
         "default": "required",
         "si_unit": "$1$",
         "validation": "finite",
-        "meaning": "damping-like efficiency",
-        "backend_support": "FEM/FDM CPU/GPU: IR; resolver-specific",
+        "meaning": "damping-like SOT efficiency $\\xi_{\\mathrm{DL}}$",
+        "backend_support": "FDM CPU/GPU: executable; FEM: IR",
         "problem_ir": "xi_dl"
       },
       {
@@ -88,8 +154,8 @@
         "default": "0.0",
         "si_unit": "$1$",
         "validation": "finite",
-        "meaning": "field-like efficiency",
-        "backend_support": "FEM/FDM CPU/GPU: IR; resolver-specific",
+        "meaning": "field-like SOT efficiency $\\xi_{\\mathrm{FL}}$",
+        "backend_support": "FDM CPU/GPU: executable; FEM: IR",
         "problem_ir": "xi_fl"
       },
       {
@@ -97,12 +163,72 @@
         "type": "float",
         "default": "required",
         "si_unit": "$\\mathrm{m}$",
-        "validation": "positive",
-        "meaning": "free-layer thickness",
-        "backend_support": "FEM/FDM CPU/GPU: IR; resolver-specific",
+        "validation": "strictly positive",
+        "meaning": "free-layer thickness $t_F$",
+        "backend_support": "FDM CPU/GPU: executable; FEM: IR",
         "problem_ir": "free_layer_thickness_m"
+      },
+      {
+        "python": "fm.SignedScalarDrive.current_density_Apm2",
+        "type": "float",
+        "default": "required",
+        "si_unit": "$\\mathrm{A\\,m^{-2}}$",
+        "validation": "finite scalar",
+        "meaning": "signed charge current density",
+        "backend_support": "FDM CPU/GPU: executable; FEM: IR",
+        "problem_ir": "drive.current_density_Apm2"
+      },
+      {
+        "python": "fm.SignedScalarDrive.sigma",
+        "type": "Sequence[float]",
+        "default": "required",
+        "si_unit": "$1$",
+        "validation": "finite, norm $> 10^{-12}$, normalized",
+        "meaning": "spin polarization unit axis $\\hat{\\boldsymbol{\\sigma}}$",
+        "backend_support": "FDM CPU/GPU: executable; FEM: IR",
+        "problem_ir": "drive.sigma_hat"
+      },
+      {
+        "python": "fm.SignedScalarDrive.envelope",
+        "type": "TimeEnvelope | None",
+        "default": "None",
+        "si_unit": "$1$",
+        "validation": "canonical `TimeEnvelope` when supplied",
+        "meaning": "dimensionless time multiplier for scalar drive",
+        "backend_support": "FDM CPU/GPU: executable; FEM: IR",
+        "problem_ir": "drive.envelope"
+      },
+      {
+        "python": "fm.VectorCurrentDrive.current_source",
+        "type": "str",
+        "default": "required",
+        "si_unit": "$1$",
+        "validation": "non-empty `CurrentTransport` name",
+        "meaning": "upstream vector current source identifier",
+        "backend_support": "FDM/FEM CPU/GPU: IR; resolver-specific",
+        "problem_ir": "drive.current_source_id"
+      },
+      {
+        "python": "fm.VectorCurrentDrive.drive_direction",
+        "type": "Sequence[float]",
+        "default": "required",
+        "si_unit": "$1$",
+        "validation": "finite, norm $> 10^{-12}$, non-parallel to `interface_normal`, normalized",
+        "meaning": "reference charge-current projection axis",
+        "backend_support": "FDM/FEM CPU/GPU: IR; resolver-specific",
+        "problem_ir": "drive.drive_direction"
+      },
+      {
+        "python": "fm.VectorCurrentDrive.interface_normal",
+        "type": "Sequence[float]",
+        "default": "required",
+        "si_unit": "$1$",
+        "validation": "finite, norm $> 10^{-12}$, non-parallel to `drive_direction`, normalized",
+        "meaning": "heavy-metal/ferromagnet interface normal",
+        "backend_support": "FDM/FEM CPU/GPU: IR; resolver-specific",
+        "problem_ir": "drive.interface_normal"
       }
     ],
-    "returns": "typed ProblemIR record at to_ir_module()"
+    "returns": "typed prescribed_sot.v1 ProblemIR record at to_ir_module()"
   }
 }

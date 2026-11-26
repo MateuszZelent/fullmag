@@ -1,10 +1,10 @@
 {
   "document": {
     "path": "public_docs/site/numerical-methods/time-integration/tangent-plane-methods.md",
-    "reviewed_revision": "5e99782acbb7fb3f65d0cad872e102bf67733103"
+    "reviewed_revision": "752450f8d259ab97c76c36fe666d5474b02abe9a"
   },
   "backend_matrix": [
-    {"solver": "FEM", "device": "CPU", "status": "documented"},
+    {"solver": "FEM", "device": "CPU", "status": "source-backed"},
     {"solver": "FEM", "device": "GPU", "status": "unsupported", "reason": "tangent_plane_implicit has no GPU implementation; forced GPU execution fails closed (frozen_spins_fem_gpu_tpi_unqualified)."},
     {"solver": "FDM", "device": "CPU", "status": "unsupported", "reason": "The current public contract marks tangent_plane_implicit as FEM-only."},
     {"solver": "FDM", "device": "GPU", "status": "unsupported", "reason": "The current public contract marks tangent_plane_implicit as FEM-only."}
@@ -12,23 +12,25 @@
   "equations": [
     {"id": "eq-tangent-projector", "symbols": ["P", "I", "mu"], "sources": ["relaxation-contract", "fem-tpi-step"]},
     {"id": "eq-tangent-field", "symbols": ["Hperp", "P", "H_eff", "mu"], "sources": ["relaxation-contract", "fem-tpi-step"]},
-    {"id": "eq-tangent-implicit-system", "symbols": ["M_perp", "tau", "K_ex_perp", "w", "r_perp", "H_eff", "mu"], "sources": ["fem-tpi-step"]}
+    {"id": "eq-tangent-implicit-system", "symbols": ["M_perp", "tau", "mu0", "K_ex_perp", "w", "r_perp", "H_eff", "mu"], "sources": ["fem-tpi-units", "fem-tpi-step"]}
   ],
   "symbols": [
-    {"id": "mu", "latex": "\\mu_i", "meaning": "normalized magnetization at point i", "si_unit": "1"},
+    {"id": "mu", "latex": "\\mu_i", "meaning": "normalized magnetization at node $i$", "si_unit": "1"},
     {"id": "P", "latex": "P_i", "meaning": "tangent-space projector", "si_unit": "1"},
     {"id": "I", "latex": "I", "meaning": "three-dimensional identity tensor", "si_unit": "1"},
     {"id": "H_eff", "latex": "H_{\\mathrm{eff},i}", "meaning": "effective magnetic field", "si_unit": "\\mathrm{A\\,m^{-1}}"},
     {"id": "Hperp", "latex": "H_i^{\\perp}", "meaning": "projected effective field", "si_unit": "\\mathrm{A\\,m^{-1}}"},
-    {"id": "M_perp", "latex": "M_{\\perp}", "meaning": "tangent-space lumped/consistent mass operator", "si_unit": "\\mathrm{J}"},
-    {"id": "K_ex_perp", "latex": "K_{\\mathrm{ex},\\perp}", "meaning": "tangent-space projected exchange stiffness operator", "si_unit": "\\mathrm{J\\,s^{-1}}"},
-    {"id": "w", "latex": "w", "meaning": "two-component tangent-frame increment coordinates", "si_unit": "1"},
-    {"id": "r_perp", "latex": "r_{\\perp}", "meaning": "tangent-projected energy-gradient residual", "si_unit": "\\mathrm{J}"},
-    {"id": "tau", "latex": "\\tau", "meaning": "implicit tangent-plane trial step size", "si_unit": "1"}
+    {"id": "mu0", "latex": "\\mu_0", "meaning": "vacuum permeability", "si_unit": "\\mathrm{N\\,A^{-2}}"},
+    {"id": "M_perp", "latex": "M_{\\perp}", "meaning": "tangent-projected $M_s$-weighted mass operator", "si_unit": "\\mathrm{A\\,m^2}"},
+    {"id": "K_ex_perp", "latex": "K_{\\mathrm{ex},\\perp}", "meaning": "tangent-projected $A_{\\mathrm{ex}}$-weighted exchange stiffness operator", "si_unit": "\\mathrm{J}"},
+    {"id": "w", "latex": "w", "meaning": "two-component tangent-frame search direction coordinates", "si_unit": "\\mathrm{A\\,m^{-1}}"},
+    {"id": "r_perp", "latex": "r_{\\perp}", "meaning": "tangent-projected mass-weighted residual", "si_unit": "\\mathrm{A^2\\,m}"},
+    {"id": "tau", "latex": "\\tau", "meaning": "implicit tangent-plane trial step size", "si_unit": "\\mathrm{m\\,A^{-1}}"}
   ],
   "sources": [
     {"id": "relaxation-contract", "path": "packages/fullmag-py/src/fullmag/model/study.py", "symbol": "class Relaxation", "responsibility": "Public relaxation algorithm validation and IR lowering"},
     {"id": "relax-stage", "path": "packages/fullmag-py/src/fullmag/world.py", "symbol": "relax_stage", "responsibility": "Ordered stage capture and validation"},
+    {"id": "fem-tpi-units", "path": "backends/fem/src/relaxation_operator_units.hpp", "symbol": "exchange_hessian_scale_from_step_m_per_a", "responsibility": "Exact SI exchange Hessian scale 2*tau/mu0 for step_m_per_a"},
     {"id": "fem-tpi-step", "path": "backends/fem/cpu/mfem/relaxation/tangent_plane_implicit.cpp", "symbol": "run_tangent_plane_implicit_step", "responsibility": "Native FEM CPU/MFEM tangent-plane implicit linear solve, retraction, and Armijo gate"}
   ],
   "public_api": {"parameters": [

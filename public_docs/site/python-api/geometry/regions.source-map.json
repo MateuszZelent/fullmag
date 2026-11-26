@@ -1,7 +1,7 @@
 {
   "document": {
     "path": "public_docs/site/python-api/geometry/regions.md",
-    "reviewed_revision": "ab3c8802a691a535063102c12f9a79bb0043b367"
+    "reviewed_revision": "752450f8d259ab97c76c36fe666d5474b02abe9a"
   },
   "backend_matrix": [
     {
@@ -36,11 +36,23 @@
       "id": "source_object_region",
       "path": "packages/fullmag-py/src/fullmag/model/structure.py",
       "symbol": "class ObjectRegion",
-      "responsibility": "public constructor and IR lowering"
+      "responsibility": "owner-scoped region constructor, overrides, and IR lowering"
+    },
+    {
+      "id": "source_region_ref",
+      "path": "packages/fullmag-py/src/fullmag/model/spin_torque.py",
+      "symbol": "class RegionRef",
+      "responsibility": "typed object and optional region reference"
+    },
+    {
+      "id": "source_selection_def",
+      "path": "packages/fullmag-py/src/fullmag/model/selection.py",
+      "symbol": "class SelectionDefinition",
+      "responsibility": "named composable spatial/logical selection expression"
     }
   ],
   "public_api": {
-    "owner": "fm.Region(name, geometry) and fm.ObjectRegion(...)",
+    "owner": "fm.Region, fm.ObjectRegion, fm.RegionRef, fm.RegionMaterialOverride, fm.RegionTextureOverride, fm.SelectionDefinition",
     "parameters": [
       {
         "python": "Region.name",
@@ -48,9 +60,9 @@
         "default": "required",
         "si_unit": "$1$",
         "validation": "non-empty",
-        "meaning": "region name",
+        "meaning": "canonical geometry region name",
         "backend_support": "FEM/FDM CPU/GPU: IR; resolver-specific",
-        "problem_ir": "name"
+        "problem_ir": "regions[].name"
       },
       {
         "python": "Region.geometry",
@@ -60,17 +72,17 @@
         "validation": "typed geometry",
         "meaning": "region shape",
         "backend_support": "FEM/FDM CPU/GPU: IR; resolver-specific",
-        "problem_ir": "shape"
+        "problem_ir": "regions[].geometry"
       },
       {
         "python": "ObjectRegion.owner_object",
-        "type": "str or object",
+        "type": "str",
         "default": "required",
         "si_unit": "$1$",
-        "validation": "owner-scoped",
-        "meaning": "owning object",
+        "validation": "owner-scoped object identifier",
+        "meaning": "owning magnetic object",
         "backend_support": "FEM/FDM CPU/GPU: IR; resolver-specific",
-        "problem_ir": "owner"
+        "problem_ir": "object_regions[].owner_object"
       },
       {
         "python": "ObjectRegion.name",
@@ -78,29 +90,39 @@
         "default": "required",
         "si_unit": "$1$",
         "validation": "non-empty",
-        "meaning": "region name",
+        "meaning": "region display name",
         "backend_support": "FEM/FDM CPU/GPU: IR; resolver-specific",
-        "problem_ir": "name"
+        "problem_ir": "object_regions[].name"
+      },
+      {
+        "python": "ObjectRegion.shape",
+        "type": "Geometry",
+        "default": "required",
+        "si_unit": "$1$",
+        "validation": "typed geometry object",
+        "meaning": "subvolume bounding/clipping shape",
+        "backend_support": "FEM/FDM CPU/GPU: IR; resolver-specific",
+        "problem_ir": "object_regions[].shape"
       },
       {
         "python": "ObjectRegion.region_id",
-        "type": "str or None",
+        "type": "str | None",
         "default": "None",
         "si_unit": "$1$",
-        "validation": "stable when supplied",
+        "validation": "stable unique ID when supplied",
         "meaning": "region identifier",
         "backend_support": "FEM/FDM CPU/GPU: IR; resolver-specific",
-        "problem_ir": "region_id"
+        "problem_ir": "object_regions[].region_id"
       },
       {
         "python": "ObjectRegion.frame",
         "type": "str",
-        "default": "object",
+        "default": "\"object\"",
         "si_unit": "$1$",
-        "validation": "supported frame",
-        "meaning": "coordinate frame",
+        "validation": "`\"object\"` or `\"world\"`",
+        "meaning": "coordinate frame for `shape` evaluation",
         "backend_support": "FEM/FDM CPU/GPU: IR; resolver-specific",
-        "problem_ir": "frame"
+        "problem_ir": "object_regions[].frame"
       },
       {
         "python": "ObjectRegion.enabled",
@@ -108,29 +130,119 @@
         "default": "True",
         "si_unit": "$1$",
         "validation": "boolean",
-        "meaning": "activation flag",
+        "meaning": "region activation flag",
         "backend_support": "FEM/FDM CPU/GPU: IR; resolver-specific",
-        "problem_ir": "enabled"
+        "problem_ir": "object_regions[].enabled"
       },
       {
         "python": "ObjectRegion.priority",
         "type": "int",
         "default": "0",
         "si_unit": "$1$",
-        "validation": "integer",
+        "validation": "integer; equal highest priorities fail closed",
         "meaning": "overlap precedence",
         "backend_support": "FEM/FDM CPU/GPU: IR; resolver-specific",
-        "problem_ir": "priority"
+        "problem_ir": "object_regions[].priority"
       },
       {
         "python": "ObjectRegion.realization_policy",
         "type": "str",
-        "default": "inherit",
+        "default": "\"inherit\"",
         "si_unit": "$1$",
-        "validation": "supported policy",
+        "validation": "supported realization policy",
         "meaning": "mesh/realization inheritance",
         "backend_support": "FEM/FDM CPU/GPU: IR; resolver-specific",
-        "problem_ir": "realization_policy"
+        "problem_ir": "object_regions[].realization_policy"
+      },
+      {
+        "python": "ObjectRegion.mesh_policy",
+        "type": "dict[str, object] | None",
+        "default": "None",
+        "si_unit": "$1$",
+        "validation": "typed region mesh policy mapping",
+        "meaning": "optional local FEM/FDM mesh sizing policy",
+        "backend_support": "FEM/FDM CPU/GPU: IR; planner-validated",
+        "problem_ir": "object_regions[].mesh_policy"
+      },
+      {
+        "python": "ObjectRegion.material_overrides",
+        "type": "list[RegionMaterialOverride] | None",
+        "default": "None",
+        "si_unit": "parameter-dependent",
+        "validation": "typed `RegionMaterialOverride` list",
+        "meaning": "local spatial/constant material overrides",
+        "backend_support": "FEM/FDM CPU/GPU: IR; planner-validated",
+        "problem_ir": "object_regions[].material_overrides"
+      },
+      {
+        "python": "ObjectRegion.material_transition_spec",
+        "type": "MaterialTransitionSpec | None",
+        "default": "None",
+        "si_unit": "$1$",
+        "validation": "typed boundary transition policy",
+        "meaning": "explicit transition width/scope for `Ms`/`Aex`",
+        "backend_support": "FEM/FDM CPU/GPU: IR; planner-validated",
+        "problem_ir": "object_regions[].material_transition_spec"
+      },
+      {
+        "python": "ObjectRegion.texture_override",
+        "type": "RegionTextureOverride | None",
+        "default": "None",
+        "si_unit": "$1$",
+        "validation": "typed `RegionTextureOverride`",
+        "meaning": "local initial magnetization override clipped to the winning region",
+        "backend_support": "FEM/FDM CPU/GPU: IR; planner-validated",
+        "problem_ir": "object_regions[].texture_override"
+      },
+      {
+        "python": "RegionRef.object_id",
+        "type": "str",
+        "default": "required",
+        "si_unit": "$1$",
+        "validation": "non-empty object identity",
+        "meaning": "referenced object ID (with optional `RegionRef.region_id`)",
+        "backend_support": "FEM/FDM CPU/GPU: IR",
+        "problem_ir": "object_id"
+      },
+      {
+        "python": "RegionMaterialOverride.parameter",
+        "type": "str",
+        "default": "required",
+        "si_unit": "$1$",
+        "validation": "canonical or alias material parameter name",
+        "meaning": "material parameter overridden inside the region",
+        "backend_support": "FEM/FDM CPU/GPU: IR",
+        "problem_ir": "material_overrides[].parameter"
+      },
+      {
+        "python": "RegionMaterialOverride.value",
+        "type": "MaterialParameterField",
+        "default": "required",
+        "si_unit": "parameter-dependent",
+        "validation": "typed `MaterialParameterField`",
+        "meaning": "replacement field value inside the region",
+        "backend_support": "FEM/FDM CPU/GPU: IR",
+        "problem_ir": "material_overrides[].value"
+      },
+      {
+        "python": "RegionTextureOverride.initial_magnetization",
+        "type": "InitialMagnetization",
+        "default": "required",
+        "si_unit": "$1$",
+        "validation": "typed initializer or preset texture",
+        "meaning": "region-local initial magnetization",
+        "backend_support": "FEM/FDM CPU/GPU: IR",
+        "problem_ir": "texture_override.initial_magnetization"
+      },
+      {
+        "python": "SelectionDefinition.selection_id",
+        "type": "str",
+        "default": "required",
+        "si_unit": "$1$",
+        "validation": "unique non-empty selection identifier",
+        "meaning": "named composable selection expression (`SelectionDefinition.expression`)",
+        "backend_support": "FEM/FDM CPU/GPU: IR",
+        "problem_ir": "selections[].selection_id"
       }
     ],
     "returns": "typed ProblemIR record at to_ir()"

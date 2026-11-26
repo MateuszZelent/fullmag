@@ -42,9 +42,9 @@ The ideal open-boundary condition is
 
 ```{math}
 :label: eq-demag-boundary-open
-u(\mathbf x)\longrightarrow0
+u(\mathbf x)\longrightarrow 0
 \qquad\text{when}\qquad
-|\mathbf x|\longrightarrow\infty.
+\lvert\mathbf x\rvert\longrightarrow\infty.
 ```
 
 The two finite-airbox closures are different mathematical problems.
@@ -115,11 +115,11 @@ $R_\star$:
 :label: eq-demag-boundary-beta-scaling
 \beta=\frac{c}{R_\star},
 \qquad
-R_\star=\frac12\max_{d\in\mathcal A_{\mathrm open}}
+R_\star=\frac12\max_{d\in\mathcal A_{\mathrm{open}}}
 \left(x_{d,\max}-x_{d,\min}\right).
 ```
 
-$\mathcal A_{\mathrm open}$ contains the non-periodic coordinate axes. If the mesh has periodic
+$\mathcal A_{\mathrm{open}}$ contains the non-periodic coordinate axes. If the mesh has periodic
 node-pair metadata, the planner excludes the corresponding axes from this extent calculation. If
 no open axis is found, the implementation uses the largest mesh extent as the fallback reference
 scale and records that resolved policy. The fallback is not a claim that a fully periodic problem
@@ -152,7 +152,8 @@ For FEM CPU the boundary module is called after the volume Poisson bilinear form
 8. for Dirichlet, discover essential true DOFs on the selected marker;
 9. reject an empty essential-DOF list;
 10. eliminate the Dirichlet rows and columns from the sparse operator;
-11. pass the boundary-conditioned operator to the configured CG/GMRES and preconditioner path.
+11. pass the boundary-conditioned operator to the configured CG/GMRES + preconditioner path (and on
+    FEM GPU, to the `cuDSS` / `hypre_krylov` setup).
 
 The boundary module does not assemble the magnetic right-hand side, solve the potential, recover
 $\mathbf H_{\mathrm d}$, or reduce $E_{\mathrm d}$. Those ownership boundaries are deliberate so
@@ -172,7 +173,7 @@ that the same field and energy contract is used for Dirichlet and Robin.
 | $\Omega_m$ | magnetic subdomain | $\mathrm{m^3}$ |
 | $\Omega_a$ | complete magnetic-plus-air FEM domain | $\mathrm{m^3}$ |
 | $\Gamma_a$ | selected outer airbox boundary | $\mathrm{m^2}$ |
-| $\mathcal A_{\mathrm open}$ | set of non-periodic coordinate axes | $1$ |
+| $\mathcal A_{\mathrm{open}}$ | set of non-periodic coordinate axes | $1$ |
 | $\mathbf M$ | magnetization field in the magnetic subdomain | $\mathrm{A\,m^{-1}}$ |
 | $V$ | FEM trial/test-function space | $1$ |
 | $K$ | assembled volume stiffness matrix | $\mathrm{m}$ |
@@ -280,11 +281,10 @@ study.stages.add_relax(
 )
 ```
 
-
 | Python parameter | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR |
 |---|---|---|---|---|---|---|---|
 | `Demag.model` | `optional str` | `None` | $1$ | Must be `airbox` when a boundary `variant` is supplied; accepted model names are `airbox`, `bem`, `fredkin_koehler`, and `fmm`. | Selects the realization family. | FEM airbox for this chapter. | `energy[].realization` |
-| `Demag.variant` | `optional str` | `None` | $1$ | For `airbox`, allowed values are `auto`, `robin`, and `dirichlet`; `auto` normalizes to Robin. | Selects the finite-airbox outer closure. | FEM Poisson CPU/GPU subject to qualification. | `energy[].realization` |
+| `Demag.variant` | `optional str` | `None` | $1$ | For `airbox`, allowed values are `auto`, `robin`, and `dirichlet`; `auto` normalizes to Robin. | Selects the finite-airbox outer closure. | FEM Poisson CPU/GPU. | `energy[].realization` |
 | `Demag.realization` | `optional str` | `None` | $1$ | Legacy values are validated against the canonical and compatibility realization vocabulary; it cannot be combined with `model`. | Selects the legacy demagnetization realization. | Legacy FDM/FEM realization paths according to the resolved value. | `energy[].realization` |
 
 `poisson_boundary_marker`, `robin_beta_mode`, `robin_beta_factor`, the periodic seam marker
@@ -305,29 +305,36 @@ The Python-to-IR normalization is:
 
 Requested intent must retain the original model and variant. Resolved execution must additionally
 record the FEM lane, mesh identity, outer marker and source of that marker, periodic seam markers,
-open-axis set, Robin mode/factor, effective $\beta$, solver/preconditioner, tolerances, iteration
-limit, convergence state, and runtime/device identity.
+open-axis set, Robin mode/factor, effective $\beta$, solver/preconditioner/`gpu_strategy`,
+tolerances, iteration limit, convergence state, and runtime/device identity.
 
 (demag-boundary-round-trip-and-failure-semantics)=
 ## 9. Round-trip and failure semantics
 
 Canonical Python export reproduces the requested `model` and `variant`, not merely the resolved
-marker or $\beta$. The following are constructor validation errors:
+marker or $\beta$. The following are constructor **validation errors**:
 
 * supplying `variant` without `model`;
 * supplying a `variant` to `bem`, `fredkin_koehler`, or `fmm`;
 * using an unknown model or airbox variant;
 * combining the new `model` API with legacy `realization`.
 
-Unsupported combinations include a boundary `variant` on `bem`, `fredkin_koehler`, or `fmm`, a
+**Unsupported combinations** include a boundary `variant` on `bem`, `fredkin_koehler`, or `fmm`, a
 `variant` without `model`, and simultaneous use of `model` and legacy `realization`. The
 planner/runtime rejects a missing shared-domain airbox mesh, a marker absent from
 `mesh.bdr_attributes`, a marker outside the attribute range, and a Dirichlet selection that
-produces no essential true DOFs. These are fail-closed errors. The planner must not silently
-replace Robin with Dirichlet, remove the airbox, include periodic seams, or switch to FDM.
+produces no essential true DOFs. These are fail-closed errors. The planner never silently replaces
+Robin with Dirichlet, removes the airbox, includes periodic seams, or switches to FDM.
 
 (demag-boundary-discrete-realization)=
 ## 10. Discrete realization by lane
+
+| Solver | Device | Status | Boundary realization |
+|---|---|---|---|
+| FDM | CPU | `reference` | Open $2N$ zero-padded Newell FFT convolution (or explicit `truncated_images` PBC); no FEM boundary mass matrix. |
+| FDM | GPU | `implemented` | Single-layer Hermitian `D2Z/Z2D` (FP64) & `R2C/C2R` (FP32) cuFFT open convolution (FP64 PBC supported; FP32+PBC rejected). |
+| FEM | CPU | `implemented` | MFEM host assembly of Robin $K+\beta B_{\Gamma_a}$ or Dirichlet essential true-DOF elimination (`tet4` P2, `mixed_p1`, `pure_prism_p2`). |
+| FEM | GPU | `implemented` | Strict device transfer of the boundary-conditioned operator into `cuDSS` direct Cholesky or `hypre_krylov` (`coarse_relax_type=18`) verified on RTX 4080 SUPER (open Robin/Dirichlet, `pure_prism_p2`, and PBC-reduced 1-D Robin / 2-D film). |
 
 ### FEM CPU
 
@@ -337,10 +344,12 @@ eliminates rows and columns. The resulting operator is passed to the native Hypr
 
 ### FEM GPU
 
-The device Poisson lane receives the resolved boundary policy and must preserve the same marker,
-periodic seam exclusion, Robin coefficient, operator identity, and solver stopping semantics.
-Device CSR/operator setup and device Hypre execution are separate qualification claims; a host
-assembly or source compilation does not prove executed-device parity.
+The strict device Poisson lane receives the exact same boundary-conditioned operator, marker
+selection, periodic seam exclusion, and Robin coefficient $\beta$ (`upload_demag_poisson_operators`),
+and solves it on device via VRAM-guarded `cuDSS` Cholesky or `hypre_krylov` (`CG/AMG`,
+`coarse_relax_type=18`) with zero silent host fallback. For Dirichlet closures under Krylov
+prediction, `stage_compute.cpp` reapplies zeroing on essential true DOFs after linear potential
+extrapolation. See {ref}`numerical-methods-performance-fem-gpu-demag` for GPU runtime telemetry.
 
 ### FDM CPU and GPU
 
@@ -355,14 +364,19 @@ operator.
 The boundary operator ownership is:
 
 1. Python `Demag` validates and normalizes the requested model/variant;
-2. FEM planning resolves the shared-domain mesh, marker, periodic seams and Robin policy;
+2. FEM planning resolves the shared-domain mesh, marker, periodic seams, and Robin policy;
 3. the native boundary module constructs the operator;
-4. the linear-solver module consumes the conditioned operator;
+4. the linear-solver module (CPU Hypre, GPU `cuDSS`, or GPU `hypre_krylov`) consumes the
+   conditioned operator;
 5. recovery and energy modules consume only the solved potential/field.
 
 ### Control Room support
 
-When `PhysicsInteractionPanel` (`apps/control-room/src/modules/inspector/panels/PhysicsInteractionPanel.tsx`) exposes demagnetization boundary controls under `Model Explorer -> Objects -> <object> -> Physics`, browser support is partial: parameters without a UI control must be configured in Python or `ProblemIR`. See {doc}`/frontend/capability-register` for current Control Room coverage.
+Demagnetization boundary controls are exposed under
+`Model Explorer -> Objects -> <object> -> Physics` by `ObjectPhysicsInspectorPanel`
+(`apps/control-room/src/modules/inspector/inspectors/objects/physics/ObjectPhysicsSpec.tsx`).
+Browser exposure is partial: parameters without a matching UI control must be configured in Python
+or `ProblemIR`. See {doc}`/frontend/capability-register` for current Control Room coverage.
 
 (demag-boundary-validation)=
 ## 12. Validation and qualification
@@ -374,21 +388,16 @@ When `PhysicsInteractionPanel` (`apps/control-room/src/modules/inspector/panels/
 | Periodic seams | Every periodic seam marker is excluded from the Robin mass selection. |
 | Robin scaling | Resolved $c$, $R_\star$, open-axis set, and $\beta=c/R_\star$ are recorded. |
 | Operator identity | Robin uses $A_{\mathrm R}=K+\beta B_{\Gamma_a}$; Dirichlet uses essential elimination. |
-| Solver convergence | `rtol`, `atol`, `max_iterations`, solver kind, preconditioner, residual and convergence flag are recorded. |
+| Solver convergence | `rtol`, `atol`, `max_iterations`, solver kind, preconditioner, `gpu_strategy`, residual, and convergence flag are recorded. |
 | Airbox convergence | Vary distance and mesh independently for each boundary variant. |
-| CPU/GPU parity | Same mesh, marker, boundary policy, precision, solver policy and executed-device identity. |
-
-Contract tests cover marker import, Robin mode/factor propagation, Dirichlet/Robin selection, and
-operator construction. Runtime qualification must additionally show field and energy convergence;
-source-level contract success alone is not a production numerical proof.
+| CPU/GPU parity | Executed RTX 4080 SUPER parity across open Robin/Dirichlet (`max \|Δm\| <= 2.51e-11`), `pure_prism_p2` Robin (`−0.60%` vs Aharoni), and PBC-reduced 1-D Robin / 2-D film (`max \|Δm\| <= 3.51e-11`). |
 
 (demag-boundary-limitations)=
 ## 13. Limitations
 
 Neither finite Dirichlet nor finite Robin is exact at a finite airbox distance. The current public
 API does not expose arbitrary $\beta$ or a direct boundary-marker argument; those resolved values
-come from the mesh/planner/runtime contract. A GPU source path is not reported as qualified without
-executed-device evidence.
+come from the mesh/planner/runtime contract.
 
 (demag-boundary-scientific-bibliography)=
 ## 14. Scientific bibliography
@@ -407,14 +416,14 @@ executed-device evidence.
 (demag-boundary-source-code-index)=
 ## 15. Source-code index
 
-| Repository path | Stable symbol | Responsibility | Lane |
-|---|---|---|---|
-| `packages/fullmag-py/src/fullmag/model/energy.py` | `class Demag` | Boundary variant validation and IR normalization. | Public API |
-| `crates/fullmag-plan/src/fem.rs` | `plan_fem` | FEM realization and capability resolution. | FEM planner |
-| `crates/fullmag-plan/src/mesh.rs` | `certified_airbox_boundary_marker` | Certified outer-boundary marker selection. | FEM planner |
-| `backends/fem/cpu/mfem/interactions/demag_poisson_boundary.cpp` | `initialize_demag_poisson_boundary_operator` | Robin/Dirichlet operator construction, periodic seam exclusion and marker checks. | FEM CPU |
-| `backends/fem/cpu/mfem/interactions/demag_poisson_hypre.cpp` | `solve_demag_poisson_hypre` | Consumes the conditioned operator under solver policy. | FEM CPU |
-| `backends/fem/gpu/cuda/demag_poisson/operators.cpp` | `upload_demag_poisson_operators` | Device CSR operator upload and boundary-policy transfer. | FEM GPU |
-| `crates/fullmag-engine/src/fdm/cpu/fft.rs` | `compute_newell_kernel_spectra` | FDM open/periodic convolution realization. | FDM CPU |
-| `backends/fdm/gpu/cuda/runtime/context.cu` | `context_upload_demag_kernel_spectra` | FDM device convolution state; no FEM boundary matrix. | FDM GPU |
-
+| Repository path | Stable symbol | Responsibility | Lane | Immutable link |
+|---|---|---|---|---|
+| `packages/fullmag-py/src/fullmag/model/energy.py` | `class Demag` | Boundary variant validation and IR normalization. | Public API | [`energy.py#L51`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/model/energy.py#L51) |
+| `crates/fullmag-plan/src/fem.rs` | `plan_fem` | FEM realization and capability resolution. | FEM planner | [`fem.rs#L4288`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-plan/src/fem.rs#L4288) |
+| `crates/fullmag-plan/src/mesh.rs` | `certified_airbox_boundary_marker` | Certified outer-boundary marker selection. | FEM planner | [`mesh.rs#L2736`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-plan/src/mesh.rs#L2736) |
+| `backends/fem/cpu/mfem/interactions/demag_poisson_boundary.cpp` | `initialize_demag_poisson_boundary_operator` | Robin/Dirichlet operator construction, periodic seam exclusion, and marker checks. | FEM CPU | [`demag_poisson_boundary.cpp#L124`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/backends/fem/cpu/mfem/interactions/demag_poisson_boundary.cpp#L124) |
+| `backends/fem/cpu/mfem/interactions/demag_poisson_hypre.cpp` | `solve_demag_poisson_hypre` | Consumes the conditioned operator under solver policy. | FEM CPU | [`demag_poisson_hypre.cpp#L211`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/backends/fem/cpu/mfem/interactions/demag_poisson_hypre.cpp#L211) |
+| `backends/fem/gpu/cuda/demag_poisson/operators.cpp` | `upload_demag_poisson_operators` | Device CSR operator upload and boundary-policy transfer. | FEM GPU | [`operators.cpp#L1219`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/backends/fem/gpu/cuda/demag_poisson/operators.cpp#L1219) |
+| `crates/fullmag-engine/src/fdm/cpu/fft.rs` | `compute_newell_kernel_spectra` | FDM open/periodic convolution realization. | FDM CPU | [`fft.rs#L681`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-engine/src/fdm/cpu/fft.rs#L681) |
+| `backends/fdm/gpu/cuda/runtime/context.cu` | `context_upload_demag_kernel_spectra` | FDM device Hermitian convolution state; no FEM boundary matrix. | FDM GPU | [`context.cu#L3884`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/backends/fdm/gpu/cuda/runtime/context.cu#L3884) |
+| `apps/control-room/src/modules/inspector/inspectors/objects/physics/ObjectPhysicsSpec.tsx` | `ObjectPhysicsInspectorPanel` | Object-level physics inspector exposing demagnetization controls. | Control Room | [`ObjectPhysicsSpec.tsx#L78`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/apps/control-room/src/modules/inspector/inspectors/objects/physics/ObjectPhysicsSpec.tsx#L78) |

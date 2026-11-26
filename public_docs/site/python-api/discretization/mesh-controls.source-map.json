@@ -1,7 +1,7 @@
 {
   "document": {
     "path": "public_docs/site/python-api/discretization/mesh-controls.md",
-    "reviewed_revision": "ab3c8802a691a535063102c12f9a79bb0043b367"
+    "reviewed_revision": "752450f8d259ab97c76c36fe666d5474b02abe9a"
   },
   "backend_matrix": [
     {
@@ -69,6 +69,12 @@
       "responsibility": "Conforming shared-domain interface and airbox assembly policy."
     },
     {
+      "id": "fem_linear_solver_policy",
+      "path": "packages/fullmag-py/src/fullmag/model/discretization.py",
+      "symbol": "class FemLinearSolverPolicy",
+      "responsibility": "Native FEM Poisson linear-solver policy including atol, print_level, and gpu_strategy."
+    },
+    {
       "id": "public_validation",
       "path": "packages/fullmag-py/src/fullmag/world.py",
       "symbol": "_validate_mesh_control_values",
@@ -132,104 +138,134 @@
   "public_api": {
     "parameters": [
       {
-        "python": "MeshSizeControls.calibrate_for",
+        "python": "fullmag.model.discretization.MeshSizeControls.calibrate_for",
         "type": "str | None",
         "default": "None",
-        "si_unit": "1",
+        "si_unit": "$1$",
         "validation": "Standalone compatibility payload; no authoring facade attaches it to ProblemIR.",
         "meaning": "Recorded calibration-family data.",
         "backend_support": "Unattached",
         "problem_ir": "none"
       },
       {
-        "python": "MeshSizeControls.size_preset",
+        "python": "fullmag.model.discretization.MeshSizeControls.size_preset",
         "type": "str | None",
         "default": "None",
-        "si_unit": "1",
+        "si_unit": "$1$",
         "validation": "Standalone compatibility payload; no authoring facade attaches it to ProblemIR.",
         "meaning": "Named size-policy data.",
         "backend_support": "Unattached",
         "problem_ir": "none"
       },
       {
-        "python": "MeshSizeControls.maximum_element_size",
+        "python": "fullmag.model.discretization.MeshSizeControls.maximum_element_size",
         "type": "float | None",
         "default": "None",
-        "si_unit": "\\mathrm{m}",
+        "si_unit": "$\\mathrm{m}$",
         "validation": "Standalone compatibility payload; constructor does not validate it.",
         "meaning": "Upper element-size data.",
         "backend_support": "Unattached",
         "problem_ir": "none"
       },
       {
-        "python": "MeshSizeControls.minimum_element_size",
+        "python": "fullmag.model.discretization.MeshSizeControls.minimum_element_size",
         "type": "float | None",
         "default": "None",
-        "si_unit": "\\mathrm{m}",
+        "si_unit": "$\\mathrm{m}$",
         "validation": "Standalone compatibility payload; constructor does not validate it.",
         "meaning": "Lower element-size data.",
         "backend_support": "Unattached",
         "problem_ir": "none"
       },
       {
-        "python": "MeshSizeControls.maximum_element_growth_rate",
+        "python": "fullmag.model.discretization.MeshSizeControls.maximum_element_growth_rate",
         "type": "float | None",
         "default": "None",
-        "si_unit": "1",
+        "si_unit": "$1$",
         "validation": "Standalone compatibility payload; constructor does not validate it.",
         "meaning": "Element-growth data.",
         "backend_support": "Unattached",
         "problem_ir": "none"
       },
       {
-        "python": "MeshSizeControls.curvature_factor",
+        "python": "fullmag.model.discretization.MeshSizeControls.curvature_factor",
         "type": "float | None",
         "default": "None",
-        "si_unit": "1",
+        "si_unit": "$1$",
         "validation": "Standalone compatibility payload; constructor does not validate it.",
         "meaning": "Curvature-sizing data.",
         "backend_support": "Unattached",
         "problem_ir": "none"
       },
       {
-        "python": "MeshSizeControls.narrow_region_resolution",
+        "python": "fullmag.model.discretization.MeshSizeControls.narrow_region_resolution",
         "type": "float | None",
         "default": "None",
-        "si_unit": "1",
+        "si_unit": "$1$",
         "validation": "Standalone compatibility payload; constructor does not validate it.",
         "meaning": "Narrow-region data.",
         "backend_support": "Unattached",
         "problem_ir": "none"
       },
       {
-        "python": "SharedMeshAssemblyPolicy.interface_hmax_factor",
+        "python": "fullmag.model.discretization.SharedMeshAssemblyPolicy.interface_hmax_factor",
         "type": "float",
         "default": "0.5",
-        "si_unit": "1",
+        "si_unit": "$1$",
         "validation": "Strictly greater than zero and no greater than one.",
         "meaning": "Preserved compatibility value; not consumed by the current builder.",
         "backend_support": "Inert compatibility data",
         "problem_ir": "shared_mesh_assembly_policy.interface_hmax_factor"
       },
       {
-        "python": "SharedMeshAssemblyPolicy.enforce_conforming",
+        "python": "fullmag.model.discretization.SharedMeshAssemblyPolicy.enforce_conforming",
         "type": "bool",
         "default": "True",
-        "si_unit": "1",
+        "si_unit": "$1$",
         "validation": "Boolean.",
         "meaning": "Preserved compatibility value; not consumed by the current builder.",
         "backend_support": "Inert compatibility data",
         "problem_ir": "shared_mesh_assembly_policy.enforce_conforming"
       },
       {
-        "python": "SharedMeshAssemblyPolicy.airbox_hmax_factor",
+        "python": "fullmag.model.discretization.SharedMeshAssemblyPolicy.airbox_hmax_factor",
         "type": "float",
         "default": "3.0",
-        "si_unit": "1",
+        "si_unit": "$1$",
         "validation": "Finite and positive.",
         "meaning": "Preserved compatibility value; not consumed by the current builder.",
         "backend_support": "Inert compatibility data",
         "problem_ir": "shared_mesh_assembly_policy.airbox_hmax_factor"
+      },
+      {
+        "python": "FemLinearSolverPolicy.atol",
+        "type": "`float | None`",
+        "default": "`None`",
+        "si_unit": "$1$",
+        "validation": "Finite and positive when supplied.",
+        "meaning": "Optional absolute residual floor for the FEM Poisson linear solver.",
+        "backend_support": "FEM CPU/GPU demag lanes",
+        "problem_ir": "`backend_policy.discretization_hints.fem.demag_solver_policy.atol`"
+      },
+      {
+        "python": "FemLinearSolverPolicy.print_level",
+        "type": "`int`",
+        "default": "`0`",
+        "si_unit": "$1$",
+        "validation": "Integer >= 0.",
+        "meaning": "Native FEM linear-solver diagnostic verbosity level.",
+        "backend_support": "FEM CPU/GPU demag lanes",
+        "problem_ir": "`backend_policy.discretization_hints.fem.demag_solver_policy.print_level`"
+      },
+      {
+        "python": "FemLinearSolverPolicy.gpu_strategy",
+        "type": "`Literal[\"auto\", \"cg_amg\", \"cudss\"]`",
+        "default": "`\"auto\"`",
+        "si_unit": "$1$",
+        "validation": "One of `\"auto\"`, `\"cg_amg\"`, or `\"cudss\"`.",
+        "meaning": "GPU Poisson realization strategy (`\"auto\"` selects cuDSS within VRAM budget, else hypre CG+AMG).",
+        "backend_support": "FEM GPU demag lanes",
+        "problem_ir": "`backend_policy.discretization_hints.fem.demag_solver_policy.gpu_strategy`"
       }
     ]
   }

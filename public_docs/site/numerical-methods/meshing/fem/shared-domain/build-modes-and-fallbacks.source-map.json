@@ -1,7 +1,7 @@
 {
   "document": {
     "path": "public_docs/site/numerical-methods/meshing/fem/shared-domain/build-modes-and-fallbacks.md",
-    "reviewed_revision": "969efa0941905825ac569d525f4bdaefc059e2af"
+    "reviewed_revision": "752450f8d259ab97c76c36fe666d5474b02abe9a"
   },
   "backend_matrix": [
     {
@@ -81,26 +81,40 @@
       "path": "crates/fullmag-runner/src/lib.rs",
       "symbol": "run_planned_problem",
       "responsibility": "Planned runtime dispatch; source evidence only here."
+    },
+    {
+      "id": "domain_dispatch",
+      "path": "packages/fullmag-py/src/fullmag/meshing/asset_pipeline.py",
+      "symbol": "_realize_fem_domain_mesh_asset_from_components_impl",
+      "responsibility": "Selects pure_prism_extruded_shared_domain, single_geometry_geo_mixed, and conformal_occ",
+      "evidence_status": "verified"
+    },
+    {
+      "id": "stl_fallback_guard",
+      "path": "packages/fullmag-py/src/fullmag/meshing/asset_pipeline.py",
+      "symbol": "_reject_anonymous_import_fallback",
+      "responsibility": "Blocks anonymous concatenated-STL fallback on multi-component imports",
+      "evidence_status": "verified"
     }
   ],
   "symbols": [
     {
       "id": "hmax",
-      "latex": "h_{max}",
+      "latex": "$h_{\\max}$",
       "meaning": "effective preview element-size target",
-      "si_unit": "\\mathrm{m}"
+      "si_unit": "$\\mathrm{m}$"
     },
     {
       "id": "h_recipe",
-      "latex": "h_{recipe}",
+      "latex": "$h_{\\mathrm{recipe}}$",
       "meaning": "per-object recipe target",
-      "si_unit": "\\mathrm{m}"
+      "si_unit": "$\\mathrm{m}$"
     },
     {
       "id": "h_FEM",
-      "latex": "h_{FEM}",
+      "latex": "$h_{\\mathrm{FEM}}$",
       "meaning": "FEM hint target",
-      "si_unit": "\\mathrm{m}"
+      "si_unit": "$\\mathrm{m}$"
     }
   ],
   "equations": [

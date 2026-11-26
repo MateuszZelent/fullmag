@@ -1,7 +1,7 @@
 {
   "document": {
     "path": "public_docs/site/python-api/runtime/backend-policy.md",
-    "reviewed_revision": "ab3c8802a691a535063102c12f9a79bb0043b367"
+    "reviewed_revision": "752450f8d259ab97c76c36fe666d5474b02abe9a"
   },
   "backend_matrix": [
     {
@@ -37,8 +37,32 @@
     {
       "id": "source-2",
       "path": "packages/fullmag-py/src/fullmag/model/problem.py",
+      "symbol": "class FdmPrecisionPolicy",
+      "responsibility": "Mixed-precision storage/reduction contract for FDM."
+    },
+    {
+      "id": "source-3",
+      "path": "packages/fullmag-py/src/fullmag/model/problem.py",
+      "symbol": "class ParallelExecutionPolicy",
+      "responsibility": "Independent-work admission and FEM CPU gating."
+    },
+    {
+      "id": "source-4",
+      "path": "packages/fullmag-py/src/fullmag/model/problem.py",
       "symbol": "class RuntimeSelection",
       "responsibility": "Runtime policy state and lowering."
+    },
+    {
+      "id": "source-5",
+      "path": "packages/fullmag-py/src/fullmag/model/execution_profile.py",
+      "symbol": "class ExecutionProfile",
+      "responsibility": "Layered execution profiles and resource overrides."
+    },
+    {
+      "id": "source-6",
+      "path": "packages/fullmag-py/src/fullmag/model/compute_resources.py",
+      "symbol": "class ComputeResources",
+      "responsibility": "Compute target, CPU, GPU, memory, and distributed resource descriptors."
     }
   ],
   "public_api": {
@@ -47,41 +71,111 @@
         "python": "BackendTarget",
         "type": "`str` enum",
         "default": "`\"auto\"`",
-        "si_unit": "1",
+        "si_unit": "$1$",
         "validation": "`auto`, `fdm`, `fem`, `hybrid`",
         "meaning": "Solver backend family",
         "backend_support": "FEM/FDM CPU/GPU; planner and runtime capability checks remain authoritative",
-        "problem_ir": "`runtime.backend_target`"
+        "problem_ir": "`backend_policy.requested_backend`"
       },
       {
         "python": "DeviceTarget",
         "type": "`str` enum",
         "default": "`\"auto\"`",
-        "si_unit": "1",
+        "si_unit": "$1$",
         "validation": "`auto`, `cpu`, `cuda`, `gpu`",
-        "meaning": "Execution device",
+        "meaning": "Execution device target",
         "backend_support": "FEM/FDM CPU/GPU; planner and runtime capability checks remain authoritative",
-        "problem_ir": "`runtime.device_target`"
+        "problem_ir": "`problem_meta.runtime_metadata.runtime_selection.device`"
       },
       {
         "python": "ExecutionMode",
         "type": "`str` enum",
         "default": "`\"strict\"`",
-        "si_unit": "1",
+        "si_unit": "$1$",
         "validation": "`strict`, `extended`, `hybrid`",
-        "meaning": "Execution policy",
+        "meaning": "Execution capability policy",
         "backend_support": "FEM/FDM CPU/GPU; planner and runtime capability checks remain authoritative",
-        "problem_ir": "`runtime.execution_mode`"
+        "problem_ir": "`validation_profile.execution_mode`"
       },
       {
         "python": "ExecutionPrecision",
         "type": "`str` enum",
         "default": "`\"double\"`",
-        "si_unit": "1",
+        "si_unit": "$1$",
         "validation": "`single`, `double`",
         "meaning": "Floating-point precision",
         "backend_support": "FEM/FDM CPU/GPU; planner and runtime capability checks remain authoritative",
-        "problem_ir": "`runtime.execution_precision`"
+        "problem_ir": "`backend_policy.execution_precision`"
+      },
+      {
+        "python": "FdmPrecisionPolicy",
+        "type": "`str` enum",
+        "default": "`None` (unspecified)",
+        "si_unit": "$1$",
+        "validation": "`full_double` (`double`) or `single_storage_fp64_reduction` (`single`); must match `execution_precision`",
+        "meaning": "Explicit FDM storage/reduction precision contract",
+        "backend_support": "FDM CPU/GPU; planner validates compatibility",
+        "problem_ir": "`problem_meta.runtime_metadata.runtime_selection.fdm_precision_policy`"
+      },
+      {
+        "python": "ParallelExecutionPolicy.mode",
+        "type": "`str`",
+        "default": "`\"serial\"`",
+        "si_unit": "$1$",
+        "validation": "`\"serial\"` or `\"adaptive\"`; `\"adaptive\"` requires `fem` + `cpu`",
+        "meaning": "Independent-work admission mode (e.g. eigen `k`-sweeps)",
+        "backend_support": "Serial: all lanes; adaptive: FEM CPU only",
+        "problem_ir": "`problem_meta.runtime_metadata.runtime_selection.parallel_execution.mode`"
+      },
+      {
+        "python": "ParallelExecutionPolicy.max_cpu_percent",
+        "type": "`float`",
+        "default": "`90.0`",
+        "si_unit": "$1$",
+        "validation": "Finite real in `(0, 100]`",
+        "meaning": "Soft CPU utilization ceiling inside container allocation",
+        "backend_support": "FEM CPU adaptive admission",
+        "problem_ir": "`problem_meta.runtime_metadata.runtime_selection.parallel_execution.max_cpu_percent`"
+      },
+      {
+        "python": "ParallelExecutionPolicy.max_memory_percent",
+        "type": "`float`",
+        "default": "`80.0`",
+        "si_unit": "$1$",
+        "validation": "Finite real in `(0, 100]`",
+        "meaning": "Soft memory utilization ceiling inside container allocation",
+        "backend_support": "FEM CPU adaptive admission",
+        "problem_ir": "`problem_meta.runtime_metadata.runtime_selection.parallel_execution.max_memory_percent`"
+      },
+      {
+        "python": "ParallelExecutionPolicy.memory_reserve_bytes",
+        "type": "`int`",
+        "default": "`1073741824`",
+        "si_unit": "$\\mathrm{B}$",
+        "validation": "Integer in `[0, 2^64 - 1]`",
+        "meaning": "Reserved headroom bytes kept free for runtime overhead",
+        "backend_support": "FEM CPU adaptive admission",
+        "problem_ir": "`problem_meta.runtime_metadata.runtime_selection.parallel_execution.memory_reserve_bytes`"
+      },
+      {
+        "python": "ParallelExecutionPolicy.max_workers",
+        "type": "`int | None`",
+        "default": "`None`",
+        "si_unit": "$1$",
+        "validation": "`None` or integer `>= 1`",
+        "meaning": "Hard cap on concurrent independent workers",
+        "backend_support": "FEM CPU adaptive admission",
+        "problem_ir": "`problem_meta.runtime_metadata.runtime_selection.parallel_execution.max_workers`"
+      },
+      {
+        "python": "ParallelExecutionPolicy.threads_per_worker",
+        "type": "`int`",
+        "default": "`1`",
+        "si_unit": "$1$",
+        "validation": "Integer `>= 1`",
+        "meaning": "Threads assigned to each admitted worker",
+        "backend_support": "FEM CPU adaptive admission",
+        "problem_ir": "`problem_meta.runtime_metadata.runtime_selection.parallel_execution.threads_per_worker`"
       }
     ]
   }

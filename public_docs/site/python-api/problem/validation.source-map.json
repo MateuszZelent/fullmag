@@ -1,7 +1,7 @@
 {
   "document": {
     "path": "public_docs/site/python-api/problem/validation.md",
-    "reviewed_revision": "ab3c8802a691a535063102c12f9a79bb0043b367"
+    "reviewed_revision": "752450f8d259ab97c76c36fe666d5474b02abe9a"
   },
   "backend_matrix": [
     {
@@ -33,6 +33,12 @@
       "path": "packages/fullmag-py/src/fullmag/model/problem.py",
       "symbol": "class Problem",
       "responsibility": "Constructor and lowering validation boundary."
+    },
+    {
+      "id": "source-2",
+      "path": "packages/fullmag-py/src/fullmag/_validation.py",
+      "symbol": "class TypedValidationError",
+      "responsibility": "Pointer-carrying validation exceptions and shared domain checks."
     }
   ],
   "public_api": {

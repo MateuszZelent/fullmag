@@ -1,11 +1,11 @@
 ---
 title: Demagnetization
-status: partial
+status: implemented
 doc_kind: reference
 audience: user
 owner: fullmag-public-docs
-last_updated: 2026-08-31
-reviewed_revision: ab3c8802a691a535063102c12f9a79bb0043b367
+last_updated: 2026-11-26
+reviewed_revision: 752450f8d259ab97c76c36fe666d5474b02abe9a
 ---
 
 # Demagnetization
@@ -14,9 +14,9 @@ reviewed_revision: ab3c8802a691a535063102c12f9a79bb0043b367
 (python-api-interactions-demagnetization-problem-statement)=
 ## Problem statement
 
-Demag records the requested realization and rejects ambiguous model/realization combinations.
+`fm.Demag` and the stage-first helpers `study.demag(...)`, `study.disable_demag()`, and `fm.demag_quality(...)` configure magnetostatic demagnetization policy and reject ambiguous `model`/`realization` combinations.
 
-This page covers the Python authoring contract: construction validates the requested demagnetization model, boundary variant, and realization policy in Python, while `to_ir()` emits the canonical `ProblemIR` record before solver planning.
+This page covers the Python authoring contract: construction validates the requested demagnetization model, airbox boundary variant, and legacy realization aliases in Python, while `to_ir()` emits a flat canonical `ProblemIR` record before solver planning.
 
 (python-api-interactions-demagnetization-governing-equations)=
 ## Governing equations
@@ -26,78 +26,115 @@ Magnetostatics solves $\nabla\cdot\mathbf{B} = 0$ with $\mathbf{B} = \mu_0(\math
 (python-api-interactions-demagnetization-symbols-and-si-units)=
 ## Symbols and SI units
 
-The solver-policy selectors (`model`, `variant`, and `realization`) are dimensionless string tags ($1$). Physical magnetization $M_s$ and demagnetizing field $\mathbf{H}_{\mathrm{d}}$ evaluated by the backends use $\mathrm{A\,m^{-1}}$ and domain coordinates use $\mathrm{m}$.
+The solver-policy selectors (`model`, `variant`, `realization`, and `demag_quality` profile names) are dimensionless string tags ($1$). Physical magnetization $M_s$ and demagnetizing field $\mathbf{H}_{\mathrm{d}}$ evaluated by the backends use $\mathrm{A\,m^{-1}}$, refresh intervals (`demag_interval_s`) use $\mathrm{s}$, and domain coordinates use $\mathrm{m}$.
 
 (python-api-interactions-demagnetization-assumptions-and-validity)=
 ## Assumptions and validity
 
-`model` (one of `"airbox"`, `"bem"`, `"fredkin_koehler"`, `"fmm"`) and `realization` are mutually exclusive; `variant` (`"auto"`, `"dirichlet"`, `"robin"`) is valid only with `model="airbox"`. Conflicting arguments, unknown selector strings, or periodic airbox combinations on FDM fail closed at authoring or lowering.
+- `model` (`"airbox"`, `"bem"`, `"fredkin_koehler"`, `"fmm"`) and legacy `realization` are mutually exclusive.
+- `variant` (`"auto"`, `"dirichlet"`, `"robin"`) is valid **only** when `model="airbox"`; passing `variant` with `model=None` or with another model raises `ValueError`.
+- Legacy `realization` accepts canonical IR tags (`"auto"`, `"bem"`, `"fmm"`, `"fredkin_koehler"`, `"poisson_dirichlet"`, `"poisson_robin"`) plus deprecated aliases normalized by `_DEMAG_LEGACY_ALIASES`: `"poisson_airbox"` $\to$ `"poisson_robin"`, `"airbox_robin"` $\to$ `"poisson_robin"`, and `"airbox_dirichlet"` $\to$ `"poisson_dirichlet"`.
+- `fm.demag_quality(profile)` accepts `"exact"` (refresh every RHS evaluation, `demag_interval_s=None`), `"balanced"` (`5.0e-13` s), or `"fast"` (`2.0e-12` s).
+- Conflicting arguments, unknown selector strings, or FEM-only periodic airbox combinations on FDM fail closed at authoring or lowering.
 
 (python-api-interactions-demagnetization-python-api)=
 ## Python API
 
-### Constructor or function
+### Constructors and study helpers
 
-`fm.Demag(model=None, variant=None, realization=None)`
+- `fm.Demag(model=None, variant=None, realization=None)`
+- `study.demag(*, enabled=True, model=None, variant=None, realization=None)` (also `fm.demag(...)`)
+- `study.disable_demag()` (also `fm.disable_demag()`)
+- `fm.demag_quality(profile)` (`"exact"`, `"balanced"`, `"fast"`)
 
 ### Parameters
 
 | Python name | Type | Default | SI unit | Validation | Meaning | FEM/FDM CPU/GPU support | ProblemIR destination |
 |---|---|---|---|---|---|---|---|
-| `fm.Demag.model` | `str or None` | `None` | $1$ | airbox, bem, fredkin_koehler, or fmm when supplied | demagnetization model | FEM/FDM CPU/GPU: IR; resolved support required | `realization` |
-| `fm.Demag.variant` | `str or None` | `None` | $1$ | airbox variant auto, dirichlet, or robin; only with model=airbox | airbox boundary variant | FEM/FDM CPU/GPU: IR; resolved support required | `realization.variant` |
-| `fm.Demag.realization` | `str or None` | `None` | $1$ | mutually exclusive with model | pre-resolved realization label | FEM/FDM CPU/GPU: IR; resolved support required | `realization` |
+| `fm.Demag.model` | `str \| None` | `None` | $1$ | `"airbox"`, `"bem"`, `"fredkin_koehler"`, or `"fmm"` when supplied; mutually exclusive with `realization` | canonical demagnetization model | FEM/FDM CPU/GPU: IR; planner resolves backend support | `realization` |
+| `fm.Demag.variant` | `str \| None` | `None` | $1$ | `"auto"`, `"dirichlet"`, or `"robin"`; valid only with `model="airbox"` | airbox boundary variant flattened into `realization` | FEM CPU/GPU: airbox Robin/Dirichlet; FDM fails closed on FEM airbox options | `realization` |
+| `fm.Demag.realization` | `str \| None` | `None` | $1$ | canonical tags or aliases (`poisson_airbox`, `airbox_robin`, `airbox_dirichlet`); mutually exclusive with `model` | legacy pre-resolved realization label | FEM/FDM CPU/GPU: IR; normalized to flat realization string | `realization` |
+| `study.demag.enabled` | `bool` | `True` | $1$ | boolean; `enabled=False` or `study.disable_demag()` omits demag | enables or disables demagnetization on the study | FEM/FDM CPU/GPU: controls inclusion in `energy_terms` | `energy_terms` |
+| `fm.demag_quality.profile` | `str` | `required` | $1$ | `"exact"`, `"balanced"`, or `"fast"` | sets demag refresh cadence (`None`, `5e-13` s, `2e-12` s) | FEM/FDM CPU/GPU: lowers to `field_refresh.demag_interval_s` | `field_refresh.demag_interval_s` |
 
 ### Stage-first example
 
 ```python
-# %%
+# %% Stage-first demagnetization configuration
 import fullmag as fm
 
-study = fm.study("public-api-example")
-study.objects.mesh.defaults(maximum_element_size=5e-9)
-body = study.geometry(fm.Box(size=(100e-9, 20e-9, 5e-9)), name="film")
-body.Ms = 800.0e3
-body.Aex = 13.0e-12
-body.alpha = 0.02
-body.m = fm.texture.uniform(1.0, 0.0, 0.0)
-study.stages.add_relax(stage_id="api-example", dt=5e-13, max_steps=1)
-# Author the documented object after the stage exists.
-value = fm.Demag(model="airbox", variant="auto")
-canonical_ir = value.to_ir()
+study = fm.study("demag_airbox_relaxation")
+study.engine("fem")
+study.device("cpu", precision="double")
+study.objects.mesh.defaults(maximum_element_size=5.0e-9)
+
+film = study.geometry(fm.Box(size=(100.0e-9, 20.0e-9, 5.0e-9)), name="film")
+film.Ms = 800.0e3
+film.Aex = 13.0e-12
+film.alpha = 0.02
+film.m = fm.texture.uniform(1.0, 0.0, 0.0)
+
+study.exchange()
+study.demag(model="airbox", variant="robin")
+fm.demag_quality("exact")
+study.stages.add_relax(stage_id="relax_eq", dt=5.0e-13, max_steps=100)
+
+# %% Canonical flat IR lowering (including legacy alias normalization)
+airbox_ir = fm.Demag(model="airbox", variant="auto").to_ir()
+alias_ir = fm.Demag(realization="airbox_dirichlet").to_ir()
+assert airbox_ir == {"kind": "demag", "realization": "poisson_robin"}
+assert alias_ir == {"kind": "demag", "realization": "poisson_dirichlet"}
 ```
 
-In a complete simulation script, attach demagnetization policy via the study's solver/physics configuration rather than relying on standalone object construction.
+To omit magnetostatics cleanly (for example in exchange-only analytical benchmarks), call `study.disable_demag()` or `study.demag(enabled=False)`.
 
 (python-api-interactions-demagnetization-problem-ir)=
 ## ProblemIR
 
-`value.to_ir()` emits `{"kind": "demag", "realization": ...}` (for example, `"poisson_robin"` when `model="airbox"` and `variant="auto"` are normalized for airbox execution).
+`fm.Demag.to_ir()` always emits a **flat** two-key record `{"kind": "demag", "realization": "<resolved>"}` (there is no nested `realization.variant` field):
+
+| Python authoring | Flattened `ProblemIR` `realization` value |
+|---|---|
+| `fm.Demag()` | `"auto"` |
+| `fm.Demag(model="airbox")` / `variant="auto"` / `variant="robin"` | `"poisson_robin"` |
+| `fm.Demag(model="airbox", variant="dirichlet")` | `"poisson_dirichlet"` |
+| `fm.Demag(model="fredkin_koehler")` | `"fredkin_koehler"` |
+| `fm.Demag(model="bem")` / `fm.Demag(model="fmm")` | `"bem"` / `"fmm"` |
+| `fm.Demag(realization="poisson_airbox")` / `"airbox_robin"` | `"poisson_robin"` |
+| `fm.Demag(realization="airbox_dirichlet")` | `"poisson_dirichlet"` |
 
 (python-api-interactions-demagnetization-round-trip-and-failure-semantics)=
 ## Round-trip and failure semantics
 
-`requested intent` preserves explicit solver model/variant selection or `"auto"` resolution policy in `ProblemIR` independently of `resolved execution`. `Validation errors` reject conflicting `model` and `realization` inputs, while `unsupported combinations` (such as periodic `airbox` demag on FDM) fail closed at planning.
+`requested intent` preserves explicit solver model/variant selection or `"auto"` resolution policy as the flattened `realization` string in `ProblemIR` independently of `resolved execution`. `Validation errors` reject mixing `model` and `realization`, using `variant` without `model="airbox"`, or passing unknown profile names to `fm.demag_quality`. `Unsupported combinations` (such as periodic `airbox` demag on FDM or requesting an unimplemented realization on a backend lane) fail closed at planning.
 
 (python-api-interactions-demagnetization-discrete-realization)=
 ## Discrete realization
 
-The Python contract supplies solver-policy intent in `ProblemIR` only; Newell/FFT convolution kernels, Poisson airbox assembly, Robin closures, and Fredkin–Koehler FEM/BEM coupling are implemented by the solver backends.
+The Python contract supplies solver-policy intent in `ProblemIR` only; Newell/FFT convolution kernels, Poisson airbox assembly, Robin closures, and Fredkin–Koehler FEM/BEM coupling are implemented by the solver backends. For detailed acceleration algorithms, VRAM preflight, and verified speedups (batched single-layer `D2Z`/`Z2D` & `R2C`/`C2R` cuFFT on FDM GPU; auto-`cuDSS` direct Cholesky demag and `pure_prism_p2` on FEM GPU), see {ref}`numerical-methods-performance-fdm-core` and {ref}`numerical-methods-performance-fem-gpu-demag`.
+
+| Solver | Device | Supported demagnetization realizations | Performance reference |
+|---|---|---|---|
+| `FDM` | `CPU` | 3D Newell-tensor R2C/C2R FFT convolution (`realization="auto"`) | {ref}`numerical-methods-performance-fdm-core` |
+| `FDM` | `GPU` | Batched single-layer `D2Z`/`Z2D` & `R2C`/`C2R` cuFFT with exact workspace preflight | {ref}`numerical-methods-performance-fdm-core` |
+| `FEM` | `CPU` | Airbox Poisson (`poisson_robin`, `poisson_dirichlet`) and hybrid FEM/BEM (`fredkin_koehler`) | {doc}`../../numerical-methods/demag-solvers/index` |
+| `FEM` | `GPU` | Airbox Poisson and hybrid FEM/BEM via `cg_amg` or auto-`cuDSS` direct Cholesky (`pure_prism_p2` supported) | {ref}`numerical-methods-performance-fem-gpu-demag` |
 
 (python-api-interactions-demagnetization-implementation-mapping)=
 ## Implementation mapping
 
-The authoritative implementation is `packages/fullmag-py/src/fullmag/model/energy.py` (`class Demag`). Constructor validation, normalization rules, defaults, and `to_ir()` keys come directly from that module.
+- Typed interaction class and alias mapping: `packages/fullmag-py/src/fullmag/model/energy.py` (`class Demag`).
+- Stage-first helpers and refresh profiles: `packages/fullmag-py/src/fullmag/world.py` (`demag`, `disable_demag`, `demag_quality`, `StudyBuilder.demag`, `StudyBuilder.disable_demag`).
 
 (python-api-interactions-demagnetization-validation)=
 ## Validation
 
-Focused repository unit tests covering `Demag` authoring and lowering include `test_demag_authoring_rejects_ambiguous_realization` and `test_problem_to_ir_rejects_periodic_airbox_demag_for_fdm`. Live solver runtime and Control Room browser behavior require separate qualification.
+Focused repository unit tests covering `Demag` authoring and lowering include `test_demag_authoring_rejects_ambiguous_realization` and `test_problem_to_ir_rejects_periodic_airbox_demag_for_fdm`. Live solver runtime parity and Control Room browser behavior require separate qualification.
 
 (python-api-interactions-demagnetization-limitations)=
 ## Limitations and Control Room
 
-Control Room has no standalone object form for `fm.Demag`; demagnetization method selection is surfaced through study/discretization configuration or session capability panels when exposed, and otherwise authored in Python. See {doc}`/frontend/capability-register`.
+Control Room surfaces demagnetization method selection through `apps/control-room/src/modules/inspector/inspectors/objects/physics/ObjectPhysicsSpec.tsx` and `apps/control-room/src/modules/inspector/inspectors/objects/physics/PhysicsModuleSpec.tsx` (and airbox controls under `UniverseAndAirboxSpec.tsx`); low-level `fm.demag_quality(...)` cadence profiles are authored in Python scripts. See {doc}`/frontend/capability-register`.
 
 (python-api-interactions-demagnetization-scientific-bibliography)=
 ## Scientific bibliography
@@ -111,4 +148,5 @@ Control Room has no standalone object form for `fm.Demag`; demagnetization metho
 
 | Source path | Symbol | Responsibility |
 |---|---|---|
-| `packages/fullmag-py/src/fullmag/model/energy.py` | `class Demag` | public constructor and IR lowering |
+| [`packages/fullmag-py/src/fullmag/model/energy.py`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/model/energy.py#L50) | `class Demag` | public constructor, alias normalization, and flat IR lowering |
+| [`packages/fullmag-py/src/fullmag/world.py`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/world.py#L9546) | `demag_quality` | named refresh-cadence profiles (`exact`, `balanced`, `fast`) |

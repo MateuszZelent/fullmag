@@ -4,15 +4,17 @@ status: partial
 doc_kind: reference
 audience: user
 owner: fullmag-public-docs
+last_updated: 2026-11-26
+reviewed_revision: 752450f8d259ab97c76c36fe666d5474b02abe9a
 ---
 
 (public-docs-physics-interactions-stt)=
 # Spin-transfer torque
 
 Spin-transfer torque (STT) is a non-conservative LLG source. Fullmag exposes local
-Slonczewski CPP/MTJ and Zhang–Li CIP models, plus canonical source-binding variants. Legacy
-formula versions remain distinguishable in `ProblemIR`; they must not be relabelled as the
-canonical SI models.
+Slonczewski CPP/MTJ and Zhang–Li CIP models, plus canonical source-binding variants and
+stage-level runtime toggles (`set_spin_torque_enabled`). Legacy formula versions remain
+distinguishable in `ProblemIR`; they must not be relabelled as the canonical SI models.
 
 (physics-spin-transfer-torque-problem-statement)=
 ## Physical problem
@@ -150,10 +152,10 @@ source, and realization.
 
 | Solver | Device | Authoring / IR | Executable realization | Scientific qualification | Exact boundary |
 |---|---|---|---|---|---|
-| FDM | CPU | legacy and selected canonical IR | reference executable subsets | μMAG SP5 and analytic/current-scaling tests | target/source/formula-version gates apply |
-| FDM | GPU | same tagged IR | implemented subsets | device and precision qualification separate | no silent replacement of canonical request by legacy formula |
-| FEM | CPU | legacy and selected canonical IR | reference/partial executable | skew-mesh and weak-gradient tests required | target and current-source support narrower |
-| FEM | GPU | authoring/IR | partial or unsupported by variant | no generic qualification claim | planner must report exact rejected feature |
+| FDM | CPU | legacy and canonical IR | reference executable (`slonczewski_torque_from_config`, `zhang_li_stt_torque`) | μMAG SP5 and analytic/current-scaling tests | target/source/formula-version gates apply |
+| FDM | GPU | same tagged IR | native CUDA kernels; FP64 RK45 fuses `SlonczewskiSTT` into field/RHS (`add_prescribed_spin_torques_fp64`), while `ZhangLiSTT` uses a dedicated gradient stencil | device and precision qualification separate; see {ref}`numerical-methods-performance-fdm-transport` | no silent replacement of canonical request by legacy formula; `FrozenSpins` projection runs after torque assembly |
+| FEM | CPU | legacy and canonical IR | MFEM weak/nodal realizations (`add_slonczewski_stt_rhs_aos`, `prepare_zhang_li_stt_workspace`) | skew-mesh and weak-gradient contracts | target and current-source support narrower |
+| FEM | GPU | same tagged IR | native CUDA kernels (`fullmag_cuda_add_slonczewski_stt_rhs`, `fullmag_cuda_add_zhang_li_stt_rhs`) | bounded GPU/CPU contract tests; broad qualification remains separate | planner reports exact rejected variant/source combinations fail-closed |
 
 (physics-spin-transfer-torque-python-api)=
 ## Python API and stage-first example
@@ -186,45 +188,35 @@ study.spin_torque(stt)
 study.stages.add_run(stage_id="drive", until=1.0e-12)
 ```
 
-See {doc}`/python-api/interactions/spin-transfer-torque` for complete constructor signatures, defaults,
-and validation rules for `fm.SlonczewskiSTT` and `fm.ZhangLiSTT`. Execution support depends on
-the selected study target, formula version, and current-source route.
+Stage workflows may also enable or disable registered spin-torque modules between stages via `study.terms.set_spin_torque_enabled(...)` (or flat helper `fm.set_spin_torque_enabled(...)`) without reconstructing the geometry or material graph. See {doc}`/python-api/interactions/spin-transfer-torque` for complete constructor signatures, defaults, and validation rules for `fm.SlonczewskiSTT` and `fm.ZhangLiSTT`.
 
-## Constructor parameters
+### Parameter contract
 
-### `SlonczewskiSTT`
-
-| Parameter | Unit | Meaning |
-|---|---:|---|
-| `current_density` | $\mathrm{A\,m^{-2}}$ | signed three-vector prescribed current; mutually exclusive with `current_source` |
-| `spin_polarization` | $1$ | fixed-layer polarization direction |
-| `degree` | $1$ | polarization magnitude |
-| `lambda_asymmetry` | $1$ | angular asymmetry parameter |
-| `epsilon_prime` | $1$ | field-like coefficient in the selected formula |
-| `free_layer_thickness_m` | $\mathrm m$ | local volumetric prefactor realization |
-| `id`, `target`, `stack_normal`, `interface_id` | mixed | canonical tagged-module identity and realization |
-
-### `ZhangLiSTT`
-
-| Parameter | Unit | Meaning |
-|---|---:|---|
-| `current_density` | $\mathrm{A\,m^{-2}}$ | signed three-vector prescribed current |
-| `degree` / `xi` | $1$ | polarization parameter/alias under the documented formula |
-| `beta` | $1$ | non-adiabaticity |
-| `current_source` | $1$ | named solved-current source, exclusive with prescribed current |
-| `id`, `target`, `lande_g`, `operator_version` | mixed | canonical tagged-module contract |
+| Python parameter | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR |
+|---|---|---|---|---|---|---|---|
+| `SlonczewskiSTT.current_density` | `Sequence[float] \| None` | `None` | $\mathrm{A\,m^{-2}}$ | finite 3-vector; exclusive with `current_source` | signed prescribed charge-current density $\mathbf{J}_c$ | FDM/FEM CPU/GPU | `spin_torque_modules[].current_density` |
+| `SlonczewskiSTT.spin_polarization` | `Sequence[float]` | `(0.0, 0.0, 1.0)` | $1$ | finite nonzero 3-vector; normalized to $\hat{\mathbf{p}}$ | fixed-layer spin-polarization direction | FDM/FEM CPU/GPU | `spin_torque_modules[].spin_polarization` |
+| `SlonczewskiSTT.degree` | `float` | `0.4` | $1$ | finite in $[0, 1]$ | spin polarization magnitude $P$ | FDM/FEM CPU/GPU | `spin_torque_modules[].degree` |
+| `SlonczewskiSTT.lambda_asymmetry` | `float` | `1.0` | $1$ | finite and $\ge 1$ | Slonczewski angular asymmetry parameter $\Lambda$ | FDM/FEM CPU/GPU | `spin_torque_modules[].lambda_asymmetry` |
+| `SlonczewskiSTT.epsilon_prime` | `float` | `0.0` | $1$ | finite | secondary field-like Slonczewski coefficient $\epsilon'$ | FDM/FEM CPU/GPU | `spin_torque_modules[].epsilon_prime` |
+| `SlonczewskiSTT.free_layer_thickness_m` | `float \| None` | `None` | $\mathrm{m}$ | finite and $> 0$ when set | physical free-layer thickness $t_F$ | FDM/FEM CPU/GPU | `spin_torque_modules[].free_layer_thickness_m` |
+| `SlonczewskiSTT.stack_normal` | `Sequence[float] \| None` | `None` | $1$ | finite nonzero 3-vector when set | oriented unit stack normal $\hat{\mathbf{n}}_{\mathrm{stack}}$ | canonical v2 lanes | `spin_torque_modules[].stack_normal` |
+| `ZhangLiSTT.current_density` | `Sequence[float] \| None` | `None` | $\mathrm{A\,m^{-2}}$ | finite 3-vector; exclusive with `current_source` | signed prescribed in-plane charge-current density $\mathbf{J}_c$ | FDM/FEM CPU/GPU | `spin_torque_modules[].current_density` |
+| `ZhangLiSTT.degree` | `float` | `0.4` | $1$ | finite in $[0, 1]$ | spin polarization degree $P$ | FDM/FEM CPU/GPU | `spin_torque_modules[].degree` |
+| `ZhangLiSTT.beta` | `float` | `0.0` | $1$ | finite | Zhang–Li non-adiabaticity parameter $\beta$ | FDM/FEM CPU/GPU | `spin_torque_modules[].beta` |
+| `ZhangLiSTT.current_source` | `str \| None` | `None` | $1$ | non-empty resolvable named current module | bound solved-current source replacing constant current | planner-gated FDM/FEM lanes | `spin_torque_modules[].current_source_id` |
+| `ZhangLiSTT.lande_g` | `float \| None` | `None` | $1$ | finite and $> 0$ when set | Landé $g$-factor entering spin-drift velocity $\mathbf{u}$ | canonical lanes | `spin_torque_modules[].lande_g` |
 
 (physics-spin-transfer-torque-problem-ir)=
 ## ProblemIR and provenance
 
-The IR must preserve:
+The IR preserves:
 
-- `kind` and `formula_version`;
-- legacy versus canonical semantics;
+- `kind` and `formula_version` (`slonczewski.fullmag.v2` vs. legacy `slonczewski.legacy_fullmag.v0`, and Zhang–Li canonical vs. legacy tags);
 - signed current source and its identity;
 - target and stack/interface orientation;
 - thickness/interface realization;
-- all polarization/asymmetry parameters.
+- all polarization, asymmetry, non-adiabaticity, and Landé $g$-factor parameters.
 
 Canonical export preserves any explicit legacy formula version without silently upgrading it.
 
@@ -241,7 +233,7 @@ degree/asymmetry domains, conflicting current sources, incomplete canonical iden
 target, and missing realization. Planner validation additionally owns mesh derivatives, target
 materialization, source availability, backend/device support, and current-field cardinality.
 
-## Required numerical validation
+### Required numerical validation
 
 - zero-current and zero-polarization limits;
 - odd current scaling and exact sign reversal;
@@ -250,7 +242,7 @@ materialization, source availability, backend/device support, and current-field 
 - Zhang–Li translation of a one-dimensional wall;
 - μMAG Standard Problem 5 with fully declared convention;
 - source-bound versus prescribed-current equivalence;
-- CPU/GPU trajectories with matched timestep, precision, and formula version;
+- CPU/GPU trajectories with matched timestep, precision, and formula version (including FDM FP64 RK45 fused Slonczewski kernel and FEM CUDA Slonczewski/Zhang–Li kernels);
 - proof that Gilbert conversion is applied exactly once.
 
 (physics-spin-transfer-torque-limitations)=
@@ -258,8 +250,8 @@ materialization, source availability, backend/device support, and current-field 
 
 The local Slonczewski model does not solve tunnelling, spin accumulation, backflow, heating, or
 bias-dependent polarization. Zhang–Li is a diffusive adiabatic/non-adiabatic local model. Solved
-drift–diffusion torque is documented separately and must not be replaced by fitted local
-coefficients.
+drift–diffusion torque is documented separately in {doc}`../drift-diffusion-spin-torque/index` and
+must not be replaced by fitted local coefficients.
 
 (physics-spin-transfer-torque-scientific-bibliography)=
 ## Scientific bibliography
@@ -274,18 +266,21 @@ coefficients.
 (physics-spin-transfer-torque-implementation-mapping)=
 ## Implementation mapping
 
-Python owns authoring and serialization, ProblemIR owns canonical intent, planners own legality and realization selection, and backend kernels own numerical evaluation.
+Python owns authoring and serialization, `ProblemIR` owns canonical intent, planners own legality and realization selection, and backend kernels own numerical evaluation (including fused FP64 CUDA RK45 Slonczewski accumulation on FDM GPU and dedicated Slonczewski/Zhang–Li CUDA kernels on FEM GPU).
 
 (physics-spin-transfer-torque-source-code-index)=
 ## Source-code index
 
-| Repository path | Stable symbol / area | Responsibility |
+| Repository path | Stable symbol | Responsibility |
 |---|---|---|
-| `packages/fullmag-py/src/fullmag/model/spin_torque.py` | `class SlonczewskiSTT`, `class ZhangLiSTT` | public constructors and formula versions |
-| `packages/fullmag-py/src/fullmag/world.py` | `spin_torque facade` | stage registration boundary |
-| `crates/fullmag-plan/src/spin_torque.rs` | `resolve_legacy_spin_torque` | variant/source/target capability |
-| `crates/fullmag-engine/src/fdm/cpu/fields/direct_torques.rs` | `slonczewski_torque_from_config` | FDM CPU reference STT evaluator |
-| `backends/fem/cpu/mfem/interactions/stt_slonczewski.cpp` | `add_slonczewski_stt_rhs_aos` | FEM CPU Slonczewski realization |
-| `backends/fem/cpu/mfem/interactions/stt_zhang_li.cpp` | `add_zhang_li_stt_rhs_aos` | FEM CPU Zhang–Li realization |
-| `backends/fem/gpu/cuda/interactions/stt/stt_kernels.cu` | `slonczewski_stt_rhs_kernel` | FEM GPU CUDA STT kernels |
-
+| [`packages/fullmag-py/src/fullmag/model/spin_torque.py`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/model/spin_torque.py#L456) | [`class SlonczewskiSTT`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/model/spin_torque.py#L456) | Slonczewski constructor, formula version, and IR lowering |
+| [`packages/fullmag-py/src/fullmag/model/spin_torque.py`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/model/spin_torque.py#L654) | [`class ZhangLiSTT`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/model/spin_torque.py#L654) | Zhang–Li constructor, current-source binding, and IR lowering |
+| [`packages/fullmag-py/src/fullmag/world.py`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/world.py#L5307) | [`set_spin_torque_enabled`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/world.py#L5307) | stage-level spin-torque activation toggle |
+| [`crates/fullmag-plan/src/spin_torque.rs`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-plan/src/spin_torque.rs#L192) | [`resolve_legacy_spin_torque`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-plan/src/spin_torque.rs#L192) | variant/source/target capability and formula-version planner gate |
+| [`crates/fullmag-engine/src/fdm/cpu/fields/direct_torques.rs`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-engine/src/fdm/cpu/fields/direct_torques.rs#L72) | [`slonczewski_torque_from_config`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-engine/src/fdm/cpu/fields/direct_torques.rs#L72) | FDM CPU reference Slonczewski evaluator |
+| [`crates/fullmag-engine/src/fdm/cpu/fields/direct_torques.rs`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-engine/src/fdm/cpu/fields/direct_torques.rs#L389) | [`zhang_li_stt_torque`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-engine/src/fdm/cpu/fields/direct_torques.rs#L389) | FDM CPU reference Zhang–Li evaluator |
+| [`backends/fdm/gpu/cuda/integrators/prescribed_spin_torques_fp64.cuh`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/backends/fdm/gpu/cuda/integrators/prescribed_spin_torques_fp64.cuh#L7) | [`add_prescribed_spin_torques_fp64`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/backends/fdm/gpu/cuda/integrators/prescribed_spin_torques_fp64.cuh#L7) | FDM GPU fused FP64 RK45 Slonczewski/SOT device helper |
+| [`backends/fem/cpu/mfem/interactions/stt_slonczewski.cpp`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/backends/fem/cpu/mfem/interactions/stt_slonczewski.cpp#L67) | [`add_slonczewski_stt_rhs_aos`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/backends/fem/cpu/mfem/interactions/stt_slonczewski.cpp#L67) | FEM CPU Slonczewski realization |
+| [`backends/fem/cpu/mfem/interactions/stt_zhang_li.hpp`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/backends/fem/cpu/mfem/interactions/stt_zhang_li.hpp#L23) | [`prepare_zhang_li_stt_workspace`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/backends/fem/cpu/mfem/interactions/stt_zhang_li.hpp#L23) | FEM CPU Zhang–Li weak-gradient workspace and RHS |
+| [`backends/fem/gpu/cuda/interactions/stt/stt_kernels.cu`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/backends/fem/gpu/cuda/interactions/stt/stt_kernels.cu#L337) | [`fullmag_cuda_add_slonczewski_stt_rhs`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/backends/fem/gpu/cuda/interactions/stt/stt_kernels.cu#L337) | FEM GPU CUDA Slonczewski RHS launch |
+| [`backends/fem/gpu/cuda/interactions/stt/stt_kernels.cu`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/backends/fem/gpu/cuda/interactions/stt/stt_kernels.cu#L402) | [`fullmag_cuda_add_zhang_li_stt_rhs`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/backends/fem/gpu/cuda/interactions/stt/stt_kernels.cu#L402) | FEM GPU CUDA Zhang–Li RHS launch |

@@ -1,32 +1,32 @@
 {
   "document": {
     "path": "public_docs/site/python-api/current-and-excitations/cpw-antenna.md",
-    "reviewed_revision": "ab3c8802a691a535063102c12f9a79bb0043b367"
+    "reviewed_revision": "752450f8d259ab97c76c36fe666d5474b02abe9a"
   },
   "backend_matrix": [
     {
       "solver": "FEM",
       "device": "CPU",
       "status": "documented",
-      "reason": "authoring and IR documented; runtime qualification separate"
+      "reason": "2.5D and 3D quasistatic conduction + Biot-Savart antenna pipeline documented"
     },
     {
       "solver": "FEM",
       "device": "GPU",
       "status": "documented",
-      "reason": "authoring and IR documented; runtime qualification separate"
+      "reason": "IR lowering and projected field-basis consumption on FEM GPU documented"
     },
     {
       "solver": "FDM",
       "device": "CPU",
       "status": "documented",
-      "reason": "authoring and IR documented; runtime qualification separate"
+      "reason": "IR lowering and projected field-basis consumption on FDM CPU documented"
     },
     {
       "solver": "FDM",
       "device": "GPU",
       "status": "documented",
-      "reason": "authoring and IR documented; runtime qualification separate"
+      "reason": "IR lowering and projected field-basis consumption on FDM GPU documented"
     }
   ],
   "equations": [],
@@ -36,28 +36,96 @@
       "id": "source_cpw_antenna",
       "path": "packages/fullmag-py/src/fullmag/model/antenna.py",
       "symbol": "class CPWAntenna",
-      "responsibility": "public constructor and IR lowering"
+      "responsibility": "2.5D CPW constructor and IR lowering"
+    },
+    {
+      "id": "source_cpw_antenna_layout",
+      "path": "packages/fullmag-py/src/fullmag/model/geometry.py",
+      "symbol": "class CPWAntennaLayout",
+      "responsibility": "3D conductor-backed CPW layout with tapered stations and optional closed loop"
+    },
+    {
+      "id": "source_cpw_width_station",
+      "path": "packages/fullmag-py/src/fullmag/model/geometry.py",
+      "symbol": "class CPWWidthStation",
+      "responsibility": "longitudinal cross-section station for CPWAntennaLayout"
+    },
+    {
+      "id": "source_antenna_port_mode",
+      "path": "packages/fullmag-py/src/fullmag/model/antenna.py",
+      "symbol": "class AntennaPortMode",
+      "responsibility": "balanced multi-branch unit-current port excitation contract"
+    },
+    {
+      "id": "source_antenna_field_solve_stage",
+      "path": "packages/fullmag-py/src/fullmag/model/antenna.py",
+      "symbol": "class AntennaFieldSolveStage",
+      "responsibility": "3D quasi-static conduction + Biot-Savart field-basis solve stage"
+    },
+    {
+      "id": "source_solved_antenna_drive",
+      "path": "packages/fullmag-py/src/fullmag/model/antenna.py",
+      "symbol": "class SolvedAntennaDrive",
+      "responsibility": "time-dependent drive scaling a projected 3D antenna field basis"
+    },
+    {
+      "id": "source_antenna_spectrum_request",
+      "path": "packages/fullmag-py/src/fullmag/model/antenna.py",
+      "symbol": "class AntennaSpectrumRequest",
+      "responsibility": "2D k-space excitation spectrum request on solved antenna fields"
+    },
+    {
+      "id": "source_antenna_field_solve",
+      "path": "packages/fullmag-py/src/fullmag/model/study.py",
+      "symbol": "class AntennaFieldSolve",
+      "responsibility": "standalone antenna field-solve stage family descriptor"
+    },
+    {
+      "id": "source_study_builder",
+      "path": "packages/fullmag-py/src/fullmag/world.py",
+      "symbol": "class StudyBuilder",
+      "responsibility": "study helpers antenna_object, antenna_field_source, add_antenna_port_mode, add_solved_antenna_drive, add_antenna_spectrum_request"
     }
   ],
   "public_api": {
     "owner": "fm.CPWAntenna(...)",
     "parameters": [
       {
-        "python": "signal_width/gap/ground_width",
+        "python": "signal_width",
         "type": "float",
         "default": "required",
         "si_unit": "$\\mathrm{m}$",
-        "validation": "positive",
-        "meaning": "CPW transverse dimensions",
+        "validation": "finite and `> 0`",
+        "meaning": "center signal conductor width",
         "backend_support": "FEM/FDM CPU/GPU: IR; preview/resolver-specific",
-        "problem_ir": "dimensions"
+        "problem_ir": "signal_width"
+      },
+      {
+        "python": "gap",
+        "type": "float",
+        "default": "required",
+        "si_unit": "$\\mathrm{m}$",
+        "validation": "finite and `> 0`",
+        "meaning": "signal-to-ground slot width",
+        "backend_support": "FEM/FDM CPU/GPU: IR; preview/resolver-specific",
+        "problem_ir": "gap"
+      },
+      {
+        "python": "ground_width",
+        "type": "float",
+        "default": "required",
+        "si_unit": "$\\mathrm{m}$",
+        "validation": "finite and `> 0`",
+        "meaning": "lateral ground conductor width",
+        "backend_support": "FEM/FDM CPU/GPU: IR; preview/resolver-specific",
+        "problem_ir": "ground_width"
       },
       {
         "python": "thickness",
         "type": "float",
         "default": "required",
         "si_unit": "$\\mathrm{m}$",
-        "validation": "positive",
+        "validation": "finite and `> 0`",
         "meaning": "conductor thickness",
         "backend_support": "FEM/FDM CPU/GPU: IR; preview/resolver-specific",
         "problem_ir": "thickness"
@@ -67,8 +135,8 @@
         "type": "float",
         "default": "required",
         "si_unit": "$\\mathrm{m}$",
-        "validation": "non-negative",
-        "meaning": "height over magnet",
+        "validation": "finite and `>= 0`",
+        "meaning": "vertical standoff above magnetic film",
         "backend_support": "FEM/FDM CPU/GPU: IR; preview/resolver-specific",
         "problem_ir": "height_above_magnet"
       },
@@ -77,28 +145,38 @@
         "type": "float",
         "default": "required",
         "si_unit": "$\\mathrm{m}$",
-        "validation": "positive",
-        "meaning": "preview length",
+        "validation": "finite and `> 0`",
+        "meaning": "preview extrusion length",
         "backend_support": "FEM/FDM CPU/GPU: IR; preview/resolver-specific",
         "problem_ir": "preview_length"
       },
       {
-        "python": "center_x/center_y",
+        "python": "center_x",
         "type": "float",
         "default": "0.0",
         "si_unit": "$\\mathrm{m}$",
         "validation": "finite",
-        "meaning": "in-plane position",
+        "meaning": "in-plane $x$ center offset",
         "backend_support": "FEM/FDM CPU/GPU: IR; preview/resolver-specific",
-        "problem_ir": "center"
+        "problem_ir": "center_x"
+      },
+      {
+        "python": "center_y",
+        "type": "float",
+        "default": "0.0",
+        "si_unit": "$\\mathrm{m}$",
+        "validation": "finite",
+        "meaning": "in-plane $y$ center offset",
+        "backend_support": "FEM/FDM CPU/GPU: IR; preview/resolver-specific",
+        "problem_ir": "center_y"
       },
       {
         "python": "current_distribution",
         "type": "str",
-        "default": "uniform",
+        "default": "\"uniform\"",
         "si_unit": "$1$",
-        "validation": "only uniform currently accepted",
-        "meaning": "current distribution",
+        "validation": "currently accepts `\"uniform\"` only",
+        "meaning": "cross-section current distribution model",
         "backend_support": "FEM/FDM CPU/GPU: IR; resolver-specific",
         "problem_ir": "current_distribution"
       }

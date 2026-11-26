@@ -76,6 +76,13 @@ silently converted to another texture.
 (python-api-magnets-and-textures-uniform-texture-discrete-realization)=
 ## Discrete realization
 
+| Solver | Device | Realization | Qualification status |
+|---|---|---|---|
+| FDM | CPU | planner samples the normalized direction at active cell centres | authoring, parity, and planner tests present; runtime qualification separate |
+| FDM | GPU | consumes the shared planner-materialized initial vector | semantic parity; GPU runtime qualification separate |
+| FEM | CPU | planner samples the normalized direction at magnetic mesh nodes | authoring, parity, and planner tests present; runtime qualification separate |
+| FEM | GPU | consumes the shared planner-materialized initial vector | semantic parity; GPU runtime qualification separate |
+
 The analytic preset is sampled at FDM cell centres or FEM nodes after final geometry/mesh ordering.
 
 (python-api-magnets-and-textures-uniform-texture-implementation-mapping)=
@@ -102,16 +109,16 @@ No independent interaction is introduced.
 
 ## Control Room support
 
-Status: Uniform initial magnetization (`uniform`) is editable in `ObjectMagneticTexturePanel` (`partial` relative to the full transform/version surface); unlisted preset arguments remain Python-only.
+Status: Uniform initial magnetization (`uniform`) is editable in `MagneticTextureInspectorPanel` (`partial` relative to the full transform/version surface); unlisted preset arguments remain Python-only.
 
 | Python/API surface | Control Room path | Status | Transaction |
 |---|---|---|---|
 | Parameters documented on this page | `Model Explorer -> Objects -> <object> -> Magnetization` | `partial` | Apply magnetization draft via `commitMagneticTextureApply`; authored object state is revised |
 | Parameters without a named UI field | `Model Explorer -> Objects -> <object> -> Magnetization` | `Python-only` | Authored in Python |
 
-Transform arguments outside `ObjectMagneticTexturePanel` remain Python-only.
+Transform arguments outside `MagneticTextureInspectorPanel` remain Python-only.
 See {doc}`/frontend/inspectors/objects-and-materials` and [Control Room capability register](/frontend/capability-register) for the UI support matrix.
-Frontend source owner: `apps/control-room/src/modules/inspector/panels/ObjectMagneticTexturePanel.tsx` (`ObjectMagneticTexturePanel`).
+Frontend source owner: `apps/control-room/src/modules/inspector/panels/magnetic-texture/MagneticTextureInspectorPanel.tsx` (`MagneticTextureInspectorPanel`).
 
 ```{image} /_static/images/ui/inspector-magnetic-texture.png
 :alt: Semantic Inspector Magnetic Texture panel configuring uniform magnetization vector
@@ -123,4 +130,4 @@ Frontend source owner: `apps/control-room/src/modules/inspector/panels/ObjectMag
 
 | Claim | Path | Stable symbol | Responsibility | Evidence |
 |---|---|---|---|---|
-| factory and versioning | [`packages/fullmag-py/src/fullmag/init/textures.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/init/textures.py#L266) | [`uniform`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/init/textures.py#L266), `PresetTexture` | preset construction and IR | signature/evaluator tests |
+| factory and versioning | [`packages/fullmag-py/src/fullmag/init/textures.py`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/init/textures.py#L342) | [`uniform`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/init/textures.py#L342), `PresetTexture` | preset construction and IR | signature/evaluator tests |

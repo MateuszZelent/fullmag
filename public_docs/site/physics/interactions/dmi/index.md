@@ -77,6 +77,29 @@ w_{\mathrm b}=D_{\mathrm b}\,\mathbf m\cdot(\nabla\times\mathbf m),
 -\frac{2D_{\mathrm b}}{\mu_0M_s}\nabla\times\mathbf m .
 ```
 
+Rotated interfacial DMI (Göbel *et al.* 2019 in-plane bimeron symmetry) uses the distinct
+Lifshitz invariant
+
+```{math}
+:label: eq-public-dmi-dmi-rotated-energy
+w_{\mathrm{rot}}
+=
+D_{\mathrm{rot}}\left(
+m_z\partial_x m_x - m_x\partial_x m_z
++ m_x\partial_y m_y - m_y\partial_y m_x
+\right),
+```
+
+with volume effective field
+
+```{math}
+:label: eq-public-dmi-dmi-rotated-field
+\mathbf H_{\mathrm{rot}}
+=
+\frac{2D_{\mathrm{rot}}}{\mu_0 M_s}
+\left(\partial_x m_z - \partial_y m_y,\; \partial_y m_x,\; -\partial_x m_x\right)^{\mathsf T}.
+```
+
 The sign of $D$, the interface-normal orientation, and the coordinate handedness jointly
 determine chirality. None may be silently changed during normalization.
 
@@ -94,10 +117,19 @@ Moriya symmetry vectors, energy/field conventions, and numerically evaluated chi
 
 | Symbol | Meaning | SI unit |
 |---|---|---:|
-| $D_{\mathrm i},D_{\mathrm b}$ | interfacial and bulk DMI coefficients | $\mathrm{J\,m^{-2}}$ |
+| $D_{\mathrm i}$ | interfacial DMI coefficient | $\mathrm{J\,m^{-2}}$ |
+| $D_{\mathrm b}$ | bulk DMI coefficient | $\mathrm{J\,m^{-2}}$ |
+| $D_{\mathrm{rot}}$ | rotated interfacial DMI coefficient | $\mathrm{J\,m^{-2}}$ |
 | $\hat{\mathbf n}$ | oriented interface normal | $1$ |
-| $w_{\mathrm i},w_{\mathrm b}$ | energy density | $\mathrm{J\,m^{-3}}$ |
-| $\mathbf H_{\mathrm i},\mathbf H_{\mathrm b}$ | DMI effective field | $\mathrm{A\,m^{-1}}$ |
+| $\mathbf m$ | reduced magnetization | $1$ |
+| $M_s$ | saturation magnetization | $\mathrm{A\,m^{-1}}$ |
+| $\mu_0$ | vacuum permeability | $\mathrm{N\,A^{-2}}$ |
+| $w_{\mathrm i}$ | interfacial DMI energy density | $\mathrm{J\,m^{-3}}$ |
+| $w_{\mathrm b}$ | bulk DMI energy density | $\mathrm{J\,m^{-3}}$ |
+| $w_{\mathrm{rot}}$ | rotated interfacial DMI energy density | $\mathrm{J\,m^{-3}}$ |
+| $\mathbf H_{\mathrm i}$ | interfacial DMI effective field | $\mathrm{A\,m^{-1}}$ |
+| $\mathbf H_{\mathrm b}$ | bulk DMI effective field | $\mathrm{A\,m^{-1}}$ |
+| $\mathbf H_{\mathrm{rot}}$ | rotated interfacial DMI effective field | $\mathrm{A\,m^{-1}}$ |
 
 (physics-dmi-assumptions-and-validity)=
 ## Boundary conditions and validity
@@ -105,20 +137,26 @@ Moriya symmetry vectors, energy/field conventions, and numerically evaluated chi
 For an open boundary, exchange and DMI must be varied together; applying a pure Neumann
 exchange condition while retaining DMI generally loses the chiral boundary twist. Periodic
 boundaries remove that exterior surface term but require consistent periodic neighbor mapping.
+See {doc}`boundary-conditions` for all three natural boundary laws.
 
 The FDM interfacial path is restricted to the canonical $+\hat{\mathbf z}$ normal. FEM may
 represent a general finite non-zero normal. Bulk-DMI FDM support is subject to the planner's
-periodicity and topology restrictions. Spatial coefficient fields must match the realized mesh.
+all-axis periodicity and topology restrictions. Spatial coefficient fields (`Dind_field`,
+`Dbulk_field`) must match the realized FEM mesh.
 
 (physics-dmi-discrete-realization)=
 ## Backend capability matrix
 
 | Solver | Device | Authoring / IR | Executable realization | Scientific qualification | Exact boundary |
 |---|---|---|---|---|---|
-| FDM | CPU | explicit/material coefficient | reference executable | bounded stencil tests | interfacial normal fixed to +z; topology restrictions apply |
-| FDM | GPU | same canonical intent | implemented | device parity workload-specific | FP32/FP64 kernels and separate energy reduction |
-| FEM | CPU | scalar/spatial material routes | implemented | weak-form and mesh convergence required | general oriented interfacial normal |
-| FEM | GPU | same resolved FEM IR | implemented | executed-device qualification separate | resident residual, projection, and reduction |
+| FDM | CPU | explicit/material coefficient | reference executable (`fields/dmi.rs`) | bounded stencil tests | interfacial normal fixed to $+\hat{\mathbf z}$; bulk DMI requires 3D PBC |
+| FDM | GPU | same canonical intent | implemented FP64/FP32 fused kernels and separate energy reduction | device parity workload-specific | canonical $+\hat{\mathbf z}$ interfacial normal; bulk DMI requires 3D PBC; multilayer rejects bulk DMI |
+| FEM | CPU | scalar/spatial material routes | implemented MFEM weak residual + lumped projection | weak-form and mesh convergence tests across `tet4`, `prism6`, `mixed` | general oriented interfacial normal; open and periodic boundaries |
+| FEM | GPU | same resolved FEM IR | unified preassembled skew-symmetric CSR GPU DMI (`dmi_csr_*`) across `tet4`, `prism6`, `mixed`, and 2D periodic meshes + `cub::BlockReduce` / `energy_out=nullptr` RK gating | RTX 4080 SUPER qualified (`h_rel <= 1.12e-15`, `E_rel <= 4.76e-14`, 15 configs, 0 memcheck errors) | strict device-resident FP64; no silent CPU fallback |
+
+See {ref}`numerical-methods-performance-fem-gpu-demag` and
+{ref}`numerical-methods-performance-fem-gpu-kernels` for the unified CSR GPU DMI operator,
+`pure_prism_p2` compatibility, and short-range RK reduction gating benchmarks.
 
 (physics-dmi-python-api)=
 ## Python API and stage-first example
@@ -132,13 +170,14 @@ study = fm.study("interfacial_dmi_reference")
 study.engine("fem")
 study.device("cpu", precision="double")
 study.mode("strict")
-study.objects.mesh.defaults(cell_size=(2 * nm, 2 * nm, 2 * nm))
 body = study.geometry(fm.Box(40 * nm, 20 * nm, 4 * nm), name="film")
 body.Ms = 8.0e5
 body.Aex = 13.0e-12
 body.alpha = 0.02
 body.m = fm.texture.uniform(1.0, 0.0, 0.0)
+body.mesh(maximum_element_size=4 * nm, order=1)
 
+# %% Anisotropy, interfacial DMI, demagnetization, and relaxation stage
 body.Ku1 = 4.7e5
 body.anisU = (0.0, 0.0, 1.0)
 body.dind = 3.0e-3  # J/m^2
@@ -146,7 +185,19 @@ study.demag(realization="poisson_robin")
 study.stages.add_relax(stage_id="relax", algorithm="llg_overdamped", dt=5.0e-13, max_steps=500, tolT=1.0e-6)
 ```
 
-The study facade supports material-owned interfacial DMI directly. Explicit energy-term constructors also remain supported for `ProblemIR` serialization tests and explicit compatibility scripts:
+The study facade supports material-owned interfacial and bulk DMI directly (`body.Dind` /
+`body.dind`, `body.Dbulk` / `body.dbulk`, `body.dmi_interface_normal`). Explicit energy-term
+constructors (`fm.InterfacialDMI`, `fm.BulkDMI`, `fm.RotatedInterfacialDMI`) remain canonical
+for explicit term registration and `ProblemIR` serialization:
+
+| Python parameter | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR |
+|---|---|---|---|---|---|---|---|
+| `InterfacialDMI.D` | `float` | `required` | $\mathrm{J\,m^{-2}}$ | finite; signed | scalar interfacial DMI coefficient | FDM/FEM CPU/GPU | `energy_terms[].D` |
+| `InterfacialDMI.interface_normal` | `Sequence[float] \| None` | `None` | $1$ | length 3; finite; FEM non-zero; FDM canonical +z only | interface-symmetry normal | FDM +z; FEM arbitrary non-zero | `energy_terms[].interface_normal` |
+| `BulkDMI.D` | `float` | `required` | $\mathrm{J\,m^{-2}}$ | finite; signed | scalar isotropic bulk DMI coefficient | FDM 3D PBC / FEM CPU/GPU | `energy_terms[].D` |
+| `RotatedInterfacialDMI.D` | `float` | `required` | $\mathrm{J\,m^{-2}}$ | finite; signed | rotated interfacial (Göbel) DMI coefficient | FDM/FEM CPU/GPU | `energy_terms[].D` |
+| `Material.Dind` | `float \| None` | `None` | $\mathrm{J\,m^{-2}}$ | finite when supplied | material-owned scalar interfacial DMI coefficient | FEM CPU/GPU | `materials[].interfacial_dmi` |
+| `Material.Dbulk` | `float \| None` | `None` | $\mathrm{J\,m^{-2}}$ | finite when supplied | material-owned scalar bulk DMI coefficient | FEM CPU/GPU; FDM planner-dependent | `materials[].bulk_dmi` |
 
 (physics-dmi-problem-ir)=
 ## ProblemIR and coefficient ownership
@@ -173,11 +224,11 @@ mesh, boundary policy, solver, device, and precision.
 - one-dimensional cycloid/helix with the expected wave vector and chirality;
 - sign reversal under $D\to-D$;
 - interfacial normal reversal with an explicitly defined convention;
-- exchange+DMI natural-boundary twist;
+- exchange+DMI natural-boundary twist across all three variants;
 - finite-difference energy/field consistency;
 - periodic translation invariance for bulk DMI;
-- mesh refinement and matched CPU/GPU comparisons;
-- skyrmion/domain-wall benchmarks that state all sign conventions.
+- mesh refinement and matched CPU/GPU comparisons across `tet4`, `prism6`, and `mixed` meshes;
+- skyrmion/domain-wall/bimeron benchmarks that state all sign conventions.
 
 (physics-dmi-limitations)=
 ## Limitations and recommended extensions
@@ -196,30 +247,46 @@ the magnetization while leaving the grid stencil unchanged.
 5. S. Rohart and A. Thiaville, “Skyrmion confinement in ultrathin film nanostructures in the presence of Dzyaloshinskii-Moriya interaction,” *Physical Review B* **88**(18), 184422 (2013). [doi:10.1103/PhysRevB.88.184422](https://doi.org/10.1103/PhysRevB.88.184422) | [arXiv:1310.0666](https://arxiv.org/abs/1310.0666).
 6. A. O. Leonov, T. L. Monchesky, N. Romming, A. Kubetzka, A. N. Bogdanov, and R. Wiesendanger, “The properties of isolated chiral skyrmions in thin magnetic films,” *New Journal of Physics* **18**(6), 065003 (2016). [doi:10.1088/1367-2630/18/6/065003](https://doi.org/10.1088/1367-2630/18/6/065003) | [Open-access PDF (CC-BY)](https://iopscience.iop.org/article/10.1088/1367-2630/18/6/065003/pdf) | [arXiv:1508.02155](https://arxiv.org/abs/1508.02155).
 7. D. Cortés-Ortuño et al., “Proposal for a micromagnetic standard problem for materials with Dzyaloshinskii–Moriya interaction,” *New Journal of Physics* **20**(11), 113015 (2018). [doi:10.1088/1367-2630/aaea1c](https://doi.org/10.1088/1367-2630/aaea1c) | [Open-access PDF (CC-BY)](https://iopscience.iop.org/article/10.1088/1367-2630/aaea1c/pdf) | [arXiv:1803.11174](https://arxiv.org/abs/1803.11174).
-8. C. H. Back et al., “The 2020 skyrmionics roadmap,” *Journal of Physics D: Applied Physics* **53**(36), 363001 (2020). [doi:10.1088/1361-6463/ab8418](https://doi.org/10.1088/1361-6463/ab8418) | [Open-access PDF (CC-BY)](https://iopscience.iop.org/article/10.1088/1361-6463/ab8418/pdf) | [arXiv:2001.00026](https://arxiv.org/abs/2001.00026).
-9. J. Joos, P. Bassirian, P. Gypens, J. Mulkers, K. Litzius, B. Van Waeyenberge, and J. Leliaert, “Tutorial: Simulating modern magnetic material systems in mumax3,” *Journal of Applied Physics* **134**(17), 171101 (2023). [doi:10.1063/5.0160988](https://doi.org/10.1063/5.0160988) | [Open-access PDF (CC-BY)](https://pubs.aip.org/aip/jap/article-pdf/doi/10.1063/5.0160988/18193198/171101_1_5.0160988.pdf).
+8. B. Göbel, A. Mook, J. Henk, I. Mertig, and O. A. Tretiakov, “Magnetic bimerons as skyrmion analogues in in-plane magnets,” *Physical Review B* **99**(6), 060407(R) (2019). [doi:10.1103/PhysRevB.99.060407](https://doi.org/10.1103/PhysRevB.99.060407) | [arXiv:1811.07068](https://arxiv.org/abs/1811.07068).
+9. C. H. Back et al., “The 2020 skyrmionics roadmap,” *Journal of Physics D: Applied Physics* **53**(36), 363001 (2020). [doi:10.1088/1361-6463/ab8418](https://doi.org/10.1088/1361-6463/ab8418) | [Open-access PDF (CC-BY)](https://iopscience.iop.org/article/10.1088/1361-6463/ab8418/pdf) | [arXiv:2001.00026](https://arxiv.org/abs/2001.00026).
+10. J. Joos, P. Bassirian, P. Gypens, J. Mulkers, K. Litzius, B. Van Waeyenberge, and J. Leliaert, “Tutorial: Simulating modern magnetic material systems in mumax3,” *Journal of Applied Physics* **134**(17), 171101 (2023). [doi:10.1063/5.0160988](https://doi.org/10.1063/5.0160988) | [Open-access PDF (CC-BY)](https://pubs.aip.org/aip/jap/article-pdf/doi/10.1063/5.0160988/18193198/171101_1_5.0160988.pdf).
 
 (physics-dmi-round-trip-and-failure-semantics)=
 ## Round-trip and failure semantics
 
-Requested intent preserves the authored model, coefficients, orientations, targets, and execution request. Resolved execution records the selected solver, device, precision, discretization, and capability decision. Validation errors reject malformed or contradictory data before runtime. Unsupported combinations fail closed and are not silently omitted or converted to another interaction.
+Requested intent preserves the authored DMI variant (`interfacial_dmi`, `bulk_dmi`, or
+`rotated_interfacial_dmi`), signed coefficients, interface-normal orientation, and execution
+request. Resolved execution records the selected solver, device, precision, discretization,
+CSR or stencil realization, and capability decision. Validation errors reject malformed normals,
+duplicate or conflicting DMI variants, and non-finite coefficients before runtime.
+Unsupported combinations fail closed and are not silently omitted or converted to another DMI variant.
 
 (physics-dmi-implementation-mapping)=
 ## Implementation mapping
 
-Python owns authoring and serialization, ProblemIR owns canonical intent, planners own legality and realization selection, and backend kernels own numerical evaluation.
+Python owns authoring and serialization (`InterfacialDMI`, `BulkDMI`, `RotatedInterfacialDMI`,
+`Material`, `MagnetHandle`), `ProblemIR` owns canonical intent, `plan_fdm` and `plan_fem` own
+legality and normal/periodicity resolution, FDM CPU/CUDA own centered-difference stencils and
+boundary ghost corrections, and FEM CPU/CUDA own weak-residual assembly (`dmi_weak_residual.cpp`)
+and unified preassembled CSR GPU DMI (`dmi_csr_operator.cpp` / `dmi_csr_kernels.cu`).
 
 (physics-dmi-source-code-index)=
 ## Source-code index
 
-| Repository path | Stable symbol / area | Responsibility |
-|---|---|---|
-| `packages/fullmag-py/src/fullmag/model/energy.py` | `InterfacialDMI, BulkDMI, RotatedInterfacialDMI` | explicit authoring |
-| `packages/fullmag-py/src/fullmag/model/structure.py` | `Material.Dind/Dbulk` | canonical material coefficients |
-| `packages/fullmag-py/src/fullmag/world.py` | `geometry material facade` | stage-first `dind` authoring |
-| `crates/fullmag-plan/src/fdm.rs` | `DMI planning` | FDM normal, topology, and field resolution |
-| `crates/fullmag-plan/src/fem.rs` | `DMI planning` | FEM coefficient/normal resolution |
-| `backends/fem/cpu/mfem/interactions/dmi_interfacial.cpp` | `interfacial DMI` | FEM CPU weak residual |
-| `backends/fem/cpu/mfem/interactions` | `bulk DMI` | FEM CPU bulk operator |
-| `backends/fdm/gpu/cuda/interactions` | `DMI kernels` | FDM GPU realization |
-| `backends/fem/gpu/cuda/interactions` | `DMI kernels` | FEM GPU realization |
+| Repository path | Stable symbol | Responsibility | Lane |
+|---|---|---|---|
+| [`packages/fullmag-py/src/fullmag/model/energy.py`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/model/energy.py#L128) | [`class InterfacialDMI`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/model/energy.py#L128) | explicit interfacial DMI authoring and IR lowering | Python |
+| [`packages/fullmag-py/src/fullmag/model/energy.py`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/model/energy.py#L187) | [`class BulkDMI`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/model/energy.py#L187) | explicit bulk DMI authoring and IR lowering | Python |
+| [`packages/fullmag-py/src/fullmag/model/energy.py`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/model/energy.py#L150) | [`class RotatedInterfacialDMI`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/model/energy.py#L150) | explicit rotated interfacial DMI authoring and IR lowering | Python |
+| [`packages/fullmag-py/src/fullmag/model/structure.py`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/model/structure.py#L16) | [`class Material`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/model/structure.py#L16) | canonical `Dind`/`Dbulk` material coefficients and spatial fields | Python |
+| [`packages/fullmag-py/src/fullmag/world.py`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/world.py#L568) | [`class MagnetHandle`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/world.py#L568) | stage-first `Dind`/`dind`, `Dbulk`/`dbulk`, and `dmi_interface_normal` authoring | Python |
+| [`crates/fullmag-plan/src/fdm.rs`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-plan/src/fdm.rs#L2512) | [`plan_fdm`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-plan/src/fdm.rs#L2512) | FDM normal, periodicity, and field resolution | FDM |
+| [`crates/fullmag-plan/src/fem.rs`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-plan/src/fem.rs#L4287) | [`plan_fem`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-plan/src/fem.rs#L4287) | FEM coefficient/normal resolution | FEM |
+| [`crates/fullmag-engine/src/fdm/cpu/fields/dmi.rs`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-engine/src/fdm/cpu/fields/dmi.rs#L461) | [`interfacial_dmi_field`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-engine/src/fdm/cpu/fields/dmi.rs#L461) | FDM CPU interfacial stencil field | FDM CPU |
+| [`crates/fullmag-engine/src/fdm/cpu/fields/dmi.rs`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-engine/src/fdm/cpu/fields/dmi.rs#L565) | [`bulk_dmi_field`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-engine/src/fdm/cpu/fields/dmi.rs#L565) | FDM CPU bulk curl stencil field | FDM CPU |
+| [`crates/fullmag-engine/src/fdm/cpu/fields/dmi.rs`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-engine/src/fdm/cpu/fields/dmi.rs#L513) | [`rotated_interfacial_dmi_field`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-engine/src/fdm/cpu/fields/dmi.rs#L513) | FDM CPU rotated interfacial stencil field | FDM CPU |
+| [`backends/fdm/gpu/cuda/interactions/demag_fp64.cu`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/backends/fdm/gpu/cuda/interactions/demag_fp64.cu#L244) | [`combine_effective_field_fp64_kernel`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/backends/fdm/gpu/cuda/interactions/demag_fp64.cu#L244) | FDM GPU FP64 fused DMI field kernels | FDM GPU |
+| [`backends/fem/cpu/mfem/interactions/dmi_interfacial.cpp`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/backends/fem/cpu/mfem/interactions/dmi_interfacial.cpp#L30) | [`compute_interfacial_dmi_field`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/backends/fem/cpu/mfem/interactions/dmi_interfacial.cpp#L30) | FEM CPU interfacial and rotated weak residual | FEM CPU |
+| [`backends/fem/cpu/mfem/interactions/dmi_bulk.cpp`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/backends/fem/cpu/mfem/interactions/dmi_bulk.cpp#L28) | [`compute_bulk_dmi_field`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/backends/fem/cpu/mfem/interactions/dmi_bulk.cpp#L28) | FEM CPU bulk DMI weak residual | FEM CPU |
+| [`backends/fem/gpu/cuda/interactions/dmi/dmi_csr_operator.cpp`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/backends/fem/gpu/cuda/interactions/dmi/dmi_csr_operator.cpp#L138) | [`build_gpu_dmi_csr_from_mfem`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/backends/fem/gpu/cuda/interactions/dmi/dmi_csr_operator.cpp#L138) | unified CSR GPU DMI operator across `tet4`/`prism6`/`mixed`/periodic | FEM GPU |
+| [`backends/fem/gpu/cuda/interactions/dmi/dmi_csr_kernels.cu`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/backends/fem/gpu/cuda/interactions/dmi/dmi_csr_kernels.cu#L331) | [`fullmag_cuda_dmi_csr_field_energy`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/backends/fem/gpu/cuda/interactions/dmi/dmi_csr_kernels.cu#L331) | unified CSR GPU DMI SpMV and CUB block energy reduction | FEM GPU |

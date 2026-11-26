@@ -1,6 +1,7 @@
 {
   "document": {
-    "reviewed_revision": "752450f8d259ab97c76c36fe666d5474b02abe9a",
+    "reviewed_revision": "9dee602ba086f95b1ae7477f1b0ea69e2d9cef50",
+    "reviewed_at": "2026-11-26",
     "path": "public_docs/site/physics/interactions/magnetoelastic/boundary-conditions-and-meshing.md",
     "title": "Magnetoelastic boundary conditions and spatial meshing",
     "interaction": "magnetoelastic"

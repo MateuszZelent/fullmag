@@ -1,0 +1,122 @@
+{
+  "document": {
+    "path": "public_docs/site/numerical-methods/performance/fem-gpu-relaxation-and-kernels.md",
+    "reviewed_revision": "752450f8d259ab97c76c36fe666d5474b02abe9a",
+    "source_of_truth": "Current repository FEM GPU relaxation preconditioning and short-range kernel declarations and RTX 4080 SUPER A/B evidence."
+  },
+  "backend_matrix": [
+    {
+      "solver": "FEM",
+      "device": "GPU",
+      "status": "implemented"
+    },
+    {
+      "solver": "FEM",
+      "device": "CPU",
+      "status": "implemented"
+    },
+    {
+      "solver": "FDM",
+      "device": "CPU",
+      "status": "not-applicable",
+      "reason": "Cartesian FDM uses stencil operators rather than unstructured FEM mass/stiffness CSR matrices."
+    },
+    {
+      "solver": "FDM",
+      "device": "GPU",
+      "status": "not-applicable",
+      "reason": "Cartesian FDM CUDA uses native_cuda_pgbb and stencil kernels documented on the FDM core page."
+    }
+  ],
+  "equations": [
+    {
+      "id": "eq-perf-fem-bb-precond",
+      "symbols": ["MMs", "KA", "lambdak", "mu0", "gk", "zkdk"],
+      "sources": ["bb-create", "bb-solve", "bb-pcg-kernel", "bb-reuse-fin"]
+    },
+    {
+      "id": "eq-perf-fem-dmi-csr",
+      "symbols": ["HDMI", "mu0", "Msi", "Vi", "Dij", "EDMI"],
+      "sources": ["dmi-csr-build", "dmi-csr-kernel"]
+    },
+    {
+      "id": "eq-perf-fem-fused-heff",
+      "symbols": ["Heffi"],
+      "sources": ["exch-csr", "heff-fused", "pack-soa-aos", "unpack-aos-soa"]
+    }
+  ],
+  "symbols": [
+    {"id": "MMs", "latex": "$M_{M_s}$", "meaning": "consistent magnetization-weighted FEM mass matrix", "si_unit": "$\\mathrm{A\\,m^2}$"},
+    {"id": "KA", "latex": "$K_A$", "meaning": "exchange stiffness matrix $\\int A_{\\mathrm{ex}}\\nabla\\varphi_i\\cdot\\nabla\\varphi_j\\,\\mathrm{d}V$", "si_unit": "$\\mathrm{J}$"},
+    {"id": "lambdak", "latex": "$\\lambda_k$", "meaning": "Barzilai--Borwein step size", "si_unit": "$\\mathrm{m\\,A^{-1}}$"},
+    {"id": "mu0", "latex": "$\\mu_0$", "meaning": "vacuum permeability", "si_unit": "$\\mathrm{N\\,A^{-2}}$"},
+    {"id": "gk", "latex": "$\\mathbf g^{(k)}$", "meaning": "nodal projected gradient at relaxation step $k$", "si_unit": "$\\mathrm{A\\,m^{-1}}$"},
+    {"id": "zkdk", "latex": "$\\mathbf z^{(k)}, \\mathbf d^{(k)}$", "meaning": "preconditioned and tangent-projected search direction", "si_unit": "$\\mathrm{A\\,m^{-1}}$"},
+    {"id": "Dij", "latex": "$\\mathbf D_{ij}$", "meaning": "skew-symmetric CSR DMI edge-coupling vector", "si_unit": "$\\mathrm{J}$"},
+    {"id": "Vi", "latex": "$V_i$", "meaning": "lumped nodal magnetic volume", "si_unit": "$\\mathrm{m^3}$"},
+    {"id": "Msi", "latex": "$M_{s,i}$", "meaning": "nodal saturation magnetization", "si_unit": "$\\mathrm{A\\,m^{-1}}$"},
+    {"id": "HDMI", "latex": "$\\mathbf H_{\\mathrm{DMI},i}$", "meaning": "nodal DMI effective field", "si_unit": "$\\mathrm{A\\,m^{-1}}$"},
+    {"id": "EDMI", "latex": "$E_{\\mathrm{DMI}}$", "meaning": "total Dzyaloshinskii--Moriya interaction energy", "si_unit": "$\\mathrm{J}$"},
+    {"id": "Heffi", "latex": "$\\mathbf H_{\\mathrm{eff},i}$", "meaning": "fused nodal effective magnetic field", "si_unit": "$\\mathrm{A\\,m^{-1}}$"}
+  ],
+  "sources": [
+    {"id": "py-study-builder", "path": "packages/fullmag-py/src/fullmag/world.py", "symbol": "class StudyBuilder", "responsibility": "Public StudyBuilder exposing fem_bb_preconditioner policy."},
+    {"id": "ir-bb-enum", "path": "crates/fullmag-ir/src/mesh_hints.rs", "symbol": "FemGpuBbPreconditionerIR", "responsibility": "IR enum for auto/none/exchange_mass GPU BB preconditioning."},
+    {"id": "runner-bb-prov", "path": "crates/fullmag-runner/src/relaxation/provenance.rs", "symbol": "apply_native_fem_gpu_bb_preconditioner_runtime_provenance", "responsibility": "Attest runtime-resolved GPU BB preconditioner status."},
+    {"id": "bb-create", "path": "backends/fem/gpu/cuda/relaxation/bb_exchange_mass.cpp", "symbol": "gpu_bb_exchange_mass_create", "responsibility": "Upload immutable consistent mass and exchange CSR matrices."},
+    {"id": "bb-solve", "path": "backends/fem/gpu/cuda/relaxation/bb_exchange_mass.cpp", "symbol": "gpu_bb_exchange_mass_solve_and_project", "responsibility": "Single-sync cooperative PCG solve, tangent projection, and descent dot."},
+    {"id": "bb-pcg-kernel", "path": "backends/fem/gpu/cuda/relaxation/bb_exchange_mass_kernels.cu", "symbol": "gpu_bb_pcg_launch", "responsibility": "Persistent cooperative CUDA PCG kernel."},
+    {"id": "bb-reuse-fin", "path": "backends/fem/gpu/cuda/integrators/rk/rk_step_stats.cu", "symbol": "gpu_rk_finalize_step_stats_control_readback_with_scalar_tail_reuse_energy", "responsibility": "Fused PGBB finalizer reusing reduced trial energies."},
+    {"id": "bb-capi-set", "path": "backends/fem/src/api.cpp", "symbol": "fullmag_fem_backend_set_gpu_bb_preconditioner", "responsibility": "C ABI setter for GPU BB preconditioner policy."},
+    {"id": "dmi-csr-build", "path": "backends/fem/gpu/cuda/interactions/dmi/dmi_csr_operator.cpp", "symbol": "build_gpu_dmi_csr_from_mfem", "responsibility": "Preassemble unified skew-symmetric CSR GPU DMI across element families."},
+    {"id": "dmi-csr-kernel", "path": "backends/fem/gpu/cuda/interactions/dmi/dmi_csr_kernels.cu", "symbol": "fullmag_cuda_dmi_csr_field_energy", "responsibility": "Zero-atomic CSR DMI field and predicated BlockReduce energy kernel."},
+    {"id": "exch-csr", "path": "backends/fem/gpu/cuda/exchange/exchange_kernels.cu", "symbol": "fullmag_cuda_legacy_sparse_exchange_xyz", "responsibility": "Dual-path FMA vs double-double CSR exchange kernel dispatch."},
+    {"id": "heff-fused", "path": "backends/fem/gpu/cuda/fields/vector_field_kernels.cu", "symbol": "fullmag_cuda_accumulate_heff_fused_xyz", "responsibility": "Single-launch order-preserving fused effective-field accumulation."},
+    {"id": "pack-soa-aos", "path": "backends/fem/gpu/cuda/transfer/transfer_kernels.cu", "symbol": "fullmag_cuda_pack_soa_to_aos", "responsibility": "Device SoA-to-AoS packing eliminating strided D2H transfers."},
+    {"id": "unpack-aos-soa", "path": "backends/fem/gpu/cuda/transfer/transfer_kernels.cu", "symbol": "fullmag_cuda_unpack_aos_to_soa", "responsibility": "Device AoS-to-SoA unpacking eliminating strided H2D transfers."}
+  ],
+  "public_api": {
+    "parameters": [
+      {
+        "python": "study.fem_bb_preconditioner(policy)",
+        "type": "str",
+        "default": "\"auto\"",
+        "si_unit": "$1$",
+        "validation": "`\"auto\"`, `\"none\"`, or `\"exchange_mass\"`; invalid values raise `ValueError`",
+        "meaning": "FEM GPU PG-BB exchange-mass preconditioner policy",
+        "backend_support": "FEM GPU (`PG-BB` only)",
+        "problem_ir": "`backend_policy.discretization_hints.fem.gpu_bb_preconditioner`"
+      },
+      {
+        "python": "study.stages.add_minimize(method=...)",
+        "type": "str",
+        "default": "\"bb\"",
+        "si_unit": "$1$",
+        "validation": "`\"bb\"` required for `fem_bb_preconditioner`",
+        "meaning": "direct energy minimization algorithm",
+        "backend_support": "FEM CPU/GPU",
+        "problem_ir": "`stages[].minimize.method`"
+      },
+      {
+        "python": "body.Dind",
+        "type": "float",
+        "default": "0.0",
+        "si_unit": "$\\mathrm{J\\,m^{-2}}$",
+        "validation": "finite real scalar",
+        "meaning": "interfacial DMI constant assembled into unified CSR GPU DMI",
+        "backend_support": "FDM/FEM CPU/GPU (`tet4`/`prism6`/mixed)",
+        "problem_ir": "`materials[].dmi_interfacial`"
+      },
+      {
+        "python": "body.Dbulk",
+        "type": "float",
+        "default": "0.0",
+        "si_unit": "$\\mathrm{J\\,m^{-2}}$",
+        "validation": "finite real scalar",
+        "meaning": "bulk DMI constant assembled into unified CSR GPU DMI",
+        "backend_support": "FDM/FEM CPU/GPU (`tet4`/`prism6`/mixed)",
+        "problem_ir": "`materials[].dmi_bulk`"
+      }
+    ]
+  }
+}

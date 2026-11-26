@@ -1,32 +1,32 @@
 {
   "document": {
     "path": "public_docs/site/python-api/interactions/inter-region-couplings.md",
-    "reviewed_revision": "ab3c8802a691a535063102c12f9a79bb0043b367"
+    "reviewed_revision": "752450f8d259ab97c76c36fe666d5474b02abe9a"
   },
   "backend_matrix": [
     {
       "solver": "FEM",
       "device": "CPU",
       "status": "documented",
-      "reason": "authoring and IR documented; runtime qualification separate"
+      "reason": "authoring and IR documented; runtime gated by planner capability policy"
     },
     {
       "solver": "FEM",
       "device": "GPU",
       "status": "documented",
-      "reason": "authoring and IR documented; runtime qualification separate"
+      "reason": "authoring and IR documented; runtime gated by planner capability policy"
     },
     {
       "solver": "FDM",
       "device": "CPU",
       "status": "documented",
-      "reason": "authoring and IR documented; runtime qualification separate"
+      "reason": "authoring, IR, and cross-cell exchange/RKKY documented"
     },
     {
       "solver": "FDM",
       "device": "GPU",
       "status": "documented",
-      "reason": "authoring and IR documented; runtime qualification separate"
+      "reason": "authoring, IR, and cross-cell exchange/RKKY documented"
     }
   ],
   "equations": [],
@@ -36,59 +36,119 @@
       "id": "source_coupling_registry",
       "path": "packages/fullmag-py/src/fullmag/model/couplings.py",
       "symbol": "class CouplingRegistry",
-      "responsibility": "public constructor and IR lowering"
+      "responsibility": "public coupling registry (exchange, rkky, interlayer_exchange) and IR lowering"
+    },
+    {
+      "id": "source_coupling",
+      "path": "packages/fullmag-py/src/fullmag/model/couplings.py",
+      "symbol": "class Coupling",
+      "responsibility": "immutable coupling record and to_ir() validation"
+    },
+    {
+      "id": "source_coupling_endpoint",
+      "path": "packages/fullmag-py/src/fullmag/model/couplings.py",
+      "symbol": "class CouplingEndpoint",
+      "responsibility": "object, region, and surface endpoint selectors"
+    },
+    {
+      "id": "source_couplings_namespace",
+      "path": "packages/fullmag-py/src/fullmag/couplings.py",
+      "symbol": "registry",
+      "responsibility": "fm.couplings convenience namespace (object, region, surface, registry)"
+    },
+    {
+      "id": "source_study_couplings_handle",
+      "path": "packages/fullmag-py/src/fullmag/world.py",
+      "symbol": "class StudyCouplingsHandle",
+      "responsibility": "study.couplings chainable study registration handle"
+    },
+    {
+      "id": "source_magnet_handle",
+      "path": "packages/fullmag-py/src/fullmag/world.py",
+      "symbol": "class MagnetHandle",
+      "responsibility": "magnet.surface(selector) endpoint helper"
     }
   ],
   "public_api": {
     "owner": "fm.CouplingRegistry().exchange/rkky/interlayer_exchange(...)",
     "parameters": [
       {
-        "python": "source/target",
-        "type": "str or endpoint",
+        "python": "source",
+        "type": "CouplingEndpoint | ObjectRegion | object | str",
         "default": "required",
         "si_unit": "$1$",
-        "validation": "typed, non-empty endpoints",
-        "meaning": "coupling endpoints",
+        "validation": "resolves to typed endpoint; must be `\"surface\"` for `rkky`/`interlayer_exchange`",
+        "meaning": "source coupling endpoint",
         "backend_support": "FEM/FDM CPU/GPU: IR; capability policy resolves runtime",
-        "problem_ir": "source/target"
+        "problem_ir": "source"
+      },
+      {
+        "python": "target",
+        "type": "CouplingEndpoint | ObjectRegion | object | str",
+        "default": "required",
+        "si_unit": "$1$",
+        "validation": "resolves to typed endpoint; must be `\"surface\"` for `rkky`/`interlayer_exchange`",
+        "meaning": "target coupling endpoint",
+        "backend_support": "FEM/FDM CPU/GPU: IR; capability policy resolves runtime",
+        "problem_ir": "target"
       },
       {
         "python": "mode",
         "type": "str",
-        "default": "harmonic_mean",
+        "default": "\"harmonic_mean\"",
         "si_unit": "$1$",
-        "validation": "source validation modes",
-        "meaning": "cross-interface averaging mode",
+        "validation": "`\"harmonic_mean\"`, `\"explicit\"`, or `\"disabled\"` (`exchange` only)",
+        "meaning": "cross-interface exchange averaging mode",
         "backend_support": "FEM/FDM CPU/GPU: IR; capability policy resolves runtime",
-        "problem_ir": "mode"
+        "problem_ir": "parameters.mode"
       },
       {
         "python": "scale",
-        "type": "float or None",
+        "type": "float | None",
         "default": "None",
         "si_unit": "$1$",
-        "validation": "finite when supplied",
-        "meaning": "exchange scale",
+        "validation": "finite and `>= 0` when supplied (`exchange` only)",
+        "meaning": "dimensionless exchange multiplier",
         "backend_support": "FEM/FDM CPU/GPU: IR; capability policy resolves runtime",
-        "problem_ir": "scale"
+        "problem_ir": "parameters.scale"
       },
       {
-        "python": "J1/J2",
-        "type": "float",
-        "default": "J1 required; J2 None",
-        "si_unit": "$\\mathrm{J\\,m^{-2}}$",
-        "validation": "finite when supplied",
-        "meaning": "RKKY/interlayer constants",
+        "python": "inter_exchange",
+        "type": "float | None",
+        "default": "None",
+        "si_unit": "$\\mathrm{J\\,m^{-1}}$",
+        "validation": "required for `mode=\"explicit\"`, forbidden for `mode=\"harmonic_mean\"`, finite",
+        "meaning": "explicit interfacial exchange stiffness",
         "backend_support": "FEM/FDM CPU/GPU: IR; capability policy resolves runtime",
-        "problem_ir": "J1/J2"
+        "problem_ir": "parameters.inter_exchange"
+      },
+      {
+        "python": "J1",
+        "type": "float",
+        "default": "required",
+        "si_unit": "$\\mathrm{J\\,m^{-2}}$",
+        "validation": "finite float",
+        "meaning": "bilinear RKKY / interlayer exchange constant",
+        "backend_support": "FEM/FDM CPU/GPU: IR; capability policy resolves runtime",
+        "problem_ir": "parameters.j1"
+      },
+      {
+        "python": "J2",
+        "type": "float | None",
+        "default": "None",
+        "si_unit": "$\\mathrm{J\\,m^{-2}}$",
+        "validation": "finite float when supplied",
+        "meaning": "biquadratic interlayer exchange constant",
+        "backend_support": "FEM/FDM CPU/GPU: IR; capability policy resolves runtime",
+        "problem_ir": "parameters.j2"
       },
       {
         "python": "coupling_id",
-        "type": "str or None",
+        "type": "str | None",
         "default": "None",
         "si_unit": "$1$",
-        "validation": "non-empty when supplied",
-        "meaning": "stable coupling ID",
+        "validation": "non-empty when supplied; auto-generated `<kind>:<src>:<dst>` if omitted",
+        "meaning": "stable coupling identifier",
         "backend_support": "FEM/FDM CPU/GPU: IR; resolver-specific",
         "problem_ir": "coupling_id"
       },
@@ -98,17 +158,17 @@
         "default": "True",
         "si_unit": "$1$",
         "validation": "boolean",
-        "meaning": "activation flag",
+        "meaning": "coupling activation flag",
         "backend_support": "FEM/FDM CPU/GPU: IR; resolver-specific",
         "problem_ir": "enabled"
       },
       {
         "python": "capability_policy",
         "type": "str",
-        "default": "require_runtime",
+        "default": "\"require_runtime\"",
         "si_unit": "$1$",
-        "validation": "supported policy",
-        "meaning": "runtime capability policy",
+        "validation": "`\"require_runtime\"` or `\"authored_only\"`",
+        "meaning": "runtime capability enforcement policy",
         "backend_support": "FEM/FDM CPU/GPU: IR; resolver-specific",
         "problem_ir": "capability_policy"
       }

@@ -1,32 +1,32 @@
 {
   "document": {
     "path": "public_docs/site/python-api/interactions/bulk-dmi.md",
-    "reviewed_revision": "ab3c8802a691a535063102c12f9a79bb0043b367"
+    "reviewed_revision": "752450f8d259ab97c76c36fe666d5474b02abe9a"
   },
   "backend_matrix": [
     {
       "solver": "FEM",
       "device": "CPU",
-      "status": "documented",
-      "reason": "authoring and IR documented; runtime qualification separate"
+      "status": "implemented",
+      "reason": "Bulk DMI weak-form assembly implemented on FEM CPU"
     },
     {
       "solver": "FEM",
       "device": "GPU",
-      "status": "documented",
-      "reason": "authoring and IR documented; runtime qualification separate"
+      "status": "implemented",
+      "reason": "Unified preassembled CSR GPU DMI (PR #577) implemented on FEM GPU"
     },
     {
       "solver": "FDM",
       "device": "CPU",
-      "status": "documented",
-      "reason": "authoring and IR documented; runtime qualification separate"
+      "status": "implemented",
+      "reason": "Chiral finite-difference bulk DMI stencil implemented on FDM CPU"
     },
     {
       "solver": "FDM",
       "device": "GPU",
-      "status": "documented",
-      "reason": "authoring and IR documented; runtime qualification separate"
+      "status": "implemented",
+      "reason": "CUDA chiral finite-difference bulk DMI kernel implemented on FDM GPU"
     }
   ],
   "equations": [],
@@ -37,20 +37,36 @@
       "path": "packages/fullmag-py/src/fullmag/model/energy.py",
       "symbol": "class BulkDMI",
       "responsibility": "public constructor and IR lowering"
+    },
+    {
+      "id": "source_magnet_handle",
+      "path": "packages/fullmag-py/src/fullmag/world.py",
+      "symbol": "class MagnetHandle",
+      "responsibility": "per-magnet Dbulk / dbulk authoring facade"
     }
   ],
   "public_api": {
-    "owner": "fm.BulkDMI(D)",
+    "owner": "fm.BulkDMI(D), MagnetHandle.Dbulk",
     "parameters": [
       {
         "python": "fm.BulkDMI.D",
         "type": "float",
         "default": "required",
         "si_unit": "$\\mathrm{J\\,m^{-2}}$",
-        "validation": "finite; sign preserved",
+        "validation": "finite scalar via `require_finite`; sign preserved",
         "meaning": "bulk DMI constant",
-        "backend_support": "FEM/FDM CPU/GPU: IR; resolved support required",
+        "backend_support": "FEM/FDM CPU/GPU: IR and chiral exchange/DMI kernels",
         "problem_ir": "D"
+      },
+      {
+        "python": "MagnetHandle.Dbulk",
+        "type": "float | None",
+        "default": "None",
+        "si_unit": "$\\mathrm{J\\,m^{-2}}$",
+        "validation": "finite scalar when set; `None` deactivates material bulk DMI",
+        "meaning": "per-magnet bulk DMI constant in stage-first scripts",
+        "backend_support": "FEM/FDM CPU/GPU: lowers onto `materials[].dmi_bulk`",
+        "problem_ir": "materials[].dmi_bulk"
       }
     ],
     "returns": "typed ProblemIR record at to_ir()"

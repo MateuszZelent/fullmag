@@ -3,7 +3,8 @@
     "path": "public_docs/site/physics/foundations/conventions-and-units.md",
     "title": "Conventions and units",
     "scope": "shared SI quantities, reduced magnetization, and field-energy units",
-    "reviewed_revision": "ab3c8802a691a535063102c12f9a79bb0043b367"
+    "reviewed_revision": "752450f8d259ab97c76c36fe666d5474b02abe9a",
+    "reviewed_at": "2026-11-26"
   },
   "backend_matrix": [
     {"solver": "FDM", "device": "CPU", "status": "partial", "reason": "Structured-cell realization is source-backed but numerical qualification is separate."},

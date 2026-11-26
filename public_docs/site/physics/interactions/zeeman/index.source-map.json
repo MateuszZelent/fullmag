@@ -1,6 +1,7 @@
 {
   "document": {
-    "reviewed_revision": "ab3c8802a691a535063102c12f9a79bb0043b367",
+    "reviewed_revision": "752450f8d259ab97c76c36fe666d5474b02abe9a",
+    "reviewed_at": "2026-11-26",
     "path": "public_docs/site/physics/interactions/zeeman/index.md",
     "title": "Zeeman interaction",
     "interaction": "zeeman"
@@ -9,39 +10,203 @@
     {
       "solver": "FDM",
       "device": "CPU",
-      "status": "partial",
-      "reason": "Authoring, planning, runtime, and scientific qualification are reported separately on the page."
+      "status": "supported",
+      "reason": "Uniform Zeeman, StaticFieldMap, RegionalFieldDrive, and MaskAntenna are executable in fullmag-engine CPU SoA field assembly."
     },
     {
       "solver": "FDM",
       "device": "GPU",
       "status": "partial",
-      "reason": "Device source presence does not replace executed-device evidence and precision-specific qualification."
+      "reason": "Device-resident uniform Zeeman, StaticFieldMap, and regional drives are implemented; precision-specific parity and residency provenance remain lane-specific."
     },
     {
       "solver": "FEM",
       "device": "CPU",
       "status": "partial",
-      "reason": "The exact weak/discrete realization and bounded capability envelope remain lane-specific."
+      "reason": "Uniform Zeeman, RegionalFieldDrive, and MaskAntenna are executable on magnetic nodes; StaticFieldMap fails closed on FEM."
     },
     {
       "solver": "FEM",
       "device": "GPU",
       "status": "partial",
-      "reason": "Strict device residency and executed-device qualification remain separate evidence gates."
+      "reason": "Uniform Zeeman and RegionalFieldDrive execute device-resident with fused H_eff accumulation and lazy h_drive_zeroed skip; StaticFieldMap fails closed on FEM."
     }
   ],
   "sources": [
     {
-      "id": "python-owner",
+      "id": "python-zeeman",
       "path": "packages/fullmag-py/src/fullmag/model/energy.py",
       "symbol": "class Zeeman",
-      "responsibility": "Own the public interaction constructor, validation, or canonical IR lowering boundary."
+      "responsibility": "Uniform Zeeman constructor and canonical IR lowering."
+    },
+    {
+      "id": "python-static-field-map",
+      "path": "packages/fullmag-py/src/fullmag/model/energy.py",
+      "symbol": "class StaticFieldMap",
+      "responsibility": "FDM-only spatially varying static external induction map."
+    },
+    {
+      "id": "python-regional-drive",
+      "path": "packages/fullmag-py/src/fullmag/model/antenna.py",
+      "symbol": "class RegionalFieldDrive",
+      "responsibility": "Localized time-varying regional field drive authoring."
+    },
+    {
+      "id": "python-mask-antenna",
+      "path": "packages/fullmag-py/src/fullmag/model/mask_field_drive.py",
+      "symbol": "class MaskAntenna",
+      "responsibility": "Geometry-masked localized antenna drive contract."
+    },
+    {
+      "id": "python-vector3-validation",
+      "path": "packages/fullmag-py/src/fullmag/_validation.py",
+      "symbol": "as_vector3",
+      "responsibility": "Constructor-level 3-vector length and float validation."
+    },
+    {
+      "id": "fdm-cpu-zeeman",
+      "path": "crates/fullmag-engine/src/fdm/cpu/fields/zeeman.rs",
+      "symbol": "external_field_add_into_soa",
+      "responsibility": "FDM CPU uniform Zeeman and static-map field accumulation."
+    },
+    {
+      "id": "fdm-cpu-regional-drive",
+      "path": "crates/fullmag-engine/src/fdm/cpu/fields/zeeman.rs",
+      "symbol": "regional_field_drives_add_into_soa_at_time",
+      "responsibility": "FDM CPU time-evaluated regional and mask field-drive accumulation."
+    },
+    {
+      "id": "fem-cpu-zeeman",
+      "path": "backends/fem/cpu/mfem/interactions/zeeman_uniform_field.cpp",
+      "symbol": "initialize_uniform_zeeman_field",
+      "responsibility": "FEM CPU uniform nodal Zeeman field initialization."
+    },
+    {
+      "id": "fem-cpu-regional-drive",
+      "path": "backends/fem/cpu/mfem/interactions/zeeman_regional_field.cpp",
+      "symbol": "materialize_regional_field_drive",
+      "responsibility": "FEM CPU regional and mask field-drive evaluation."
+    },
+    {
+      "id": "fem-gpu-zeeman-energy",
+      "path": "backends/fem/gpu/cuda/interactions/zeeman/zeeman_kernels.cu",
+      "symbol": "fullmag_cuda_external_energy_blocks",
+      "responsibility": "FEM GPU Zeeman scalar energy block reduction."
+    },
+    {
+      "id": "fem-gpu-regional-drive",
+      "path": "backends/fem/gpu/cuda/interactions/zeeman/regional_field_kernels.cuh",
+      "symbol": "gpu_regional_field_drive_materialize_and_accumulate",
+      "responsibility": "FEM GPU regional-drive accumulation with lazy h_drive_zeroed skip."
+    },
+    {
+      "id": "fem-gpu-fused-heff",
+      "path": "backends/fem/gpu/cuda/fields/vector_field_kernels.cu",
+      "symbol": "fullmag_cuda_accumulate_heff_fused_xyz",
+      "responsibility": "FEM GPU single-launch fused H_eff combiner including Zeeman and drives."
     }
   ],
-  "symbols": [],
-  "equations": [],
+  "symbols": [
+    {"id": "Bext", "latex": "$\\mathbf B_{\\mathrm{ext}}$", "meaning": "authored external flux density", "si_unit": "$\\mathrm{T}$"},
+    {"id": "Hext", "latex": "$\\mathbf H_{\\mathrm{ext}}$", "meaning": "external magnetic field", "si_unit": "$\\mathrm{A\\,m^{-1}}$"},
+    {"id": "Hdrive", "latex": "$\\mathbf H_{\\mathrm{drive}}$", "meaning": "regional or mask drive field", "si_unit": "$\\mathrm{A\\,m^{-1}}$"},
+    {"id": "M", "latex": "$\\mathbf M$", "meaning": "magnetization", "si_unit": "$\\mathrm{A\\,m^{-1}}$"},
+    {"id": "m", "latex": "$\\mathbf m$", "meaning": "reduced magnetization", "si_unit": "$1$"},
+    {"id": "EZ", "latex": "$E_{\\mathrm Z}$", "meaning": "Zeeman energy", "si_unit": "$\\mathrm{J}$"},
+    {"id": "mu0", "latex": "$\\mu_0$", "meaning": "vacuum permeability", "si_unit": "$\\mathrm{N\\,A^{-2}}$"},
+    {"id": "Omega_m", "latex": "$\\Omega_m$", "meaning": "magnetic domain", "si_unit": "$\\mathrm{m^3}$"},
+    {"id": "dV", "latex": "$\\mathrm dV$", "meaning": "volume measure", "si_unit": "$\\mathrm{m^3}$"}
+  ],
+  "equations": [
+    {
+      "id": "eq-public-zeeman-zeeman-conversion",
+      "symbols": ["Hext", "Bext", "mu0"],
+      "sources": ["python-zeeman", "fdm-cpu-zeeman", "fem-cpu-zeeman"]
+    },
+    {
+      "id": "eq-public-zeeman-zeeman-energy",
+      "symbols": ["EZ", "mu0", "Omega_m", "M", "Hext", "Bext", "dV"],
+      "sources": ["fdm-cpu-zeeman", "fem-cpu-zeeman", "fem-gpu-zeeman-energy"]
+    },
+    {
+      "id": "eq-public-zeeman-zeeman-field",
+      "symbols": ["Hext", "Hdrive"],
+      "sources": ["fdm-cpu-zeeman", "fdm-cpu-regional-drive", "fem-cpu-zeeman", "fem-cpu-regional-drive", "fem-gpu-regional-drive", "fem-gpu-fused-heff"]
+    }
+  ],
   "public_api": {
-    "parameters": []
+    "constructors": ["fullmag.Zeeman", "fullmag.StaticFieldMap", "fullmag.RegionalFieldDrive", "fullmag.MaskAntenna"],
+    "parameters": [
+      {
+        "python": "fm.Zeeman.B",
+        "type": "Sequence[float]",
+        "default": "required",
+        "si_unit": "$\\mathrm{T}$",
+        "validation": "3-vector via `as_vector3`; finite at IR/planner boundary",
+        "meaning": "uniform external magnetic flux density $\\mathbf B_{\\mathrm{ext}}$",
+        "backend_support": "FDM CPU/GPU, FEM CPU/GPU",
+        "problem_ir": "energy_terms[].B"
+      },
+      {
+        "python": "study.b_ext",
+        "type": "(float, float | None, float | None, *, theta, phi)",
+        "default": "required",
+        "si_unit": "$\\mathrm{T}$",
+        "validation": "Cartesian `(Bx, By, Bz)` or spherical `(magnitude, theta, phi)`",
+        "meaning": "stage-first uniform Zeeman authoring helper",
+        "backend_support": "FDM CPU/GPU, FEM CPU/GPU",
+        "problem_ir": "energy_terms[].B"
+      },
+      {
+        "python": "fm.StaticFieldMap.id",
+        "type": "str",
+        "default": "required",
+        "si_unit": "—",
+        "validation": "non-empty unique identifier",
+        "meaning": "identifier for per-cell static induction map",
+        "backend_support": "FDM CPU/GPU only",
+        "problem_ir": "energy_terms[].id"
+      },
+      {
+        "python": "fm.StaticFieldMap.field_B_T",
+        "type": "Sequence[Sequence[float]]",
+        "default": "required",
+        "si_unit": "$\\mathrm{T}$",
+        "validation": "$N_{\\mathrm{cell}}\\times 3$ finite vectors checked at planner boundary",
+        "meaning": "per-cell static external flux density map",
+        "backend_support": "FDM CPU/GPU only",
+        "problem_ir": "energy_terms[].field_B_T"
+      },
+      {
+        "python": "fm.RegionalFieldDrive.amplitude_B_T",
+        "type": "float",
+        "default": "required",
+        "si_unit": "$\\mathrm{T}$",
+        "validation": "finite scalar checked at IR/planner boundary",
+        "meaning": "peak induction amplitude of a localized regional drive",
+        "backend_support": "FDM CPU/GPU, FEM CPU/GPU",
+        "problem_ir": "regional_field_drives[].amplitude_B_T"
+      },
+      {
+        "python": "fm.RegionalFieldDrive.direction",
+        "type": "Sequence[float]",
+        "default": "required",
+        "si_unit": "$1$",
+        "validation": "non-zero 3-vector normalized at planner boundary",
+        "meaning": "unit polarization direction of the regional drive",
+        "backend_support": "FDM CPU/GPU, FEM CPU/GPU",
+        "problem_ir": "regional_field_drives[].direction"
+      },
+      {
+        "python": "fm.MaskAntenna.shape",
+        "type": "object",
+        "default": "required",
+        "si_unit": "—",
+        "validation": "supported geometry mask shape",
+        "meaning": "spatial footprint selecting excited magnetic cells/nodes",
+        "backend_support": "FDM CPU/GPU, FEM CPU/GPU",
+        "problem_ir": "regional_field_drives[].spatial_profile"
+      }
+    ]
   }
 }

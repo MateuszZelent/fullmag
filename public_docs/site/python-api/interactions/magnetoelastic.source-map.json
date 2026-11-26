@@ -1,7 +1,7 @@
 {
   "document": {
     "path": "public_docs/site/python-api/interactions/magnetoelastic.md",
-    "reviewed_revision": "ab3c8802a691a535063102c12f9a79bb0043b367"
+    "reviewed_revision": "752450f8d259ab97c76c36fe666d5474b02abe9a"
   },
   "backend_matrix": [
     {
@@ -14,19 +14,19 @@
       "solver": "FEM",
       "device": "GPU",
       "status": "documented",
-      "reason": "authoring and IR documented; runtime qualification separate"
+      "reason": "authoring and IR documented; unsupported coupled mechanics fail closed"
     },
     {
       "solver": "FDM",
       "device": "CPU",
       "status": "documented",
-      "reason": "authoring and IR documented; runtime qualification separate"
+      "reason": "authoring and IR documented; prescribed-strain runtime qualification separate"
     },
     {
       "solver": "FDM",
       "device": "GPU",
       "status": "documented",
-      "reason": "authoring and IR documented; runtime qualification separate"
+      "reason": "authoring and IR documented; unsupported coupled mechanics fail closed"
     }
   ],
   "equations": [],
@@ -36,7 +36,31 @@
       "id": "source_magnetoelastic",
       "path": "packages/fullmag-py/src/fullmag/model/energy.py",
       "symbol": "class Magnetoelastic",
-      "responsibility": "public constructor and IR lowering"
+      "responsibility": "public magnetoelastic link constructor and IR lowering"
+    },
+    {
+      "id": "source_elastic_body",
+      "path": "packages/fullmag-py/src/fullmag/model/mechanics.py",
+      "symbol": "class ElasticBody",
+      "responsibility": "elastic domain binding geometry and elastic material"
+    },
+    {
+      "id": "source_prescribed_strain",
+      "path": "packages/fullmag-py/src/fullmag/model/dynamics.py",
+      "symbol": "class PrescribedStrain",
+      "responsibility": "prescribed strain/stress mechanical regime"
+    },
+    {
+      "id": "source_quasistatic_elasticity",
+      "path": "packages/fullmag-py/src/fullmag/model/dynamics.py",
+      "symbol": "class QuasistaticElasticity",
+      "responsibility": "quasistatic bidirectional Picard elasticity mode"
+    },
+    {
+      "id": "source_elastodynamics",
+      "path": "packages/fullmag-py/src/fullmag/model/dynamics.py",
+      "symbol": "class Elastodynamics",
+      "responsibility": "full coupled elastodynamics mode descriptor"
     }
   ],
   "public_api": {
@@ -49,7 +73,7 @@
         "si_unit": "$1$",
         "validation": "non-empty magnet link",
         "meaning": "magnetic object link",
-        "backend_support": "FEM CPU/GPU: IR; coupled mechanics runtime required",
+        "backend_support": "FEM/FDM CPU/GPU: IR; coupled mechanics runtime required",
         "problem_ir": "magnet"
       },
       {
@@ -59,7 +83,7 @@
         "si_unit": "$1$",
         "validation": "non-empty body link",
         "meaning": "mechanical body link",
-        "backend_support": "FEM CPU/GPU: IR; coupled mechanics runtime required",
+        "backend_support": "FEM/FDM CPU/GPU: IR; coupled mechanics runtime required",
         "problem_ir": "body"
       },
       {
@@ -69,7 +93,7 @@
         "si_unit": "$1$",
         "validation": "non-empty law link",
         "meaning": "magnetostriction law link",
-        "backend_support": "FEM CPU/GPU: IR; coupled mechanics runtime required",
+        "backend_support": "FEM/FDM CPU/GPU: IR; coupled mechanics runtime required",
         "problem_ir": "law"
       }
     ],

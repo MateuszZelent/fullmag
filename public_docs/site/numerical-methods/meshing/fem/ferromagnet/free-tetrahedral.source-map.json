@@ -1,7 +1,7 @@
 {
   "document": {
     "path": "public_docs/site/numerical-methods/meshing/fem/ferromagnet/free-tetrahedral.md",
-    "reviewed_revision": "969efa0941905825ac569d525f4bdaefc059e2af"
+    "reviewed_revision": "752450f8d259ab97c76c36fe666d5474b02abe9a"
   },
   "backend_matrix": [
     {
@@ -87,6 +87,13 @@
       "path": "crates/fullmag-runner/src/dispatch.rs",
       "symbol": "apply_native_fem_runtime_contract",
       "responsibility": "Returns () and populates ExecutionProvenance from runtime observations; it is not a gate."
+    },
+    {
+      "id": "compact_markers",
+      "path": "backends/fem/core/fem_marker_map.hpp",
+      "symbol": "class CompactMarkerMap",
+      "responsibility": "Compact canonical domain/boundary FEM markers onto contiguous positive MFEM attributes",
+      "evidence_status": "verified"
     }
   ],
   "symbols": [
@@ -278,7 +285,7 @@
         "type": "float | None",
         "default": "None",
         "si_unit": "$1$",
-        "validation": "finite, > 0, and <= 2.5",
+        "validation": "finite, > 1.0, and <= 2.5",
         "meaning": "size-growth alias",
         "backend_support": "FEM CPU source-backed; FEM GPU capability-gated",
         "problem_ir": "mesh_workflow.per_geometry[].growth_rate"
@@ -288,7 +295,7 @@
         "type": "float | None",
         "default": "None",
         "si_unit": "$1$",
-        "validation": "finite, > 0, and <= 2.5",
+        "validation": "finite, > 1.0, and <= 2.5",
         "meaning": "maximum growth request",
         "backend_support": "FEM CPU source-backed; FEM GPU capability-gated",
         "problem_ir": "mesh_workflow.per_geometry[].maximum_element_growth_rate"

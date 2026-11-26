@@ -1,7 +1,8 @@
 {
   "document": {
     "path": "public_docs/site/physics/geometry-and-materials.md",
-    "reviewed_revision": "f3a4e9e3d4bb868f5d092817c7119e6e202083ee",
+    "reviewed_revision": "752450f8d259ab97c76c36fe666d5474b02abe9a",
+    "reviewed_at": "2026-11-26",
     "title": "Geometry, regions, materials and meshes"
   },
   "backend_matrix": [
@@ -59,7 +60,7 @@
       "id": "material-fields",
       "path": "packages/fullmag-py/src/fullmag/model/structure.py",
       "symbol": "class MaterialParameterField",
-      "responsibility": "Constant, linear, radial, and sampled field payloads."
+      "responsibility": "Constant, linear, radial, sampled, and analytic function field payloads."
     },
     {
       "id": "object-regions",
@@ -88,10 +89,22 @@
       "si_unit": "$\\mathrm{m^3}$"
     },
     {
-      "id": "p",
-      "latex": "$p$",
-      "meaning": "material parameter",
-      "si_unit": "parameter-dependent"
+      "id": "Ms",
+      "latex": "$M_s$",
+      "meaning": "saturation magnetization",
+      "si_unit": "$\\mathrm{A\\,m^{-1}}$"
+    },
+    {
+      "id": "A",
+      "latex": "$A$",
+      "meaning": "exchange stiffness",
+      "si_unit": "$\\mathrm{J\\,m^{-1}}$"
+    },
+    {
+      "id": "alpha",
+      "latex": "$\\alpha$",
+      "meaning": "Gilbert damping parameter",
+      "si_unit": "$1$"
     }
   ],
   "equations": [
@@ -102,13 +115,16 @@
     }
   ],
   "public_api": {
-    "owner": "study.geometry, fm.geometry, ObjectRegion, Material, and MaterialParameterField",
+    "owner": "study.geometry, study.conductor, fm.geometry, ObjectRegion, Material, and MaterialParameterField",
     "constructors": [
       "fullmag.Box",
       "fullmag.Cylinder",
       "fullmag.Ellipsoid",
       "fullmag.Sphere",
       "fullmag.Ellipse",
+      "fullmag.Cone",
+      "fullmag.Torus",
+      "fullmag.PolygonPrism",
       "fullmag.ImportedGeometry",
       "fullmag.Material",
       "fullmag.MaterialParameterField"

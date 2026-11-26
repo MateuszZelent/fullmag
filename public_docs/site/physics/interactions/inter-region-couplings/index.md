@@ -10,15 +10,17 @@ owner: fullmag-public-docs
 # Inter-region couplings
 
 Inter-region couplings connect named regions or opposing surfaces beyond ordinary homogeneous
-exchange. Fullmag authors region exchange, RKKY, and bilinear/biquadratic interlayer exchange, but
-their executable support is deliberately narrower than their IR vocabulary.
+exchange. Fullmag's public `CouplingRegistry` and `CouplingKindIR` contract exposes exactly three
+coupling families—region `exchange`, `rkky`, and bilinear/biquadratic `interlayer_exchange`—and
+their executable support is deliberately narrower than their IR vocabulary. Interlayer DMI and
+general interfacial coupling families are not part of the current public Python/IR contract.
 
 (physics-inter-region-couplings-problem-statement)=
 ## Physical problem
 
-Inter-region couplings represent both discrete cell-to-cell exchange overrides (`A_ab`) across
+Inter-region couplings represent both discrete cell-to-cell exchange overrides ($A_{ab}$) across
 adjacent `ObjectRegion` domains and opposing-surface bilinear/biquadratic RKKY interactions
-(`J_1, J_2`) across non-magnetic spacers.
+($J_1, J_2$) across non-magnetic spacers.
 
 (physics-inter-region-couplings-governing-equations)=
 ## Governing equations
@@ -70,7 +72,7 @@ Cell-link region exchange $A_{ab}$ across adjacent `ObjectRegion` cells (a) vers
 |---|---|---:|
 | $J_1,J_2$ | surface-coupling coefficients | $\mathrm{J\,m^{-2}}$ |
 | $A_a,A_b,A_{ab}$ | exchange stiffness/link coefficient | $\mathrm{J\,m^{-1}}$ |
-| $\Gamma_{ab}$ | coupled surface set | not applicable |
+| $\Gamma_{ab}$ | coupled surface set | $\mathrm{m^2}$ |
 | $\mathrm dS$ | surface measure | $\mathrm{m^2}$ |
 | $s$ | harmonic-mean scale | $1$ |
 
@@ -79,13 +81,27 @@ Cell-link region exchange $A_{ab}$ across adjacent `ObjectRegion` cells (a) vers
 
 | Solver | Device | Authoring / IR | Executable realization | Scientific qualification | Exact boundary |
 |---|---|---|---|---|---|
-| FDM | CPU | all coupling IR variants | partial: region-to-region exchange via AoS reference (`ExchangeFaces`) | bounded planner/operator tests | persistent SoA fast path rejects `exchange_faces`; RKKY/interlayer unsupported |
-| FDM | GPU | all coupling IR variants | partial: region-to-region exchange via CUDA `face_xp/yp/zp` buffers | managed runtime evidence still required | multilayer FDM and RKKY/interlayer surfaces unsupported |
-| FEM | CPU | all coupling IR variants | unsupported | none | region-exchange and surface trace quadrature operators not implemented |
-| FEM | GPU | all coupling IR variants | unsupported | none | no device surface or region-link materializer |
+| FDM | CPU | `exchange`, `rkky`, `interlayer_exchange` | partial: region-to-region `exchange` via `materialize_region_exchange_couplings` (`ExchangeFaces` AoS path) | bounded planner/operator tests | persistent SoA fast path explicitly rejects `exchange_faces` via `soa_fast_path_rejection_reason`; multilayer FDM, `rkky`, and `interlayer_exchange` fail closed |
+| FDM | GPU | same three IR variants | partial: region-to-region `exchange` via CUDA `face_xp/yp/zp` buffers | executed-device parity required | multilayer FDM, `rkky`, and `interlayer_exchange` fail closed |
+| FEM | CPU | same three IR variants | unsupported | none | `crates/fullmag-plan/src/fem.rs` does not materialize region-exchange or surface trace couplings; all coupling kinds fail closed |
+| FEM | GPU | same three IR variants | unsupported | none | no device surface or region-link materializer; fails closed |
 
 (physics-inter-region-couplings-python-api)=
 ## Python API and stage-first example
+
+### Public API parameters
+
+| Python API | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR field |
+|---|---|---|---|---|---|---|---|
+| `study.couplings.exchange.mode` | `str` | `"harmonic_mean"` | — | `"harmonic_mean"`, `"explicit"`, or `"disabled"` | selects inter-region cell-face exchange rule | FDM CPU/GPU (single-layer), FEM unsupported | `couplings[].parameters.mode` |
+| `study.couplings.exchange.scale` | `float \| None` | `None` | $1$ | non-negative float when `mode="harmonic_mean"` | dimensionless multiplier $s \ge 0$ on $A_{ab}^{\mathrm{harm}}$ | FDM CPU/GPU (single-layer), FEM unsupported | `couplings[].parameters.scale` |
+| `study.couplings.exchange.inter_exchange` | `float \| None` | `None` | $\mathrm{J\,m^{-1}}$ | required non-negative float when `mode="explicit"` | explicit interface exchange stiffness $A_{ab}$ | FDM CPU/GPU (single-layer), FEM unsupported | `couplings[].parameters.inter_exchange` |
+| `study.couplings.rkky.J1` | `float` | required | $\mathrm{J\,m^{-2}}$ | finite float; `authored_only` in strict runtime | bilinear surface RKKY coupling constant $J_1$ | authoring/IR only (rejected at runtime on all lanes) | `couplings[].parameters.J1` |
+| `study.couplings.interlayer_exchange.J1` | `float` | required | $\mathrm{J\,m^{-2}}$ | finite float; `authored_only` in strict runtime | bilinear interlayer coupling constant $J_1$ | authoring/IR only (rejected at runtime on all lanes) | `couplings[].parameters.J1` |
+| `study.couplings.interlayer_exchange.J2` | `float \| None` | `None` | $\mathrm{J\,m^{-2}}$ | optional finite float; `authored_only` in strict runtime | biquadratic interlayer coupling constant $J_2$ | authoring/IR only (rejected at runtime on all lanes) | `couplings[].parameters.J2` |
+| `Coupling.capability_policy` | `str` | `"require_runtime"` | — | `"require_runtime"` or `"authored_only"` | controls whether non-executable IR entries reject at planning or remain schema-only | all lanes (planner gate) | `couplings[].capability_policy` |
+
+### Stage-first example
 
 ```python
 # %% Study, execution lane, and magnetic body
@@ -94,7 +110,7 @@ import fullmag as fm
 nm = 1.0e-9
 study = fm.study("region_exchange_reference")
 study.engine("fdm")
-study.device("cuda", precision="double")
+study.device("gpu", precision="double")
 study.mode("strict")
 study.objects.mesh.defaults(cell_size=(2 * nm, 2 * nm, 2 * nm))
 body = study.geometry(fm.Box(40 * nm, 20 * nm, 4 * nm), name="film")
@@ -112,10 +128,11 @@ study.stages.add_relax(stage_id="relax", algorithm="llg_overdamped", dt=5.0e-13,
 The two region shapes are explicitly displaced; overlapping identical boxes must not be presented
 as a left/right partition.
 
-### Authored-only surface term
+### Authored-only surface terms
 
-RKKY and interlayer terms carry `capability_policy="authored_only"` strictly for `ProblemIR`
-export and schema inspection; they are not executable in strict planning.
+`rkky` and `interlayer_exchange` terms carry `capability_policy="authored_only"` strictly for
+`ProblemIR` export and schema inspection; with the default `capability_policy="require_runtime"`,
+strict planning rejects them fail-closed on every lane.
 
 (physics-inter-region-couplings-problem-ir)=
 ## ProblemIR
@@ -139,10 +156,11 @@ export and schema inspection; they are not executable in strict planning.
 (physics-inter-region-couplings-validation)=
 ## Validation boundary
 
-Python validates endpoint kind, selector names, mode/policy enums, and scalar consistency (with
-`coupling_id` uniqueness and canonical identifiers checked during `to_ir()` lowering). The planner
-resolves region IDs, material coefficients, backend capability, and link materialization before
-execution.
+Python (`packages/fullmag-py/src/fullmag/model/couplings.py`) validates endpoint kind, selector
+names, mode/policy enums, and scalar consistency (with `coupling_id` uniqueness and canonical
+identifiers checked during `to_ir()` lowering). The planner (`crates/fullmag-plan/src/fdm.rs`)
+resolves region IDs, material coefficients, backend capability, and `ExchangeFaces` link
+materialization before execution.
 
 ## Required numerical validation
 
@@ -152,16 +170,17 @@ execution.
 - harmonic versus explicit region-link coefficients;
 - interface and surface-area convergence;
 - endpoint orientation and face-pair symmetry;
-- strict rejection on all unsupported lanes;
+- strict rejection on all unsupported lanes (FEM CPU/GPU, multilayer FDM, and surface couplings);
 - verified CPU reference alongside any GPU surface-coupling implementation.
 
 (physics-inter-region-couplings-limitations)=
 ## Limitations and roadmap
 
-RKKY and interlayer exchange are presently representable, not executable. Future FEM support must
-define trace spaces, face pairing, quadrature, normal orientation, energy reduction, and mesh
-convergence. Curved contacts and spacer-mediated transport need separate typed geometry/physics
-contracts.
+`rkky` and `interlayer_exchange` are presently representable in `ProblemIR`, not executable, and
+interlayer DMI or general interface coupling classes do not exist in the current public API. Future
+FEM support must define trace spaces, face pairing, quadrature, normal orientation, energy
+reduction, and mesh convergence. Curved contacts and spacer-mediated transport need separate typed
+geometry/physics contracts.
 
 (physics-inter-region-couplings-scientific-bibliography)=
 ## Scientific bibliography
@@ -175,25 +194,43 @@ contracts.
 (physics-inter-region-couplings-round-trip-and-failure-semantics)=
 ## Round-trip and failure semantics
 
-Requested intent preserves the authored model, coefficients, orientations, targets, and execution request. Resolved execution records the selected solver, device, precision, discretization, and capability decision. Validation errors reject malformed or contradictory data before runtime. Unsupported combinations fail closed and are not silently omitted or converted to another interaction.
+Requested intent preserves the authored coupling kind (`exchange`, `rkky`, `interlayer_exchange`),
+endpoint selectors, mode, coefficients, `capability_policy`, and execution request.
+Resolved execution records the selected solver, device, precision, `ExchangeFaces` materialization, and
+capability decision. Validation errors reject malformed endpoints, conflicting mode/parameter
+combinations, duplicate `coupling_id` values, and non-finite coefficients before runtime.
+Unsupported combinations (including `rkky` and `interlayer_exchange` under `require_runtime`,
+multilayer FDM couplings, and any coupling on FEM CPU or FEM GPU) fail closed and are never
+silently omitted or converted to another interaction.
 
 (physics-inter-region-couplings-assumptions-and-validity)=
 ## Assumptions and validity
 
-The authored model is valid only within the continuum, discretization, boundary, and capability limits stated on this page.
+The authored model is valid only within the continuum, discretization, boundary, and capability
+limits stated on this page. Region-to-region `exchange` overrides act only across adjacent active
+FDM faces sharing a cell boundary; non-adjacent regions produce no link unless a surface-coupling
+operator is explicitly implemented and qualified.
 
 (physics-inter-region-couplings-implementation-mapping)=
 ## Implementation mapping
 
-Python owns authoring and serialization, ProblemIR owns canonical intent, planners own legality and realization selection, and backend kernels own numerical evaluation.
+Python owns authoring and serialization (`packages/fullmag-py/src/fullmag/model/couplings.py`,
+`packages/fullmag-py/src/fullmag/world.py`), `ProblemIR` (`crates/fullmag-ir/src/model.rs`) owns
+canonical intent, `crates/fullmag-plan/src/fdm.rs` (`materialize_region_exchange_couplings`) owns
+FDM legality and face-override materialization, and backend kernels (`crates/fullmag-engine/src/fdm/cpu/fields.rs`
+AoS reference and CUDA `face_xp/yp/zp` buffers) own numerical evaluation.
 
 (physics-inter-region-couplings-source-code-index)=
 ## Source-code index
 
 | Repository path | Stable symbol / area | Responsibility |
 |---|---|---|
-| `packages/fullmag-py/src/fullmag/model/couplings.py` | `CouplingRegistry, Coupling` | public endpoint and parameter validation |
-| `packages/fullmag-py/src/fullmag/world.py` | `StudyCouplingsHandle` | stage-first coupling facade |
-| `crates/fullmag-plan/src/fdm.rs` | `region coupling planning` | FDM capability and region resolution |
-| `crates/fullmag-engine/src` | `materialize_region_exchange_couplings` | FDM CPU/GPU link overrides (`ExchangeFaces`) |
-| `crates/fullmag-ir/src` | `CouplingKindIR/CouplingEndpointIR` | tagged canonical schema |
+| [`packages/fullmag-py/src/fullmag/model/couplings.py`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/model/couplings.py#L14) | `class CouplingEndpoint` | typed region or surface endpoint descriptor |
+| [`packages/fullmag-py/src/fullmag/model/couplings.py`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/model/couplings.py#L48) | `class Coupling` | validated coupling record and `to_ir()` lowering |
+| [`packages/fullmag-py/src/fullmag/model/couplings.py`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/model/couplings.py#L85) | `class CouplingRegistry` | public `exchange`, `rkky`, and `interlayer_exchange` registry |
+| [`packages/fullmag-py/src/fullmag/world.py`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/world.py#L6085) | `class StudyCouplingsHandle` | stage-first `study.couplings` facade |
+| [`crates/fullmag-ir/src/model.rs`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-ir/src/model.rs#L621) | `CouplingIR` | canonical tagged coupling record |
+| [`crates/fullmag-ir/src/model.rs`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-ir/src/model.rs#L635) | `CouplingKindIR` | canonical coupling-kind enum (`Exchange`, `Rkky`, `InterlayerExchange`) |
+| [`crates/fullmag-ir/src/model.rs`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-ir/src/model.rs#L643) | `CouplingEndpointIR` | canonical region/surface endpoint IR enum |
+| [`crates/fullmag-plan/src/fdm.rs`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-plan/src/fdm.rs#L1639) | `materialize_region_exchange_couplings` | FDM region-to-region exchange face materialization and capability gate |
+| [`crates/fullmag-engine/src/fdm/cpu/fields.rs`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-engine/src/fdm/cpu/fields.rs#L367) | `soa_fast_path_rejection_reason` | routes `exchange_faces` overrides to AoS CPU reference path |

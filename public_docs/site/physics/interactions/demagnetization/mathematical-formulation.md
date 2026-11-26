@@ -24,7 +24,7 @@ numerical method eliminates it analytically.
 
 ```{math}
 :label: eq-demag-formulation-maxwell
-\nabla\times\mathbf H_{\mathrm d}=\mathbf0,
+\nabla\times\mathbf H_{\mathrm d}=\mathbf 0,
 \qquad
 \nabla\cdot\mathbf B=0,
 \qquad
@@ -37,12 +37,12 @@ numerical method eliminates it analytically.
 \qquad
 \Delta u=\nabla\cdot\mathbf M,
 \qquad
-u(\mathbf x)\to0\ \text{as}\ |\mathbf x|\to\infty.
+u(\mathbf x)\to 0\ \text{as}\ \lvert\mathbf x\rvert\to\infty.
 ```
 
 ```{math}
 :label: eq-demag-formulation-energy
-E_{\mathrm d}=\frac{\mu_0}{2}\int_{\mathbb R^3}|\mathbf H_{\mathrm d}|^2\,\mathrm dV
+E_{\mathrm d}=\frac{\mu_0}{2}\int_{\mathbb R^3}\lvert\mathbf H_{\mathrm d}\rvert^2\,\mathrm dV
 =-\frac{\mu_0}{2}\int_{\Omega_m}\mathbf M\cdot\mathbf H_{\mathrm d}\,\mathrm dV.
 ```
 
@@ -73,7 +73,6 @@ it with separately documented discrete conditions.
 
 (demag-math-python-api)=
 ## Python API
-
 
 | Python parameter | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR |
 |---|---|---|---|---|---|---|---|
@@ -123,12 +122,22 @@ study.stages.add_relax(
 
 The selected realization is a requested intent. The resolved plan must additionally
 record the magnetic domain, air domain, outer marker, boundary variant, linear solver,
-preconditioner, tolerances, mesh identity, field recovery, and energy reduction.
+preconditioner, `gpu_strategy`, tolerances, mesh identity, field recovery, and energy reduction.
 
 (demag-math-realization-matrix)=
 ## Realization hierarchy
 
-See {numref}`fig-demag-solver-families-comparison` on {doc}`index` for a visual comparison of Fullmag's four discrete operator families solving this continuum magnetostatic system.
+See {numref}`fig-demag-solver-families-comparison` on {doc}`index` for a visual comparison of
+Fullmag's four discrete operator families solving this continuum magnetostatic system, and see
+{ref}`numerical-methods-performance-fdm-core` and {ref}`numerical-methods-performance-fem-gpu-demag`
+for GPU kernel performance characteristics.
+
+| Solver | Device | Operator formulation | Exact realization scope |
+|---|---|---|---|
+| FDM | CPU | Cell-averaged 27-point Newell tensor FFT | Reference open, periodic truncated-image, and multilayer CPU FP64 paths. |
+| FDM | GPU | Real-to-complex Hermitian `D2Z/Z2D` (FP64) & `R2C/C2R` (FP32) cuFFT | Single-layer CUDA verified on RTX 4080 SUPER; FP32+PBC rejected fail-closed; multilayer CUDA partial. |
+| FEM | CPU | Scalar-potential Poisson (`tet4` P2, `mixed_p1`, `pure_prism_p2`) and $H^2$ Fredkin–Koehler | MFEM/Hypre open Robin/Dirichlet, periodic reduced P1, and body-only `tet4` P1 FEM–BEM. |
+| FEM | GPU | Device CSR RHS/recovery + VRAM-guarded `cuDSS` or `hypre_krylov` (`coarse_relax_type=18`) | Open Poisson (`tet4` P2, `mixed_p1`, `pure_prism_p2`), PBC-reduced 1-D Robin / 2-D film, and strict GPU Fredkin–Koehler verified on RTX 4080 SUPER. |
 
 ### FDM CPU and GPU: discrete Green operator
 
@@ -137,21 +146,21 @@ convolution with a translation-invariant tensor on a common grid:
 
 ```{math}
 :label: eq-demag-formulation-fdm-discrete
-H_{\mathrm{d},p}^{i}=-\sum_{q}\sum_{j=1}^{3}N_{pq}^{ij}M_q^{j}.
+H_{\mathrm d,p}^{i}=-\sum_{q}\sum_{j=1}^{3}N_{pq}^{ij}M_q^{j}.
 ```
 
 The CPU reference constructs the tensor spectrum and applies the reduction in host memory.
-The CUDA lane uses device kernels and device reductions. The mathematical input is the
-same, but padding, FFT layout, precision, reduction order, and device residency are not.
-Neither lane solves a finite airbox Poisson equation.
+Single-layer CUDA evaluates the exact same tensor product on the Hermitian half-spectrum via
+`D2Z/Z2D` (FP64) or `R2C/C2R` (FP32) cuFFT with exact workspace preflight. Neither lane solves a
+finite airbox Poisson equation.
 
 ### FEM CPU and GPU: scalar potential
 
 FEM introduces a scalar potential over the magnetic body and, for the airbox variant, an
-exterior air region. The magnetic source enters through the divergence of $\mathbf M$ and
-its boundary trace. The CPU path assembles and solves the operator using MFEM/Hypre
-components; the GPU path has a separate CSR/device-Hypre realization. The recovered field
-and energy must use the same sign convention as the common continuum equations.
+exterior air region (or eliminates the exterior via boundary integrals in Fredkin–Koehler). The
+magnetic source enters through the divergence of $\mathbf M$ and its boundary trace. The CPU path
+assembles and solves the operator using MFEM/Hypre components; the strict GPU path executes device
+CSR RHS/recovery kernels with VRAM-guarded `cuDSS` direct Cholesky or device `hypre_krylov`.
 
 (demag-math-energy-reduction)=
 ## Energy and observable ownership
@@ -185,7 +194,9 @@ converted to an open-boundary default.
 ## Discrete realization
 
 FDM approximates the Green operator by a cell-averaged tensor. FEM approximates the scalar potential
-weak form. Both must reproduce the same sign convention and energy derivative.
+weak form (with P2 scalar potential on non-periodic `tet4` and `pure_prism_p2` meshes, and P1 on
+`mixed_p1`, periodic meshes, and Fredkin–Koehler). Both reproduce the same sign convention and
+energy derivative.
 
 (demag-math-implementation-mapping)=
 ## Implementation mapping
@@ -195,19 +206,24 @@ Newell tensor construction is in `compute_newell_kernels`; FEM source assembly i
 
 ### Control Room support
 
-When `PhysicsInteractionPanel` exposes demagnetization under `Model Explorer -> Objects -> <object> -> Physics`, browser support is partial: parameters without a matching UI control are configured via the Python API or `ProblemIR`. See {doc}`/frontend/capability-register` for current Control Room coverage.
+Demagnetization controls are hosted under `Model Explorer -> Objects -> <object> -> Physics` by
+`ObjectPhysicsInspectorPanel`
+(`apps/control-room/src/modules/inspector/inspectors/objects/physics/ObjectPhysicsSpec.tsx`).
+Browser support is partial: parameters without a matching UI control are configured via the Python
+API or `ProblemIR`. See {doc}`/frontend/capability-register` for current Control Room coverage.
 
 (demag-math-validation)=
 ## Validation
 
 Check Maxwell residuals, field sign, self-demagnetizing factors of uniformly magnetized bodies, and
-the identity between field-derived energy and the reported scalar energy.
+the identity between field-derived energy and the reported scalar energy (see {doc}`validation`).
 
 (demag-math-limitations)=
 ## Limitations
 
-The scalar-potential page does not claim that every listed backend is qualified for every mesh,
-precision, periodicity, or airbox policy.
+This continuum formulation page does not claim that every listed backend is qualified for every
+mesh, precision, periodicity, or airbox policy; see the realization-specific pages for exact
+lane gates.
 
 (demag-math-scientific-bibliography)=
 ## Scientific bibliography
@@ -225,8 +241,9 @@ precision, periodicity, or airbox policy.
 (demag-math-source-code-index)=
 ## Source-code index
 
-| Repository path | Stable symbol | Responsibility |
-|---|---|---|
-| [`crates/fullmag-fdm-demag/src/newell.rs`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-fdm-demag/src/newell.rs#L542) | [`compute_newell_kernels`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-fdm-demag/src/newell.rs#L542) | Cell-averaged FDM demag tensor. |
-| [`backends/fem/cpu/mfem/interactions/demag_poisson_rhs.cpp`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/backends/fem/cpu/mfem/interactions/demag_poisson_rhs.cpp#L182) | [`assemble_demag_poisson_rhs`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/backends/fem/cpu/mfem/interactions/demag_poisson_rhs.cpp#L182) | FEM weak-form right-hand side. |
-| [`backends/fem/cpu/mfem/interactions/demag_poisson_energy.cpp`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/backends/fem/cpu/mfem/interactions/demag_poisson_energy.cpp#L24) | [`demag_poisson_energy_from_field`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/backends/fem/cpu/mfem/interactions/demag_poisson_energy.cpp#L24) | FEM demag energy reduction. |
+| Repository path | Stable symbol | Responsibility | Lane | Immutable link |
+|---|---|---|---|---|
+| `crates/fullmag-fdm-demag/src/newell.rs` | `compute_newell_kernels` | Cell-averaged FDM demag tensor. | FDM CPU/GPU setup | [`newell.rs#L596`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-fdm-demag/src/newell.rs#L596) |
+| `backends/fem/cpu/mfem/interactions/demag_poisson_rhs.cpp` | `assemble_demag_poisson_rhs` | FEM weak-form right-hand side. | FEM CPU | [`demag_poisson_rhs.cpp#L359`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/backends/fem/cpu/mfem/interactions/demag_poisson_rhs.cpp#L359) |
+| `backends/fem/cpu/mfem/interactions/demag_poisson_energy.cpp` | `demag_poisson_energy_from_field` | FEM demag energy reduction. | FEM CPU | [`demag_poisson_energy.cpp#L25`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/backends/fem/cpu/mfem/interactions/demag_poisson_energy.cpp#L25) |
+| `apps/control-room/src/modules/inspector/inspectors/objects/physics/ObjectPhysicsSpec.tsx` | `ObjectPhysicsInspectorPanel` | Object-level physics inspector exposing demagnetization controls. | Control Room | [`ObjectPhysicsSpec.tsx#L78`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/apps/control-room/src/modules/inspector/inspectors/objects/physics/ObjectPhysicsSpec.tsx#L78) |

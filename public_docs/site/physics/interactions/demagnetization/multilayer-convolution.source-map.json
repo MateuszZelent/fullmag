@@ -1,6 +1,7 @@
 {
   "document": {
-    "reviewed_revision": "ab3c8802a691a535063102c12f9a79bb0043b367",
+    "reviewed_revision": "752450f8d259ab97c76c36fe666d5474b02abe9a",
+    "reviewed_at": "2026-11-26",
     "path": "public_docs/site/physics/interactions/demagnetization/multilayer-convolution.md",
     "title": "FDM multilayer convolution",
     "interaction": "demagnetization"
@@ -129,10 +130,22 @@
       "responsibility": "Validate, upload and initialize a native CUDA multilayer v2 plan."
     },
     {
+      "id": "cuda-preflight",
+      "path": "backends/fdm/gpu/cuda/runtime/context.cu",
+      "symbol": "context_preflight_multilayer_workspace_v2",
+      "responsibility": "Validate aggregate multilayer VRAM and cuFFT workspace budget before device allocation."
+    },
+    {
       "id": "cuda-fft",
       "path": "backends/fdm/gpu/cuda/runtime/context.cu",
       "symbol": "context_prepare_multilayer_fft_workspace_v2",
       "responsibility": "Prepare the native batched cuFFT workspace for a multilayer plan."
+    },
+    {
+      "id": "ui-object-physics",
+      "path": "apps/control-room/src/modules/inspector/inspectors/objects/physics/ObjectPhysicsSpec.tsx",
+      "symbol": "ObjectPhysicsInspectorPanel",
+      "responsibility": "Object-level physics inspector panel exposing demagnetization controls."
     },
     {
       "id": "ui-authoring",

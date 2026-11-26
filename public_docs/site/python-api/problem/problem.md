@@ -17,6 +17,11 @@ selections, magnetization constraints, discretization, and requested runtime int
 scripts normally produce this object through the loader; direct construction remains the exact
 class API and serialization contract.
 
+Companion problem-level contracts—the derived multiphysics dependency graph (`PhysicsGraph`,
+`build_physics_graph`), versioned SI parameter expressions (`ParameterDefinition`,
+`ParameterExpression`, `ParameterValue`), and structured authoring records (`ComponentDefinition`,
+`ModelDefinition`)—share the same typed graph and round-trip boundaries.
+
 (python-api-problem-problem-governing-equations)=
 ## Governing equations
 
@@ -27,7 +32,7 @@ individual modules own their equations, signs, units, boundary conditions, and q
 ## Symbols and SI units
 
 Each nested module retains its declared SI units. Names, IDs, policies, selections, activation
-rules, and runtime choices are dimensionless semantic/provenance data.
+rules, graph edges, and runtime choices are dimensionless semantic/provenance data ($1$).
 
 (python-api-problem-problem-assumptions-and-validity)=
 ## Assumptions and validity
@@ -158,6 +163,41 @@ field-solve declaration is not a stage action: a dedicated stage-first workflow 
 explicitly. A source spectrum is not evidence of an excited magnetization wavevector response; that
 requires a separate magnetization analysis.
 
+### Physics graph (`PhysicsGraph` and `build_physics_graph`)
+
+`packages/fullmag-py/src/fullmag/model/physics_scope.py` exposes the deterministic multiphysics
+dependency graph lowered into `physics_graph` inside `ProblemIR`:
+
+| Symbol | Signature / enum values | Role | ProblemIR |
+| --- | --- | --- | --- |
+| `fm.PhysicsActivation` | `str` enum: `configured`, `active`, `inactive`, `blocked`, `unsupported`, `unresolved` | Activation state of a physics module or dependency edge | `physics_graph.modules[].activation`, `physics_graph.edges[].status` |
+| `fm.PhysicsScope` | `(kind, object_id=None, region_id=None, object_ids=(), side_a=None, side_b=None, reason=None, source_path=None)` | Typed target scope (object, region, pair, or boundary side) to which a module applies | `physics_graph.modules[].applies_to[]` |
+| `fm.PhysicsModule` | `(id, kind, applies_to, solve_domain, depends_on, activation, authored_state, capability, source_path, family_payload)` | Typed node describing one authored physics module, its solve domain, capability status, and payload | `physics_graph.modules[]` |
+| `fm.PhysicsEdge` | `(kind, source_id, target_id, status)` | Directed dependency edge between physics modules | `physics_graph.edges[]` |
+| `fm.PhysicsGraph` | `(modules=(), edges=(), objects=(), schema_version='physics_graph.v1', scene_revision=0)` | Versioned snapshot of authored physics modules, edges, and object summaries | `physics_graph` |
+| `fm.build_physics_graph` | `(problem) -> PhysicsGraph` | Deterministically constructs a `PhysicsGraph` from a `Problem` instance | `physics_graph` |
+
+### Parameter library (`ParameterDefinition`, `ParameterExpression`, `ParameterValue`)
+
+`packages/fullmag-py/src/fullmag/model/parameters.py` provides versioned, dimension-checked SI
+authoring parameters attached via `Problem.parameters`:
+
+| Symbol | Signature / methods | Role | ProblemIR |
+| --- | --- | --- | --- |
+| `fm.ParameterValue` | `(value_si: float, dimension: str)` | Resolved SI numeric value paired with its canonical physical dimension string | `parameters.resolved` |
+| `fm.ParameterExpression` | Base expression AST with `constant(...)`, `reference(...)`, `evaluate(...)`, `dimension(...)`, `references()`, `to_ir()`, `from_ir(...)` | Serializable arithmetic/unit expression referencing other parameters without arbitrary Python execution | `parameters.definitions[].expression` |
+| `fm.ParameterDefinition` | `(name: str, expression: ParameterExpression, display_unit: str \| None = None, description: str \| None = None)` | Named parameter entry validated for cycles, unknown references, and dimensional consistency | `parameters.definitions[]` |
+
+### Structured authoring records (`ComponentDefinition` and `ModelDefinition`)
+
+`packages/fullmag-py/src/fullmag/model/authoring.py` provides schema-versioned component and
+multi-component model records used by canonical round-trip tooling:
+
+| Symbol | Signature | Role | Schema version |
+| --- | --- | --- | --- |
+| `fm.ComponentDefinition` | `(component_id, name, geometry, material_ref, region_ids=(), material_parameter_assignment_ids=(), physics_assignment_ids=(), initial_state=None, mesh_recipe=None, schema_version='component_definition.v1')` | Self-contained object authoring record binding geometry, material reference, regions, fields, initial state, and mesh recipe | `component_definition.v1` |
+| `fm.ModelDefinition` | `(model_id, name, components, physics_configurations, couplings=(), discretization=None, parameters=None, parameter_numerical_sha256=None, schema_version='authoring_model.v1')` | Aggregate multi-component authoring model carrying physics configurations, couplings, discretization, and parameter digest | `authoring_model.v1` |
+
 ### Authoring boundary matrix
 
 | Solver | Device | Aggregate contract | Execution qualification |
@@ -210,8 +250,8 @@ roles are declared. This is an excerpt rather than a complete problem snapshot.
 ```
 
 Requested intent remains distinct from planner resolution and execution evidence. The serializer
-preserves selections and frozen-spin constraints as typed graph data; it must not flatten them to
-backend masks before planning.
+preserves selections, `physics_graph`, parameters, and frozen-spin constraints as typed graph data;
+it must not flatten them to backend masks before planning.
 
 (python-api-problem-problem-round-trip-and-failure-semantics)=
 ## Round-trip and failure semantics
@@ -232,9 +272,15 @@ Planners resolve the same `ProblemIR` into FDM/FEM and CPU/GPU execution plans. 
 (python-api-problem-problem-implementation-mapping)=
 ## Implementation mapping
 
-`packages/fullmag-py/src/fullmag/model/problem.py`, `class Problem`, owns aggregate validation,
-legacy migration, canonical lowering, geometry assets, selections, constraints, and multiphysics
-reference integrity.
+- `packages/fullmag-py/src/fullmag/model/problem.py`, `class Problem`, owns aggregate validation,
+  legacy migration, canonical lowering, geometry assets, selections, constraints, and multiphysics
+  reference integrity.
+- `packages/fullmag-py/src/fullmag/model/physics_scope.py` owns `PhysicsGraph`, `PhysicsModule`,
+  `PhysicsEdge`, `PhysicsScope`, `PhysicsActivation`, and `build_physics_graph`.
+- `packages/fullmag-py/src/fullmag/model/parameters.py` owns `ParameterDefinition`,
+  `ParameterExpression`, and `ParameterValue`.
+- `packages/fullmag-py/src/fullmag/model/authoring.py` owns `ComponentDefinition` and
+  `ModelDefinition`.
 
 (python-api-problem-problem-validation)=
 ## Validation
@@ -281,6 +327,9 @@ Frontend source owners: `apps/control-room/src/modules/inspector/panels/StudyIns
 
 | Claim | Path | Stable symbol | Responsibility | Evidence |
 |---|---|---|---|---|
-| aggregate API and IR | [`packages/fullmag-py/src/fullmag/model/problem.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/problem.py#L2601) | [`class Problem`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/problem.py#L2601) | graph validation and lowering | signature and round-trip tests |
+| aggregate API and IR | [`packages/fullmag-py/src/fullmag/model/problem.py`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/model/problem.py#L2733) | [`class Problem`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/model/problem.py#L2733) | graph validation and lowering | signature and round-trip tests |
+| physics graph | [`packages/fullmag-py/src/fullmag/model/physics_scope.py`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/model/physics_scope.py#L99) | [`class PhysicsGraph`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/model/physics_scope.py#L99), `build_physics_graph` | multiphysics module/edge dependency graph | physics graph tests |
+| parameter library | [`packages/fullmag-py/src/fullmag/model/parameters.py`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/model/parameters.py#L318) | [`class ParameterDefinition`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/model/parameters.py#L318) | SI parameter expressions and resolution | parameter library tests |
+| authoring definitions | [`packages/fullmag-py/src/fullmag/model/authoring.py`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/model/authoring.py#L330) | [`class ModelDefinition`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/model/authoring.py#L330), `ComponentDefinition` | versioned component/model authoring records | authoring round-trip tests |
 | selections | `packages/fullmag-py/src/fullmag/model/selection.py` | `SelectionDefinition` | canonical selection graph | selection validation tests |
 | constraints | `packages/fullmag-py/src/fullmag/model/constraints.py` | `FrozenSpins` | magnetization constraint semantics | constraint tests |

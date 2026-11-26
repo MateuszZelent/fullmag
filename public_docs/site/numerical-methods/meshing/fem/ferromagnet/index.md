@@ -6,9 +6,9 @@ status: implemented
 doc_kind: reference
 audience: user
 owner: fullmag-public-docs
-last_updated: 2026-08-24
-reviewed_revision: 5e99782acbb7fb3f65d0cad872e102bf67733103
-source_of_truth: "PerObjectMeshRecipe, Gmsh object generators, object policy resources and realized scoped quality reports"
+last_updated: 2026-11-26
+reviewed_revision: 752450f8d259ab97c76c36fe666d5474b02abe9a
+source_of_truth: "PerObjectMeshRecipe, Gmsh object generators, pure-prism P2 and mixed swept generators, object policy resources and realized scoped quality reports"
 ---
 
 (public-docs-numerical-methods-meshing-fem-ferromagnet-index)=
@@ -19,7 +19,7 @@ The magnetic mesh resolves the vector magnetization and local interactions insid
 ::::{admonition} Implementation status
 :class: important
 
-Free tetrahedral and thickness-aware tetrahedral authoring are available. Exact prism authoring is capability-gated; swept hex is not currently production executable in Control Room.
+Free tetrahedral, thickness-aware tetrahedral, pure-prism P2 (`transition="pure_prism"`, 100% `prism6` with automatic P2 `H1_WedgeElement(2)` demagnetization potential and P1 magnetization), and mixed `prism6 + pyramid5 + tet4` (`layers=1,2,3` with Chebyshev-center untangling) are implemented and verified. `swept_hex` remains unsupported and fail-closed.
 ::::
 
 ## Scope and purpose
@@ -76,7 +76,7 @@ the representation of magnetic boundaries and the shared exterior domain.
 | --- | --- | --- |
 | General curved/CSG body | Free tetrahedral | Most robust topology |
 | Thin body without exact prism requirement | Thin-film tetrahedral | Thickness-aware tetrahedral sizing |
-| Sweepable thin film with exact layers | Swept prism | Certified P1 prism layers when enabled |
+| Sweepable thin film with exact layers | Swept prism (`transition="pure_prism"` / `pure_prism_p2` or `pyramid_to_tetrahedra`) | Certified `prism6` layers; `pure_prism` unlocks automatic P2 wedge demag + P1 $\mathbf{m}_h$ (`-0.60%` Aharoni at `L=2`) |
 | Hexahedral volume request | Swept hex—currently unsupported | Do not select until capability is qualified |
 | External CAD/STL/mesh | Imported mesh | Explicit source units, scale, markers and supported families |
 | Prism/pyramid/tet solver mesh | Mixed elements | Scenario-qualified strict shared-domain path |
@@ -111,7 +111,7 @@ the representation of magnetic boundaries and the shared exterior domain.
 | `sweep_source`, `sweep_destination` | 1 | auto selectors | semantic selector strings/descriptors | explicit paired sweep faces |
 | `element_family` | 1 | strategy-derived | `prism` or `hex` | requested volume-element family |
 | `topology` | 1 | strategy-derived | `prismatic` or `tetrahedral` in current object policy | topology declaration checked against all swept fields |
-| `transition_policy` | 1 | `reject` or route-derived | `pyramid_to_tetrahedra` or `reject` | connects prism layer to tetrahedral surroundings when qualified |
+| `transition_policy` | 1 | `reject` or route-derived | `pyramid_to_tetrahedra`, `pure_prism`, or `reject` | selects pyramid-to-tet transition or pyramid-free 100% `prism6` P2-capable shared domain |
 | `exact_layer_count` | 1 | `False` | Boolean; exact prism route requires true | turns layer count into a strict certificate requirement |
 
 ## Python API
@@ -164,10 +164,10 @@ magnet.m = fm.texture.uniform(1.0, 0.0, 0.0)
 
 study.exchange()
 study.demag(realization="poisson_robin")
-study.build_domain_mesh()
 study.stages.add_relax(
     stage_id="equilibrium",
     algorithm="llg_overdamped",
+    dt=5.0e-13,
     tolA=1.0e-4,
     max_steps=20_000,
 )
@@ -237,13 +237,13 @@ A magnetic mesh can be valid geometrically yet unsupported by the selected inter
 
 | Responsibility | Repository source | Stable owner / symbol |
 | --- | --- | --- |
-| Object mesh recipe | [`packages/fullmag-py/src/fullmag/model/discretization.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/discretization.py) | `PerObjectMeshRecipe` |
-| Gmsh generators | [`packages/fullmag-py/src/fullmag/meshing/_gmsh_generators.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/meshing/_gmsh_generators.py) | `generate_mesh` |
-| Swept generator | [`packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py) | `generate_swept_mesh` |
-| Object policy model | [`apps/control-room/src/modules/inspector/panels/ObjectMeshPolicyPanelModel.ts`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/apps/control-room/src/modules/inspector/panels/ObjectMeshPolicyPanelModel.ts) | `ObjectMeshPolicyDraft` |
-| Scoped quality panels | [`apps/control-room/src/modules/inspector/panels/ObjectMeshPolicyPanel.tsx`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/apps/control-room/src/modules/inspector/panels/ObjectMeshPolicyPanel.tsx) | `ObjectMeshPolicyPanel` |
+| Object mesh recipe | [`packages/fullmag-py/src/fullmag/model/discretization.py`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/model/discretization.py) | `PerObjectMeshRecipe` |
+| Gmsh generators | [`packages/fullmag-py/src/fullmag/meshing/_gmsh_generators.py`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/meshing/_gmsh_generators.py#L322) | `generate_mesh` |
+| Swept and pure-prism generators | [`packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py) | `generate_swept_mesh, generate_pure_prism_box_airbox_mesh` |
+| Object policy model | [`apps/control-room/src/modules/inspector/panels/ObjectMeshPolicyPanelModel.ts`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/apps/control-room/src/modules/inspector/panels/ObjectMeshPolicyPanelModel.ts) | `ObjectMeshPolicyDraft` |
+| Scoped quality and policy panel | [`apps/control-room/src/modules/inspector/panels/mesh-details/ObjectMeshSpecPanel.tsx`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/apps/control-room/src/modules/inspector/panels/mesh-details/ObjectMeshSpecPanel.tsx#L180) | `ObjectMeshInspectorSpecPanel` |
 
-Implementation map reviewed against commit `5e99782acbb7fb3f65d0cad872e102bf67733103` on 2026-08-24.
+Implementation map reviewed against commit `752450f8d259ab97c76c36fe666d5474b02abe9a` on 2026-11-26.
 
 ## References
 

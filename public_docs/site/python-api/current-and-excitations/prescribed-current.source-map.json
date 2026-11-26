@@ -1,7 +1,7 @@
 {
   "document": {
     "path": "public_docs/site/python-api/current-and-excitations/prescribed-current.md",
-    "reviewed_revision": "ab3c8802a691a535063102c12f9a79bb0043b367"
+    "reviewed_revision": "752450f8d259ab97c76c36fe666d5474b02abe9a"
   },
   "backend_matrix": [
     {
@@ -20,13 +20,13 @@
       "solver": "FDM",
       "device": "CPU",
       "status": "documented",
-      "reason": "authoring and IR documented; runtime qualification separate"
+      "reason": "authoring, IR, and prescribed-density spin-torque path documented"
     },
     {
       "solver": "FDM",
       "device": "GPU",
       "status": "documented",
-      "reason": "authoring and IR documented; runtime qualification separate"
+      "reason": "authoring, IR, and CUDA prescribed-density spin-torque / M1 path documented"
     }
   ],
   "equations": [],
@@ -36,11 +36,17 @@
       "id": "source_current_transport",
       "path": "packages/fullmag-py/src/fullmag/model/current_transport.py",
       "symbol": "class CurrentTransport",
-      "responsibility": "public constructor and IR lowering"
+      "responsibility": "public prescribed-density constructor and IR lowering"
+    },
+    {
+      "id": "source_study_builder",
+      "path": "packages/fullmag-py/src/fullmag/world.py",
+      "symbol": "class StudyBuilder",
+      "responsibility": "study.current_transport(...) study registration helper"
     }
   ],
   "public_api": {
-    "owner": "fm.CurrentTransport(name=..., model=\"prescribed_density\", current_density=...)",
+    "owner": "fm.CurrentTransport(*, name, model=\"prescribed_density\", current_density=..., coupling=\"one_way\", time_envelope=None)",
     "parameters": [
       {
         "python": "name",
@@ -48,39 +54,49 @@
         "default": "required",
         "si_unit": "$1$",
         "validation": "non-empty",
-        "meaning": "transport module ID",
+        "meaning": "transport module identifier referenced by downstream torque/Oersted modules",
         "backend_support": "FEM/FDM CPU/GPU: IR; resolver-specific",
         "problem_ir": "name"
       },
       {
         "python": "model",
         "type": "str",
-        "default": "prescribed_density",
+        "default": "\"prescribed_density\"",
         "si_unit": "$1$",
-        "validation": "supported model name",
-        "meaning": "current closure",
+        "validation": "`\"prescribed_density\"` for uniform prescribed current",
+        "meaning": "current closure model",
         "backend_support": "FEM/FDM CPU/GPU: IR; resolved module",
         "problem_ir": "model"
       },
       {
         "python": "current_density",
-        "type": "tuple[float,float,float]",
-        "default": "None",
+        "type": "Sequence[float]",
+        "default": "required",
         "si_unit": "$\\mathrm{A\\,m^{-2}}$",
-        "validation": "required for `prescribed_density`; finite",
-        "meaning": "prescribed current density",
+        "validation": "3-component vector required for `\"prescribed_density\"`",
+        "meaning": "uniform prescribed charge current density",
         "backend_support": "FEM/FDM CPU/GPU: IR; resolved module",
         "problem_ir": "current_density"
       },
       {
         "python": "coupling",
         "type": "str",
-        "default": "one_way",
+        "default": "\"one_way\"",
         "si_unit": "$1$",
-        "validation": "`one_way` or `bidirectional`",
+        "validation": "`\"one_way\"` ( `\"bidirectional\"` forbidden for `\"prescribed_density\"` )",
         "meaning": "coupling direction",
         "backend_support": "FEM/FDM CPU/GPU: IR; resolved module",
         "problem_ir": "coupling"
+      },
+      {
+        "python": "time_envelope",
+        "type": "TimeEnvelope | None",
+        "default": "None",
+        "si_unit": "$1$",
+        "validation": "canonical `TimeEnvelope` instance when supplied",
+        "meaning": "temporal envelope modulating $\\mathbf{J}_c(t)$",
+        "backend_support": "FEM/FDM CPU/GPU: IR; resolver-specific",
+        "problem_ir": "time_envelope"
       }
     ],
     "returns": "typed ProblemIR record at to_ir()"

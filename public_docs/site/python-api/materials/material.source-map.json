@@ -1,7 +1,7 @@
 {
   "document": {
     "path": "public_docs/site/python-api/materials/material.md",
-    "reviewed_revision": "ab3c8802a691a535063102c12f9a79bb0043b367"
+    "reviewed_revision": "752450f8d259ab97c76c36fe666d5474b02abe9a"
   },
   "backend_matrix": [
     {
@@ -36,7 +36,7 @@
       "id": "source_material",
       "path": "packages/fullmag-py/src/fullmag/model/structure.py",
       "symbol": "class Material",
-      "responsibility": "public constructor and IR lowering"
+      "responsibility": "public constructor, validation, and lowercase IR lowering"
     }
   ],
   "public_api": {
@@ -60,7 +60,7 @@
         "validation": "positive or typed field",
         "meaning": "saturation magnetization",
         "backend_support": "FEM/FDM CPU/GPU: IR; resolver-specific",
-        "problem_ir": "Ms"
+        "problem_ir": "saturation_magnetisation"
       },
       {
         "python": "Material.A",
@@ -70,7 +70,7 @@
         "validation": "positive or typed field",
         "meaning": "exchange stiffness",
         "backend_support": "FEM/FDM CPU/GPU: IR; resolver-specific",
-        "problem_ir": "A"
+        "problem_ir": "exchange_stiffness"
       },
       {
         "python": "Material.alpha",
@@ -80,7 +80,7 @@
         "validation": "finite and non-negative",
         "meaning": "Gilbert damping",
         "backend_support": "FEM/FDM CPU/GPU: IR; resolver-specific",
-        "problem_ir": "alpha"
+        "problem_ir": "damping"
       },
       {
         "python": "Material.Ku1",
@@ -90,7 +90,7 @@
         "validation": "finite when supplied",
         "meaning": "first uniaxial constant",
         "backend_support": "FEM/FDM CPU/GPU: IR; resolver-specific",
-        "problem_ir": "Ku1"
+        "problem_ir": "uniaxial_anisotropy"
       },
       {
         "python": "Material.Ku2",
@@ -100,7 +100,7 @@
         "validation": "finite when supplied",
         "meaning": "second uniaxial constant",
         "backend_support": "FEM/FDM CPU/GPU: IR; resolver-specific",
-        "problem_ir": "Ku2"
+        "problem_ir": "uniaxial_anisotropy_k2"
       },
       {
         "python": "Material.anisU",
@@ -110,7 +110,7 @@
         "validation": "typed when supplied",
         "meaning": "uniaxial axes",
         "backend_support": "FEM/FDM CPU/GPU: IR; resolver-specific",
-        "problem_ir": "anisU"
+        "problem_ir": "anisotropy_axis"
       },
       {
         "python": "Material.Kc1",
@@ -120,7 +120,7 @@
         "validation": "finite when supplied",
         "meaning": "first cubic constant",
         "backend_support": "FEM/FDM CPU/GPU: IR; resolver-specific",
-        "problem_ir": "Kc1"
+        "problem_ir": "cubic_anisotropy_kc1"
       },
       {
         "python": "Material.Kc2",
@@ -130,7 +130,7 @@
         "validation": "finite when supplied",
         "meaning": "second cubic constant",
         "backend_support": "FEM/FDM CPU/GPU: IR; resolver-specific",
-        "problem_ir": "Kc2"
+        "problem_ir": "cubic_anisotropy_kc2"
       },
       {
         "python": "Material.Kc3",
@@ -140,7 +140,7 @@
         "validation": "finite when supplied",
         "meaning": "third cubic constant",
         "backend_support": "FEM/FDM CPU/GPU: IR; resolver-specific",
-        "problem_ir": "Kc3"
+        "problem_ir": "cubic_anisotropy_kc3"
       },
       {
         "python": "Material.anisC1",
@@ -150,7 +150,7 @@
         "validation": "typed when supplied",
         "meaning": "first cubic axis",
         "backend_support": "FEM/FDM CPU/GPU: IR; resolver-specific",
-        "problem_ir": "anisC1"
+        "problem_ir": "cubic_anisotropy_axis1"
       },
       {
         "python": "Material.anisC2",
@@ -160,7 +160,7 @@
         "validation": "typed when supplied",
         "meaning": "second cubic axis",
         "backend_support": "FEM/FDM CPU/GPU: IR; resolver-specific",
-        "problem_ir": "anisC2"
+        "problem_ir": "cubic_anisotropy_axis2"
       },
       {
         "python": "Material.Dind",
@@ -170,7 +170,7 @@
         "validation": "finite when supplied",
         "meaning": "interfacial DMI constant",
         "backend_support": "FEM/FDM CPU/GPU: IR; resolver-specific",
-        "problem_ir": "Dind"
+        "problem_ir": "interfacial_dmi"
       },
       {
         "python": "Material.Dbulk",
@@ -180,107 +180,107 @@
         "validation": "finite when supplied",
         "meaning": "bulk DMI constant",
         "backend_support": "FEM/FDM CPU/GPU: IR; resolver-specific",
-        "problem_ir": "Dbulk"
+        "problem_ir": "bulk_dmi"
       },
       {
         "python": "Material.Ms_field",
-        "type": "field or None",
+        "type": "list[float] | None",
         "default": "None",
         "si_unit": "$\\mathrm{A\\,m^{-1}}$",
-        "validation": "typed when supplied",
+        "validation": "finite numeric sequence when supplied",
         "meaning": "spatial saturation magnetization field",
         "backend_support": "FEM/FDM CPU/GPU: IR; resolver-specific",
-        "problem_ir": "Ms_field"
+        "problem_ir": "ms_field"
       },
       {
         "python": "Material.A_field",
-        "type": "field or None",
+        "type": "list[float] | None",
         "default": "None",
         "si_unit": "$\\mathrm{J\\,m^{-1}}$",
-        "validation": "typed when supplied",
+        "validation": "finite numeric sequence when supplied",
         "meaning": "spatial exchange field",
         "backend_support": "FEM/FDM CPU/GPU: IR; resolver-specific",
-        "problem_ir": "A_field"
+        "problem_ir": "a_field"
       },
       {
         "python": "Material.alpha_field",
-        "type": "field or None",
+        "type": "list[float] | None",
         "default": "None",
         "si_unit": "$1$",
-        "validation": "typed when supplied",
+        "validation": "finite non-negative sequence when supplied",
         "meaning": "spatial damping field",
         "backend_support": "FEM/FDM CPU/GPU: IR; resolver-specific",
         "problem_ir": "alpha_field"
       },
       {
         "python": "Material.Ku_field",
-        "type": "field or None",
+        "type": "list[float] | None",
         "default": "None",
         "si_unit": "$\\mathrm{J\\,m^{-3}}$",
-        "validation": "typed when supplied",
+        "validation": "finite numeric sequence when supplied",
         "meaning": "spatial Ku1 field",
         "backend_support": "FEM/FDM CPU/GPU: IR; resolver-specific",
-        "problem_ir": "Ku_field"
+        "problem_ir": "ku_field"
       },
       {
         "python": "Material.Ku2_field",
-        "type": "field or None",
+        "type": "list[float] | None",
         "default": "None",
         "si_unit": "$\\mathrm{J\\,m^{-3}}$",
-        "validation": "typed when supplied",
+        "validation": "finite numeric sequence when supplied",
         "meaning": "spatial Ku2 field",
         "backend_support": "FEM/FDM CPU/GPU: IR; resolver-specific",
-        "problem_ir": "Ku2_field"
+        "problem_ir": "ku2_field"
       },
       {
         "python": "Material.Kc1_field",
-        "type": "field or None",
+        "type": "list[float] | None",
         "default": "None",
         "si_unit": "$\\mathrm{J\\,m^{-3}}$",
-        "validation": "typed when supplied",
+        "validation": "finite numeric sequence when supplied",
         "meaning": "spatial Kc1 field",
         "backend_support": "FEM/FDM CPU/GPU: IR; resolver-specific",
-        "problem_ir": "Kc1_field"
+        "problem_ir": "kc1_field"
       },
       {
         "python": "Material.Kc2_field",
-        "type": "field or None",
+        "type": "list[float] | None",
         "default": "None",
         "si_unit": "$\\mathrm{J\\,m^{-3}}$",
-        "validation": "typed when supplied",
+        "validation": "finite numeric sequence when supplied",
         "meaning": "spatial Kc2 field",
         "backend_support": "FEM/FDM CPU/GPU: IR; resolver-specific",
-        "problem_ir": "Kc2_field"
+        "problem_ir": "kc2_field"
       },
       {
         "python": "Material.Kc3_field",
-        "type": "field or None",
+        "type": "list[float] | None",
         "default": "None",
         "si_unit": "$\\mathrm{J\\,m^{-3}}$",
-        "validation": "typed when supplied",
+        "validation": "finite numeric sequence when supplied",
         "meaning": "spatial Kc3 field",
         "backend_support": "FEM/FDM CPU/GPU: IR; resolver-specific",
-        "problem_ir": "Kc3_field"
+        "problem_ir": "kc3_field"
       },
       {
         "python": "Material.Dind_field",
-        "type": "field or None",
+        "type": "list[float] | None",
         "default": "None",
         "si_unit": "$\\mathrm{J\\,m^{-2}}$",
-        "validation": "typed when supplied",
+        "validation": "finite numeric sequence when supplied",
         "meaning": "spatial interfacial DMI field",
         "backend_support": "FEM/FDM CPU/GPU: IR; resolver-specific",
-        "problem_ir": "Dind_field"
+        "problem_ir": "dind_field"
       },
       {
         "python": "Material.Dbulk_field",
-        "type": "field or None",
+        "type": "list[float] | None",
         "default": "None",
         "si_unit": "$\\mathrm{J\\,m^{-2}}$",
-        "validation": "typed when supplied",
+        "validation": "finite numeric sequence when supplied",
         "meaning": "spatial bulk DMI field",
         "backend_support": "FEM/FDM CPU/GPU: IR; resolver-specific",
-        "problem_ir": "Dbulk_field"
+        "problem_ir": "dbulk_field"
       }
     ],
     "returns": "typed ProblemIR record at to_ir()"

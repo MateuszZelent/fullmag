@@ -6,8 +6,8 @@ status: implemented
 doc_kind: reference
 audience: user
 owner: fullmag-public-docs
-last_updated: 2026-08-24
-reviewed_revision: 5e99782acbb7fb3f65d0cad872e102bf67733103
+last_updated: 2026-11-26
+reviewed_revision: 752450f8d259ab97c76c36fe666d5474b02abe9a
 source_of_truth: "Universe airbox policy, AirboxOptions, shared-domain manifest and FEM demag boundary policy"
 ---
 
@@ -19,7 +19,7 @@ The airbox branch documents the universe-owned exterior FEM domain from geometri
 ::::{admonition} Implementation status
 :class: important
 
-Ordinary open-airbox geometry, grading and shared-domain assembly are implemented. Periodic airbox behavior remains a separate partial/capability-gated path.
+Ordinary open-airbox geometry, grading (including `curvature_factor` and `narrow_region_resolution`), shared-domain assembly, and open-airbox `k=0` Robin modal closure (`magnetostatic_bc="open_airbox_k0"`) are implemented. Periodic airbox behavior includes native pure-Neumann ($\beta = 0$) outer closure with singleton gauge pinning for 2D-periodic films, PBC-reduced 1D/2D `cuDSS` static Poisson solves, and single-$k$ GPU Floquet modal solves.
 ::::
 
 ## Scope and purpose
@@ -159,10 +159,10 @@ magnet.m = fm.texture.uniform(1.0, 0.0, 0.0)
 
 study.exchange()
 study.demag(realization="poisson_robin")
-study.build_domain_mesh()
 study.stages.add_relax(
     stage_id="equilibrium",
     algorithm="llg_overdamped",
+    dt=5.0e-13,
     tolA=1.0e-4,
     max_steps=20_000,
 )
@@ -229,12 +229,13 @@ The shared-domain manifest must identify air volume, magnetic/air interfaces and
 
 | Responsibility | Repository source | Stable owner / symbol |
 | --- | --- | --- |
-| Airbox options | [`packages/fullmag-py/src/fullmag/meshing/_gmsh_types.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/meshing/_gmsh_types.py) | `AirboxOptions` |
-| Airbox OCC construction | [`packages/fullmag-py/src/fullmag/meshing/_gmsh_airbox.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/meshing/_gmsh_airbox.py) | `airbox geometry/fragmentation` |
-| Control Room airbox panel | [`apps/control-room/src/modules/inspector/panels/airbox/AirboxMeshParametersPanel.tsx`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/apps/control-room/src/modules/inspector/panels/airbox/AirboxMeshParametersPanel.tsx) | `AirboxMeshParametersPanel` |
-| Shared-domain manifest | [`apps/control-room/src/kernel/resources/geometryLifecycleResources.ts`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/apps/control-room/src/kernel/resources/geometryLifecycleResources.ts) | `useMeshSharedDomainManifestResource` |
+| Airbox options | [`packages/fullmag-py/src/fullmag/meshing/_gmsh_types.py`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/meshing/_gmsh_types.py) | `AirboxOptions` |
+| Airbox OCC construction | [`packages/fullmag-py/src/fullmag/meshing/_gmsh_airbox.py`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/meshing/_gmsh_airbox.py) | `airbox geometry/fragmentation` |
+| Control Room airbox sizing panel | [`apps/control-room/src/modules/inspector/inspectors/universe/AirboxMeshSizingSpecs.tsx`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/apps/control-room/src/modules/inspector/inspectors/universe/AirboxMeshSizingSpecs.tsx#L60) | `AirboxMeshParametersInspectorSpecPanel` |
+| Control Room airbox overview panel | [`apps/control-room/src/modules/inspector/inspectors/universe/AirboxMeshOverviewSpec.tsx`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/apps/control-room/src/modules/inspector/inspectors/universe/AirboxMeshOverviewSpec.tsx#L62) | `AirboxMeshInspectorSpecPanel` |
+| Shared-domain manifest | [`apps/control-room/src/kernel/resources/geometryLifecycleResources.ts`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/apps/control-room/src/kernel/resources/geometryLifecycleResources.ts#L1141) | `useMeshSharedDomainManifestResource` |
 
-Implementation map reviewed against commit `5e99782acbb7fb3f65d0cad872e102bf67733103` on 2026-08-24.
+Implementation map reviewed against commit `752450f8d259ab97c76c36fe666d5474b02abe9a` on 2026-11-26.
 
 ## References
 

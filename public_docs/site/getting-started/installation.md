@@ -126,9 +126,9 @@ python -B scripts/setup_docker.py --check
 Use `python3` in Linux/WSL shells. This wizard writes only the storage root, checkout selection, and
 default frontend port into `.env` and never starts or deletes containers. User sessions, Zarr
 results, projects, and settings stay in the configured host storage; build caches, Cargo/pnpm
-packages, and compilation artifacts live in Docker named volumes and BuildKit (with **ADR 0076**
-defining the single group-private named volume architecture splitting `private/backend`,
-`private/frontend`, and `private/ledger` alongside shared `fullmag-shared-*` caches).
+packages, and compilation artifacts live in Docker named volumes and BuildKit (with a
+group-private named volume splitting `private/backend`, `private/frontend`, and `private/ledger`
+alongside shared `fullmag-shared-*` caches).
 
 ### 3. Build the toolchain and start services
 
@@ -140,8 +140,8 @@ just docker-dev "$PWD"
 ```
 
 - `just docker-dev-toolchain` builds the pinned container dependency image (`docker/fem-gpu/Dockerfile`,
-  including CMake, MFEM, hypre, libCEED, and CUDA headers). This step is only slow on the first
-  host setup.
+  pinning CUDA `12.4.1`, CMake `3.30.5`, MFEM `4.10`, hypre `3.1.0`, and libCEED `0.12.0`). This
+  step is only slow on the first host setup.
 - `just docker-dev "$PWD"` validates mounts and storage, builds the backend inside the permanent
   `backend` container, and starts both the API runtime and Control Room on `http://127.0.0.1:3197`
   (or the next free port printed by the launcher).
@@ -154,9 +154,11 @@ the managed launcher records source, package, storage, and startup provenance be
 service.
 
 Both FDM CUDA and FEM GPU lanes run inside the container runtime when NVIDIA GPU access is enabled
-(`--gpu-access auto` or explicit GPU selection). Executed GPU evidence still requires the resolved
-device identity to be recorded in the simulation provenance; host build completion alone does not
-qualify GPU parity.
+(`--gpu-access auto` or explicit GPU selection; optional `FULLMAG_DEV_CUDA_ARCHITECTURES` pins the
+target CUDA compute capability in `compose.dev.yaml`). Before launching CUDA workloads, the runtime
+runs device memory preflight checks (such as exact cuFFT workspace sizing on FDM CUDA and device
+factor budget checks for opt-in cuDSS solvers) and records the resolved device identity in the
+simulation provenance; host build completion alone does not qualify GPU parity.
 
 ## Checking the installation
 

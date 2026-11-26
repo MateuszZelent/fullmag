@@ -1,8 +1,42 @@
 {
-  "document": {"reviewed_revision": "ab3c8802a691a535063102c12f9a79bb0043b367", "path": "public_docs/site/physics/interactions/demagnetization/validation.md", "title": "Validation", "interaction": "demagnetization"},
-  "backend_matrix": [{"solver":"FDM","device":"CPU","status":"reference","reason":"CPU reference comparisons."},{"solver":"FDM","device":"GPU","status":"partial","reason":"Executed-device qualification is evidence-gated."},{"solver":"FEM","device":"CPU","status":"implemented","reason":"CPU contracts and comparisons exist."},{"solver":"FEM","device":"GPU","status":"partial","reason":"Runtime qualification remains separate."}],
-  "sources": [{"id":"api","path":"packages/fullmag-py/src/fullmag/model/energy.py","symbol":"class Demag","responsibility":"Validation target selection."},{"id":"fem","path":"backends/fem/cpu/mfem/interactions/demag.cpp","symbol":"compute_demag_field_for_magnetization","responsibility":"FEM production field path."}],
-  "symbols": [{"id":"Ed","latex":"$E_{\\mathrm d}$","meaning":"demagnetization energy","si_unit":"$\\mathrm{J}$"},{"id":"M","latex":"$\\mathbf M$","meaning":"magnetization","si_unit":"$\\mathrm{A\\,m^{-1}}$"},{"id":"Hd","latex":"$\\mathbf H_{\\mathrm d}$","meaning":"demagnetizing field","si_unit":"$\\mathrm{A\\,m^{-1}}$"},{"id":"r","latex":"$r$","meaning":"magnetic divergence residual","si_unit":"$\\mathrm{A\\,m^{-2}}$"},{"id":"mu0","latex":"$\\mu_0$","meaning":"vacuum permeability","si_unit":"$\\mathrm{N\\,A^{-2}}$"}],
-  "equations": [{"id":"eq-demag-validation-energy","symbols":["Ed","mu0","M","Hd"],"sources":["api","fem"]},{"id":"eq-demag-validation-residual","symbols":["r","Hd","M"],"sources":["fem"]}],
-  "public_api":{"constructors":["fullmag.Demag"],"parameters":[{"python":"Demag.model","type":"optional str","default":"None","si_unit":"$1$","validation":"Canonical model validation.","meaning":"Selects realization under test.","backend_support":"Planner-dependent.","problem_ir":"`energy[].realization`"},{"python":"SaveField(\"H_demag\")","type":"str","default":"required","si_unit":"$\\mathrm{A\\,m^{-1}}$","validation":"Quantity must be materializable.","meaning":"Requests vector field.","backend_support":"Executable lane-dependent.","problem_ir":"`outputs[].quantity`"}]}
+  "document": {
+    "reviewed_revision": "752450f8d259ab97c76c36fe666d5474b02abe9a",
+    "reviewed_at": "2026-11-26",
+    "path": "public_docs/site/physics/interactions/demagnetization/validation.md",
+    "title": "Validation",
+    "interaction": "demagnetization"
+  },
+  "backend_matrix": [
+    {"solver": "FDM", "device": "CPU", "status": "reference", "reason": "CPU reference comparisons (Newell tensor, Aharoni prism, single-layer mixed periodic dipole tail, CPU FP64 multilayer)."},
+    {"solver": "FDM", "device": "GPU", "status": "implemented", "reason": "RTX 4080 SUPER single-layer FP64 Hermitian D2Z/Z2D cuFFT parity verified (rel dE_demag <= 1.76e-16 across 8 geometries); FP32+PBC rejected fail-closed and multilayer CUDA remains partial."},
+    {"solver": "FEM", "device": "CPU", "status": "implemented", "reason": "CPU MFEM Poisson (tet4 P2, mixed_p1, pure_prism_p2), periodic reduced P1, and hierarchical H2 Fredkin-Koehler contracts exist and pass."},
+    {"solver": "FEM", "device": "GPU", "status": "implemented", "reason": "RTX 4080 SUPER A/B parity verified across open Poisson (<= 2.51e-11), PBC-reduced 1-D Robin / 2-D film (<= 3.51e-11), strict GPU FEM-BEM (4.88e-14, 0 memcheck errors), and pure_prism_p2 Aharoni benchmark (-0.60% vs Aharoni, -0.43% vs FDM, +0.30% vs MuMax3)."}
+  ],
+  "sources": [
+    {"id": "api", "path": "packages/fullmag-py/src/fullmag/model/energy.py", "symbol": "class Demag", "responsibility": "Validation target selection."},
+    {"id": "fdm-gpu", "path": "backends/fdm/gpu/cuda/interactions/demag_fp64.cu", "symbol": "launch_demag_field_fp64", "responsibility": "Single-layer CUDA FP64 Hermitian D2Z/Z2D cuFFT production field path."},
+    {"id": "fem", "path": "backends/fem/cpu/mfem/interactions/demag.cpp", "symbol": "compute_demag_field_for_magnetization", "responsibility": "FEM production field path."},
+    {"id": "fem-gpu-cudss", "path": "backends/fem/gpu/cuda/demag_poisson/cudss_direct_solver.cpp", "symbol": "try_initialize_demag_cudss_direct", "responsibility": "Three-state VRAM-guarded cuDSS direct solver admission verified in A/B suites."},
+    {"id": "fem-gpu-fembem", "path": "backends/fem/gpu/cuda/demag_fem_bem/fem_bem.cpp", "symbol": "compute_device_demag_fem_bem_for_device_stage", "responsibility": "Strict device-resident GPU Fredkin-Koehler field path verified against CPU oracle."},
+    {"id": "ui-object-physics", "path": "apps/control-room/src/modules/inspector/inspectors/objects/physics/ObjectPhysicsSpec.tsx", "symbol": "ObjectPhysicsInspectorPanel", "responsibility": "Object-level physics inspector exposing demagnetization settings."}
+  ],
+  "symbols": [
+    {"id": "Ed", "latex": "$E_{\\mathrm d}$", "meaning": "demagnetization energy", "si_unit": "$\\mathrm{J}$"},
+    {"id": "M", "latex": "$\\mathbf M$", "meaning": "magnetization", "si_unit": "$\\mathrm{A\\,m^{-1}}$"},
+    {"id": "Hd", "latex": "$\\mathbf H_{\\mathrm d}$", "meaning": "demagnetizing field", "si_unit": "$\\mathrm{A\\,m^{-1}}$"},
+    {"id": "r", "latex": "$r$", "meaning": "magnetic divergence residual", "si_unit": "$\\mathrm{A\\,m^{-2}}$"},
+    {"id": "mu0", "latex": "$\\mu_0$", "meaning": "vacuum permeability", "si_unit": "$\\mathrm{N\\,A^{-2}}$"}
+  ],
+  "equations": [
+    {"id": "eq-demag-validation-energy", "symbols": ["Ed", "mu0", "M", "Hd"], "sources": ["api", "fdm-gpu", "fem", "fem-gpu-cudss", "fem-gpu-fembem"]},
+    {"id": "eq-demag-validation-residual", "symbols": ["r", "Hd", "M"], "sources": ["fem", "fem-gpu-cudss", "fem-gpu-fembem"]}
+  ],
+  "public_api": {
+    "constructors": ["fullmag.Demag"],
+    "parameters": [
+      {"python": "Demag.model", "type": "optional str", "default": "None", "si_unit": "$1$", "validation": "Canonical model validation.", "meaning": "Selects realization under test.", "backend_support": "Planner-dependent.", "problem_ir": "`energy[].realization`"},
+      {"python": "SaveField(\"H_demag\")", "type": "str", "default": "required", "si_unit": "$\\mathrm{A\\,m^{-1}}$", "validation": "Quantity must be materializable.", "meaning": "Requests vector field.", "backend_support": "Executable lane-dependent.", "problem_ir": "`outputs[].quantity`"},
+      {"python": "SaveScalar(\"E_demag\")", "type": "str", "default": "required", "si_unit": "$\\mathrm{J}$", "validation": "Quantity must be materializable.", "meaning": "Requests global energy.", "backend_support": "Executable lane-dependent.", "problem_ir": "`outputs[].quantity`"}
+    ]
+  }
 }

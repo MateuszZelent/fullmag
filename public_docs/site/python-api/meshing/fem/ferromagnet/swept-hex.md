@@ -25,30 +25,76 @@ source faces and the `hex` element family in an object recipe.
 
 When to use it: **never in production today.** Python representability is not a
 production qualification — Control Room exposes this option as unsupported, and
-the prism-to-pyramid combination is contradictory and rejected.
+both `"pyramid_to_tetrahedra"` and `"pure_prism"` transitions contradict the
+`hex` element family and are rejected immediately at authoring time.
 
 This page documents the API boundary: what is representable, what validation
-accepts, and what realization does not guarantee.
+accepts, and what realization does not guarantee. For production thin-film FEM
+GPU and CPU meshes, see {doc}`swept-prism` and
+{ref}`numerical-methods-performance-fem-gpu-demag`.
 
 (python-api-meshing-fem-ferromagnet-swept-hex-governing-equations)=
 ## 2. Physical and mathematical explanation
 
 No physical model of its own; this page describes only the topological contract of
-the recipe. The contradictory contract (pyramid→tetrahedra transition for hexes)
-is rejected by validation — no correct realization of that transition exists in
-the current shared-domain mesh pipeline.
+the recipe. Contradictory transition contracts (`"pyramid_to_tetrahedra"` and
+`"pure_prism"` for `hex`) are rejected by validation — no conforming realization
+of those transitions exists in the current shared-domain mesh pipeline.
 
 ## 3. Example — complete Python script
 
-No working production example exists. Recipe-level representation:
+The block below is valid stage-first authoring that constructs a representable
+`swept_hex` recipe without calling `study.build_domain_mesh()`, because
+shared-domain realization for `swept_hex` currently fails closed (unsupported in
+production).
 
 ```python
-# %% NOT PRODUCTION: representable recipe only; UI exposes this as unsupported
-# PerObjectMeshRecipe(
-#     mesh_strategy="swept_hex",
-#     sweep_face_meshing="quadrilateral",
-#     element_family="hex",
-# )
+# %% Non-production authoring contract: representable swept_hex intent only
+import fullmag as fm
+from fullmag.model import PerObjectMeshRecipe
+
+nm = 1.0e-9
+
+study = fm.study("swept_hex_authoring_contract")
+study.engine("fem")
+study.device("cpu", precision="double")
+study.mode("strict")
+
+study.universe(mode="manual", size=(400 * nm, 200 * nm, 150 * nm))
+study.universe.mesh(maximum_element_size=50 * nm)
+
+film = study.geometry(fm.Box(120 * nm, 60 * nm, 4 * nm), name="film")
+film.Ms = 800.0e3
+film.Aex = 13.0e-12
+film.alpha = 0.02
+film.m = fm.texture.uniform(1.0, 0.0, 0.0)
+
+# Representable swept_hex intent (transition="reject" is required; pyramid_to_tetrahedra
+# and pure_prism raise ValueError). Realization/build is intentionally omitted because
+# swept_hex has no production-qualified shared-domain backend executor yet.
+film.mesh.swept(
+    elements=2,
+    distribution="fixed",
+    face_meshing="quadrilateral",
+    sweep_direction="z",
+    transition="reject",
+    exact_layers=True,
+)
+recipe = PerObjectMeshRecipe(
+    mesh_strategy="swept_hex",
+    through_thickness_elements=2,
+    through_thickness_distribution="fixed",
+    sweep_face_meshing="quadrilateral",
+    sweep_direction="z",
+    element_family="hex",
+    transition_policy="reject",
+    exact_layer_count=True,
+)
+assert recipe.to_ir()["transition_policy"] == "reject"
+
+study.exchange()
+study.demag(model="airbox", variant="robin")
+study.stages.add_relax(stage_id="equilibrium", algorithm="projected_gradient_bb", tolT=1.0e-6)
 ```
 
 For real thin-film scenarios use {doc}`swept-prism`.
@@ -58,13 +104,14 @@ For real thin-film scenarios use {doc}`swept-prism`.
 
 | Python | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| `mesh_strategy` | `str` | `None` | $1$ | `"auto" \| "free_tetrahedral" \| "swept_prism" \| "swept_hex"` | local recipe topology | FEM CPU/GPU; FDM not applicable to this mesh policy | `mesh_workflow` |
-| `sweep_face_meshing` | `Literal["triangular","quadrilateral"]` | `None` | $1$ | consistent with strategy | source faces (`quadrilateral` for hex) | FEM CPU/GPU; FDM not applicable to this mesh policy | `mesh_workflow` |
-| `element_family` | `Literal["prism","hex"]` | `None` | $1$ | consistent with strategy | element family (`hex`) | FEM CPU/GPU; FDM not applicable to this mesh policy | `mesh_workflow` |
-| `transition_policy` | `Literal["pyramid_to_tetrahedra","reject"]` | `None` | $1$ | prism→pyramid contradicts hex → rejected | transition policy | FEM CPU/GPU; FDM not applicable to this mesh policy | `mesh_workflow` |
+| `mesh_strategy` | `str \| None` | `None` | $1$ | `"auto" \| "free_tetrahedral" \| "thin_film_tetrahedral" \| "swept_prism" \| "swept_hex"` | local recipe topology | FEM CPU/GPU (authoring only for `swept_hex`); FDM not applicable | `mesh_workflow` |
+| `sweep_face_meshing` | `Literal["triangular", "quadrilateral"] \| None` | `None` | $1$ | consistent with strategy (`"quadrilateral"` required for `hex`) | source faces (`quadrilateral` for hex) | FEM CPU/GPU (authoring only for `swept_hex`); FDM not applicable | `mesh_workflow` |
+| `element_family` | `Literal["prism", "hex"] \| None` | `None` | $1$ | consistent with strategy (`"hex"` requires `swept_hex` and `"quadrilateral"`) | element family (`hex`) | FEM CPU/GPU (authoring only for `swept_hex`); FDM not applicable | `mesh_workflow` |
+| `transition_policy` | `Literal["pyramid_to_tetrahedra", "pure_prism", "reject"] \| None` | `None` | $1$ | `hex` rejects both `"pyramid_to_tetrahedra"` and `"pure_prism"` (only `"reject"` is valid) | transition policy | FEM CPU/GPU (authoring only for `swept_hex`); FDM not applicable | `mesh_workflow` |
 
-Failure behavior: `transition_policy="pyramid_to_tetrahedra"` together with
-`swept_hex` → `ValueError` (contradictory combination).
+Failure behavior: `transition_policy="pyramid_to_tetrahedra"` or
+`transition_policy="pure_prism"` together with `swept_hex` / `element_family="hex"`
+→ `ValueError` (contradictory combination).
 
 ProblemIR mapping: fields land in the object recipe; no qualified backend
 realization exists.
@@ -125,6 +172,6 @@ No physical claims on this page.
 
 | Claim | Path | Symbol | Evidence |
 |---|---|---|---|
-| swept-hex object policy and lowering | [`packages/fullmag-py/src/fullmag/model/discretization.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/discretization.py#L679) | [`class PerObjectMeshRecipe`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/discretization.py#L679) | validation tests |
+| swept-hex object policy and lowering | [`packages/fullmag-py/src/fullmag/model/discretization.py`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/model/discretization.py#L694) | [`class PerObjectMeshRecipe`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/model/discretization.py#L694) | validation tests |
 | allowed `mesh_strategy` values | `packages/fullmag-py/src/fullmag/model/discretization.py` | `PerObjectMeshRecipe.mesh_strategy` | name-set validation |
-| rejection of the contradictory combination | `packages/fullmag-py/src/fullmag/model/discretization.py` | `PerObjectMeshRecipe` (hex validation) | validation branch `hex mesh requires mesh_strategy='swept_hex'` |
+| rejection of contradictory transitions (`pyramid_to_tetrahedra`, `pure_prism`) | [`packages/fullmag-py/src/fullmag/model/discretization.py`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/model/discretization.py#L964) | `PerObjectMeshRecipe` / `SweptMeshControls` (hex validation) | validation branch `hex mesh contradicts ...` |

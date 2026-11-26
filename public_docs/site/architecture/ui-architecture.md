@@ -24,7 +24,7 @@ User Interactions / Live Python (`fm.connect`)
    ──> Authoring Transaction (`scene_revision` fenced) or Control Command
    ──> OpenAPI v2 Session API & Canonical ProblemIR Lowering
    ──> WebSocket Revision Invalidation ──> Scoped Resource Cache Invalidation
-   ──> HTTP Binary Data Plane (`FMVP` / `FMMT` / `FMRM` / `FMCS` / `FMTB` / `FMMQ`)
+   ──> HTTP Binary Data Plane (`FMVP` / `FMMT` / `FMRM` / `FMBM` / `FMFG` / `FMCS` / `FMQS` / `FMMQ` / `FMPP` / `FMTB` / `FMDS` / `FMSP`)
    ──> Three.js R3F 3D Viewport, 2D Field Map & ECharts Plots
 ```
 
@@ -57,18 +57,18 @@ apps/control-room/src/
 │   ├── resources/       # Revision-aware resource hooks, cache scoping, invalidation
 │   └── selection/       # Unified selection controller across tree, 3D, 2D & plots
 └── modules/             # Self-contained UI feature modules
-    ├── start/           # Start Screen hub (/home), templates, import, recent work, instance discovery
-    ├── ribbon/          # Discretization-aware Ribbon tabs & placeholder stripping
-    ├── explorer/        # Five-tab semantic browser (Model, Resources, Results, Jobs, Diagnostics)
-    ├── inspector/       # InspectorRegistry, route catalog & domain-specific semantic panels
-    ├── viewport-3d/     # WebGL/Three.js R3F scene, studio HDRI & transparent/view PNG capture
+    ├── start/           # Start Screen hub (/home), templates, import/STL/preview, collapsible compute dock & StartStatusBar
+    ├── ribbon/          # Discretization-aware Ribbon tabs (live CSG/Modify, textures, ABL) & placeholder stripping
+    ├── explorer/        # Seven-tab semantic browser (Model, Resources, Results, Jobs, Diagnostics, Helper, Errors)
+    ├── inspector/       # 162-route catalog across 4 domain registries & declarative InspectorTemplate specs (`inspectors/*Spec.tsx`)
+    ├── viewport-3d/     # WebGL/Three.js R3F scene, off-main-thread FDM color workers, manual ranges, studio HDRI & PNG capture
     ├── field-map/       # 2D planar probe map, streamlines/contours, multislice & snapshot replay
     ├── live-charts/     # Real-time ECharts magnetization, energy & convergence traces
     ├── analysis-plots/  # ECharts dispersion, S(k,f) heatmap, Gamma FFT, FMR & hysteresis charts
     ├── analysis-*/      # Analysis feature modules (dispersion, hysteresis, resonance)
     ├── results-navigator/ # Durable SolutionSet browser & saved-result playback
     ├── overlay/         # Command Palette (Ctrl+Shift+P), MeshBuildDialog, notifications
-    ├── footer/          # Bottom dock (Logs, Telemetry, Diagnostics, Engine, Operations/Mesh Jobs, Problems, Quick Chart)
+    ├── footer/          # Bottom dock (Logs, Telemetry [Overview/Antenna/Eigensolve], Diagnostics, Engine, Operations [RunProgressPanel], Problems, Quick Chart)
     └── status-bar/      # Live session state, readiness helper, mesh/compute progress
 ```
 
@@ -102,7 +102,9 @@ The 3D Viewport (`src/modules/viewport-3d`) renders geometric domains and 3D vec
 
 - **Instanced Mesh Glyphs**: Vector field arrows and cones are rendered using `THREE.InstancedMesh` with GPU instancing to reduce draw-call overhead for large vector datasets.
 - **Binary ArrayBuffer Codecs**: Field samples are fetched as scoped HTTP binary resources. `decodeFieldVector` validates the FMVP header, component count, revisions, indexing and an FP64 payload, then exposes a `Float64Array`. Renderer-side GPU buffers are a separate representation. WebSocket events invalidate resources; they do not carry the field arrays.
-- **Context Loss Recovery**: WebGL canvas lifecycle events (`webglcontextlost`, `webglcontextrestored`) are monitored so rendering resources can be reconstructed after context restoration.
+- **Context Loss & Worker Ownership**: WebGL canvas lifecycle events (`webglcontextlost`, `webglcontextrestored`) are monitored so rendering resources reconstruct cleanly after context restoration, and off-main-thread viewport workers stay owned through canvas teardown.
+- **Live FDM Viewport Offloading**: Live FDM surface colors are built off the main thread (`useViewport3DFdmSampledScalarColors`), obsolete color jobs coalesce on rapid updates, live FDM field requests are scoped to visible layer owners, topology buffers are reused across revisions, large-grid hover picks defer until the pointer settles, and manual field color ranges can be pinned without altering solver data.
+- **Prepared-Field Preview & Persistent Error Diagnostics**: Prepared FDM and FEM fields can be evaluated and rendered before starting a study, busy performance-endpoint reads are treated as deferred rather than surfacing spurious transport errors, and session error history persists across browser reloads via `sessionErrorStore` (`ExplorerErrorsPanel`).
 - **Topology Caching**: FEM mesh element topologies and node coordinates are cached separately from per-step vector field data, avoiding redundant GPU geometry re-uploads during time integration.
 
 ---
@@ -143,3 +145,5 @@ User Input ──> Draft Store ──(Apply Draft)──> Session API ──> We
 | Event-to-resource invalidation | `apps/control-room/src/kernel/realtime/RealtimeInvalidationBridge.ts` | `RealtimeInvalidationBridge` |
 | Resource revision ownership | `apps/control-room/src/kernel/resources/ResourceInvalidationController.ts` | `ResourceInvalidationController` |
 | FP64 field decoding | `apps/control-room/src/kernel/api/codecs/fieldVectorCodec.ts` | `decodeFieldVector` |
+| Persistent session error store | `apps/control-room/src/kernel/diagnostics/sessionErrorStore.ts` | `useSessionErrors` |
+| Off-main-thread FDM scalar colors | `apps/control-room/src/modules/viewport-3d/hooks/useViewport3DFdmSampledScalarColors.ts` | `useViewport3DFdmSampledScalarColors` |

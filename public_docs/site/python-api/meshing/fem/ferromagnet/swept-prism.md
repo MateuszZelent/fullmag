@@ -20,10 +20,18 @@ Authoring validation does not prove mesh generation or solver qualification; the
 (python-api-meshing-fem-ferromagnet-swept-prism-problem-statement)=
 ## 1. What it is and when to use it
 
-`object.mesh.thin_film(..., topology="prismatic")` requests a strict swept-prism
-mesh through the object thickness: exactly `layers` P1 element layers, a fixed
-distribution, triangular source faces, and a pyramid-to-tetrahedra transition into
-the surrounding shared-domain mesh.
+`object.mesh.thin_film(..., topology="prismatic")` (or `object.mesh.swept(..., face_meshing="triangular")`)
+requests a strict swept-prism mesh through the object thickness: exactly `layers` element layers,
+a fixed distribution, triangular source faces, and either:
+
+- `transition="pyramid_to_tetrahedra"` (default) — prism layers inside the film connected through a
+  conforming pyramid layer to surrounding airbox tetrahedra (with the Chebyshev mixed-tet untangler
+  preventing same-side tet inversion for `layers >= 2`); or
+- `transition="pure_prism"` — pure-prism thin-film shared domain (zero pyramids/tetrahedra) where
+  magnetization remains P1 nodal while the native FEM solver automatically elevates the scalar
+  magnetic potential $\phi$ to quadratic `H1_WedgeElement(2)` (P2) via `pure_prism_p2` on both CPU
+  and GPU (including CSR DMI, CG+AMG, and cuDSS Poisson; see
+  {ref}`numerical-methods-performance-fem-gpu-demag`).
 
 When to use it:
 
@@ -98,7 +106,7 @@ film.mesh.thin_film(
 study.exchange()
 study.demag(model="airbox", variant="robin")
 study.build_domain_mesh()
-study.stages.add_relax(stage_id="equilibrium", tolT=1.0e-6)
+study.stages.add_relax(stage_id="equilibrium", algorithm="projected_gradient_bb", tolT=1.0e-6)
 ```
 
 (python-api-meshing-fem-ferromagnet-swept-prism-python-api)=
@@ -111,21 +119,21 @@ Canonical path: `object.mesh.thin_film(topology="prismatic", ...)`
 | Python | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | `topology` | `str \| None` | `None` | $1$ | `"prismatic"` | selects the prism mode | FEM CPU/GPU; FDM not applicable to this mesh policy | `mesh_workflow` |
-| `order` | `int \| None` | `None` | $1$ | `1` (P1) | linear order only | FEM CPU/GPU; FDM not applicable to this mesh policy | `mesh_workflow` |
+| `order` | `int \| None` | `None` | $1$ | `1` (P1 magnetization; `transition="pure_prism"` automatically elevates scalar potential $\phi$ to P2 `H1_WedgeElement(2)` via `pure_prism_p2`) | user-authored magnetization basis order | FEM CPU/GPU (`tet4`/mixed P1 and `pure_prism_p2`); FDM not applicable | `mesh_workflow` |
 | `exact_layers` | `bool \| None` | `None` | $1$ | `True` in strict (`False` only in extended) | require the exact layer count | FEM CPU/GPU; FDM not applicable to this mesh policy | `mesh_workflow` |
-| `transition` | `str \| None` | `None` | $1$ | `"pyramid_to_tetrahedra"` | transition into domain tetrahedra | FEM CPU/GPU; FDM not applicable to this mesh policy | `mesh_workflow` |
+| `transition` | `Literal["pyramid_to_tetrahedra", "pure_prism", "reject"] \| None` | `"pyramid_to_tetrahedra"` | $1$ | `"pyramid_to_tetrahedra"` or `"pure_prism"` for `topology="prismatic"` (`"reject"` also accepted on `SweptMeshControls` / `swept()`) | transition into surrounding domain (`"pyramid_to_tetrahedra"` uses Chebyshev mixed-tet untangler for `layers >= 2`; `"pure_prism"` activates `pure_prism_p2`) | FEM CPU/GPU; FDM not applicable to this mesh policy | `mesh_workflow` |
 | `layers` | `int \| None` | `None` | $1$ | positive integer | prism layer count | FEM CPU/GPU; FDM not applicable to this mesh policy | `mesh_workflow` |
 
 The equivalent advanced recipe (`PerObjectMeshRecipe`) must set consistently:
 `mesh_strategy="swept_prism"`, `through_thickness_elements=layers`,
 `through_thickness_distribution="fixed"`, `sweep_face_meshing="triangular"`,
-`element_family="prism"`, `transition_policy="pyramid_to_tetrahedra"`,
-`exact_layer_count=True`, `topology="prismatic"`. Missing companion fields fail
-validation.
+`element_family="prism"`, `transition_policy="pyramid_to_tetrahedra"` or
+`transition_policy="pure_prism"`, `exact_layer_count=True`, `topology="prismatic"`.
+Missing companion fields fail validation.
 
 Failure behavior: `order != 1`, `exact_layers=False` in strict mode,
-`transition != "pyramid_to_tetrahedra"` → `ValueError`; an incomplete advanced
-recipe → recipe validation `ValueError`.
+`transition not in {"pyramid_to_tetrahedra", "pure_prism"}` for `topology="prismatic"`
+→ `ValueError`; an incomplete advanced recipe → recipe validation `ValueError`.
 
 ProblemIR mapping: canonicalization happens inside the helper (section 9); the IR
 already sees a consistent `swept_prism` recipe.
@@ -151,10 +159,12 @@ Model Explorer
         └── Mesh            → selection kind: object.mesh
 ```
 
-The **Object Mesh Policy** inspector: the *Thin-Film Sweep Strategy* group —
-selecting `swept_prism` canonicalizes the exact-layered-prism fields (P1,
-triangular source faces, fixed distribution, exact layer count, prism family,
-`pyramid_to_tetrahedra`). The UI gate accepts only layer counts advertised by
+The **Object Mesh Policy** inspector (`ObjectMeshInspectorSpecPanel` in
+`apps/control-room/src/modules/inspector/panels/mesh-details/ObjectMeshSpecPanel.tsx`):
+the *Thin-Film Sweep Strategy* group — selecting `swept_prism` canonicalizes
+the exact-layered-prism fields (triangular source faces, fixed distribution,
+exact layer count, prism family, `pyramid_to_tetrahedra` or `pure_prism`
+transition). The UI gate accepts only layer counts advertised by
 `mesh.exact_layer_count`; `swept_hex` remains disabled.
 
 **Apply Object Policy** writes the recipe; **Build Mesh** materializes the mesh.
@@ -193,7 +203,7 @@ Focused constructor, lowering, and mesh-report tests are the evidence boundary f
 
 | Claim | Path | Symbol | Evidence |
 |---|---|---|---|
-| swept-prism object policy and lowering | [`packages/fullmag-py/src/fullmag/model/discretization.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/discretization.py#L679) | [`class PerObjectMeshRecipe`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/discretization.py#L679) | recipe validation tests |
-| canonical helper and strict validation | `packages/fullmag-py/src/fullmag/world.py` | `GeometryMeshHandle.thin_film` | validation in method body |
-| canonicalization to `swept_prism` | `packages/fullmag-py/src/fullmag/world.py` | `GeometryMeshHandle.thin_film` (prismatic branch) | `candidate.*` assignments in code |
-| typed swept controls | `packages/fullmag-py/src/fullmag/model/discretization.py` | `SweptMeshControls` | validation tests |
+| swept-prism object policy and lowering | [`packages/fullmag-py/src/fullmag/model/discretization.py`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/model/discretization.py#L694) | [`class PerObjectMeshRecipe`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/model/discretization.py#L694) | recipe validation tests |
+| canonical helper and strict validation | [`packages/fullmag-py/src/fullmag/world.py`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/world.py#L1681) | [`class GeometryMeshHandle`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/world.py#L1681) (`thin_film`, `swept`) | validation in method body |
+| typed swept controls | [`packages/fullmag-py/src/fullmag/model/discretization.py`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/model/discretization.py#L413) | [`class SweptMeshControls`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/model/discretization.py#L413) | validation tests |
+| Chebyshev mixed-tet untangler (`layers >= 2`) | [`packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py#L2250) | [`_chebyshev_center_3d`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py#L2250) | pure_prism and mixed-tet untangler tests |

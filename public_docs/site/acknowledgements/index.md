@@ -103,6 +103,7 @@ FullMag's finite-element, meshing, linear-algebra, spectral, and visualization l
 thank the maintainers of:
 
 - **MFEM**, **hypre**, and **libCEED** — high-order modular finite-element discretizations, scalable algebraic multigrid preconditioning, and GPU operator execution [^13].
+- **NVIDIA CUDA**, **cuFFT**, **cuDSS**, and **CUB** — batched real-to-complex demagnetization FFTs, factor-once GPU direct sparse solvers for Poisson/FEM-BEM/PBC/driven-response/multiphysics systems, and cooperative device reductions.
 - **Gmsh** — conforming 3D tetrahedral, prism, mixed-element, and Poisson-airbox mesh generation and CAD geometry import [^14].
 - **PETSc** and **SLEPc** — scalable generalized eigenvalue and Krylov/shift-invert spectral infrastructure for linearized-LLG modal analysis [^15].
 - **Foundational magnetostatic & review formulations** — Newell cell-averaged demagnetizing tensor kernels [^16], the Fredkin–Koehler hybrid FEM/BEM open-boundary formulation [^17], and unified numerical micromagnetics reviews [^18].

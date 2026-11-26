@@ -1,7 +1,7 @@
 {
   "document": {
     "path": "public_docs/site/python-api/geometry/auxiliary-geometry.md",
-    "reviewed_revision": "ab3c8802a691a535063102c12f9a79bb0043b367"
+    "reviewed_revision": "752450f8d259ab97c76c36fe666d5474b02abe9a"
   },
   "backend_matrix": [
     {
@@ -36,71 +36,139 @@
       "id": "source_waveguide_geometry",
       "path": "packages/fullmag-py/src/fullmag/model/geometry.py",
       "symbol": "class SinWaveguide",
-      "responsibility": "public constructor and IR lowering"
+      "responsibility": "curved magnonic waveguide geometry constructor and IR lowering"
+    },
+    {
+      "id": "source_cpw_layout",
+      "path": "packages/fullmag-py/src/fullmag/model/geometry.py",
+      "symbol": "class CPWAntennaLayout",
+      "responsibility": "3D coplanar waveguide conductor layout and IR lowering"
+    },
+    {
+      "id": "source_microstrip_layout",
+      "path": "packages/fullmag-py/src/fullmag/model/geometry.py",
+      "symbol": "class MicrostripAntennaLayout",
+      "responsibility": "3D microstrip conductor layout and IR lowering"
+    },
+    {
+      "id": "source_path3d_layout",
+      "path": "packages/fullmag-py/src/fullmag/model/geometry.py",
+      "symbol": "class PiecewisePath3DLayout",
+      "responsibility": "3D piecewise waypoint conductor layout and IR lowering"
     }
   ],
   "public_api": {
-    "owner": "fm.SinWaveguide(...) and fm.ArchWaveguide(...)",
+    "owner": "fm.SinWaveguide, fm.ArchWaveguide, fm.MicrostripAntennaLayout, fm.CPWAntennaLayout, fm.MeanderAntennaLayout, fm.InductiveLoopLayout, fm.PiecewisePath3DLayout",
     "parameters": [
       {
-        "python": "length/width/height/period",
+        "python": "SinWaveguide.length",
         "type": "float",
         "default": "required",
         "si_unit": "$\\mathrm{m}$",
-        "validation": "positive",
-        "meaning": "waveguide dimensions and period",
-        "backend_support": "FEM CPU/GPU: IR; FDM CPU/GPU: resolver-specific",
-        "problem_ir": "parameters"
+        "validation": "finite and positive",
+        "meaning": "waveguide length along $x$",
+        "backend_support": "FEM/FDM CPU/GPU: IR; resolver-specific",
+        "problem_ir": "length"
       },
       {
-        "python": "amplitude",
+        "python": "SinWaveguide.width",
+        "type": "float",
+        "default": "required",
+        "si_unit": "$\\mathrm{m}$",
+        "validation": "finite and positive",
+        "meaning": "waveguide cross-section width",
+        "backend_support": "FEM/FDM CPU/GPU: IR; resolver-specific",
+        "problem_ir": "width"
+      },
+      {
+        "python": "SinWaveguide.height",
+        "type": "float",
+        "default": "required",
+        "si_unit": "$\\mathrm{m}$",
+        "validation": "finite and positive",
+        "meaning": "waveguide thickness",
+        "backend_support": "FEM/FDM CPU/GPU: IR; resolver-specific",
+        "problem_ir": "height"
+      },
+      {
+        "python": "SinWaveguide.period",
+        "type": "float",
+        "default": "required",
+        "si_unit": "$\\mathrm{m}$",
+        "validation": "finite and positive",
+        "meaning": "sinusoidal wavelength $\\lambda$",
+        "backend_support": "FEM/FDM CPU/GPU: IR; resolver-specific",
+        "problem_ir": "period"
+      },
+      {
+        "python": "SinWaveguide.amplitude",
         "type": "float",
         "default": "required",
         "si_unit": "$\\mathrm{m}$",
         "validation": "finite",
-        "meaning": "sinusoidal amplitude",
-        "backend_support": "FEM CPU/GPU: IR; FDM CPU/GPU: resolver-specific",
+        "meaning": "sinusoidal vertical modulation amplitude",
+        "backend_support": "FEM/FDM CPU/GPU: IR; resolver-specific",
         "problem_ir": "amplitude"
       },
       {
-        "python": "phase",
+        "python": "SinWaveguide.phase",
         "type": "float",
         "default": "0.0",
         "si_unit": "$\\mathrm{rad}$",
         "validation": "finite",
-        "meaning": "phase offset",
+        "meaning": "initial sinusoidal phase offset",
         "backend_support": "FEM/FDM CPU/GPU: IR; resolver-specific",
         "problem_ir": "phase"
       },
       {
-        "python": "z0",
+        "python": "SinWaveguide.z0",
         "type": "float",
         "default": "0.0",
         "si_unit": "$\\mathrm{m}$",
         "validation": "finite",
-        "meaning": "vertical offset",
+        "meaning": "baseline vertical offset",
         "backend_support": "FEM/FDM CPU/GPU: IR; resolver-specific",
         "problem_ir": "z0"
       },
       {
-        "python": "arch_height",
+        "python": "ArchWaveguide.arch_height",
         "type": "float",
         "default": "required",
         "si_unit": "$\\mathrm{m}$",
-        "validation": "finite for `ArchWaveguide`",
-        "meaning": "arch height",
-        "backend_support": "FEM CPU/GPU: IR; FDM CPU/GPU: resolver-specific",
+        "validation": "finite",
+        "meaning": "vertical arch apex elevation",
+        "backend_support": "FEM/FDM CPU/GPU: IR; resolver-specific",
         "problem_ir": "arch_height"
       },
       {
-        "python": "name",
-        "type": "str",
-        "default": "sin_waveguide/arch_waveguide",
+        "python": "CPWAntennaLayout.stations",
+        "type": "Sequence[CPWWidthStation]",
+        "default": "()",
         "si_unit": "$1$",
-        "validation": "non-empty",
-        "meaning": "stable name",
-        "backend_support": "FEM/FDM CPU/GPU: IR; resolver-specific",
-        "problem_ir": "name"
+        "validation": "monotonically increasing $s \\in [0, 1]$ with positive widths/gaps",
+        "meaning": "cross-section stations along the CPW strip",
+        "backend_support": "FEM/FDM CPU/GPU: IR; antenna solve planner-gated",
+        "problem_ir": "stations"
+      },
+      {
+        "python": "MicrostripAntennaLayout.conductivity_s_per_m",
+        "type": "float",
+        "default": "required",
+        "si_unit": "$\\mathrm{S\\,m^{-1}}$",
+        "validation": "finite and positive",
+        "meaning": "conductor electrical conductivity (shared across all 3D antenna layouts)",
+        "backend_support": "FEM/FDM CPU/GPU: IR; antenna solve planner-gated",
+        "problem_ir": "conductivity_s_per_m"
+      },
+      {
+        "python": "PiecewisePath3DLayout.waypoints",
+        "type": "Sequence[Path3DWaypoint]",
+        "default": "required",
+        "si_unit": "$\\mathrm{m}$",
+        "validation": "at least two distinct finite 3D waypoints",
+        "meaning": "3D centerline path of an arbitrary conductor trace",
+        "backend_support": "FEM/FDM CPU/GPU: IR; antenna solve planner-gated",
+        "problem_ir": "waypoints"
       }
     ],
     "returns": "typed ProblemIR record at to_ir()"

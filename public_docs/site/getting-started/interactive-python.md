@@ -260,6 +260,8 @@ study.stages.add_run(
 - `packages/fullmag-py/src/fullmag/live/_session.py` — `LiveSession`: HTTP/WebSocket runtime
   bridge, 10 s presence heartbeat (`sessions.heartbeat`), chunked predicate execution, and script
   export.
+- `packages/fullmag-py/src/fullmag/world.py` — `run_while`: top-level conditional chunked execution
+  helper (`fm.run_while(...)`) shared by live and eager workflows.
 - `packages/fullmag-py/src/fullmag/live/sweep.py` — `sweep`, `SweepResult`: parallel multi-group
   execution across independent DEV group URLs.
 - `packages/fullmag-py/src/fullmag/live/jupyter.py` — `monitor`, `ScalarMonitor`: live Jupyter

@@ -31,8 +31,10 @@ output, legality, and volume-reduction system ({numref}`fig-observables-material
 | {doc}`micromagnetic-energy` | Total energy $E[\mathbf{m}] = \sum_{k\in\mathcal{K}} E_k[\mathbf{m}]$ and variational law | {numref}`fig-effective-field-and-direct-torque-composition` — Energy-to-field variation |
 | {doc}`effective-field` | Conservative $\mathbf{H}_{\mathrm{eff}}=\sum\mathbf{H}_k$ vs. direct $\boldsymbol{\tau}_{\mathrm{direct}}$ | {numref}`fig-effective-field-and-direct-torque-composition` — Field vs. direct torque |
 | {doc}`llg-equation` | Explicit LLG dynamics, $s_{\mathrm{prec}}\in\{0,1\}$, dissipation & RK sphere projection | {numref}`fig-llg-precession-damping-sphere` — Precession & damping on $\mathbb{S}^2$ |
-| {doc}`boundary-conditions` | Free Neumann, chiral DMI, FDM/FEM periodic ($P^T A P$), airbox & mechanical BCs | {numref}`fig-micromagnetic-boundary-conditions-overview` — Boundary-condition regimes |
-| {doc}`observables` | Accepted-step sampling, legality gate, airbox-excluding scalar reductions | {numref}`fig-observables-materialization-pipeline` — Sampling & legality gate |
+| {doc}`boundary-conditions` | Free Neumann, chiral DMI, FDM/FEM periodic ($P^T A P$), Floquet, frozen spins, absorbing layers, airbox & mechanical BCs | {numref}`fig-micromagnetic-boundary-conditions-overview` — Boundary-condition regimes |
+| {doc}`observables` | Accepted-step sampling, 56-entry quantity catalog, planar monitors, legality gate, airbox-excluding reductions | {numref}`fig-observables-materialization-pipeline` — Sampling & legality gate |
+
+For solver- and device-level acceleration architecture across CPU and CUDA lanes (including cuFFT, `cuDSS`, FSAL, preconditioning, and fused kernels), see {ref}`numerical-methods-performance`.
 
 ```{toctree}
 :maxdepth: 1

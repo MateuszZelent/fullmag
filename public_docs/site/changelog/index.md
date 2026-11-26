@@ -25,6 +25,10 @@ The changelog now exposes separate Documentation and GitHub / code tabs, each wi
 The 5 October 2026 documentation update corrected the getting-started, Control Room, installation, and architecture guides against the current implementation. The Documentation tab links the exact commit and changed pages.
 ```
 
+```{versionchanged} development
+The November 2026 documentation synchronization updated the getting-started, architecture, Control Room, physics, numerical-methods, Python API, and validation references against commit `752450f8d2` and added the dedicated {ref}`Computational Optimizations and Hardware Acceleration <numerical-methods-performance>` subtree covering FDM/FEM CPU and CUDA acceleration, preflight budgets, and verified A/B parity evidence.
+```
+
 FullMag exposes two complementary change records:
 
 1. **Documentation history** below is generated from the repository's first-parent Git history and

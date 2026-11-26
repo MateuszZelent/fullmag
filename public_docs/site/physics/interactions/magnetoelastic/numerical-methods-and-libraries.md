@@ -23,16 +23,34 @@ This page documents the complete FullMag numerical architecture across all four 
 optimizations, the pinned external numerical library stack (`cuDSS`, `oneMKL PARDISO`, `MFEM`,
 `libCEED`, `Hypre`, `PETSc`, `SLEPc`, `MUMPS`, `ParMETIS`, `OpenMPI`, `FFTW`/`cuFFT`), and the
 eight quantitative verification gates (`G1`–`G8`). For continuum physics see {doc}`index`; for
-boundary conditions, interfaces, and spatial meshing see {doc}`boundary-conditions-and-meshing`.
+boundary conditions, interfaces, and spatial meshing see {doc}`boundary-conditions-and-meshing`;
+and for FullMag's measured production optimizations across FDM, FEM, and multiphysics see
+{ref}`numerical-methods-performance` (in particular
+{ref}`numerical-methods-performance-fem-gpu-kernels` and
+{ref}`numerical-methods-performance-fem-spectral-multiphysics`).
 
 :::{important}
-**Current executable boundary vs. bidirectional v2 solver stack.**
-On `master`, the FEM CPU/GPU prescribed-strain magnetoelastic kernels, `CudssModalShift`,
-`solve_driven_response_gpu_cudss`, and the pinned `MFEM` / `libCEED` / `Hypre` / `PETSc` /
-`SLEPc` / `cuDSS` container stack are already active in the repository. The bidirectional
-elastodynamics integrators, HEVI IMEX-$z$ `PC2`, `GpuElasticCudssSolver` Frozen-Factor PCG,
-coupled $(k,\omega)$ magnetoelastic pencils, and `G1`–`G8` benchmarks constitute the audited
-FullMag v2 numerical specification documented here.
+**Current `master` executable boundary vs. dedicated solver branch & planned runtime kernels.**
+- **Executable on `master` today:** the FEM CPU/GPU prescribed-strain magnetoelastic kernels
+  (with `ComputeEnergy` reduction gating, single-launch fused $\mathbf{H}_{\mathrm{eff}}$, and
+  0-ULP non-contracted FP64 parity; see {ref}`numerical-methods-performance-fem-gpu-kernels`),
+  `CudssModalShift`, `solve_driven_response_gpu_cudss`, and the pinned `MFEM v4.10` /
+  `libCEED v0.12.0` / `Hypre` / `PETSc v3.24.6` / `SLEPc v3.24.3` / `cuDSS 0.8.0.10` container
+  stack.
+- **Implemented on the dedicated bidirectional magnetoelastic solver branch (not yet merged to
+  `master`):** `v0.3`/`v0.4` IR & `PhysicsObjectTypeIR::Solid` multidomain migration, stage-first
+  Python DSL, full FDM/FEM planner lowering (`FdmElastodynamicsPlanIR` with Kelvin–Mandel acoustic
+  and viscous CFL $\Delta t_{\mathrm{visc}}$ plus lateral `v_imex_m_s` guard, FM+NM FEM
+  `FemMechanicalPlanIR`, coupled `FdmEigenPlanIR` / `FdmFrequencyResponsePlanIR` with
+  `acoustic_drives` and `equilibrium_mechanics`, multi-component Fredholm RBM verification), and
+  the hardened toolchain (decoupled `cuDSS`/`SLEPc`, `Intel oneMKL 2025.0.1-14` via
+  `Fullmag::MklGnuThread` strictly linking `mkl_gnu_thread` + `libgomp`, neutral CUDA-free
+  `/opt/fullmag-metis` hosting `METIS v5.1.0-p12` + `ParMETIS v4.0.3-p9` with `ldd` ABI gate, and
+  isolated MPI runner).
+- **Planned native bidirectional runtime kernels:** two-way elastodynamic time integrators,
+  `HEVI IMEX-z PC2`, `GpuElasticCudssSolver` Frozen-Factor PCG, coupled $(k,\omega)$
+  magnetoelastic pencils, and `G1`–`G8` runtime qualification gates fail closed on `master` until
+  activated and verified.
 :::
 
 (magnetoelastic-num-problem-statement)=
@@ -98,7 +116,8 @@ compiled native capability bitmasks before allocating solver memory:
 For a 3D staggered grid with cell spacings $(\Delta x, \Delta y, \Delta z)$ and orthonormal
 Kelvin–Mandel stiffness $\mathbf{C}_{\mathrm{KM}}$ and viscosity $\boldsymbol{\eta}_{\mathrm{KM}}$,
 explicit time stepping must obey both the hyperbolic acoustic CFL condition and the parabolic
-Kelvin–Voigt diffusion limit:
+Kelvin–Voigt diffusion limit (both enforced in the solver-branch planner's
+`FdmElastodynamicsPlanIR` alongside the horizontal IMEX-$z$ wave-speed guard `v_imex_m_s`):
 
 ```{math}
 :label: eq-mel-num-fdm-cfl
@@ -114,7 +133,9 @@ c_{\max} \le \sqrt{\frac{\left\lVert \mathbf{C}_{\mathrm{KM}} \right\rVert_2}{\r
 ```
 
 with safety factor $S_{\mathrm{CFL}} = 0.85$ for Virieux staggered stencils (and $S_{\mathrm{CFL}} = 0.80$
-for 4-grid Lebedev).
+for 4-grid Lebedev). For HEVI IMEX-$z$, the planner computes the bounded lateral wave speed
+$v_{\mathrm{imex}}$ from the horizontal Christoffel spectrum with vertical-coupling stabilization
+so strongly coupled anisotropic cuts cannot yield an unbounded lateral CFL ceiling.
 
 #### Symplectic Velocity-Verlet with FSAL-safe Cubic Hermite multirate LLG coupling
 
@@ -359,7 +380,7 @@ s_v = \frac{1}{\omega_{\mathrm{ref}}\sqrt{\rho_{\mathrm{ref}} V_{\mathrm{ref}}}}
 - **Shift-and-invert linear factorizations:**
   - FEM GPU: **`CudssModalShift`** (`backends/fem/gpu/frequency_domain/modal_cudss_shift.hpp`)
     with device CUDA Graph replay (`prepare_device_replay` / `enqueue_device_replay`) and exact
-    negative inertia reporting;
+    negative inertia reporting (see {ref}`numerical-methods-performance-fem-spectral-multiphysics`);
   - FEM CPU shared memory: **`oneMKL PARDISO`**;
   - FEM CPU MPI distributed: **`MUMPS`** with **`ICNTL(13)=1`** (ScaLAPACK root off for exact
     inertia), **`ICNTL(24)=1`** (null-pivot detection), and **`ICNTL(35)=0`** (BLR low-rank
@@ -367,8 +388,9 @@ s_v = \frac{1}{\omega_{\mathrm{ref}}\sqrt{\rho_{\mathrm{ref}} V_{\mathrm{ref}}}}
 - **FDM 1D-$z$ Floquet–Bloch & 3D Harmonic Balance:** for laterally translation-invariant
   multilayers ($\mathrm{YIG}/\mathrm{GGG}$, $\mathrm{CoFeB}/\mathrm{LiNbO}_3$), a 1D-$z$
   plane-wave Bloch pencil evaluates full magnon–phonon dispersion branches $\omega_n(k_x, k_y)$
-  in milliseconds; for arbitrary 3D geometries, driven frequency response uses
-  `solve_driven_response_gpu_cudss` (FEM GPU) or 3D Harmonic Balance (FDM).
+  in milliseconds (`FdmEigenPlanIR`); for arbitrary 3D geometries, driven frequency response uses
+  `solve_driven_response_gpu_cudss` (FEM GPU) or coupled `FdmFrequencyResponsePlanIR` (supporting
+  both magnetic and `acoustic_drives` harmonic excitations).
 
 (magnetoelastic-v2-hpc-stack-contract)=
 ### HPC optimizations (CUDA, AVX-512, MPI) and external solver library stack
@@ -380,25 +402,31 @@ s_v = \frac{1}{\omega_{\mathrm{ref}}\sqrt{\rho_{\mathrm{ref}} V_{\mathrm{ref}}}}
 | **FDM GPU (CUDA)** | **3.5D ping-pong shared-memory streaming** ($32\times 16$ $(x,y)$ tiles sliding 3 $z$-planes $(k-1,k,k+1)$ in SMEM/registers) + **full-in-GPU zero-transfer residency** | $\sim 3\times$ global-memory bandwidth reduction; approaches HBM roofline ($>70\%$ peak bandwidth); zero per-step PCIe stalls |
 | **FDM CPU (x86_64)** | **AVX-512 cache-blocked tiles ($64\times 8\times 8$)**, 64-byte aligned Structure-of-Arrays (SoA), NUMA first-touch OpenMP | Maximizes L1/L2 reuse across 9 stress/velocity arrays; full 8-wide FP64 SIMD utilization |
 | **FDM MPI** | **2D lateral pencil/slab decomposition ($P_x \times P_y \times 1$)** with overlapped `MPI_Isend`/`MPI_Irecv` | Keeps entire $z$-columns rank-local so HEVI IMEX-$z$ Thomas solves require **zero vertical MPI communication** |
-| **FEM GPU (CUDA)** | **`GpuElasticCudssSolver` Frozen-Factor PCG**, `CudssModalShift` CUDA Graph replay, `libCEED` PA + `Hypre 3.1.0` `coarse_relax_type=18` | Amortizes Cholesky factorization over $10^2\text{--}10^4$ time steps; eliminates host-device synchronization on AMG coarse grid |
+| **FEM GPU (CUDA)** | Prescribed-strain `ComputeEnergy` reduction gating + fused `H_eff` + 0-ULP FP64 (`master`); **`GpuElasticCudssSolver` Frozen-Factor PCG**, `CudssModalShift` CUDA Graph replay, `libCEED` PA + `Hypre 3.1.0` `coarse_relax_type=18` (v2) | Zero intermediate RK energy reductions on `master`; v2 amortizes Cholesky factorization over $10^2\text{--}10^4$ time steps and eliminates host-device synchronization on AMG coarse grid |
 | **FEM MPI** | **3-weight `ParMETIS` partitioning (`ncon = 3`)** balancing elastic, magnetic, and airbox DOFs | Prevents straggler ranks when $\Omega_{\mathrm{mag}} \ll \Omega_{\mathrm{mech}} \ll \Omega_{\mathrm{all}}$ |
+
+For FullMag's measured production optimizations across non-magnetoelastic FDM, FEM, and
+multiphysics workloads on RTX 4080 SUPER and Threadripper 3960X, see
+{ref}`numerical-methods-performance`.
 
 #### Pinned external numerical library stack & threading contracts
 
 Exact library versions reflect FullMag's production containers (`docker/fem-gpu/Dockerfile` and
-`docker/fem-cpu/Dockerfile`):
+`docker/fem-cpu/Dockerfile`) and the solver-branch toolchain upgrades (decoupled `cuDSS`/`SLEPc`,
+`oneMKL` GNU-thread CMake target, neutral `/opt/fullmag-metis` prefix, and isolated MPI batch
+runner):
 
-| Library | Pinned version (containers) | Role in magnetoelasticity | Critical configuration & threading hygiene |
+| Library | Pinned version (containers / solver branch) | Role in magnetoelasticity | Critical configuration & threading hygiene |
 |---|---|---|---|
-| **NVIDIA `cuDSS`** | `0.8.0.10` (CUDA `12.4.1`/`12.6.3`) | GPU sparse direct Cholesky/LDL$^T$/LU (`GpuElasticCudssSolver`, `CudssModalShift`, `solve_driven_response_gpu_cudss`) | Reuses symbolic analysis + frozen numerical factor across steps; exact inertia queries for modal shift counting |
-| **Intel `oneMKL PARDISO`** | Intel oneMKL (CPU lanes) | Shared-memory CPU sparse direct solver for FEM/FDM quasistatics, Generalized-$\alpha$, and modal shifts | Strictly link **`mkl_gnu_thread` + `libgomp`** (never mix `libiomp5` and `libgomp`). `iparm[23]=1, iparm[24]=2` for `mtype=2` SPD In-Core; `iparm[23]=0, iparm[24]=0` for `mtype in {-2, 6, -4}` (with scaling/matching) or OOC (`iparm[59] in {1, 2}`); `iparm[23]=10` with `full_csr_with_diagonal` for `mtype in {11, 13}` In-Core |
+| **NVIDIA `cuDSS`** | `0.8.0.10` (CUDA `12.4.1`/`12.6.3`) | GPU sparse direct Cholesky/LDL$^T$/LU (`GpuElasticCudssSolver`, `CudssModalShift`, `solve_driven_response_gpu_cudss`) | Decoupled from `SLEPc` builds on solver branch; reuses symbolic analysis + frozen numerical factor across steps; exact inertia queries for modal shift counting |
+| **Intel `oneMKL PARDISO`** | `2025.0.1-14` (`intel-oneapi-mkl-devel`, `amd64`; clean no-op on `arm64`, solver branch) | Shared-memory CPU sparse direct solver for FEM/FDM quasistatics, Generalized-$\alpha$, and modal shifts | Strictly link **`mkl_gnu_thread` + `libgomp`** (`Fullmag::MklGnuThread`, never mix `libiomp5` and `libgomp`). `iparm[23]=1, iparm[24]=2` for `mtype=2` SPD In-Core; `iparm[23]=0, iparm[24]=0` for `mtype in {-2, 6, -4}` (with scaling/matching) or OOC (`iparm[59] in {1, 2}`); `iparm[23]=10` with `full_csr_with_diagonal` for `mtype in {11, 13}` In-Core |
 | **`MFEM`** | `v4.10` | `SubMesh`/`ParSubMesh` extraction, `H1` finite elements, `IntRules(PRISM, 3)` quadrature, `Hypre`/`PETSc` interfaces | Excludes $\Omega_{\mathrm{air}}$ and `Pyramid5` from mechanical `SubMesh`; deterministic `FaceKey` boundary tagging |
 | **`libCEED`** | `v0.12.0` | Matrix-free GPU/CPU Partial Assembly (PA) for large-scale elasticity ($>10^6$ DOFs, `Tet10`/`Hex27`) | Evaluates anisotropic $\mathbf{C}_V^{\mathrm{lab}}$ QFunctions at quadrature points without assembling full CSR |
 | **`Hypre`** | `v3.1.0` (GPU) / `v2.32.0` (CPU) | Algebraic multigrid (`BoomerAMG`) preconditioner + MPI `ParCSR` Krylov solvers | GPU mandates `HYPRE_MEMORY_DEVICE`, `SetNumFunctions(3)` + RBM near-nullspace, and **`coarse_relax_type = 18`** |
 | **`PETSc` & `SLEPc`** | `v3.24.6` / `v3.24.3` | Distributed matrices/Krylov-Schur eigensolvers (`EPS_GNHEP`, `STSINVERT`, `EPS_TARGET_MAGNITUDE`) | Thread-safe process lifecycle guarded by `petsc_slepc_process_mutex`; congruence scaling $\mathbf{S}$ applied prior to `EPSSolve` |
 | **`MUMPS`** | PETSc-bundled MPI MUMPS | Distributed MPI sparse direct solver & modal shift-and-invert | Exact Sylvester inertia requires **`ICNTL(13)=1`, `ICNTL(24)=1`, `ICNTL(35)=0`** (BLR disabled) |
-| **`METIS 5` / `ParMETIS`** | PETSc/MFEM-bundled | Serial & distributed mesh partitioning | Multi-constraint `ncon = 3` (elastic + magnetic + airbox DOF weights) |
-| **`OpenMPI`** | CUDA-aware OpenMPI | Multi-GPU & multi-node halo exchange and collective reductions | FDM $P_x \times P_y \times 1$ pencil decomposition; FEM `ParSubMesh` + `ParCSR` communication |
+| **`METIS 5` / `ParMETIS`** | `METIS v5.1.0-p12` / `ParMETIS v4.0.3-p9` in neutral CUDA-free `/opt/fullmag-metis` (solver branch) | Serial & distributed mesh partitioning shared ABI-cleanly by MFEM and PETSc | Hardened `ldd` ABI gate prevents dual-METIS linkage; multi-constraint `ncon = 3` (elastic + magnetic + airbox DOF weights) |
+| **`OpenMPI`** | CUDA-aware OpenMPI (`scripts/docker_dev_mpi.py` isolated batch runner on solver branch) | Multi-GPU & multi-node halo exchange and collective reductions | FDM $P_x \times P_y \times 1$ pencil decomposition; FEM `ParSubMesh` + `ParCSR` communication with isolated per-run scratch |
 | **`FFTW3` / `cuFFT`** | System / CUDA Toolkit | Demagnetization FFT convolution + FDM `SpectralZThomasPCG` 2D lateral FFT | Single-rank local $z$-columns preserve zero-MPI vertical Thomas solves |
 
 (magnetoelastic-num-symbols-and-si-units)=
@@ -429,8 +457,8 @@ Exact library versions reflect FullMag's production containers (`docker/fem-gpu/
    diagnostics run in **FP64 (`double`)**. Single-precision (`float`) is restricted to optional
    explicit FDM acoustic streaming only when explicitly requested and validated against FP64.
 2. **Thread-runtime isolation:** linking `oneMKL PARDISO` on Linux requires `mkl_gnu_thread`
-   matched to GCC's `libgomp`; mixing `libiomp5` and `libgomp` produces oversubscription or ABI
-   corruption and is rejected by build verification.
+   matched to GCC's `libgomp` (`Fullmag::MklGnuThread`); mixing `libiomp5` and `libgomp` produces
+   oversubscription or ABI corruption and is rejected by build verification.
 3. **Direct vs. iterative crossover:** `GpuElasticCudssSolver` is optimal up to
    $\sim 1\text{--}2\times 10^6$ DOFs on an $80\,\mathrm{GB}$ GPU (depending on 3D fill-in);
    larger meshes automatically route to `libCEED` PA + `Hypre 3.1.0` GPU `BoomerAMG`.
@@ -442,10 +470,10 @@ Exact library versions reflect FullMag's production containers (`docker/fem-gpu/
 
 | Solver | Device | Authoring / IR (`master`) | Executable realization (`master`) | Scientific qualification | Exact capability boundary and v2 roadmap |
 |---|---|---|---|---|---|
-| FDM | CPU | `MechanicsIR` + local `h_mel_single_with_ms` / `e_mel_density_single` | partial; public FDM mechanics planner fails closed | local cubic formula unit tests only | v2 target: Virieux/Lebedev, Velocity-Verlet + Hermite multirate, HEVI IMEX-$z$ `PC2`, AVX-512 `64x8x8`, `SpectralZThomasPCG`, `oneMKL PARDISO`, OpenMPI $P_x\times P_y\times 1$ |
+| FDM | CPU | `MechanicsIR` + local `h_mel_single_with_ms` / `e_mel_density_single` | partial; public FDM mechanics planner fails closed | local cubic formula unit tests only | solver branch lowers `FdmElastodynamicsPlanIR` (viscous CFL, `v_imex`, coupled FR); v2 runtime adds Virieux/Lebedev, Velocity-Verlet + Hermite multirate, HEVI IMEX-$z$ `PC2`, AVX-512 `64x8x8`, `SpectralZThomasPCG`, `oneMKL PARDISO`, OpenMPI $P_x\times P_y\times 1$ |
 | FDM | GPU | `MechanicsIR` + `reduce_magnetoelastic_energy_fp64` | partial; energy reduction kernel below planner | no end-to-end GPU qualification yet | v2 target: 3.5D ping-pong SMEM CUDA kernels, full-in-GPU zero-transfer residency, `cuDSS`, `GMG`, 1D-$z$ Floquet–Bloch |
-| FEM | CPU | `MechanicsIR` + `resolve_fem_magnetoelastic_plan` | implemented prescribed-strain field/energy (`compute_magnetoelastic_field`) + `PETSc`/`SLEPc` modal infrastructure | prescribed-strain field/energy tests; magnetic modal SLEPc tests | v2 target: Generalized-$\alpha$, Central Difference, `PGBB`/`NCG` primal-dual, `oneMKL PARDISO` (`iparm[23]` per `mtype`), `MUMPS` exact inertia, `SLEPc` `EPS_GNHEP` coupled pencil |
-| FEM | GPU | same `MechanicsIR` + `CudssModalShift` / `solve_driven_response_gpu_cudss` | implemented prescribed-strain CUDA kernels + magnetic GPU cuDSS modal/driven solvers | prescribed-strain GPU parity gate + magnetic cuDSS modal contracts | v2 target: `GpuElasticCudssSolver` Frozen-Factor PCG, `libCEED` PA + `Hypre 3.1.0` GPU `BoomerAMG` `coarse_relax_type=18`, coupled GPU `CudssModalShift` |
+| FEM | CPU | `MechanicsIR` + `resolve_fem_magnetoelastic_plan` | implemented prescribed-strain field/energy (`compute_magnetoelastic_field`) + `PETSc`/`SLEPc` modal infrastructure | prescribed-strain field/energy tests; magnetic modal SLEPc tests | solver branch lowers FM+NM `FemMechanicalPlanIR` + Fredholm checks; v2 runtime adds Generalized-$\alpha$, Central Difference, `PGBB`/`NCG` primal-dual, `oneMKL PARDISO` (`iparm[23]` per `mtype`), `MUMPS` exact inertia, `SLEPc` `EPS_GNHEP` coupled pencil |
+| FEM | GPU | same `MechanicsIR` + `CudssModalShift` / `solve_driven_response_gpu_cudss` | implemented prescribed-strain CUDA kernels (`fullmag_cuda_magnetoelastic_field_energy_blocks`, `fullmag_cuda_accumulate_heff_fused_xyz`) + magnetic GPU cuDSS modal/driven solvers | 0-ULP FP64 prescribed-strain parity gate (`ComputeEnergy` gating, fused `H_eff`) + magnetic cuDSS modal/driven contracts | v2 target: `GpuElasticCudssSolver` Frozen-Factor PCG, `libCEED` PA + `Hypre 3.1.0` GPU `BoomerAMG` `coarse_relax_type=18`, coupled GPU `CudssModalShift` |
 
 (magnetoelastic-num-python-api)=
 ## Python API and stage-first example
@@ -463,9 +491,9 @@ study = fm.study("magnetoelastic_fp64_numerical_contract")
 study.engine("fem")
 study.device("cpu", precision="double")
 study.mode("strict")
-study.objects.mesh.defaults(cell_size=(4 * nm, 4 * nm, 4 * nm))
 
 film = study.geometry(fm.Box(64 * nm, 32 * nm, 8 * nm), name="yig_layer")
+film.mesh(maximum_element_size=4 * nm, order=1)
 film.Ms = 1.40e5
 film.Aex = 3.7e-12
 film.alpha = 0.001
@@ -515,14 +543,28 @@ study.stages.add_run(stage_id="fp64_prescribed_strain_check", until=1.0e-12)
 (magnetoelastic-num-problem-ir)=
 ## ProblemIR semantics
 
-In FullMag v2, solver and HPC numerical policies serialize deterministically inside
-`mechanics_execution_plan` alongside `MechanicsIR`:
+On the dedicated solver branch (FullMag v2), the planner lowers `ProblemIR` mechanics intent into
+typed per-lane execution plans (`FdmElastodynamicsPlanIR`, `FemMechanicalPlanIR`, `FdmEigenPlanIR`,
+and `FdmFrequencyResponsePlanIR`) recording mode, staggered layout, CFL/viscous bounds, linear
+solver policy, and Fredholm RBM diagnostics:
 
 ```json
 {
-  "mechanics_execution_plan": {
-    "coupling_mode": "elastodynamics",
-    "fdm_integrator": "hevi_imex_z_pc2",
+  "fdm_elastodynamics_plan": {
+    "mode": "imex_z_hevi",
+    "layout": "virieux_split_anis",
+    "requested_linear_solver": "auto",
+    "resolved_linear_solver": "spectral_z_thomas_pcg",
+    "include_lattice_rotation": true,
+    "cfl_safety": 0.85,
+    "dt_explicit_cfl_s": 1.2e-14,
+    "dt_imex_z_cfl_s": 4.8e-13,
+    "v_imex_m_s": 6980.0,
+    "subcycle_ratio_k": 1,
+    "free_component_count": 1,
+    "expected_rbm_nullspace_dim": 4
+  },
+  "fem_solver_policy_v2": {
     "fem_integrator": "generalized_alpha",
     "generalized_alpha_rho_inf": 0.9,
     "linear_solver": "cudss_frozen_factor_pcg",
@@ -545,8 +587,9 @@ In FullMag v2, solver and HPC numerical policies serialize deterministically ins
   solver preferences, and convergence tolerances verbatim in `ProblemIR`.
 - **Resolved execution** records the materialized C ABI v1 capability bitmask, chosen solver
   backend (`GpuElasticCudssSolver`, `libCEED`+`Hypre`, `oneMKL PARDISO`, `MUMPS`, `SpectralZThomasPCG`),
-  `iparm` / `ICNTL` configuration, computed Kelvin–Mandel $\Delta t_{\mathrm{CFL}}$ and
-  $\alpha_{\mathrm{KV},z,c}$, factorization counts, and congruence scaling factors $\mathbf{S}$.
+  `iparm` / `ICNTL` configuration, computed Kelvin–Mandel $\Delta t_{\mathrm{CFL}}$,
+  $\Delta t_{\mathrm{visc}}$, lateral $v_{\mathrm{imex}}$, $\alpha_{\mathrm{KV},z,c}$,
+  factorization counts, and congruence scaling factors $\mathbf{S}$.
 - **Validation errors** reject non-positive tolerances, out-of-range $\rho_\infty \notin [0, 1]$,
   invalid `iparm`/`mtype` pairings, or FP32 requests on sparse direct / eigensolver stages.
 - **Unsupported combinations** fail closed before solver launch:
@@ -559,10 +602,12 @@ In FullMag v2, solver and HPC numerical policies serialize deterministically ins
 (magnetoelastic-num-implementation-mapping)=
 ## Implementation mapping
 
-- **Planner & capability gate:** `crates/fullmag-plan/src/fem.rs` (`resolve_fem_magnetoelastic_plan`).
+- **Planner & capability gate (`master`):** `crates/fullmag-plan/src/fem.rs`
+  (`resolve_fem_magnetoelastic_plan`).
 - **FEM CPU/GPU prescribed-strain kernels (`master`):**
   - `backends/fem/cpu/mfem/interactions/magnetoelastic_prescribed_strain.cpp` (`compute_magnetoelastic_field`);
-  - `backends/fem/gpu/cuda/interactions/magnetoelastic/magnetoelastic_kernels.cu` (`fullmag_cuda_magnetoelastic_field_energy_blocks`).
+  - `backends/fem/gpu/cuda/interactions/magnetoelastic/magnetoelastic_kernels.cu` (`fullmag_cuda_magnetoelastic_field_energy_blocks` with `ComputeEnergy` gating and non-contracted FP64 parity);
+  - `backends/fem/gpu/cuda/fields/vector_field_kernels.cu` (`fullmag_cuda_accumulate_heff_fused_xyz`).
 - **FDM GPU reduction (`master`):**
   - `backends/fdm/gpu/cuda/runtime/reductions_fp64.cu` (`reduce_magnetoelastic_energy_fp64`).
 - **Existing GPU `cuDSS` & `PETSc`/`SLEPc` solver infrastructure reused by v2 mechanics:**
@@ -571,7 +616,10 @@ In FullMag v2, solver and HPC numerical policies serialize deterministically ins
   - `backends/fem/core/petsc_slepc_runtime.hpp` (`petsc_slepc_process_mutex` lifecycle safety).
 - **Containerized library builds:** `docker/fem-gpu/Dockerfile` (`MFEM v4.10`, `libCEED v0.12.0`,
   `Hypre v3.1.0`, `PETSc v3.24.6`, `SLEPc v3.24.3`, `cuDSS 0.8.0.10`) and
-  `docker/fem-cpu/Dockerfile` (`MFEM v4.10`, `Hypre v2.32.0`, `PETSc v3.24.6`, `SLEPc v3.24.3`).
+  `docker/fem-cpu/Dockerfile` (`MFEM v4.10`, `Hypre v2.32.0`, `PETSc v3.24.6`, `SLEPc v3.24.3`),
+  extended on the solver branch with `Intel oneMKL 2025.0.1-14` (`Fullmag::MklGnuThread`),
+  neutral `/opt/fullmag-metis` (`METIS v5.1.0-p12` + `ParMETIS v4.0.3-p9`), and
+  `scripts/docker_dev_mpi.py`.
 
 (magnetoelastic-num-validation)=
 ## Validation: canonical `G1`–`G8` golden verification benchmarks
@@ -581,7 +629,7 @@ all eight quantitative golden verification gates before promotion from `partial`
 
 | Gate | Physical system & test | Exact analytical / reference oracle | Required tolerance & acceptance criterion |
 |---|---|---|---|
-| **G1** | Free cubic crystal magnetostrictive equilibrium (`TractionFreeBC` + RBM projection) | $\varepsilon_{ii}^{\mathrm{eq}} = -\frac{B_1}{C_{11}-C_{12}}(m_i^2 - \frac{1}{3})$, $\gamma_{ij}^{\mathrm{eq}} = -\frac{B_2}{C_{44}}m_i m_j$ | Relative $L_2$ strain error $< 10^{-10}$ (quasistatic) and $< 10^{-4}$ (damped dynamic relaxation) |
+| **G1** | Free cubic crystal magnetostrictive equilibrium (`"traction_free"` + RBM projection) | $\varepsilon_{ii}^{\mathrm{eq}} = -\frac{B_1}{C_{11}-C_{12}}(m_i^2 - \frac{1}{3})$, $\gamma_{ij}^{\mathrm{eq}} = -\frac{B_2}{C_{44}}m_i m_j$ | Relative $L_2$ strain error $< 10^{-10}$ (quasistatic) and $< 10^{-4}$ (damped dynamic relaxation) |
 | **G2** | $\mathrm{Ni}/\mathrm{Al}$ bilayer interface traction continuity | $\partial_x u_x = -4.48228\times 10^{-6}$; Ni total stress $(\sigma_{xx}^{\mathrm{tot}}, \sigma_{yy}^{\mathrm{tot}}, \sigma_{zz}^{\mathrm{tot}}) = (0, +0.443746, -2.971754)\,\mathrm{MPa}$ | Interface traction jump $\lvert\llbracket\sigma_{xx}^{\mathrm{tot}}\rrbracket\rvert < 10^{-8}\,\mathrm{MPa}$; in-plane total stress within $10^{-4}$ |
 | **G3** | Undamped conservative magnon–phonon energy exchange ($\alpha=0$, `NoMechanicalDamping`) | $\frac{d}{dt}(E_{\mathrm{mag}}+E_{\mathrm{el}}+E_{\mathrm{mel}}+E_{\mathrm{kin,el}}) = 0$ (Generalized-$\alpha$ $\rho_\infty = 1$, Velocity-Verlet) | Relative energy drift $\lvert\Delta E_{\mathrm{tot}}\rvert / E_{\mathrm{exch}} < 10^{-6}$ over $\ge 10$ oscillation periods |
 | **G4** | YIG Turov–Shavrov gap & `stress_free` vs. `clamped` anisotropy renormalization | `stress_free`: $36.040\,\mathrm{A\,m^{-1}}$ ($[001]$), $17.704\,\mathrm{A\,m^{-1}}$ ($[111]$); `clamped`: $8.535\,\mathrm{A\,m^{-1}}$ ($[001]$), $36.040\,\mathrm{A\,m^{-1}}$ ($[111]$) | Gap frequency & effective field match analytic oracle within $0.1\%$ |
@@ -595,7 +643,8 @@ all eight quantitative golden verification gates before promotion from `partial`
 
 - On `master`, bidirectional elastodynamics time integrators, `GpuElasticCudssSolver`
   Frozen-Factor PCG, `HEVI IMEX-z PC2`, `SpectralZThomasPCG`, and coupled $(k,\omega)$
-  magnetoelastic eigenpencils are specified architectural contracts and not yet executed in CI.
+  magnetoelastic eigenpencils are not yet executed in CI (planner lowering and toolchain upgrades
+  live on the dedicated solver branch pending native runtime kernel qualification).
 - Multi-GPU distributed direct sparse factorization (`cuDSS` multi-GPU / `MUMPS` GPU offload)
   is deferred beyond single-GPU `cuDSS` + multi-GPU `libCEED`/`Hypre 3.1.0` `BoomerAMG`.
 - Automated runtime auto-tuning between `GpuElasticCudssSolver` and `libCEED`+`Hypre` uses
@@ -615,18 +664,19 @@ all eight quantitative golden verification gates before promotion from `partial`
    **5**(3), 283–292 (1977), [doi:10.1002/eqe.4290050306](https://doi.org/10.1002/eqe.4290050306).
 4. J. R. Dormand and P. J. Prince, "A family of embedded Runge–Kutta formulae," *Journal of
    Computational and Applied Mathematics* **6**(1), 19–26 (1980),
-   [doi:10.1016/0771-050X(80)90013-3](https://doi.org/10.1016/0771-050X(80)90013-3).
+   [doi:10.1016/0771-50X(80)90013-3](https://doi.org/10.1016/0771-50X(80)90013-3).
 5. J. Normington and M. Ruggeri, "A finite element method for magnetoelasticity in
    ferromagnetism," *arXiv preprint* (2025), [arXiv:2309.00605](https://arxiv.org/abs/2309.00605).
 6. F. Vanderveken, J. Mulkers, J. Leliaert, B. Van Waeyenberge, B. Sorée, O. Zografos,
    F. Ciubotaru, and C. Adelmann, "Finite difference magnetoelastic simulator," *Open Research
    Europe* **1**, 35 (2021),
-   [doi:10.12688/openreseurope.13302.1](https://doi.org/10.12688/openreseurope.13302.1).
+   [doi:10.12688/openreseurope.13302.1](https://doi.org/10.12688/openreseurope.13302.1)
+   (Gold OA CC-BY; [EuropePMC PMC10445870](https://europepmc.org/articles/PMC10445870)).
 7. P. Flauger, M. Küß, M. K. Steinbauer, F. Bruckner, B. Emhofer, E. Nysten, M. Weiß,
    D. Suess, H. J. Krenner, M. Albrecht, and C. Abert, "Modeling magnetoelastic wave interactions
    in magnetic films and heterostructures: A finite-difference approach," *Physical Review
    Applied* **25**(3) (2026), [doi:10.1103/9txq-sc8f](https://doi.org/10.1103/9txq-sc8f)
-   ([arXiv:2509.06007](https://arxiv.org/abs/2509.06007)).
+   (Hybrid OA CC-BY; [arXiv:2509.06007](https://arxiv.org/abs/2509.06007)).
 8. U. M. Ascher, S. J. Ruuth, and R. J. Spiteri, "Implicit-explicit Runge–Kutta methods for
    time-dependent partial differential equations," *Applied Numerical Mathematics* **25**(2–3),
    151–167 (1997), [doi:10.1016/S0168-9274(97)00056-1](https://doi.org/10.1016/S0168-9274(97)00056-1).
@@ -663,13 +713,14 @@ all eight quantitative golden verification gates before promotion from `partial`
 
 | Repository path | Stable symbol / area | Responsibility |
 |---|---|---|
-| `crates/fullmag-plan/src/fem.rs` | `resolve_fem_magnetoelastic_plan` | FEM magnetoelastic capability gating and planner boundary |
-| `backends/fem/cpu/mfem/interactions/magnetoelastic_prescribed_strain.cpp` | `compute_magnetoelastic_field` | FEM CPU prescribed-strain field and lumped-mass energy evaluation |
-| `backends/fem/gpu/cuda/interactions/magnetoelastic/magnetoelastic_kernels.cu` | `fullmag_cuda_magnetoelastic_field_energy_blocks` | FEM GPU CUDA prescribed-strain field and block-reduction kernel |
-| `backends/fdm/gpu/cuda/runtime/reductions_fp64.cu` | `reduce_magnetoelastic_energy_fp64` | FDM GPU FP64 magnetoelastic energy reduction kernel |
-| `backends/fem/gpu/frequency_domain/modal_cudss_shift.hpp` | `class CudssModalShift` | GPU `cuDSS` shift-and-invert factorization with CUDA Graph replay and exact inertia |
-| `backends/fem/gpu/frequency_domain/driven_response_cudss.hpp` | `solve_driven_response_gpu_cudss` | GPU `cuDSS` driven frequency-domain response solver |
-| `backends/fem/core/petsc_slepc_runtime.hpp` | `petsc_slepc_process_mutex` | Thread-safe PETSc/SLEPc process lifecycle synchronization |
+| [`crates/fullmag-plan/src/fem.rs`](https://github.com/MateuszZelent/fullmag/blob/9dee602ba086f95b1ae7477f1b0ea69e2d9cef50/crates/fullmag-plan/src/fem.rs#L2900) | `resolve_fem_magnetoelastic_plan` | FEM magnetoelastic capability gating and planner boundary |
+| [`backends/fem/cpu/mfem/interactions/magnetoelastic_prescribed_strain.cpp`](https://github.com/MateuszZelent/fullmag/blob/9dee602ba086f95b1ae7477f1b0ea69e2d9cef50/backends/fem/cpu/mfem/interactions/magnetoelastic_prescribed_strain.cpp#L15) | `compute_magnetoelastic_field` | FEM CPU prescribed-strain field and lumped-mass energy evaluation |
+| [`backends/fem/gpu/cuda/interactions/magnetoelastic/magnetoelastic_kernels.cu`](https://github.com/MateuszZelent/fullmag/blob/9dee602ba086f95b1ae7477f1b0ea69e2d9cef50/backends/fem/gpu/cuda/interactions/magnetoelastic/magnetoelastic_kernels.cu#L105) | `fullmag_cuda_magnetoelastic_field_energy_blocks` | FEM GPU CUDA prescribed-strain kernel with `ComputeEnergy` gating and non-contracted FP64 parity |
+| [`backends/fem/gpu/cuda/fields/vector_field_kernels.cu`](https://github.com/MateuszZelent/fullmag/blob/9dee602ba086f95b1ae7477f1b0ea69e2d9cef50/backends/fem/gpu/cuda/fields/vector_field_kernels.cu#L248) | `fullmag_cuda_accumulate_heff_fused_xyz` | FEM GPU single-launch fused `H_eff` combiner including `H_mel` |
+| [`backends/fdm/gpu/cuda/runtime/reductions_fp64.cu`](https://github.com/MateuszZelent/fullmag/blob/9dee602ba086f95b1ae7477f1b0ea69e2d9cef50/backends/fdm/gpu/cuda/runtime/reductions_fp64.cu#L1602) | `reduce_magnetoelastic_energy_fp64` | FDM GPU FP64 magnetoelastic energy reduction kernel |
+| [`backends/fem/gpu/frequency_domain/modal_cudss_shift.hpp`](https://github.com/MateuszZelent/fullmag/blob/9dee602ba086f95b1ae7477f1b0ea69e2d9cef50/backends/fem/gpu/frequency_domain/modal_cudss_shift.hpp#L15) | `class CudssModalShift` | GPU `cuDSS` shift-and-invert factorization with CUDA Graph replay and exact inertia |
+| [`backends/fem/gpu/frequency_domain/driven_response_cudss.hpp`](https://github.com/MateuszZelent/fullmag/blob/9dee602ba086f95b1ae7477f1b0ea69e2d9cef50/backends/fem/gpu/frequency_domain/driven_response_cudss.hpp#L39) | `solve_driven_response_gpu_cudss` | GPU `cuDSS` driven frequency-domain response solver |
+| [`backends/fem/core/petsc_slepc_runtime.hpp`](https://github.com/MateuszZelent/fullmag/blob/9dee602ba086f95b1ae7477f1b0ea69e2d9cef50/backends/fem/core/petsc_slepc_runtime.hpp#L10) | `petsc_slepc_process_mutex` | Thread-safe PETSc/SLEPc process lifecycle synchronization |
 | Specification contract (v2) | {ref}`C ABI v1 and bitmasks <magnetoelastic-v2-cabi-contract>` | Planned v2 contract for C ABI v1 and 23 FDM / 17 FEM capability bitmasks |
 | Specification contract (v2) | {ref}`FDM time integrators and quasistatics <magnetoelastic-v2-fdm-integrators-contract>` | Planned v2 contract for Kelvin–Mandel CFL, Hermite multirate, HEVI IMEX-$z$ `PC2`, and FDM quasistatics |
 | Specification contract (v2) | {ref}`FEM variational adjoint and Generalized-alpha <magnetoelastic-v2-fem-integrators-contract>` | Planned v2 contract for FEM variational adjoint, Generalized-$\alpha$, and Frozen-Factor PCG |
