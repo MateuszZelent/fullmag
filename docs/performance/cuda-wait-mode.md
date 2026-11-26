@@ -31,6 +31,22 @@ Any other value, and any refusal by CUDA to apply the flag, fails backend creati
 kept silently. When a mode is applied, the backend logs one line, for example
 `[fullmag] FEM CUDA wait mode: blocking (schedule flags 0x4)`.
 
+## Measured on WSL2 (2026-11-26)
+
+RTX 5050, Windows driver 610.88 (CUDA 13.3) under WSL2, a 1.8 s kernel: every wait costs as much CPU time
+as it lasts. This holds in every mode: `default`, `spin`, `yield`, `blocking` (flag 0x4 confirmed by
+`cudaGetDeviceFlags`), and an event created with `cudaEventBlockingSync`. The host thread cannot sleep
+while waiting for the GPU on this platform, so `blocking` cannot lower the CPU time of a job under WSL2.
+
+The 30k-node FEM GPU case (cuDSS, one core per job) confirms it: CPU time per step equals step time
+in both `default` and `blocking`. `blocking` and `yield` still help when the core is shared. With one
+busy process on the same core, the median step went from 32.0 ms (`default`) to 24.8 ms (`blocking`) and
+27.0 ms (`yield`), against 24.5 ms with a core of its own. Without sharing, step time is unchanged
+(24.5–24.6 ms).
+
+Native Linux drivers normally put a `blocking` waiter to sleep. The CPU-time benefit has to be measured
+on a native Linux machine before any default changes.
+
 The setting changes only how the host waits, not what is computed: results are expected to be identical.
 `blocking` adds a wake-up delay at every synchronization point (a few to tens of microseconds), so it can
 lengthen steps that synchronize often. The A/B measurement must check step time, CPU time per step and the
