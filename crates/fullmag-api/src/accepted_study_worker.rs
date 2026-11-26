@@ -25,6 +25,11 @@ use std::sync::Arc;
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
+#[path = "accepted_retained_current_worker.rs"]
+mod accepted_retained_current_worker;
+#[path = "accepted_retained_preparation_worker.rs"]
+mod accepted_retained_preparation_worker;
+
 #[path = "accepted_solver_profile.rs"]
 pub(crate) mod accepted_solver_profile;
 #[path = "accepted_antenna_progress.rs"]
@@ -2271,9 +2276,35 @@ fn fdm_cpu_observation_grid(accepted_step: &AcceptedWorkerStep) -> Option<[u32; 
     .then_some(fdm_plan.grid.cells)
 }
 
+#[derive(Clone, Copy)]
+enum WorkerOutputContract {
+    Legacy,
+    RetainedCurrentV6,
+    RetainedAssetFieldV7,
+    RetainedDirectV7,
+}
+
 fn expected_output_binding(
     port: &StudyOutputPort,
 ) -> Result<(&'static str, &'static str, &'static str)> {
+    expected_output_binding_for_contract(port, WorkerOutputContract::Legacy)
+}
+
+fn expected_output_binding_for_contract(
+    port: &StudyOutputPort,
+    contract: WorkerOutputContract,
+) -> Result<(&'static str, &'static str, &'static str)> {
+    if matches!(contract, WorkerOutputContract::RetainedCurrentV6 | WorkerOutputContract::RetainedAssetFieldV7 | WorkerOutputContract::RetainedDirectV7) {
+        if port.port_id != fullmag_authoring::ANTENNA_INSPECTION_OUTPUT_PORT_ID
+            || port.data_kind != StudyPortDataKind::Artifact {
+            bail!("retained-current worker permits only its inspection Artifact output");
+        }
+        return Ok(("artifact",
+            fullmag_antenna_artifacts::retained_current::RETAINED_CURRENT_FIELD_CODEC_ID,
+            if matches!(contract, WorkerOutputContract::RetainedDirectV7) {
+                fullmag_antenna_artifacts::retained_current::RETAINED_CURRENT_FIELD_CODEC_VERSION_V2
+            } else { fullmag_antenna_artifacts::retained_current::RETAINED_CURRENT_FIELD_CODEC_VERSION }));
+    }
     match port.data_kind {
         StudyPortDataKind::Artifact if port.port_id == "response" => Ok((
             "artifact", fullmag_application::FREQUENCY_RESPONSE_INDEX_CODEC_ID,
@@ -2357,6 +2388,33 @@ fn persist_completed_worker_execution_with_terminal(
     terminal_stats: Option<&fullmag_runner::StepStats>,
     completion: Option<&fullmag_ir::StageCompletionIR>,
 ) -> Result<()> {
+    persist_completed_worker_execution_with_contract(store, attempt_output_dir, identity,
+        declared_outputs, status, completed_step_count, outputs, accepted_state_ref,
+        observation_source, terminal_publication, terminal_stats, completion, WorkerOutputContract::Legacy)
+}
+
+fn persist_completed_worker_execution_with_contract(
+    store: &SessionStore,
+    attempt_output_dir: &Path,
+    identity: &WorkerExecutionReceiptIdentity,
+    declared_outputs: &[StudyOutputPort],
+    status: RunStatus,
+    completed_step_count: usize,
+    outputs: &[StudyOutputPayload],
+    accepted_state_ref: Option<&AcceptedStateRef>,
+    observation_source: Option<&ObservationSourcePayload>,
+    terminal_publication: Option<&fullmag_runtime_control::PreparedTerminalPublicationV4>,
+    terminal_stats: Option<&fullmag_runner::StepStats>,
+    completion: Option<&fullmag_ir::StageCompletionIR>,
+    output_contract: WorkerOutputContract,
+) -> Result<()> {
+    if matches!(output_contract, WorkerOutputContract::RetainedCurrentV6 | WorkerOutputContract::RetainedAssetFieldV7 | WorkerOutputContract::RetainedDirectV7)
+        && (declared_outputs.len() != 1 || outputs.len() != 1
+            || status != RunStatus::Completed || completed_step_count != 1
+            || accepted_state_ref.is_some() || observation_source.is_some()
+            || terminal_publication.is_some() || terminal_stats.is_some() || completion.is_some()) {
+        bail!("retained-current completion cannot contain magnetic state or another output shape");
+    }
     let mut declared = BTreeMap::new();
     for port in declared_outputs {
         if declared.insert(port.port_id.as_str(), port).is_some() {
@@ -2425,7 +2483,7 @@ fn persist_completed_worker_execution_with_terminal(
         let port = declared.get(output.port_id.as_str()).with_context(|| {
             format!("accepted worker output `{}` is undeclared", output.port_id)
         })?;
-        let (data_kind, codec_id, codec_version) = expected_output_binding(port)?;
+        let (data_kind, codec_id, codec_version) = expected_output_binding_for_contract(port, output_contract)?;
         if output.case_id != identity.case_id
             || ((output.codec_id != codec_id || output.codec_version != codec_version)
                 && !frozen_output_binding(port, &output.codec_id, &output.codec_version))
@@ -2574,6 +2632,34 @@ fn read_recovered_worker_object(
     Ok(range.bytes)
 }
 
+fn read_completed_worker_receipt(
+    attempt_output_dir: &Path,
+    expected_identity: &WorkerExecutionReceiptIdentity,
+) -> Result<WorkerExecutionCompletedReceiptWire> {
+    let started: WorkerExecutionStartedReceipt =
+        read_attempt_receipt(attempt_output_dir, WORKER_EXECUTION_STARTED_RECEIPT)?
+            .context("existing attempt has no durable started receipt; refusing to rerun")?;
+    if !started.identity.matches_same_attempt(expected_identity) {
+        bail!("existing worker start receipt belongs to another command or claim");
+    }
+    read_attempt_receipt(attempt_output_dir, WORKER_EXECUTION_COMPLETED_RECEIPT)?.context(
+        "worker outcome is unknown because no completed receipt exists; refusing to rerun",
+    )
+}
+
+fn read_completed_worker_receipt_for_publication(
+    store: &SessionStore,
+    attempt_output_dir: &Path,
+    expected_identity: &WorkerExecutionReceiptIdentity,
+) -> Result<WorkerExecutionCompletedReceiptWire> {
+    retry_store_writer_busy(|| {
+        // Publication alone waits for the metadata writer. Existing read-only
+        // callers may already hold a shared transaction and must never upgrade it.
+        let _transaction = store.write_transaction()?;
+        read_completed_worker_receipt(attempt_output_dir, expected_identity)
+    })
+}
+
 fn recover_completed_worker_execution(
     store: &SessionStore,
     attempt_output_dir: &Path,
@@ -2583,16 +2669,38 @@ fn recover_completed_worker_execution(
     expected_accepted_state_ref: Option<&AcceptedStateRef>,
     expected_observation_grid: Option<[u32; 3]>,
 ) -> Result<AcceptedRunnerExecution> {
-    let started: WorkerExecutionStartedReceipt =
-        read_attempt_receipt(attempt_output_dir, WORKER_EXECUTION_STARTED_RECEIPT)?
-            .context("existing attempt has no durable started receipt; refusing to rerun")?;
-    if !started.identity.matches_same_attempt(expected_identity) {
-        bail!("existing worker start receipt belongs to another command or claim");
-    }
-    let wire: WorkerExecutionCompletedReceiptWire =
-        read_attempt_receipt(attempt_output_dir, WORKER_EXECUTION_COMPLETED_RECEIPT)?.context(
-            "worker outcome is unknown because no completed receipt exists; refusing to rerun",
-        )?;
+    recover_completed_worker_execution_with_contract(store, attempt_output_dir, expected_identity,
+        declared_outputs, max_output_bytes, expected_accepted_state_ref, expected_observation_grid,
+        WorkerOutputContract::Legacy)
+}
+
+fn recover_completed_worker_execution_with_contract(
+    store: &SessionStore,
+    attempt_output_dir: &Path,
+    expected_identity: &WorkerExecutionReceiptIdentity,
+    declared_outputs: &[StudyOutputPort],
+    max_output_bytes: u64,
+    expected_accepted_state_ref: Option<&AcceptedStateRef>,
+    expected_observation_grid: Option<[u32; 3]>,
+    output_contract: WorkerOutputContract,
+) -> Result<AcceptedRunnerExecution> {
+    let wire = read_completed_worker_receipt(attempt_output_dir, expected_identity)?;
+    recover_completed_worker_execution_from_receipt(store, attempt_output_dir, expected_identity,
+        declared_outputs, max_output_bytes, expected_accepted_state_ref, expected_observation_grid,
+        output_contract, wire)
+}
+
+fn recover_completed_worker_execution_from_receipt(
+    store: &SessionStore,
+    attempt_output_dir: &Path,
+    expected_identity: &WorkerExecutionReceiptIdentity,
+    declared_outputs: &[StudyOutputPort],
+    max_output_bytes: u64,
+    expected_accepted_state_ref: Option<&AcceptedStateRef>,
+    expected_observation_grid: Option<[u32; 3]>,
+    output_contract: WorkerOutputContract,
+    wire: WorkerExecutionCompletedReceiptWire,
+) -> Result<AcceptedRunnerExecution> {
     let (completed, terminal_publication) = match wire {
         WorkerExecutionCompletedReceiptWire::V1(receipt) => (
             RecoveredWorkerExecutionReceipt {
@@ -2729,7 +2837,7 @@ fn recover_completed_worker_execution(
         let port = declared.get(output.port_id.as_str()).with_context(|| {
             format!("completed worker output `{}` is undeclared", output.port_id)
         })?;
-        let (data_kind, codec_id, codec_version) = expected_output_binding(port)?;
+        let (data_kind, codec_id, codec_version) = expected_output_binding_for_contract(port, output_contract)?;
         if output.case_id != expected_identity.case_id
             || output.data_kind != data_kind
             || ((output.codec_id != codec_id || output.codec_version != codec_version)
@@ -2874,6 +2982,16 @@ pub(crate) fn accepted_runner_horizon(accepted_step: &AcceptedWorkerStep) -> Res
     Ok(until_seconds)
 }
 
+#[cfg(test)]
+std::thread_local! {
+    static START_EXECUTION_ENTRIES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+pub(crate) fn accepted_start_execution_entries_for_test() -> usize {
+    START_EXECUTION_ENTRIES.with(std::cell::Cell::get)
+}
+
 /// Execute a Start using the immutable accepted snapshot already validated by
 /// `run_pending_accepted_start`. Recheck the durable worker boundary before
 /// dispatch, but do not reload the immutable study/catalog payload.
@@ -2885,6 +3003,8 @@ fn execute_accepted_worker_start_from_snapshot(
     case_id: &str,
     interrupt_requested: Option<&AtomicBool>,
 ) -> Result<AcceptedRunnerExecution> {
+    #[cfg(test)]
+    START_EXECUTION_ENTRIES.with(|count| count.set(count.get() + 1));
     validate_accepted_worker_start_preconditions(store, start, accepted_step, case_id)?;
     execute_accepted_worker_start_with_snapshot(
         store,
@@ -3057,7 +3177,26 @@ fn execute_accepted_worker_start_with_snapshot(
                 port.port_id
             );
         }
-        expected_output_binding(port)?;
+        let retained = matches!(study_step.kind,
+            fullmag_authoring::StudyStepKind::RetainedCurrentFieldInspection { .. });
+        let contract = if retained {
+            match &accepted_step.execution_plan.backend_plan {
+                fullmag_ir::BackendPlanIR::AntennaRetainedCurrentFieldInspection(_) => {
+                    accepted_retained_current_worker::validate_protocol(start, accepted_step, study_step)?;
+                    WorkerOutputContract::RetainedCurrentV6
+                }
+                fullmag_ir::BackendPlanIR::AntennaRetainedDirectFieldInspection(_) => {
+                    accepted_retained_preparation_worker::validate_protocol(start, accepted_step, study_step)?;
+                    WorkerOutputContract::RetainedDirectV7
+                }
+                fullmag_ir::BackendPlanIR::AntennaRetainedPreparationFieldInspection(_) => {
+                    accepted_retained_preparation_worker::validate_protocol(start, accepted_step, study_step)?;
+                    WorkerOutputContract::RetainedAssetFieldV7
+                }
+                _ => bail!("retained-current operation requires its explicitly versioned backend plan"),
+            }
+        } else { WorkerOutputContract::Legacy };
+        expected_output_binding_for_contract(port, contract)?;
     }
 
     let specification = &accepted.run.specification;
@@ -3085,6 +3224,17 @@ fn execute_accepted_worker_start_with_snapshot(
         .validate_execution_for_problem(specification, immutable_problem)
         .context("validate accepted task execution before dispatch")?;
     let request = &accepted_step.resolved_input.requested_execution;
+    if matches!(&accepted_step.execution_plan.backend_plan,
+        fullmag_ir::BackendPlanIR::AntennaRetainedCurrentFieldInspection(_)) {
+        return accepted_retained_current_worker::execute(
+            store, accepted, start, accepted_step, study_step, case_id, interrupt_requested);
+    }
+    if matches!(&accepted_step.execution_plan.backend_plan,
+        fullmag_ir::BackendPlanIR::AntennaRetainedPreparationFieldInspection(_)
+            | fullmag_ir::BackendPlanIR::AntennaRetainedDirectFieldInspection(_)) {
+        return accepted_retained_preparation_worker::execute(
+            store, accepted, start, accepted_step, study_step, case_id, interrupt_requested);
+    }
     if matches!(study_step.kind, fullmag_authoring::StudyStepKind::ClosedLoopInspection { .. }) {
         return execute_accepted_closed_loop_worker_start(store, accepted, start, accepted_step, study_step, case_id, interrupt_requested);
     }
@@ -4324,6 +4474,53 @@ pub(crate) fn run_pending_accepted_start(
     apply_accepted_start_effect(store, &accepted, &claim, &start)
 }
 
+fn recover_accepted_completion_for_publication(
+    store: &SessionStore,
+    accepted: &fullmag_runtime_control::AcceptedStudySnapshot,
+    start: &fullmag_application::WorkerCommandEnvelope,
+    accepted_step: &AcceptedWorkerStep,
+    execution: &AcceptedRunnerExecution,
+) -> Result<AcceptedRunnerExecution> {
+    retry_store_writer_busy(|| {
+        validate_accepted_worker_start_preconditions(store, start, accepted_step, "default")?;
+        let step = accepted.study.steps.iter()
+            .find(|step| step.step_id == accepted_step.step_id)
+            .context("completed worker step is missing from its immutable StudyPlan")?;
+        let contract = match &accepted_step.execution_plan.backend_plan {
+            fullmag_ir::BackendPlanIR::AntennaRetainedCurrentFieldInspection(_) =>
+                WorkerOutputContract::RetainedCurrentV6,
+            fullmag_ir::BackendPlanIR::AntennaRetainedPreparationFieldInspection(_) =>
+                WorkerOutputContract::RetainedAssetFieldV7,
+            fullmag_ir::BackendPlanIR::AntennaRetainedDirectFieldInspection(_) =>
+                WorkerOutputContract::RetainedDirectV7,
+            _ => WorkerOutputContract::Legacy,
+        };
+        let identity = worker_execution_receipt_identity(start, accepted_step, "default")?;
+        refuse_known_prelaunch_failure(&execution.attempt_output_dir, &identity)?;
+        // Inputs and scientific bindings were validated before the one native
+        // dispatch. Read its exact immutable completion here, never its launcher.
+        let expected_state = if execution.terminal_publication.is_some() {
+            None
+        } else {
+            execution.accepted_state_ref.as_ref()
+        };
+        let wire = read_completed_worker_receipt_for_publication(
+            store, &execution.attempt_output_dir, &identity,
+        )?;
+        // The metadata writer guard has ended; immutable CAS validation is shared
+        // with the existing read-only recovery path.
+        let recovered = recover_completed_worker_execution_from_receipt(
+            store, &execution.attempt_output_dir, &identity, &step.outputs,
+            accepted_step.claim.lease.budget.storage_bytes, expected_state,
+            execution.observation_source.as_ref().map(|source| source.grid_cells), contract, wire,
+        )?;
+        if let Some(terminal) = &recovered.terminal_publication {
+            fullmag_runtime_control::validate_prepared_terminal_publication(store, accepted_step, terminal)?;
+        }
+        Ok(recovered)
+    })
+}
+
 fn apply_accepted_start_effect(
     store: &SessionStore,
     accepted: &fullmag_runtime_control::AcceptedStudySnapshot,
@@ -4391,16 +4588,13 @@ fn apply_accepted_start_effect(
         SessionStore::open_existing(store.root().to_path_buf())
             .context("reopen worker receipt store")
     })?;
-    let durable_execution = execute_accepted_worker_start_from_snapshot(
-        &receipt_store,
-        accepted,
-        start,
-        &accepted_step,
-        DEFAULT_ACCEPTED_CASE_ID,
-        None,
+    let durable_execution = recover_accepted_completion_for_publication(
+        &receipt_store, accepted, start, &accepted_step, &execution,
     )
     .context("recover completed worker receipt before publication")?;
     if !durable_execution.recovered_from_receipt
+        || durable_execution.status != execution.status
+        || durable_execution.completed_step_count != execution.completed_step_count
         || durable_execution.outputs != execution.outputs
         || durable_execution.accepted_state_ref != execution.accepted_state_ref
         || durable_execution.terminal_publication != execution.terminal_publication
@@ -4493,8 +4687,10 @@ fn apply_accepted_start_effect(
         }
     })
     .context("publish accepted worker outputs")?;
-    fullmag_runtime_control::validate_study_task_completion(store, claim)
-        .context("validate accepted worker completion barrier")?;
+    retry_store_writer_busy(|| {
+        fullmag_runtime_control::validate_study_task_completion(store, claim)
+    })
+    .context("validate accepted worker completion barrier")?;
     let recovered_before_completion =
         retry_store_writer_busy(|| fullmag_runtime_control::recover_coordinator(store, claim))
             .context("recover worker coordinator before completion publication")?;
@@ -6179,5 +6375,150 @@ mod completion_receipt_tests {
                     1024 * 1024, Some(&record.source), None).is_err());
             }
         }
+    }
+}
+
+
+#[cfg(test)]
+mod publication_receipt_tests {
+    use super::*;
+    use std::sync::mpsc::sync_channel;
+    use std::thread;
+
+    fn fixture() -> (tempfile::TempDir, SessionStore, PathBuf, WorkerExecutionReceiptIdentity,
+                      AcceptedStateRef, fullmag_ir::StageCompletionIR) {
+        use fullmag_application::{ResourceBudget, ResourceKind, ResourceLease, RunId, TaskRecord};
+        let directory = tempfile::tempdir().unwrap();
+        let store = SessionStore::open(directory.path().join("store")).unwrap();
+        let mut task = TaskRecord::new(RunId::parse("run-completion").unwrap(), "a".repeat(64)).unwrap();
+        task.queue().unwrap();
+        let claim = task.claim(ResourceLease::new("cpu-completed-read", ResourceKind::Cpu,
+            ResourceBudget { cpu_millis: 1000, memory_bytes: 1024*1024,
+                gpu_memory_bytes: 0, storage_bytes: 1024*1024 }).unwrap()).unwrap();
+        let identity = WorkerExecutionReceiptIdentity {
+            schema_version: WORKER_EXECUTION_RECEIPT_SCHEMA.into(), claim,
+            start_message_id: "start".into(), start_sequence: 1,
+            case_id: "case".into(), plan_fingerprint: "c".repeat(64),
+        };
+        let (record, _) = crate::accepted_field_materialization_worker::completion_tests::fixture(
+            fullmag_ir::StageStopReason::MaxSteps, false);
+        let attempt = directory.path().join("attempt");
+        std::fs::create_dir(&attempt).unwrap();
+        write_immutable_attempt_receipt(&attempt, WORKER_EXECUTION_STARTED_RECEIPT,
+            &WorkerExecutionStartedReceipt { identity: identity.clone() }).unwrap();
+        persist_completed_worker_execution(&store, &attempt, &identity, &[],
+            RunStatus::Completed, 7, &[], Some(&record.source), None, None,
+            Some(&record.completion)).unwrap();
+        (directory, store, attempt, identity, record.source, record.completion)
+    }
+
+    #[test]
+    fn completed_receipt_read_preserves_existing_shared_transaction() {
+        let (_directory, store, attempt, identity, source, completion) = fixture();
+        let reader_store = SessionStore::open_existing(store.root().to_path_buf()).unwrap();
+        let holder_store = SessionStore::open_existing(store.root().to_path_buf()).unwrap();
+        let transaction = holder_store.read_transaction().unwrap();
+        let (finished, result) = sync_channel(1);
+        let reader = thread::spawn(move || {
+            finished.send(recover_completed_worker_execution(&reader_store, &attempt,
+                &identity, &[], 1024*1024, Some(&source), None)).unwrap();
+        });
+        let while_shared = result.recv_timeout(Duration::from_secs(2));
+        drop(transaction);
+        let recovered = match while_shared {
+            Ok(outcome) => {
+                reader.join().unwrap();
+                outcome.unwrap()
+            }
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                let _ = result.recv_timeout(Duration::from_secs(5));
+                reader.join().unwrap();
+                panic!("completed read attempted to upgrade its caller's shared store lock");
+            }
+            Err(error) => {
+                reader.join().unwrap();
+                panic!("completed reader disconnected: {error}");
+            }
+        };
+        assert!(recovered.recovered_from_receipt);
+        assert_eq!(recovered.completion, Some(completion));
+    }
+
+    #[test]
+    fn completed_receipt_waits_for_busy_store_before_publication() {
+        let (_directory, store, attempt, identity, source, completion) = fixture();
+        let reader_store = SessionStore::open_existing(store.root().to_path_buf()).unwrap();
+        let holder_store = SessionStore::open_existing(store.root().to_path_buf()).unwrap();
+        let started_before = std::fs::read(attempt.join(WORKER_EXECUTION_STARTED_RECEIPT)).unwrap();
+        let completed_before = std::fs::read(attempt.join(WORKER_EXECUTION_COMPLETED_RECEIPT)).unwrap();
+        let transaction = holder_store.write_transaction().unwrap();
+        let (entered, started) = sync_channel(1);
+        let (finished, result) = sync_channel(1);
+        let reader_attempt = attempt.clone();
+        let reader = thread::spawn(move || {
+            entered.send(()).unwrap();
+            let outcome = read_completed_worker_receipt_for_publication(
+                &reader_store, &reader_attempt, &identity,
+            ).and_then(|wire| recover_completed_worker_execution_from_receipt(
+                &reader_store, &reader_attempt, &identity, &[], 1024*1024,
+                Some(&source), None, WorkerOutputContract::Legacy, wire,
+            ));
+            finished.send(outcome).unwrap();
+        });
+        started.recv_timeout(Duration::from_secs(2)).unwrap();
+        let while_busy = result.recv_timeout(Duration::from_millis(100));
+        drop(transaction);
+        // Always release the real writer and join before evaluating assertions.
+        let recovered = match while_busy {
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) =>
+                result.recv_timeout(Duration::from_secs(5)).unwrap(),
+            Ok(outcome) => {
+                reader.join().unwrap();
+                panic!("completed read did not wait for the actual store writer: {}",
+                    outcome.err().map(|error| format!("{error:#}")).unwrap_or_default());
+            }
+            Err(error) => panic!("completed reader disconnected: {error}"),
+        }.unwrap();
+        reader.join().unwrap();
+        assert!(recovered.recovered_from_receipt);
+        assert!(recovered.outputs.is_empty());
+        assert_eq!(recovered.completion, Some(completion));
+        assert!(recovered.accepted_state_ref.is_some());
+        assert_eq!(std::fs::read(attempt.join(WORKER_EXECUTION_STARTED_RECEIPT)).unwrap(), started_before);
+        assert_eq!(std::fs::read(attempt.join(WORKER_EXECUTION_COMPLETED_RECEIPT)).unwrap(), completed_before);
+    }
+
+    #[test]
+    fn completed_receipt_missing_never_dispatches_again() {
+        let (_directory, store, attempt, identity, source, _) = fixture();
+        let missing = attempt.join("absent-attempt");
+        let error = recover_completed_worker_execution(&store, &missing, &identity,
+            &[], 1024*1024, Some(&source), None).err().unwrap();
+        assert!(format!("{error:#}").contains("refusing to rerun"));
+        assert!(!missing.exists(), "a completed read must never reserve or start another attempt");
+        let completed = attempt.join(WORKER_EXECUTION_COMPLETED_RECEIPT);
+        let saved = attempt.join("saved-completed.json");
+        std::fs::rename(&completed, &saved).unwrap();
+        let started_before = std::fs::read(attempt.join(WORKER_EXECUTION_STARTED_RECEIPT)).unwrap();
+        let error = recover_completed_worker_execution(&store, &attempt, &identity,
+            &[], 1024*1024, Some(&source), None).err().unwrap();
+        assert!(format!("{error:#}").contains("refusing to rerun"));
+        assert!(!completed.exists());
+        assert_eq!(std::fs::read(attempt.join(WORKER_EXECUTION_STARTED_RECEIPT)).unwrap(), started_before);
+        assert!(saved.exists());
+    }
+
+    #[test]
+    fn completed_receipt_identity_mismatch_is_not_retried() {
+        let (_directory, store, attempt, mut identity, source, _) = fixture();
+        identity.start_message_id = "foreign-start".into();
+        let mut calls = 0;
+        let error = retry_store_writer_busy(|| {
+            calls += 1;
+            recover_completed_worker_execution(&store, &attempt, &identity,
+                &[], 1024*1024, Some(&source), None)
+        }).err().unwrap();
+        assert_eq!(calls, 1);
+        assert!(format!("{error:#}").contains("another command or claim"));
     }
 }

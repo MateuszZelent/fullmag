@@ -6762,6 +6762,7 @@ fn embed_geometry_transform(geometry: SceneGeometry, transform: &Transform3D) ->
         return geometry;
     }
     SceneGeometry {
+        geometry_name: None,
         source_asset: None,
         geometry_kind: "Transform".to_string(),
         geometry_params: serde_json::json!({ "child": geometry, "transform": transform }),
@@ -7142,6 +7143,7 @@ fn apply_boolean_combine_objects_transaction(
     {
         let target = &mut scene.objects[target_index];
         target.geometry = SceneGeometry {
+            geometry_name: None,
             source_asset: None,
             geometry_kind: target_kind.to_string(),
             geometry_params: serde_json::json!({ "operands": operands_value }),
@@ -7307,6 +7309,7 @@ fn apply_update_boolean_operands_transaction(
         ApiError::internal(format!("failed to serialize boolean operands: {error}"))
     })?;
     object.geometry = SceneGeometry {
+        geometry_name: None,
         source_asset: None,
         geometry_kind,
         geometry_params: serde_json::json!({ "operands": operands_value }),
@@ -7372,6 +7375,7 @@ fn apply_separate_object_transaction(
                 Some(op_transform) => {
                     // Preserve exact affine composition without shear loss when source has anisotropic scale
                     let wrapped = SceneGeometry {
+                        geometry_name: None,
                         source_asset: None,
                         geometry_kind: "Transform".to_string(),
                         geometry_params: serde_json::json!({
@@ -7412,6 +7416,7 @@ fn apply_separate_object_transaction(
                         }
                         Some(sole_t) => {
                             target.geometry = SceneGeometry {
+                                geometry_name: None,
                                 source_asset: None,
                                 geometry_kind: "Transform".to_string(),
                                 geometry_params: serde_json::json!({
@@ -7538,6 +7543,7 @@ fn apply_separate_object_transaction(
             ];
             let original_geometry = source.geometry.clone();
             let positive_half = SceneGeometry {
+                geometry_name: None,
                 source_asset: None,
                 geometry_kind: "SlicePlane".to_string(),
                 geometry_params: serde_json::json!({
@@ -7550,6 +7556,7 @@ fn apply_separate_object_transaction(
                 bounds_max: None,
             };
             let negative_half = SceneGeometry {
+                geometry_name: None,
                 source_asset: None,
                 geometry_kind: "SlicePlane".to_string(),
                 geometry_params: serde_json::json!({
@@ -7713,6 +7720,7 @@ fn build_array_3d_geometry(
         Value::Bool(merge_overlapping),
     );
     Ok(SceneGeometry {
+        geometry_name: None,
         source_asset: None,
         geometry_kind: "Array3D".to_string(),
         geometry_params: Value::Object(params),
@@ -7780,6 +7788,7 @@ fn apply_array_3d_transaction(
                     ApiError::internal(format!("failed to serialize boolean operands: {error}"))
                 })?;
                 target.geometry = SceneGeometry {
+                    geometry_name: None,
                     source_asset: None,
                     geometry_kind,
                     geometry_params: serde_json::json!({ "operands": operands_value }),
@@ -7877,6 +7886,7 @@ fn apply_array_3d_transaction(
                             )
                         } else {
                             let wrapped = SceneGeometry {
+                                geometry_name: None,
                                 source_asset: None,
                                 geometry_kind: "Transform".to_string(),
                                 geometry_params: serde_json::json!({
@@ -8461,6 +8471,31 @@ mod antenna_scene_roundtrip_tests {
     use super::*;
 
     #[test]
+    fn shared_domain_source_survives_unrelated_patch_and_explicit_reset() {
+        let source = serde_json::json!({
+            "kind": "explicit", "source": "retained.fullmag-mesh",
+            "region_markers": [], "object_region_markers": [], "marker_owners": []
+        });
+        let scene: SceneDocument = serde_json::from_value(serde_json::json!({
+            "version": "scene.v2", "study": {"shared_domain_mesh_source": source}
+        })).unwrap();
+        let patched = apply_scene_merge_patch(&scene, &serde_json::json!({
+            "scene": {"name": "Renamed"}
+        })).unwrap();
+        assert_eq!(patched.study.shared_domain_mesh_source, scene.study.shared_domain_mesh_source);
+        let reset = apply_scene_merge_patch(&patched, &serde_json::json!({
+            "study": {"shared_domain_mesh_source": {"kind": "generated",
+                "source": null, "region_markers": null, "object_region_markers": null, "marker_owners": null}}
+        })).unwrap();
+        assert_eq!(reset.study.shared_domain_mesh_source,
+                   Some(fullmag_authoring::ScriptBuilderSharedDomainMeshSource::Generated {}));
+        let absent = apply_scene_merge_patch(&reset, &serde_json::json!({
+            "study": {"shared_domain_mesh_source": null}
+        })).unwrap();
+        assert!(absent.study.shared_domain_mesh_source.is_none());
+    }
+
+    #[test]
     fn merge_patch_preserves_all_five_antenna_composition_collections() {
         let scene: SceneDocument = serde_json::from_value(serde_json::json!({
             "version": "scene.v2",
@@ -8695,6 +8730,7 @@ mod boolean_operand_identity_tests {
 
     fn geometry(params: Value) -> SceneGeometry {
         SceneGeometry {
+            geometry_name: None,
             source_asset: None,
             geometry_kind: "Union".to_string(),
             geometry_params: params,

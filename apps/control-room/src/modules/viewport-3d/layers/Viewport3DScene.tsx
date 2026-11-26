@@ -73,6 +73,7 @@ import type {
   Viewport3DInspectScreenPosition,
 } from "../viewport3dInspect";
 import type { Viewport3DResourceTracker } from "../viewport3dDiagnostics";
+import { useViewport3DWorkerRuntime } from "../viewport3dWorkerRuntime";
 import { useBatchedInvalidate } from "../viewport3dBatchedInvalidate";
 import type {
   Viewport3DBounds,
@@ -2399,6 +2400,9 @@ export function Viewport3DScene({
   visualProfileId,
   qualityProfileId,
 }: Viewport3DSceneProps) {
+  // The renderer reconciles separately and may still run worker-producing
+  // effects while the enclosing DOM viewport is being removed.
+  useViewport3DWorkerRuntime();
   const appearance = useViewport3DAppearance();
   const invalidate = useBatchedInvalidate("camera");
   const setThreeState = useThree((state) => state.set);

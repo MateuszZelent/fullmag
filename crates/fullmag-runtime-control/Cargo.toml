@@ -13,6 +13,7 @@ serde_json.workspace = true
 serde.workspace = true
 sha2 = "0.10"
 fullmag-application = { path = "../fullmag-application" }
+fullmag-antenna-artifacts = { path = "../fullmag-antenna-artifacts" }
 fullmag-session = { path = "../fullmag-session" }
 fullmag-authoring = { path = "../fullmag-authoring" }
 fullmag-ir = { path = "../fullmag-ir" }

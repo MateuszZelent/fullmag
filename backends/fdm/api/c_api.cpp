@@ -3519,6 +3519,49 @@ int fullmag_fdm_backend_multilayer_bb(
 #endif
 }
 
+int fullmag_fdm_backend_single_layer_bb_v1(
+    fullmag_fdm_backend *handle, uint32_t op, double lambda,
+    double *out_scalars, uint64_t scalar_count)
+{
+#if FULLMAG_HAS_CUDA
+    if (!handle) return FULLMAG_FDM_ERR_INVALID;
+    auto &ctx = *reinterpret_cast<Context *>(handle);
+    if (ctx.has_multilayer_plan_v2 || op > FULLMAG_FDM_SINGLE_LAYER_BB_OP_RESTORE) {
+        ctx.last_error =
+            "resident single-layer BB requires a single-grid context and valid operation";
+        return FULLMAG_FDM_ERR_INVALID;
+    }
+    if (ctx.boundary_tier >= 2 && ctx.delta_xp != nullptr) {
+        ctx.last_error =
+            "resident single-layer BB does not support T1 delta boundary exchange";
+        return FULLMAG_FDM_ERR_INVALID;
+    }
+    const bool first_capture =
+        op == FULLMAG_FDM_SINGLE_LAYER_BB_OP_CAPTURE && !ctx.single_layer_bb_history_valid;
+    fullmag_fdm_reset_hot_loop_audit(ctx);
+    ReceiptSolverPhaseGuard receipt_solver_phase(ctx);
+    if (!context_single_layer_bb(ctx, op, lambda, out_scalars, scalar_count)) {
+        return FULLMAG_FDM_ERR_CUDA;
+    }
+    if (first_capture) {
+        if (!context_complete_solver_receipt_attempt(
+                ctx, "cudaStreamSynchronize(single-layer BB initial capture)")) {
+            return FULLMAG_FDM_ERR_CUDA;
+        }
+        fullmag_fdm_note_operator_device_execution(
+            ctx, FULLMAG_FDM_OPERATOR_LLG_INTEGRATOR);
+    } else if (op == FULLMAG_FDM_SINGLE_LAYER_BB_OP_TRIAL) {
+        fullmag_fdm_note_operator_device_execution(
+            ctx, FULLMAG_FDM_OPERATOR_LLG_INTEGRATOR);
+    }
+    receipt_solver_phase.commit();
+    return FULLMAG_FDM_OK;
+#else
+    (void)handle; (void)op; (void)lambda; (void)out_scalars; (void)scalar_count;
+    return FULLMAG_FDM_ERR_CUDA;
+#endif
+}
+
 int fullmag_fdm_backend_refresh_multilayer_demag(
     fullmag_fdm_backend *handle)
 {

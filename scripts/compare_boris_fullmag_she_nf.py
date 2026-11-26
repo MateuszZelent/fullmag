@@ -410,6 +410,11 @@ def _normalize_boris_fields(
         raise ValueError("BORIS N/F meshes must share in-plane dimensions")
     if normal["V"].step_m != ferromagnet["V"].step_m:
         raise ValueError("BORIS N/F meshes must share cell steps")
+    if any(
+        not math.isclose(n, f, rel_tol=_MESH_REL_TOLERANCE, abs_tol=_MESH_ABS_TOLERANCE)
+        for n, f in zip(normal["V"].origin_m[:2], ferromagnet["V"].origin_m[:2])
+    ):
+        raise ValueError("BORIS N/F meshes must share in-plane origins")
     n_top = normal["V"].origin_m[2] + n_shape[2] * normal["V"].step_m[2]
     if not math.isclose(n_top, ferromagnet["V"].origin_m[2], rel_tol=_MESH_REL_TOLERANCE, abs_tol=_MESH_ABS_TOLERANCE):
         raise ValueError("BORIS N/F meshes are not contiguous along the interface normal")

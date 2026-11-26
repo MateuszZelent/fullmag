@@ -277,6 +277,50 @@ class NativeFailedRecreateTests(unittest.TestCase):
             attestation["retained_ready_owner"] = self.journal["retained_ready_owner"]
         self.namespace_raw = reconcile.canonical(attestation) + b"\n"
 
+    def configure_api_start_drained_journal(self):
+        self.owner["state"] = "drained"
+        self.owner_raw = json.dumps(self.owner, sort_keys=True).encode()
+        probe = self.journal["native_failure_probe"]
+        probe["failed_owner"] = self.owner
+        probe["failed_owner_sha256"] = hashlib.sha256(self.owner_raw).hexdigest()
+        probe["failure_mode"] = stop_failed.API_START_FAILURE_MODE
+        probe["owner_pid_exists"] = False
+        probe["child_pids_exist"] = False
+        probe["process_receipt"]["error"] = (
+            "API binding did not become ready: runtime image provenance is not a bounded regular file"
+        )
+        self.journal["failure_receipt"]["receipt"] = probe["process_receipt"]
+        self.journal["failure_mode"] = stop_failed.API_START_FAILURE_MODE
+        self.journal["terminal_failed_owner_sha256"] = probe["failed_owner_sha256"]
+        self.journal_raw = json.dumps(self.journal, sort_keys=True).encode()
+
+    def test_api_start_drained_context_preserves_actual_owner_and_unknown_shutdown(self):
+        self.configure_api_start_drained_journal()
+        before = self.owner_raw
+        with patch.object(stop_unadmitted, "_control_bytes", side_effect=self.control_bytes), patch.object(
+            dev, "_read_runtime_config_digest", return_value="c" * 64
+        ):
+            context = dev._native_failed_stop_recovery_context(
+                self.control, self.previous(), backend_id=BACKEND_ID, fresh_state=False
+            )
+        self.assertIs(context["api_start_with_drained_owner"], True)
+        self.assertEqual(context["native_restart_metadata"]["failure_mode"], "api-start-failure")
+        self.assertIs(context["native_restart_metadata"]["claim_pending"], False)
+        self.assertEqual(self.owner_raw, before)
+        self.assertEqual(self.owner["state"], "drained")
+        self.assertEqual(self.terminal["state"], "shutdown_unknown")
+
+    def test_api_start_drained_context_rejects_changed_owner_bytes(self):
+        self.configure_api_start_drained_journal()
+        self.owner_raw += b" "
+        with patch.object(stop_unadmitted, "_control_bytes", side_effect=self.control_bytes), patch.object(
+            dev, "_read_runtime_config_digest", return_value="c" * 64
+        ):
+            with self.assertRaises(dev.BuildControlError):
+                dev._native_failed_stop_recovery_context(
+                    self.control, self.previous(), backend_id=BACKEND_ID, fresh_state=False
+                )
+
     def test_native_stop_journal_pins_owner_and_current_config(self):
         with patch.object(stop_unadmitted, "_control_bytes", side_effect=self.control_bytes), \
                 patch.object(dev, "_read_runtime_config_digest", return_value="c" * 64):
@@ -464,6 +508,14 @@ class CompletedRecreationContinuationTests(unittest.TestCase):
             return completed_raw if path.startswith('recreate-services/') else previous_raw
         with patch.object(stop_unadmitted,'_control_bytes',side_effect=read),patch.object(recovery,'docker_capture',return_value=self.absence),patch.object(dev,'_validate_removed_recreation_proof',return_value=({}, {}, self.recovery)),patch.object(dev,'_operator_probe_record_from_retained',return_value={}),patch.object(dev,'_session_host',return_value=host):
             return dev._completed_recreation_start_context(self.control,self.args,self.selected,{'runtime_root':self.root})
+    def test_completed_api_start_drained_context_matches_real_start_signature(self):
+        import inspect
+        self.recovery["api_start_with_drained_owner"] = True
+        context = self.invoke()
+        inspect.signature(dev.start).bind(self.args, **context)
+        self.assertNotIn("api_start_with_drained_owner", context)
+        self.assertEqual(context["native_restart_metadata"], self.recovery["native_restart_metadata"])
+
     def test_completed_removal_restores_exact_state_and_existing_r5_context(self):
         context=self.invoke();self.assertEqual(context['reuse_state']['state'],self.state);self.assertEqual(context['previous_config_sha256'],'c'*64);self.assertEqual(context['native_restart_metadata'],self.recovery['native_restart_metadata']);self.control.write.assert_not_called()
     @unittest.skipUnless(sys.platform.startswith("linux"), "requires the real Linux no-follow reader")
@@ -724,6 +776,46 @@ class CompletedRemovalNativeProofTests(unittest.TestCase):
                 self.records=copy.deepcopy(original);value=json.loads(self.records[path]);mutate(value)
                 self.records[path]=dev.canonical(value)+b'\n'
                 with self.assertRaises(dev.BuildControlError):self.invoke()
+
+    def completed_readonly_archive_pins(self):
+        pins = ("readonly-results/" + "a" * 64 + "/request.json", "b" * 64)
+        base = "recreate-services/attempts/" + self.args.completed_recreation_attempt
+        self.completed["inputs"]["readonly_result_archive"] = {
+            "request_path": pins[0], "request_sha256": pins[1],
+        }
+        receipt = dev.canonical(self.completed) + b"\n"
+        self.records[base + "/terminal.json"] = receipt
+        self.records[base + "/receipt.json"] = receipt
+        return pins
+
+    def test_resume_authenticates_completed_readonly_archive_request(self):
+        pins = self.completed_readonly_archive_pins()
+        self.args.readonly_result_archive_request, self.args.readonly_result_archive_request_sha256 = pins
+        with patch("docker_readonly_result_archive.load_request") as validate_archive:
+            observed = self.invoke(ordinary=True)
+        self.assertEqual(observed["operation_terminal"]["inputs"]["readonly_result_archive"], {
+            "request_path": pins[0], "request_sha256": pins[1],
+        })
+        validate_archive.assert_called_once_with(self.control, self.selected, pins)
+
+    def test_resume_refuses_changed_completed_readonly_archive_request_bytes(self):
+        pins = self.completed_readonly_archive_pins()
+        self.args.readonly_result_archive_request, self.args.readonly_result_archive_request_sha256 = pins
+        self.control.read_bytes.return_value = b"changed archive request"
+        with self.assertRaisesRegex(dev.BuildControlError, "Readonly archive admission request changed"):
+            self.invoke(ordinary=True)
+        self.assertEqual(self.calls, [])
+
+    def test_resume_refuses_changed_or_omitted_completed_readonly_archive_pins(self):
+        path, digest = self.completed_readonly_archive_pins()
+        for requested in ((None, None), (path, "c" * 64), ("readonly-results/" + "d" * 64 + "/request.json", digest)):
+            with self.subTest(requested=requested):
+                self.args.readonly_result_archive_request, self.args.readonly_result_archive_request_sha256 = requested
+                with patch("docker_readonly_result_archive.load_request") as validate_archive:
+                    with self.assertRaises(dev.BuildControlError):
+                        self.invoke(ordinary=True)
+                validate_archive.assert_not_called()
+                self.assertEqual(self.calls, [])
 
     def test_recheck_pins_even_nonsemantic_retained_snapshot_changes(self):
         before=self.invoke()

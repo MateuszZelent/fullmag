@@ -15,11 +15,16 @@ import {
   type InspectorDescriptor,
 } from "@/modules/inspector/inspectorDescriptor";
 
+import { NumberField } from "@/modules/inspector/panels/ObjectVisualizationTargetSection";
+
 type Target = "object" | "airbox";
 type Mode = InspectorEditMode | null;
 type BreadcrumbSelection = NonNullable<InspectorDescriptor["breadcrumbs"][number]["selection"]>;
 
 interface Snapshot {
+  numberValue: number;
+  numberMax: number;
+  numberCommitCalls: number;
   applying: boolean;
   applyCalls: number;
   dirty: boolean;
@@ -35,6 +40,8 @@ interface Snapshot {
 }
 
 interface FixtureDriver {
+  setNumberValue: (value: number) => void;
+  setNumberMax: (value: number) => void;
   read: () => Snapshot;
   setDescriptor: (target: Target) => void;
   setMode: (mode: Mode) => void;
@@ -49,6 +56,9 @@ declare global {
 }
 
 function InspectorActionsPanel({
+  numberValue,
+  numberMax,
+  onNumberChange,
   applying,
   dirty,
   mode,
@@ -59,6 +69,9 @@ function InspectorActionsPanel({
   selection,
   valid,
 }: {
+  numberValue: number;
+  numberMax: number;
+  onNumberChange: (value: number) => void;
   applying: boolean;
   dirty: boolean;
   mode: Mode;
@@ -101,6 +114,13 @@ function InspectorActionsPanel({
               defaultValue="keep-this-value"
             />
           </label>
+          <NumberField
+            label="Arrow budget"
+            value={numberValue}
+            min={1}
+            max={numberMax}
+            onChange={onNumberChange}
+          />
           <p>Controlled fixture content keeps the production Inspector scroll viewport measurable while action state changes.</p>
           {Array.from({ length: 24 }, (_, index) => (
             <div
@@ -121,6 +141,13 @@ function InspectorActionsPanel({
 }
 
 export default function InspectorActionsPage() {
+  const [numberValue, setNumberValue] = useState(10);
+  const [numberMax, setNumberMax] = useState(40);
+  const [numberCommitCalls, setNumberCommitCalls] = useState(0);
+  const commitNumber = useCallback((value: number) => {
+    setNumberCommitCalls((count) => count + 1);
+    setNumberValue(value);
+  }, []);
   const [target, setTarget] = useState<Target>("object");
   const [mode, setMode] = useState<Mode>("staged");
   const [dirty, setDirty] = useState(true);
@@ -154,6 +181,9 @@ export default function InspectorActionsPage() {
 
   const read = useCallback(
     () => ({
+      numberValue,
+      numberMax,
+      numberCommitCalls,
       applying,
       applyCalls,
       dirty,
@@ -167,7 +197,7 @@ export default function InspectorActionsPage() {
       target,
       valid,
     }),
-    [applying, applyCalls, dirty, focusCalls, lastApplyAck, lastResetMode, mode, resetCalls, target, valid],
+    [numberValue, numberMax, numberCommitCalls, applying, applyCalls, dirty, focusCalls, lastApplyAck, lastResetMode, mode, resetCalls, target, valid],
   );
 
   const apply = useCallback(async () => {
@@ -213,6 +243,8 @@ export default function InspectorActionsPage() {
 
   useEffect(() => {
     const driver: FixtureDriver = {
+      setNumberValue,
+      setNumberMax,
       read,
       setDescriptor: setTarget,
       setMode: setFixtureMode,
@@ -256,6 +288,9 @@ export default function InspectorActionsPage() {
       <Profiler id="inspector-actions-production-panel" onRender={recordReactCommit}>
         <InspectorEditSessionProvider>
           <InspectorActionsPanel
+            numberValue={numberValue}
+            numberMax={numberMax}
+            onNumberChange={commitNumber}
             applying={applying}
             dirty={dirty}
             mode={mode}

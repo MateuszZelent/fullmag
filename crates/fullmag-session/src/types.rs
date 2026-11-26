@@ -1585,6 +1585,19 @@ impl FmsPreparationReceipt {
                 &self.payload, &self.run_id, step_id,
                 &self.preparation_id, &self.plan_fingerprint,
             )?;
+        } else if payload_schema == "retained_current_preparation_receipt.v1" {
+            let step_id = self.payload["plan"]["source"]["step_id"].as_str()
+                .context("retained-current preparation accepted step is missing")?;
+            validate_retained_current_preparation_payload_identity(
+                &self.payload, &self.run_id, step_id,
+                &self.preparation_id, &self.plan_fingerprint,
+            )?;
+        } else if payload_schema == "retained_asset_field_preparation_receipt.v1" {
+            let step_id = self.payload["plan"]["source"]["step_id"].as_str()
+                .context("retained-asset field preparation accepted step is missing")?;
+            validate_retained_asset_field_preparation_payload_identity(
+                &self.payload, &self.run_id, step_id, &self.preparation_id, &self.plan_fingerprint,
+            )?;
         } else if payload_schema != FMS_PREPARATION_RECEIPT_SCHEMA {
             bail!("preparation receipt payload has unsupported schema `{payload_schema}`");
         }
@@ -1882,6 +1895,17 @@ impl FmsTaskPreparationReceipt {
         if payload["schema_version"] == "closed_loop_preparation_receipt.v1" {
             return self.validate_closed_loop_payload_identity();
         }
+        if payload["schema_version"] == "retained_current_preparation_receipt.v1" {
+            return validate_retained_current_preparation_payload_identity(
+                payload, &self.run_id, &self.step_id,
+                &self.preparation_id, &self.plan_fingerprint,
+            );
+        }
+        if payload["schema_version"] == "retained_asset_field_preparation_receipt.v1" {
+            return validate_retained_asset_field_preparation_payload_identity(
+                payload, &self.run_id, &self.step_id, &self.preparation_id, &self.plan_fingerprint,
+            );
+        }
         if payload["schema_version"] != FMS_PREPARATION_RECEIPT_SCHEMA
             || payload["preparation_id"].as_str() != Some(self.preparation_id.as_str())
             || payload["plan_fingerprint"].as_str() != Some(self.plan_fingerprint.as_str())
@@ -1990,7 +2014,8 @@ impl FmsTaskPreparationReceipt {
             bail!("accepted RunSpec run_id does not match task preparation receipt");
         }
         let expected = format!("sha256:{}", canonical_json_sha256(&intent.specification));
-        let source = if self.payload["schema_version"] == "closed_loop_preparation_receipt.v1" {
+        let source = if matches!(self.payload["schema_version"].as_str(),
+            Some("closed_loop_preparation_receipt.v1" | "retained_current_preparation_receipt.v1" | "retained_asset_field_preparation_receipt.v1")) {
             &self.payload["plan"]["source"]
         } else { &self.payload["accepted_run_source"] };
         let actual = source["specification_fingerprint"]
@@ -1998,6 +2023,26 @@ impl FmsTaskPreparationReceipt {
             .context("accepted run specification fingerprint is missing")?;
         if actual != expected {
             bail!("task preparation receipt does not match accepted RunSpec fingerprint");
+        }
+        if matches!(self.payload["schema_version"].as_str(),
+            Some("retained_current_preparation_receipt.v1" | "retained_asset_field_preparation_receipt.v1")) {
+            let project_id = intent.specification.pointer("/snapshot/project_id")
+                .and_then(Value::as_str).context("retained-current accepted project is missing")?;
+            if self.payload.pointer("/plan/parent/owner/project_id").and_then(Value::as_str)
+                != Some(project_id) {
+                bail!("retained-current preparation parent belongs to another accepted project");
+            }
+        }
+        if self.payload["schema_version"] == "retained_asset_field_preparation_receipt.v1" {
+            let reference: fullmag_ir::AntennaSourcePreparationAssetRefIR = serde_json::from_value(
+                self.payload["plan"]["preparation_asset"].clone())?;
+            let assets = intent.specification["immutable_assets"].as_array()
+                .context("retained-asset field immutable RunSpec assets absent")?;
+            if assets.iter().filter(|asset| asset["asset_id"].as_str() == Some(reference.asset_id.as_str())
+                && asset["content_sha256"].as_str() == Some(reference.content_sha256.as_str())).count() != 1
+                || intent.asset_object_refs.get(&reference.asset_id) != Some(&reference.content_sha256) {
+                bail!("retained-asset field source asset differs from accepted immutable closure");
+            }
         }
         Ok(())
     }
@@ -2048,6 +2093,183 @@ fn validate_closed_loop_preparation_payload_identity(
         validate_prefixed_sha256(plan.get(field).and_then(Value::as_str).context("inspection preparation digest missing")?, "inspection preparation fingerprint")?;
     }
     validate_prefixed_sha256(source.get("specification_fingerprint").and_then(Value::as_str).context("inspection accepted RunSpec digest missing")?, "inspection RunSpec fingerprint")?;
+    Ok(())
+}
+
+// Envelope identity only. Application validates the complete typed plan against
+// ProblemIR and the authenticated historical parent; these pins do not grant authority.
+fn validate_retained_current_preparation_payload_identity(
+    payload: &Value,
+    run_id: &str,
+    step_id: &str,
+    preparation_id: &str,
+    plan_fingerprint: &str,
+) -> Result<()> {
+    fn object<'a>(value: &'a Value, fields: &[&str]) -> Result<&'a serde_json::Map<String, Value>> {
+        let object = value.as_object().context("retained-current preparation object is missing")?;
+        if object.len() != fields.len() || fields.iter().any(|field| !object.contains_key(*field)) {
+            bail!("retained-current preparation object has unexpected or missing fields");
+        }
+        Ok(object)
+    }
+    fn identifier(value: &Value) -> Result<&str> {
+        let value = value.as_str().context("retained-current preparation identifier is missing")?;
+        if value.is_empty() || value.len() > 4096 || value.trim() != value
+            || value.chars().any(char::is_control) {
+            bail!("retained-current preparation identifier is invalid");
+        }
+        Ok(value)
+    }
+    fn cas_pin(value: &Value) -> Result<()> {
+        let pin = object(value, &["object_ref", "byte_count"])?;
+        validate_sha256(pin["object_ref"].as_str().context("retained-current CAS digest is missing")?, "retained-current CAS digest")?;
+        if pin["byte_count"].as_u64().unwrap_or(0) == 0 {
+            bail!("retained-current CAS byte count must be positive");
+        }
+        Ok(())
+    }
+
+    validate_study_step_id(step_id)?;
+    if preparation_id != format!("prep-{}", task_id_for_study_step(run_id, step_id)?) {
+        bail!("retained-current preparation does not belong to the canonical accepted task");
+    }
+    let receipt = object(payload, &["schema_version", "preparation_id", "plan_fingerprint", "plan"])?;
+    if receipt["schema_version"] != "retained_current_preparation_receipt.v1"
+        || receipt["preparation_id"].as_str() != Some(preparation_id)
+        || receipt["plan_fingerprint"].as_str() != Some(plan_fingerprint) {
+        bail!("retained-current preparation payload identity differs from envelope");
+    }
+    let plan = object(&receipt["plan"], &["schema_version", "source", "problem_fingerprint",
+        "carrier_fingerprint", "operation_fingerprint", "sampling_fingerprint", "stage_id",
+        "port_mode_id", "output_id", "parent"])?;
+    let source = object(&plan["source"], &["schema_version", "run_id", "step_id",
+        "problem_fingerprint", "specification_fingerprint"])?;
+    if plan["schema_version"] != "retained_current_preparation_plan.v1"
+        || source["schema_version"] != "accepted_run_preparation_source.v1"
+        || source["run_id"].as_str() != Some(run_id)
+        || source["step_id"].as_str() != Some(step_id)
+        || source["problem_fingerprint"] != plan["problem_fingerprint"]
+        || format!("sha256:{}", canonical_json_sha256(&receipt["plan"])) != plan_fingerprint {
+        bail!("retained-current preparation source differs from its envelope");
+    }
+    for field in ["problem_fingerprint", "carrier_fingerprint", "operation_fingerprint", "sampling_fingerprint"] {
+        validate_prefixed_sha256(plan[field].as_str().context("retained-current preparation digest missing")?, "retained-current preparation fingerprint")?;
+    }
+    validate_prefixed_sha256(source["specification_fingerprint"].as_str().context("retained-current accepted RunSpec digest missing")?, "retained-current RunSpec fingerprint")?;
+    for field in ["stage_id", "port_mode_id", "output_id"] { identifier(&plan[field])?; }
+    let parent = object(&plan["parent"], &["owner", "source", "evidence_capsule"])?;
+    let owner = object(&parent["owner"], &["project_id", "run_id", "study_step_id", "native_stage_id",
+        "task_id", "attempt_id", "ownership_epoch", "artifact_id", "package", "package_codec_id",
+        "package_codec_version", "manifest_schema", "output_manifest_artifact_id", "output_manifest"])?;
+    for field in ["project_id", "run_id", "study_step_id", "native_stage_id", "task_id", "attempt_id", "artifact_id", "output_manifest_artifact_id"] {
+        identifier(&owner[field])?;
+    }
+    // The parent's run is historical and intentionally independent of the new run.
+    let epoch = owner["ownership_epoch"].as_str().context("retained-current parent epoch missing")?;
+    if !epoch.parse::<u64>().ok().is_some_and(|value| value > 0 && value.to_string() == epoch)
+        || owner["package_codec_id"] != "fullmag.antenna.closed_loop_bundle"
+        || owner["package_codec_version"] != "v1"
+        || owner["manifest_schema"] != "antenna_field_solution.v2" {
+        bail!("retained-current preparation parent identity is invalid");
+    }
+    for pin in [&owner["package"], &owner["output_manifest"], &parent["evidence_capsule"]] { cas_pin(pin)?; }
+    let current = object(&parent["source"], &["prepared_execution_digest", "accepted_charge_field_digest",
+        "accepted_source_state_digest", "view_identity_digest", "current_balance_certificate_digest"])?;
+    for digest in current.values() {
+        validate_prefixed_sha256(digest.as_str().context("retained-current source digest missing")?, "retained-current source digest")?;
+    }
+    Ok(())
+}
+
+fn validate_retained_asset_field_preparation_payload_identity(
+    payload: &Value,
+    run_id: &str,
+    step_id: &str,
+    preparation_id: &str,
+    plan_fingerprint: &str,
+) -> Result<()> {
+    fn object<'a>(value: &'a Value, fields: &[&str]) -> Result<&'a serde_json::Map<String, Value>> {
+        let object = value.as_object().context("retained-asset field preparation object is missing")?;
+        if object.len() != fields.len() || fields.iter().any(|field| !object.contains_key(*field)) {
+            bail!("retained-asset field preparation object has unexpected or missing fields");
+        }
+        Ok(object)
+    }
+    fn identifier(value: &Value) -> Result<&str> {
+        let value = value.as_str().context("retained-asset field preparation identifier is missing")?;
+        if value.is_empty() || value.len() > 4096 || value.trim() != value
+            || value.chars().any(char::is_control) {
+            bail!("retained-asset field preparation identifier is invalid");
+        }
+        Ok(value)
+    }
+    fn cas_pin(value: &Value) -> Result<()> {
+        let pin = object(value, &["object_ref", "byte_count"])?;
+        validate_sha256(pin["object_ref"].as_str().context("retained-asset field CAS digest is missing")?, "retained-asset field CAS digest")?;
+        if pin["byte_count"].as_u64().unwrap_or(0) == 0 {
+            bail!("retained-asset field CAS byte count must be positive");
+        }
+        Ok(())
+    }
+
+    validate_study_step_id(step_id)?;
+    if preparation_id != format!("prep-{}", task_id_for_study_step(run_id, step_id)?) {
+        bail!("retained-asset field preparation does not belong to the canonical accepted task");
+    }
+    let receipt = object(payload, &["schema_version", "preparation_id", "plan_fingerprint", "plan"])?;
+    if receipt["schema_version"] != "retained_asset_field_preparation_receipt.v1"
+        || receipt["preparation_id"].as_str() != Some(preparation_id)
+        || receipt["plan_fingerprint"].as_str() != Some(plan_fingerprint) {
+        bail!("retained-asset field preparation payload identity differs from envelope");
+    }
+    let plan = object(&receipt["plan"], &["schema_version", "source", "problem_fingerprint",
+        "carrier_fingerprint", "operation_fingerprint", "sampling_fingerprint", "stage_id",
+        "port_mode_id", "output_id", "parent", "preparation_asset", "source_preparation"])?;
+    let asset: fullmag_ir::AntennaSourcePreparationAssetRefIR = serde_json::from_value(plan["preparation_asset"].clone())?;
+    let pins: fullmag_ir::AntennaSourcePreparationReceiptPinsIR = serde_json::from_value(plan["source_preparation"].clone())?;
+    let errors = asset.validation_errors("preparation_asset").into_iter()
+        .chain(pins.validation_errors("source_preparation")).collect::<Vec<_>>();
+    if !errors.is_empty() { bail!("invalid retained-asset field preparation pins: {}", errors.join("; ")); }
+    let source = object(&plan["source"], &["schema_version", "run_id", "step_id",
+        "problem_fingerprint", "specification_fingerprint"])?;
+    if plan["schema_version"] != "retained_asset_field_preparation_plan.v1"
+        || source["schema_version"] != "accepted_run_preparation_source.v1"
+        || source["run_id"].as_str() != Some(run_id)
+        || source["step_id"].as_str() != Some(step_id)
+        || source["problem_fingerprint"] != plan["problem_fingerprint"]
+        || format!("sha256:{}", canonical_json_sha256(&receipt["plan"])) != plan_fingerprint {
+        bail!("retained-asset field preparation source differs from its envelope");
+    }
+    for field in ["problem_fingerprint", "carrier_fingerprint", "operation_fingerprint", "sampling_fingerprint"] {
+        validate_prefixed_sha256(plan[field].as_str().context("retained-asset field preparation digest missing")?, "retained-asset field preparation fingerprint")?;
+    }
+    validate_prefixed_sha256(source["specification_fingerprint"].as_str().context("retained-asset field accepted RunSpec digest missing")?, "retained-asset field RunSpec fingerprint")?;
+    for field in ["stage_id", "port_mode_id", "output_id"] { identifier(&plan[field])?; }
+    let parent = object(&plan["parent"], &["owner", "source", "evidence_capsule"])?;
+    let owner = object(&parent["owner"], &["project_id", "run_id", "study_step_id", "native_stage_id",
+        "task_id", "attempt_id", "ownership_epoch", "artifact_id", "package", "package_codec_id",
+        "package_codec_version", "manifest_schema", "output_manifest_artifact_id", "output_manifest"])?;
+    for field in ["project_id", "run_id", "study_step_id", "native_stage_id", "task_id", "attempt_id", "artifact_id", "output_manifest_artifact_id"] {
+        identifier(&owner[field])?;
+    }
+    if pins.run_id != identifier(&owner["run_id"])? || pins.task_id != identifier(&owner["task_id"])?
+        || pins.step_id != identifier(&owner["study_step_id"])? {
+        bail!("retained-asset field receipt projection differs from its historical parent");
+    }
+    // The parent's run is historical and intentionally independent of the new run.
+    let epoch = owner["ownership_epoch"].as_str().context("retained-asset field parent epoch missing")?;
+    if !epoch.parse::<u64>().ok().is_some_and(|value| value > 0 && value.to_string() == epoch)
+        || owner["package_codec_id"] != "fullmag.antenna.closed_loop_bundle"
+        || owner["package_codec_version"] != "v1"
+        || owner["manifest_schema"] != "antenna_field_solution.v2" {
+        bail!("retained-asset field preparation parent identity is invalid");
+    }
+    for pin in [&owner["package"], &owner["output_manifest"], &parent["evidence_capsule"]] { cas_pin(pin)?; }
+    let current = object(&parent["source"], &["prepared_execution_digest", "accepted_charge_field_digest",
+        "accepted_source_state_digest", "view_identity_digest", "current_balance_certificate_digest"])?;
+    for digest in current.values() {
+        validate_prefixed_sha256(digest.as_str().context("retained-asset field source digest missing")?, "retained-asset field source digest")?;
+    }
     Ok(())
 }
 
@@ -5161,6 +5383,125 @@ mod closed_loop_preparation_identity_tests {
         assert!(FmsPreparationReceipt::new(
             &anchor.preparation_id, &anchor.run_id, &anchor.plan_fingerprint, unknown,
         ).validate().is_err());
+    }
+}
+
+#[cfg(test)]
+mod retained_current_preparation_identity_tests {
+    use super::*;
+    use serde_json::json;
+
+    fn payload() -> (FmsRunIntent, Value) {
+        let intent = FmsRunIntent::new("run-resampled", "retained-identity-test",
+            json!({"run_id":"run-resampled", "snapshot":{"project_id":"project-source"}}));
+        let hash = |byte: &str| format!("sha256:{}", byte.repeat(64));
+        let cas = |byte: &str| json!({"object_ref":byte.repeat(64), "byte_count":64});
+        let task_id = task_id_for_study_step(&intent.run_id, "inspection-step").unwrap();
+        let plan = json!({
+            "schema_version":"retained_current_preparation_plan.v1",
+            "source":{"schema_version":"accepted_run_preparation_source.v1",
+                "run_id":intent.run_id,"step_id":"inspection-step",
+                "specification_fingerprint":format!("sha256:{}",canonical_json_sha256(&intent.specification)),
+                "problem_fingerprint":hash("a")},
+            "problem_fingerprint":hash("a"), "carrier_fingerprint":hash("b"),
+            "operation_fingerprint":hash("c"), "sampling_fingerprint":hash("d"),
+            "stage_id":"new-h-stage", "port_mode_id":"port-signal", "output_id":"resampled-h",
+            "parent":{"owner":{"project_id":"project-source", "run_id":"run-historical",
+                "study_step_id":"source-step", "native_stage_id":"source-stage",
+                "task_id":"task-historical", "attempt_id":"attempt-historical", "ownership_epoch":"2",
+                "artifact_id":"inspection-parent", "package":cas("e"),
+                "package_codec_id":"fullmag.antenna.closed_loop_bundle", "package_codec_version":"v1",
+                "manifest_schema":"antenna_field_solution.v2", "output_manifest_artifact_id":"output-manifest",
+                "output_manifest":cas("f")},
+                "source":{"prepared_execution_digest":hash("1"), "accepted_charge_field_digest":hash("2"),
+                    "accepted_source_state_digest":hash("3"), "view_identity_digest":hash("4"),
+                    "current_balance_certificate_digest":hash("5")}, "evidence_capsule":cas("6")}
+        });
+        let payload = json!({"schema_version":"retained_current_preparation_receipt.v1",
+            "preparation_id":format!("prep-{task_id}"),
+            "plan_fingerprint":format!("sha256:{}",canonical_json_sha256(&plan)), "plan":plan});
+        (intent, payload)
+    }
+
+    fn envelope(mut payload: Value) -> Result<FmsTaskPreparationReceipt> {
+        // Rehash mutations so semantic envelope fences, rather than stale hashes, are exercised.
+        payload["plan_fingerprint"] = json!(format!("sha256:{}", canonical_json_sha256(&payload["plan"])));
+        FmsTaskPreparationReceipt::new("run-resampled", "inspection-step", "a".repeat(64),
+            payload["preparation_id"].as_str().unwrap(),
+            payload["plan_fingerprint"].as_str().unwrap(), payload.clone())
+    }
+
+    #[test]
+    fn retained_current_identity_keeps_historical_parent_and_cold_anchor() {
+        let (intent, payload) = payload();
+        let receipt = envelope(payload).unwrap();
+        receipt.validate_for_run_intent(&intent).unwrap();
+        assert_ne!(receipt.run_id, receipt.payload["plan"]["parent"]["owner"]["run_id"].as_str().unwrap());
+        let anchor = FmsPreparationReceipt::new(&receipt.preparation_id, &receipt.run_id,
+            &receipt.plan_fingerprint, receipt.payload.clone());
+        anchor.validate().unwrap();
+        let cold: FmsPreparationReceipt = serde_json::from_slice(&serde_json::to_vec(&anchor).unwrap()).unwrap();
+        cold.validate().unwrap();
+        assert!(anchor.same_immutable_payload(&cold));
+        let mut foreign = receipt.payload.clone();
+        foreign["plan"]["parent"]["owner"]["project_id"] = json!("project-foreign");
+        assert!(envelope(foreign).unwrap().validate_for_run_intent(&intent).is_err());
+    }
+
+    #[test]
+    fn retained_asset_identity_uses_own_schema_and_actual_immutable_input_closure() {
+        let (mut intent, mut payload) = payload();
+        let asset_id = format!("script-file-{}", "7".repeat(64));
+        let asset_hash = "8".repeat(64);
+        intent.specification["immutable_assets"] = json!([{ "asset_id":asset_id, "content_sha256":asset_hash }]);
+        intent.asset_object_refs.insert(asset_id.clone(), asset_hash.clone());
+        intent.payload_sha256 = canonical_json_sha256(&intent.specification);
+        payload["schema_version"] = json!("retained_asset_field_preparation_receipt.v1");
+        payload["plan"]["schema_version"] = json!("retained_asset_field_preparation_plan.v1");
+        payload["plan"]["source"]["specification_fingerprint"] = json!(format!("sha256:{}", intent.payload_sha256));
+        payload["plan"]["preparation_asset"] = json!({"asset_id":asset_id, "content_sha256":asset_hash});
+        let historical_task = task_id_for_study_step("run-historical", "source-step").unwrap();
+        payload["plan"]["parent"]["owner"]["task_id"] = json!(historical_task);
+        payload["plan"]["source_preparation"] = json!({
+            "receipt_schema_version":"task_preparation_receipt.v1", "run_id":"run-historical",
+            "task_id":historical_task, "step_id":"source-step", "input_fingerprint":"1".repeat(64),
+            "preparation_id":format!("prep-{historical_task}"), "plan_fingerprint":format!("sha256:{}","2".repeat(64)),
+            "payload_sha256":"3".repeat(64), "receipt_sha256":"4".repeat(64)});
+        let receipt = envelope(payload.clone()).unwrap();
+        receipt.validate_for_run_intent(&intent).unwrap();
+        FmsPreparationReceipt::new(&receipt.preparation_id, &receipt.run_id,
+            &receipt.plan_fingerprint, receipt.payload.clone()).validate().unwrap();
+        let mut relabeled = payload.clone(); relabeled["schema_version"] = json!("retained_current_preparation_receipt.v1");
+        assert!(envelope(relabeled).is_err());
+        for field in ["receipt_sha256", "task_id", "receipt_schema_version"] {
+            let mut changed = payload.clone(); changed["plan"]["source_preparation"][field] = json!("invalid");
+            assert!(envelope(changed).is_err());
+        }
+        let mut wrong_asset = payload;
+        wrong_asset["plan"]["preparation_asset"]["content_sha256"] = json!("9".repeat(64));
+        assert!(envelope(wrong_asset).unwrap().validate_for_run_intent(&intent).is_err());
+    }
+
+    #[test]
+    fn retained_current_identity_rejects_rehashed_shape_and_owner_changes() {
+        let (_, payload) = payload();
+        for (pointer, value) in [
+            ("/native", json!({})),
+            ("/plan/source/run_id", json!("run-foreign")),
+            ("/plan/source/step_id", json!("foreign-step")),
+            ("/plan/source/problem_fingerprint", json!(format!("sha256:{}", "b".repeat(64)))),
+            ("/plan/sampling_fingerprint", json!("invalid")),
+            ("/plan/stage_id", json!(" ")),
+            ("/plan/parent/owner/ownership_epoch", json!("02")),
+            ("/plan/parent/owner/package/object_ref", json!("not-a-digest")),
+            ("/plan/parent/owner/package/byte_count", json!(0)),
+            ("/plan/parent/source/view_identity_digest", json!("invalid")),
+        ] {
+            let mut changed = payload.clone();
+            if pointer == "/native" { changed["native"] = value; }
+            else { *changed.pointer_mut(pointer).unwrap() = value; }
+            assert!(envelope(changed).is_err(), "accepted malformed envelope at {pointer}");
+        }
     }
 }
 

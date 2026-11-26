@@ -1267,6 +1267,7 @@ class AbruptStopTests(unittest.TestCase):
         def read_json(control,path,*,optional=False):
             raw=read(control,path,optional=optional)
             return (json.loads(raw),raw) if raw else (None,None)
+        control.read = lambda path, *, optional=False: read_json(control, path, optional=optional)[0]
         def docker(*args,**kwargs):
             if args[0]=='rm':
                 self.assertEqual(json.loads(documents['operations/fake/receipt.json'])['private_group_storage'], 'group-volume-v1')

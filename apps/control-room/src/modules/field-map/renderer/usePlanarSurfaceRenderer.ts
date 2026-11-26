@@ -22,6 +22,7 @@ import { usePlanarStreamlines } from "./usePlanarStreamlines";
 export function usePlanarSurfaceRenderer(
   model: FieldMapRenderModel,
   onRenderEvidence?: (evidence: PlanarRenderEvidence) => void,
+  verticalExaggeration = 1,
 ) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const overlayRef = useRef<HTMLCanvasElement>(null);
@@ -163,6 +164,7 @@ export function usePlanarSurfaceRenderer(
         vectorField: current.layers.vectors && current.vectors
           ? {
               budget: current.vectorBudget,
+              verticalExaggeration,
               lengthMode: current.vectorStyle.lengthMode,
               mask: current.mask,
               sampleBounds: current.bounds,
@@ -327,6 +329,7 @@ export function usePlanarSurfaceRenderer(
     model.resolution,
     model.scalar,
     model.vectorBudget,
+    verticalExaggeration,
     model.vectorScale,
     model.vectorStyle.colorMode,
     model.vectorStyle.color,

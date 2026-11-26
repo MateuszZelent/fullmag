@@ -9,10 +9,11 @@ use std::fs::File;
 use std::io::{Read, Seek, Write};
 use std::path::{Path, PathBuf};
 
-const SOURCE_LIMIT: u64 = 8 * 1024 * 1024;
+pub const SOURCE_LIMIT: u64 = 8 * 1024 * 1024;
 const RUNTIME_LIMIT: u64 = 128 * 1024 * 1024;
 const FILE_LIMIT: u64 = 32 * 1024 * 1024;
-pub const METADATA_LIMIT: usize = 8 * 1024 * 1024;
+pub const METADATA_LIMIT: usize = 12 * 1024 * 1024;
+const MATERIAL_CATALOG_LIMIT: usize = 8 * 1024 * 1024;
 // A run configuration can carry dense FDM masks in addition to the source inventory.
 const RUN_CONFIG_RESPONSE_LIMIT: usize = 16 * 1024 * 1024;
 pub const MATERIAL_CATALOG_UNAVAILABLE: &[u8] = br#"{"unavailable":true}"#;
@@ -269,7 +270,7 @@ pub fn runtime_helper_loads_authored_script(args: &[String]) -> bool {
 
 /// Pass a bounded catalog view to a child without a named file or writable pipe.
 pub fn material_catalog_input(snapshot: &[u8]) -> Result<File> {
-    if snapshot.len() > METADATA_LIMIT {
+    if snapshot.len() > MATERIAL_CATALOG_LIMIT {
         bail!("material catalog snapshot exceeds the 8 MiB capture limit");
     }
     let mut input = tempfile::tempfile().context("create material catalog input")?;
@@ -506,7 +507,7 @@ mod tests {
         let mut read = Vec::new();
         input.read_to_end(&mut read).unwrap();
         assert_eq!(read, payload);
-        assert!(material_catalog_input(&vec![0; METADATA_LIMIT + 1]).is_err());
+        assert!(material_catalog_input(&vec![0; MATERIAL_CATALOG_LIMIT + 1]).is_err());
 
         let options = CaptureOptions {
             material_catalog: Some(payload),

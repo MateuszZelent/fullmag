@@ -315,8 +315,10 @@ class RetainedDeviceLifecycleTests(unittest.TestCase):
                             dev.start(args, reuse_state=reuse, retained_device_access='gpu')
                         handles[14].assert_not_called()
                 handles[15].assert_not_called()
-                control.read.assert_called_once_with(supervision_stop.PREPARED_QUARANTINE,
-                                                     optional=True)
+                self.assertEqual(control.read.call_args_list, [
+                    mock.call('group-ledger-generation.json', optional=True),
+                    mock.call(supervision_stop.PREPARED_QUARANTINE, optional=True),
+                ])
                 self.assertEqual(handles[16].call_args_list, [
                     mock.call(control, cancelled.replay_index_path('state', str(reuse['state'])),
                               optional=True),

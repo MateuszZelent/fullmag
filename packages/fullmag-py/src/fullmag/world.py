@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import copy
 import functools
+import json
 import asyncio
 import math
 import threading
@@ -593,9 +594,11 @@ class MagnetHandle:
         name: str = "body",
         *,
         object_id: str | None = None,
+        geometry_name: str | None = None,
     ) -> None:
         object.__setattr__(self, "_owner_state", _state.current())
         self._shape = shape
+        self._geometry_name = _validate_geometry_key(geometry_name)
         self._name = name
         self._object_id = (
             require_non_empty(object_id, "object_id") if object_id is not None else None
@@ -785,7 +788,7 @@ class MagnetHandle:
             import copy
 
             geom = copy.copy(geom)
-            object.__setattr__(geom, "name", f"{self._name}_geom")
+            object.__setattr__(geom, "name", self._geometry_name or f"{self._name}_geom")
         return geom
 
     def _to_ferromagnet(self) -> Ferromagnet:
@@ -2179,7 +2182,7 @@ class GeometryMeshHandle:
             )
         """
         self._owner._assert_active_context()
-        self._owner._mesh_spec.size_fields.append({"kind": kind, "params": dict(params)})
+        self._owner._mesh_spec.size_fields.append({"kind": kind, "params": json.loads(json.dumps(params, allow_nan=False))})
         return self
 
     def build(self) -> "GeometryMeshHandle":
@@ -2707,6 +2710,7 @@ class _WorldState:
     _study_universe: StudyUniverseConfig | None = None
     _domain_mesh_source: str | None = None
     _domain_region_markers: list[dict[str, object]] | None = None
+    _domain_marker_owners: list[dict[str, object]] | None = None
     _domain_object_region_markers: list[dict[str, object]] | None = None
     _frozen_magnetic_submesh_source: dict[str, object] | None = None
     _extra_runtime_metadata: dict[str, object] = field(default_factory=dict)
@@ -2722,6 +2726,7 @@ class _WorldState:
     _auxiliary_geometries: list[object] = field(default_factory=list)
     _auxiliary_mesh_owners: dict[str, _AuxiliaryMeshOwner] = field(default_factory=dict)
     _auxiliary_geometry_roles: dict[str, str] = field(default_factory=dict)
+    _auxiliary_geometry_names: dict[str, str] = field(default_factory=dict)
     _auxiliary_geometry_object_ids: dict[str, str] = field(default_factory=dict)
     _couplings: CouplingRegistry = field(default_factory=CouplingRegistry)
     _loaded_field_states: dict[tuple[str, str, str], object] = field(default_factory=dict)
@@ -3737,6 +3742,7 @@ def _capture_stage(stage_spec: object) -> CapturedStage:
             default_until_seconds=None,
         )
     if isinstance(stage_spec, RunStageSpec):
+        _require_magnets_for_run()
         problem = _build_problem(study_kind="time_evolution")
         if not isinstance(problem.study, TimeEvolution):
             raise TypeError("run stage requires a time-evolution study")
@@ -4119,6 +4125,7 @@ def _normalize_domain_region_marker_table(
     region_markers: Any,
     *,
     label: str,
+    allow_empty: bool = False,
 ) -> list[dict[str, object]]:
     if isinstance(region_markers, dict):
         items = region_markers.items()
@@ -4161,7 +4168,7 @@ def _normalize_domain_region_marker_table(
         seen_geometry_names.add(geometry_name)
         seen_markers.add(marker)
         normalized.append({"geometry_name": geometry_name, "marker": marker})
-    if not normalized:
+    if not normalized and not allow_empty:
         raise ValueError(f"{label} must not be empty")
     return normalized
 
@@ -4236,12 +4243,7 @@ def capture_workspace_problem() -> Problem | None:
         _state._magnets or _state._auxiliary_geometries or has_antenna_stage
     ):
         return None
-    previous_interactive = _state._interactive
-    _state._interactive = True
-    try:
-        return _build_problem()
-    finally:
-        _state._interactive = previous_interactive
+    return _build_problem()
 
 
 def capture_declared_stages() -> list[CapturedStage]:
@@ -4712,8 +4714,14 @@ class StudyStagesBuilder:
             for module in _state._current_modules
         )
         problem_before_action = _build_problem(
-            study_kind="time_evolution" if closed_loop else "antenna_field_solve"
+            study_kind=("field_only" if normalized_definition.retained_source_preparation is not None
+                        else "time_evolution" if closed_loop else "antenna_field_solve")
         )
+        if normalized_definition.retained_source_preparation is not None:
+            # The input-only source is needed while materializing this action's
+            # own snapshot, before its later execution transition is applied.
+            problem_before_action = replace(problem_before_action,
+                antenna_field_solve_stages=(*problem_before_action.antenna_field_solve_stages, normalized_definition))
         _state._antenna_field_solve_stages.append(normalized_definition)
         _state._declared_stages.append(
             CapturedStage(
@@ -4721,7 +4729,7 @@ class StudyStagesBuilder:
                 entrypoint_kind="flat_antenna_field_solve",
                 action={
                     "kind": "antenna_field_solve",
-                    "definition": normalized_definition.to_ir(),
+                    "definition": normalized_definition.to_ir(source_root=_mesh_source_root()),
                 },
                 stage_id=stage_id,
             )
@@ -7060,11 +7068,13 @@ class StudyBuilder:
         *,
         region_markers: Any,
         object_region_markers: Any | None = None,
+        marker_owners: Any | None = None,
     ) -> "StudyBuilder":
         domain_mesh(
             source,
             region_markers=region_markers,
             object_region_markers=object_region_markers,
+            marker_owners=marker_owners,
         )
         return self
 
@@ -7088,8 +7098,9 @@ class StudyBuilder:
         name: str = "body",
         *,
         object_id: str | None = None,
+        geometry_name: str | None = None,
     ) -> MagnetHandle:
-        return geometry(shape, name=name, object_id=object_id)
+        return geometry(shape, name=name, object_id=object_id, geometry_name=geometry_name)
 
     def geometry_object(
         self,
@@ -7098,18 +7109,19 @@ class StudyBuilder:
         *,
         type: str = "geometry",
         object_id: str | None = None,
+        geometry_name: str | None = None,
     ) -> object:
-        return geometry_object(shape, name=name, type=type, object_id=object_id)
+        return geometry_object(shape, name=name, type=type, object_id=object_id, geometry_name=geometry_name)
 
     def conductor(
-        self, shape: object, name: str = "conductor", *, object_id: str | None = None
+        self, shape: object, name: str = "conductor", *, object_id: str | None = None, geometry_name: str | None = None
     ) -> object:
-        return geometry_object(shape, name=name, type="conductor", object_id=object_id)
+        return geometry_object(shape, name=name, type="conductor", object_id=object_id, geometry_name=geometry_name)
 
     def antenna_object(
-        self, shape: object, name: str = "antenna", *, object_id: str | None = None
+        self, shape: object, name: str = "antenna", *, object_id: str | None = None, geometry_name: str | None = None
     ) -> object:
-        return antenna_object(shape, name=name, object_id=object_id)
+        return antenna_object(shape, name=name, object_id=object_id, geometry_name=geometry_name)
 
     def solver(
         self,
@@ -8077,8 +8089,10 @@ def _configure_object_mesh_defaults(
         )
     if compute_quality is not None:
         _state._default_mesh_spec.compute_quality = compute_quality
+        _state._default_mesh_spec.compute_quality_configured = True
     if per_element_quality is not None:
         _state._default_mesh_spec.per_element_quality = per_element_quality
+        _state._default_mesh_spec.per_element_quality_configured = True
     if periodic_pair_ids is not None:
         normalized_pair_ids = [
             require_non_empty(str(pair_id), "study.objects.mesh.defaults.periodic_pair_ids")
@@ -8170,6 +8184,7 @@ def domain_mesh(
     *,
     region_markers: Any,
     object_region_markers: Any | None = None,
+    marker_owners: Any | None = None,
 ) -> None:
     """Attach an explicit shared-domain FEM mesh asset.
 
@@ -8188,12 +8203,14 @@ def domain_mesh(
         array; Fullmag does not synthesize conformal region markers from shapes.
     """
     rendered_source = _canonical_mesh_source_path(source, label="domain_mesh")
-    _state._domain_mesh_source = rendered_source
-    _state._domain_region_markers = _normalize_domain_region_markers(region_markers)
+    # Physical eligibility is checked on the complete Problem, after all
+    # objects/stages are declared. A pure observation mesh has no magnetic map.
+    normalized_region_markers = _normalize_domain_region_marker_table(
+        region_markers, label="region_markers", allow_empty=True)
     normalized_object_region_markers = (
         _normalize_domain_region_marker_table(
             object_region_markers,
-            label="object_region_markers",
+            label="object_region_markers", allow_empty=True,
         )
         if object_region_markers is not None
         else None
@@ -8201,7 +8218,7 @@ def domain_mesh(
     if normalized_object_region_markers:
         region_marker_ids = {
             int(entry["marker"])
-            for entry in _state._domain_region_markers
+            for entry in normalized_region_markers
         }
         for entry in normalized_object_region_markers:
             marker = int(entry["marker"])
@@ -8209,7 +8226,22 @@ def domain_mesh(
                 raise ValueError(
                     f"object_region_markers marker {marker} duplicates a region_markers marker"
                 )
+    normalized_marker_owners = None
+    if marker_owners is not None:
+        from fullmag.runtime.domain_mesh_source import normalize_shared_domain_mesh_source
+        declaration = {
+            "kind": "explicit", "source": rendered_source,
+            "region_markers": normalized_region_markers, "marker_owners": marker_owners,
+        }
+        if normalized_object_region_markers is not None:
+            declaration["object_region_markers"] = normalized_object_region_markers
+        normalized_marker_owners = normalize_shared_domain_mesh_source(declaration)["marker_owners"]
+
+
+    _state._domain_mesh_source = rendered_source
+    _state._domain_region_markers = normalized_region_markers
     _state._domain_object_region_markers = normalized_object_region_markers
+    _state._domain_marker_owners = normalized_marker_owners
 
 
 def frozen_magnetic_submesh(
@@ -8965,7 +8997,10 @@ def _collect_mesh_workflow_metadata() -> dict[str, object] | None:
     per_geometry = []
     for handle in [*_state._magnets, *_state._auxiliary_mesh_owners.values()]:
         entry = {
-            "geometry": handle._name,
+            "geometry": (handle._resolved_geometry().geometry_name
+                         if isinstance(handle, MagnetHandle) and handle._geometry_name is not None
+                         and handle._geometry_name != f"{handle._name}_geom"
+                         else handle._name),
             "mode": "custom" if _mesh_spec_declares_override(handle._mesh_spec) else "inherit",
         }
         entry.update(_mesh_spec_to_metadata(handle._mesh_spec))
@@ -8989,6 +9024,8 @@ def _collect_mesh_workflow_metadata() -> dict[str, object] | None:
         mesh_workflow["domain_mesh_mode"] = "explicit_shared_domain_mesh"
         mesh_workflow["domain_mesh_source"] = _state._domain_mesh_source
         mesh_workflow["domain_region_markers"] = list(_state._domain_region_markers or [])
+        if _state._domain_marker_owners is not None:
+            mesh_workflow["domain_marker_owners"] = copy.deepcopy(_state._domain_marker_owners)
         reference = _state._extra_runtime_metadata.get("fem_domain_mesh")
         if (
             isinstance(reference, Mapping)
@@ -9088,6 +9125,7 @@ def _bind_mesh_artifact(
     _state._active_mesh_artifact = artifact
     _state._domain_mesh_source = str(source_path)
     _state._domain_region_markers = [dict(entry) for entry in artifact.region_markers]
+    _state._domain_marker_owners = None
     _state._domain_object_region_markers = [
         dict(entry) for entry in artifact.object_region_markers
     ]
@@ -9119,6 +9157,7 @@ def _clear_bound_mesh_artifact() -> None:
     _state._active_mesh_artifact = None
     _state._domain_mesh_source = None
     _state._domain_region_markers = None
+    _state._domain_marker_owners = None
     _state._domain_object_region_markers = None
     _state._extra_runtime_metadata.pop("mesh_persistence", None)
     _state._extra_runtime_metadata.pop("fem_domain_mesh", None)
@@ -9357,11 +9396,28 @@ def _cache_mesh_quality_reports(assets: dict[str, Any] | None) -> None:
 # Geometry → MagnetHandle
 # ---------------------------------------------------------------------------
 
+def _validate_geometry_key(value: str | None) -> str | None:
+    if value is not None and (
+        not isinstance(value, str) or not value or value.strip() != value
+    ):
+        raise ValueError("geometry_name must be nonempty without surrounding whitespace")
+    return value
+
+
+def _require_unique_geometry_key(key: str, *, exclude: MagnetHandle | None = None) -> None:
+    keys = [magnet._resolved_geometry().geometry_name
+            for magnet in _state._magnets if magnet is not exclude]
+    keys.extend(geometry.geometry_name for geometry in _state._auxiliary_geometries)
+    if key in keys:
+        raise ValueError(f"duplicate geometry key {key!r}")
+
+
 def geometry(
     shape: object,
     name: str = "body",
     *,
     object_id: str | None = None,
+    geometry_name: str | None = None,
 ) -> MagnetHandle:
     """Register a magnet and return its configuration handle.
 
@@ -9381,9 +9437,13 @@ def geometry(
         live_id = require_non_empty(object_id, "object_id") if object_id is not None else name
         for existing in _state._magnets:
             if live_id == (existing.object_id if existing.object_id is not None else existing._name):
+                key = _validate_geometry_key(geometry_name)
+                _require_unique_geometry_key(key or f"{existing._name}_geom", exclude=existing)
                 existing._shape = shape
+                existing._geometry_name = key
                 return existing
-    handle = MagnetHandle(shape, name, object_id=object_id)
+    handle = MagnetHandle(shape, name, object_id=object_id, geometry_name=geometry_name)
+    _require_unique_geometry_key(handle._resolved_geometry().geometry_name)
     resolved_id = handle.object_id if handle.object_id is not None else handle._name
     if resolved_id in _state._auxiliary_geometry_object_ids.values() or any(
         resolved_id == (magnet.object_id if magnet.object_id is not None else magnet._name)
@@ -9400,6 +9460,7 @@ def geometry_object(
     *,
     type: str = "geometry",
     object_id: str | None = None,
+    geometry_name: str | None = None,
 ) -> object:
     """Register a non-magnetic geometry with an explicit physical object type.
 
@@ -9412,19 +9473,19 @@ def geometry_object(
         raise ValueError(
             "geometry_object(type=...) must be one of: geometry, conductor, electrode, antenna"
         )
+    key = _validate_geometry_key(geometry_name)
     resolved = shape
     if hasattr(resolved, "name"):
         import copy
 
         resolved = copy.copy(resolved)
-        object.__setattr__(resolved, "name", require_non_empty(name, "name"))
+        object.__setattr__(resolved, "name", key or require_non_empty(name, "name"))
     geometry_name = getattr(resolved, "geometry_name", None)
     if not isinstance(geometry_name, str) or not geometry_name:
         raise TypeError("geometry_object() requires a geometry with a geometry_name")
-    if geometry_name in _state._auxiliary_geometry_roles:
-        raise ValueError(f"duplicate geometry object name {geometry_name!r}")
+    _require_unique_geometry_key(geometry_name)
     resolved_id = (
-        require_non_empty(object_id, "object_id") if object_id is not None else geometry_name
+        require_non_empty(object_id, "object_id") if object_id is not None else require_non_empty(name, "name")
     )
     if resolved_id in _state._auxiliary_geometry_object_ids.values() or any(
         resolved_id == (magnet.object_id if magnet.object_id is not None else magnet._name)
@@ -9434,6 +9495,7 @@ def geometry_object(
     _state._auxiliary_geometries.append(resolved)
     _state._auxiliary_mesh_owners[geometry_name] = _AuxiliaryMeshOwner(resolved, geometry_name)
     _state._auxiliary_geometry_roles[geometry_name] = normalized_type
+    _state._auxiliary_geometry_names[geometry_name] = require_non_empty(name, "name")
     _state._auxiliary_geometry_object_ids[geometry_name] = resolved_id
     if normalized_type == "antenna":
         _state._register_geometry_visualization_hint(
@@ -9449,10 +9511,10 @@ def geometry_object(
 
 
 def antenna_object(
-    shape: object, name: str = "antenna", *, object_id: str | None = None
+    shape: object, name: str = "antenna", *, object_id: str | None = None, geometry_name: str | None = None
 ) -> object:
     """Register a non-magnetic geometry object for prescribed antenna masks."""
-    return geometry_object(shape, name=name, type="antenna", object_id=object_id)
+    return geometry_object(shape, name=name, type="antenna", object_id=object_id, geometry_name=geometry_name)
 
 
 # ---------------------------------------------------------------------------
@@ -10583,7 +10645,7 @@ def _build_problem(
             table_autosave=s._table_autosave,
         )
 
-    return Problem(
+    problem = Problem(
         name=s._name,
         magnets=magnets,
         energy=energy,
@@ -10593,6 +10655,7 @@ def _build_problem(
         runtime_metadata=runtime_metadata,
         auxiliary_geometries=tuple(s._auxiliary_geometries),
         auxiliary_geometry_roles=dict(s._auxiliary_geometry_roles),
+        auxiliary_geometry_names=dict(s._auxiliary_geometry_names),
         auxiliary_geometry_object_ids=dict(s._auxiliary_geometry_object_ids),
         current_modules=tuple(s._current_modules),
         antenna_port_modes=tuple(s._antenna_port_modes),
@@ -10614,6 +10677,10 @@ def _build_problem(
         pbc=s._pbc,
         parameters=s._parameters if s._parameters.names else None,
     )
+    workflow = problem.runtime_metadata.get("mesh_workflow", {})
+    if s._domain_mesh_source is not None and s._domain_marker_owners is None:
+        s._domain_marker_owners = copy.deepcopy(workflow.get("domain_marker_owners"))
+    return problem
 
 
 def _collect_published_material_assets(
@@ -10737,10 +10804,14 @@ def _guard_profile_direct_execution() -> None:
         )
 
 
+def _require_magnets_for_run() -> None:
+    if not _state._magnets:
+        raise ValueError("No magnets defined. Run requires explicitly authored magnetic state.")
+
+
 def run(until: float) -> Any:
     """Build the problem and run until the given simulation time."""
-    if not _state._magnets:
-        raise ValueError("Run requires explicitly authored magnetic state; FieldOnly cannot execute LLG")
+    _require_magnets_for_run()
     if until <= 0.0:
         raise ValueError("run(until) requires a positive stop time")
     from fullmag.runtime import Simulation

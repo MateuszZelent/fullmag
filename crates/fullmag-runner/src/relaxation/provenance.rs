@@ -26,10 +26,10 @@ pub(crate) const CPU_SOA_DIRECT_MINIMIZER_REALIZATION: &str = "cpu_soa_tangent_g
 /// AoS BB/NCG kernels used when the problem rejects the SoA fast path
 /// (Frozen Spins, spatial Ms/A/alpha).
 pub(crate) const CPU_AOS_DIRECT_MINIMIZER_REALIZATION: &str = "cpu_aos_tangent_gradient";
-/// CUDA FDM BB/NCG: the optimizer state, tangent gradient, and Armijo line
-/// search run on the host over device field and energy evaluation
-/// (`fdm/gpu/cuda/direct_minimizer.rs`); there is no native CUDA minimizer
-/// kernel on this lane, unlike FEM GPU's `native_cuda_*` realizations.
+/// Host-orchestrated CUDA FDM direct-minimizer realization (nonlinear-CG):
+/// the optimizer state, tangent gradient, and Armijo line search run on the
+/// host over device field and energy evaluation
+/// (`fdm/gpu/cuda/direct_minimizer.rs`).
 pub(crate) const CUDA_FDM_HOST_DIRECT_MINIMIZER_REALIZATION: &str =
     "cuda_fdm_host_tangent_gradient";
 pub(crate) const NATIVE_LLG_TIME_INTEGRATOR_REALIZATION: &str = "native_llg_time_integrator";
@@ -57,6 +57,24 @@ pub(crate) fn expected_cpu_direct_minimizer_realization(
         .and_then(|layout| layout.rejection_reason.as_deref())
         .is_some_and(|reason| reason != COUPLED_SPIN_TRANSPORT_LAYOUT_REJECTION);
     cpu_direct_minimizer_realization(!problem_rejected_soa)
+}
+
+/// Expected CUDA single-grid FDM direct-minimizer realization.
+///
+/// Single-layer `ProjectedGradientBb` executes fully device-resident via
+/// `single_layer_bb.cu` (`native_cuda_pgbb`, matching device-resident
+/// multilayer CUDA PG-BB and the relaxation qualification contract), while
+/// `NonlinearCg` remains host-orchestrated (`cuda_fdm_host_tangent_gradient`).
+pub(crate) fn cuda_fdm_direct_minimizer_realization(
+    algorithm: RelaxationAlgorithmIR,
+) -> Option<&'static str> {
+    match algorithm {
+        RelaxationAlgorithmIR::ProjectedGradientBb => {
+            native_direct_minimizer_realization(algorithm, true)
+        }
+        RelaxationAlgorithmIR::NonlinearCg => Some(CUDA_FDM_HOST_DIRECT_MINIMIZER_REALIZATION),
+        RelaxationAlgorithmIR::TangentPlaneImplicit | RelaxationAlgorithmIR::LlgOverdamped => None,
+    }
 }
 
 pub(crate) fn native_direct_minimizer_realization(
@@ -227,6 +245,26 @@ mod tests {
         assert_eq!(
             native_direct_minimizer_realization(RelaxationAlgorithmIR::ProjectedGradientBb, true),
             Some("native_cuda_pgbb")
+        );
+    }
+
+    #[test]
+    fn cuda_fdm_realization_distinguishes_resident_pgbb_from_host_ncg() {
+        assert_eq!(
+            cuda_fdm_direct_minimizer_realization(RelaxationAlgorithmIR::ProjectedGradientBb),
+            Some("native_cuda_pgbb")
+        );
+        assert_eq!(
+            cuda_fdm_direct_minimizer_realization(RelaxationAlgorithmIR::NonlinearCg),
+            Some(CUDA_FDM_HOST_DIRECT_MINIMIZER_REALIZATION)
+        );
+        assert_eq!(
+            cuda_fdm_direct_minimizer_realization(RelaxationAlgorithmIR::TangentPlaneImplicit),
+            None
+        );
+        assert_eq!(
+            cuda_fdm_direct_minimizer_realization(RelaxationAlgorithmIR::LlgOverdamped),
+            None
         );
     }
 

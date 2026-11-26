@@ -32,11 +32,14 @@ const VIEWPORT_SURFACE_ICONS: Record<string, LucideIcon> = {
   "viewport-3d": Box,
 };
 
-export function ViewportTabHost() {
+export function ViewportTabHost({ savedOnly = false }: { savedOnly?: boolean }) {
   const kernel = useKernel();
   const modules = useMemo(
-    () => kernel.modules.forSlot("viewport-main"),
-    [kernel.modules],
+    () =>
+      kernel.modules.forSlot("viewport-main").filter(
+        (module) => !savedOnly || module.id === "viewport-3d" || module.id === "field-map",
+      ),
+    [kernel.modules, savedOnly],
   );
   const activeModuleId = useLayoutSelector(
     (layout) => layout.activeViewportMainModuleId,
@@ -46,7 +49,7 @@ export function ViewportTabHost() {
   // Surfaces ease in only after the user has switched tabs, not on page load.
   const [userSwitched, setUserSwitched] = useState(false);
   const activeModule = selectActiveViewportModule(modules, activeModuleId);
-  const companionModule = companion && companion.moduleId !== activeModule?.id
+  const companionModule = !savedOnly && companion && companion.moduleId !== activeModule?.id
     ? modules.find((module) => module.id === companion.moduleId) ?? null
     : null;
 

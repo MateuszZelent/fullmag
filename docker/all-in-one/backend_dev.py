@@ -2382,7 +2382,7 @@ def _native_contract_receipt_matches(receipt: Mapping[str, Any], requested: tupl
     )
 
 
-def _package_source_matches_fresh_live_manifest(
+def _package_matches_source_identity(
     receipt: Mapping[str, Any],
     manifest_path: Path,
     toolchain: Mapping[str, Any],
@@ -2437,10 +2437,25 @@ def _package_source_matches_fresh_live_manifest(
     expected_build = _expected_backend_build_identity(cargo_profile)
     if not all(build.get(field) == expected_build[field] for field in BACKEND_BUILD_IDENTITY_FIELDS):
         return False
-    if os.environ.get("FULLMAG_SHARED_BACKEND_STORE"):
-        if build.get("cuda_architectures") != _dev_cuda_architectures():
-            return False
     return True
+
+
+def _package_source_matches_fresh_live_manifest(
+    receipt: Mapping[str, Any],
+    manifest_path: Path,
+    toolchain: Mapping[str, Any],
+    cargo_profile: str,
+    *,
+    required_native_contracts: tuple[str, ...] = (),
+) -> bool:
+    """Qualify a candidate against the selected build architecture."""
+    if not _package_matches_source_identity(
+        receipt, manifest_path, toolchain, cargo_profile,
+        required_native_contracts=required_native_contracts,
+    ):
+        return False
+    return (not os.environ.get("FULLMAG_SHARED_BACKEND_STORE")
+            or receipt["build"].get("cuda_architectures") == _dev_cuda_architectures())
 
 
 def _package_matches_fresh_live_manifest(

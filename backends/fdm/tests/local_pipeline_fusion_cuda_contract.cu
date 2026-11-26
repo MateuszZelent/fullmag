@@ -1,4 +1,5 @@
 #include "fullmag_fdm.h"
+#include "fullmag_time_expression.h"
 #include "context.hpp"
 
 #include <cuda_runtime.h>
@@ -24,6 +25,7 @@ enum class PhysicsCase {
     DemagDmi,
     DynamicOersted,
     PrescribedSot,
+    PulsedSlonczewski,
 };
 
 void require(bool condition, const char *message) {
@@ -95,6 +97,7 @@ const char *physics_case_name(PhysicsCase physics_case) {
     case PhysicsCase::DemagDmi: return "demag-dmi";
     case PhysicsCase::DynamicOersted: return "dynamic-oersted";
     case PhysicsCase::PrescribedSot: return "prescribed-sot";
+    case PhysicsCase::PulsedSlonczewski: return "pulsed-slonczewski";
     default: return "unknown";
     }
 }
@@ -304,6 +307,18 @@ RunResult run_once(
         plan.sot_active_mask = active_mask.data();
         plan.sot_active_mask_len = active_mask.size();
     }
+    if (physics_case == PhysicsCase::PulsedSlonczewski) {
+        plan.current_density_z = -2.6e10;
+        plan.stt_p_y = 1.0;
+        plan.stt_degree = 0.21;
+        plan.stt_lambda = 1.1;
+        plan.stt_epsilon_prime = 0.03;
+        plan.stt_free_layer_thickness = 1.0e-9;
+        plan.slonczewski_formula = FULLMAG_FDM_SLONCZEWSKI_FULLMAG_V2;
+        plan.stt_stack_normal[2] = -1.0;
+        plan.slonczewski_active_mask = active_mask.data();
+        plan.slonczewski_active_mask_len = active_mask.size();
+    }
     if (physics_case == PhysicsCase::Dmi ||
         physics_case == PhysicsCase::DemagDmi) {
         plan.has_interfacial_dmi = 1;
@@ -345,6 +360,18 @@ RunResult run_once(
     require(handle != nullptr, "local-pipeline backend creation returned null");
     require(fullmag_fdm_backend_last_error(handle) == nullptr,
             "local-pipeline backend creation failed");
+    if (physics_case == PhysicsCase::PulsedSlonczewski) {
+        constexpr double origin = dt;
+        constexpr double onset = origin + dt;
+        const double program[] = {
+            FULLMAG_TIME_OP_LOAD_T, FULLMAG_TIME_OP_PUSH, onset,
+            FULLMAG_TIME_OP_SUB, FULLMAG_TIME_OP_HEAVISIDE, FULLMAG_TIME_OP_RETURN,
+        };
+        require(fullmag_fdm_backend_set_slonczewski_time_expression_v1(
+                    handle, program, sizeof(program) / sizeof(program[0]),
+                    origin, &onset, 1) == FULLMAG_FDM_OK,
+                "pulsed Slonczewski expression upload failed");
+    }
     if (physics_case != PhysicsCase::DynamicOersted) {
         require(fullmag_fdm_backend_set_static_external_field_f64(
                     handle, static_profile.data(), static_profile.size()) ==
@@ -659,39 +686,45 @@ void qualify_precision_pair(
         static_cast<unsigned long long>(fp32.peak_vram_bytes));
 }
 
-void qualify_torque_fallback_case(
+void qualify_local_spin_torque_case(
     fullmag_fdm_integrator integrator,
-    fullmag_fdm_precision precision)
+    fullmag_fdm_precision precision,
+    PhysicsCase physics_case = PhysicsCase::PrescribedSot)
 {
+    const bool pulsed = physics_case == PhysicsCase::PulsedSlonczewski;
     const uint32_t step_count =
-        integrator == FULLMAG_FDM_INTEGRATOR_ABM3 ? 4U : 1U;
+        pulsed ? 2U : (integrator == FULLMAG_FDM_INTEGRATOR_ABM3 ? 4U : 1U);
     const auto production = run_once(
         integrator, precision, false, false, step_count,
-        PhysicsCase::PrescribedSot);
+        physics_case);
     const auto forced_unfused = run_once(
         integrator, precision, true, false, step_count,
-        PhysicsCase::PrescribedSot);
-    const uint64_t stages = expected_rhs_stage_count(integrator);
+        physics_case);
+    const uint64_t stages = expected_rhs_stage_count(integrator) * (pulsed ? 2U : 1U);
+    const bool fused = integrator == FULLMAG_FDM_INTEGRATOR_DP45 &&
+        precision == FULLMAG_FDM_PRECISION_DOUBLE;
+    const auto expected_realization = fused
+        ? FULLMAG_FDM_LOCAL_PIPELINE_REALIZATION_DIRECT_FUSED
+        : FULLMAG_FDM_LOCAL_PIPELINE_REALIZATION_DIRECT_UNFUSED;
     require(production.accounting_valid == 1 &&
                 forced_unfused.accounting_valid == 1,
-            "torque fallback accounting is invalid");
+            "local torque pipeline accounting is invalid");
     require(production.requested_policy ==
                 FULLMAG_FDM_LOCAL_PIPELINE_POLICY_AUTO_SAFE &&
-                production.resolved_realization ==
-                    FULLMAG_FDM_LOCAL_PIPELINE_REALIZATION_DIRECT_UNFUSED &&
-                production.executed_realization ==
-                    FULLMAG_FDM_LOCAL_PIPELINE_REALIZATION_DIRECT_UNFUSED,
-            "torque fallback was not reported as direct unfused");
-    require(production.fused_launches == 0 &&
-                production.unfused_field_launches == stages &&
-                production.unfused_rhs_launches == stages &&
+                production.resolved_realization == expected_realization &&
+                production.executed_realization == expected_realization,
+            "local torque reported a different pipeline realization");
+    require(production.fused_launches == (fused ? stages : 0) &&
+                production.unfused_field_launches == (fused ? 0 : stages) &&
+                production.unfused_rhs_launches == (fused ? 0 : stages) &&
                 forced_unfused.fused_launches == 0 &&
                 forced_unfused.unfused_field_launches == stages &&
                 forced_unfused.unfused_rhs_launches == stages,
-            "torque fallback launch accounting does not match tableau stages");
-    require((production.active_feature_mask &
-                FULLMAG_FDM_LOCAL_PIPELINE_FEATURE_SOT) != 0,
-            "SOT fallback is absent from pipeline identity");
+            "local torque launch accounting does not match tableau stages");
+    const auto feature = pulsed ? FULLMAG_FDM_LOCAL_PIPELINE_FEATURE_SLONCZEWSKI_STT
+                                : FULLMAG_FDM_LOCAL_PIPELINE_FEATURE_SOT;
+    require((production.active_feature_mask & feature) != 0,
+            "local torque is absent from pipeline identity");
     const double tolerance = precision == FULLMAG_FDM_PRECISION_DOUBLE
         ? 1.0e-10 : 2.0e-2;
     require(max_difference(
@@ -701,9 +734,19 @@ void qualify_torque_fallback_case(
                 max_difference(
                     production.magnetization,
                     forced_unfused.magnetization) <= tolerance,
-            "torque fallback diverges from the explicit unfused oracle");
+            "local torque diverges from the explicit unfused oracle");
+    if (pulsed) {
+        const auto before_onset = run_once(integrator, precision, false, false, 1, physics_case);
+        const auto unforced_first = run_once(integrator, precision, false, false, 1);
+        const auto unforced_second = run_once(integrator, precision, false, false, 2);
+        require(max_difference(before_onset.magnetization, unforced_first.magnetization) <= tolerance,
+                "Slonczewski pulse leaked into the step ending at onset");
+        require(max_difference(production.magnetization, unforced_second.magnetization) > 1.0e-8,
+                "Slonczewski pulse was missing after onset");
+    }
     std::printf(
-        "PASS prescribed-sot fallback %s %s stages=%llu\n",
+        "PASS %s %s %s stages=%llu\n",
+        physics_case_name(physics_case),
         integrator_name(integrator),
         precision == FULLMAG_FDM_PRECISION_DOUBLE ? "fp64" : "fp32",
         static_cast<unsigned long long>(stages));
@@ -987,9 +1030,9 @@ int main() {
             integrator,
             FULLMAG_FDM_PRECISION_SINGLE,
             PhysicsCase::DemagDmi);
-        qualify_torque_fallback_case(
+        qualify_local_spin_torque_case(
             integrator, FULLMAG_FDM_PRECISION_DOUBLE);
-        qualify_torque_fallback_case(
+        qualify_local_spin_torque_case(
             integrator, FULLMAG_FDM_PRECISION_SINGLE);
         qualify_precision_pair(integrator);
         qualify_precision_pair(integrator, PhysicsCase::Dmi);
@@ -1017,6 +1060,9 @@ int main() {
         qualify_graph_recapture_case(
             integrator, FULLMAG_FDM_PRECISION_SINGLE);
     }
+    qualify_local_spin_torque_case(
+        FULLMAG_FDM_INTEGRATOR_DP45, FULLMAG_FDM_PRECISION_DOUBLE,
+        PhysicsCase::PulsedSlonczewski);
     qualify_late_static_profile_rejection();
     std::puts("FDM_GPU_PERF003_LOCAL_PIPELINE_FUSION_PASS");
     return 0;

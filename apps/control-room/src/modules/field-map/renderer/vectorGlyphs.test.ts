@@ -84,3 +84,21 @@ describe("screen-space glyph layout", () => {
     expect(normalComponentMarker(3)).toEqual({ direction: "out-of-plane", magnitude: 3 });
   });
 });
+
+
+describe("explicit planar vertical exaggeration", () => {
+  it("transforms arrow angle without changing physical components or magnitudes", () => {
+    const vectors = uniformField(10, 10, [1, 1, 0]);
+    const before = Array.from(vectors);
+    const [physical] = layoutScreenGlyphs({ ...BASE, vectors });
+    const [expanded] = layoutScreenGlyphs({ ...BASE, vectors, verticalExaggeration: 100 });
+    expect(expanded!.angle).toBeCloseTo(Math.atan2(-100, 1));
+    expect({ ...expanded, angle: physical!.angle }).toEqual(physical);
+    expect(Array.from(vectors)).toEqual(before);
+  });
+
+  it("keeps out-of-plane classification in the physical frame", () => {
+    const [glyph] = layoutScreenGlyphs({ ...BASE, vectors: uniformField(10, 10, [0, 0.1, 1]), verticalExaggeration: 100 });
+    expect(glyph!.kind).toBe("out-of-plane");
+  });
+});

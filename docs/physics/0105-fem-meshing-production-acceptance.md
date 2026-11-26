@@ -1096,6 +1096,202 @@ Wymagane są wszystkie osiem grup: exhaustive mały encoding/V oracle; mutation/
 
 Planned storage symbols `FrozenResidues`, `Context.capture`, `verify_candidate_v2`, `verify_completed_v2` i driver accepted-resource receipt nie są istniejącym publicznym API/repo implementation. Ich future source freeze/index należy do nowego namespace `canonical-residue-validation-once-v2-implementation`; scalar/math/history/v1 pozostają immutable. Primary references: [Python array](https://docs.python.org/3.12/library/array.html), [immutable sequences](https://docs.python.org/3.12/library/stdtypes.html#immutable-sequence-types), [sys.getsizeof](https://docs.python.org/3.12/library/sys.html#sys.getsizeof). Referencje opisują reprezentację i ograniczenia pomiaru, nie kwalifikują siatki ani szybkości.
 
+(fem-geometry-asset-identity)=
+## Trwały klucz geometrii w authoringu
+
+Zatwierdzony kontrakt oddziela klucz zasobu od nazwy prezentacyjnej i
+niezmiennego object_id. Nie zmienia równań, topologii, parametrów SI ani
+writera ProblemIR 0.3.0. Zagnieżdżone Translate i CSG zachowują pełne drzewo,
+nazwy dzieci i kolejność transformacji; nazwa obiektu nie zastępuje nazw dzieci.
+
+| Parametr | Typ / default | Jednostka SI | Walidacja / znaczenie | Python → IR |
+|---|---|---|---|---|
+| world.geometry.geometry_name | str lub None, None | $1$ | Jawny niepusty klucz bez otaczających spacji, unikalny globalnie; brak zachowuje legacy name_geom dla magnetyka, name dla auxiliary | world.geometry/geometry_object/antenna_object i StudyBuilder.conductor → geometry.entries[].name; geometry_id |
+| auxiliary_geometry_names | mapa str→str, pusta | $1$ | Etykiety istniejących auxiliary keys; nie aktywują fizyki | Problem → physics_objects[].name i physics_graph.objects[].name |
+| geometry_params.name | str, rzeczywista nazwa kształtu | $1$ | Zachowana na każdym poziomie istniejących konstruktorów, niezależnie od etykiety ownera | builder/scena → geometry.entries[] i zagnieżdżone deskryptory |
+
+FDM CPU/GPU zachowują istniejącą siatkę regularną i per-magnet aliasy; jest to
+zmiana tożsamości authoringu, bez kwalifikacji urządzenia. FEM CPU/GPU używają
+tych samych kluczy do referencji istniejącej siatki; brak nowego meshingu lub
+dowodu jakości. Kolizje magnetyk–magnetyk, auxiliary–auxiliary i mieszane
+odmawiają przed materializacją, również przy pustych mapach all-air.
+
+Starsze sceny bez geometry_name zachowują fallback. Nowa scena wymaga spójnego
+czytnika i eksportera; nie obiecujemy odczytu nowego pola przez starszy pakiet.
+Requested backend/device/precision, materiały, moduły i źródłowe artefakty
+pozostają bez zmian. Testy authoringu nie dowodzą runtime ani zbieżności.
+
+Mapa implementacji: packages/fullmag-py/src/fullmag/world.py::geometry,
+geometry_object, MagnetHandle._resolved_geometry; model/problem.py::Problem;
+model/physics_scope.py::build_physics_graph; runtime/script_builder.py::
+_export_geometry_descriptor i _render_geometry_expr_from_override; runtime/
+scene_document.py::build_scene_document_from_builder oraz
+build_builder_from_scene_document. Odbiór: test_geometry_asset_identity.py;
+adaptery Rust i ciągły odbiór Python–Rust–Python wymagają CI.
+
+(fem-domain-source-authoring-assertion)=
+## Jawne źródło domeny i asercja właścicieli
+
+shared_domain_mesh_source zachowuje istniejące źródło FEM w builderze i scenie.
+Jest deklaracją authoringu, bez nowego równania lub wykonywalnego bindingu
+w ProblemIR 0.3.0. Nie potwierdza historii, której nie zawiera stare wejście.
+
+| Parametr | Typ / default | SI | Walidacja / znaczenie | Docelowa reprezentacja |
+|---|---|---|---|---|
+| shared_domain_mesh_source | optional generated/explicit, brak legacy | $1$ | generated bez dalszych pól; explicit wymaga source, region_markers i marker_owners; nieznane pola/null odmawiają | ScriptBuilderState i SceneStudyState |
+| source | str, wymagany explicit | $1$ | niepusty, bez NUL; istniejący resolver bez nowego grantu | mesh_workflow.domain_mesh_source |
+| region_markers | lista geometry_name/marker, wymagana | $1$ | unikalne klucze i dodatnie u32; [] tylko dotychczasowy niemagnetyczny all-air | domain_region_markers |
+| object_region_markers | optional lista, brak | $1$ | te same reguły, markery rozłączne z root table | domain_object_region_markers |
+| world.domain_mesh.marker_owners | list[dict] lub None, None (initial legacy capture) | $1$ | dokładnie jeden rekord na każdy wpis; root RegionRef z object_id, subregion z object_id i region_id | problem_meta.runtime_metadata.mesh_workflow.domain_marker_owners (authoring assertion only) |
+| table | region_markers/object_region_markers | $1$ | literalna tabela źródłowa, bez remapowania | deklaracja i asercja |
+| target | istniejący fm.RegionRef | $1$ | exact immutable ID, bez fallbacku do nazwy nowego ownera | statyczny rekord w Pythonie |
+
+Pierwsze przyjęcie kompletnego starego modelu przechwytuje bieżących ownerów.
+Następne odświeżenia i rename sprawdzają zapisane oczekiwania. Exact region_id
+ma pierwszeństwo przed aliasem, również jeśli region jest wyłączony. Brak,
+niejednoznaczność lub zmiana ownera daje odmowę przed materializacją, także
+przy include_geometry_assets=False. To nie jest ochrona dowolnej edycji
+wykonywalnego IR ani dowód historii obiektu o ponownie użytym jawnym ID.
+
+Brak deklaracji pozostawia legacy source w eksporcie script-backed. Generated
+jawnie usuwa wybór domenowego źródła/map/asercji, bez zmiany recept Universe,
+native fem_domain_mesh, wyników i cache. Merge Patch null usuwa deklarację;
+nie oznacza resetu generated. Pole wchodzi do istniejącego fingerprint.
+
+FDM CPU/GPU odmawiają jawnej domeny FEM. FEM CPU/GPU mają wspólny kontrakt
+authoringu, bez deklaracji kwalifikacji solvera. Zachowany loader nadal
+sprawdza plik, hash, mapy i certyfikaty; błąd nie uruchamia zastępczego meshingu.
+Native fem_domain_mesh nadal oznacza study.mesh.load, osobny kontrakt.
+
+Source index: runtime/domain_mesh_source.py::normalize_shared_domain_mesh_source,
+capture_domain_marker_owners, validate_domain_marker_owners,
+accept_domain_mesh_source; world.py::domain_mesh; model/problem.py::Problem;
+runtime/scene_document.py::build_builder_from_scene_document oraz
+runtime/script_builder.py::_render_domain_mesh_call. Kontrole: test_explicit_domain_roundtrip.py,
+wspólny fixture Python/Rust i CI; rzeczywisty Solve i zmiana pakietu pozostają
+poza zatwierdzonym odbiorem tego etapu.
+
+### Pełna tabela publicznych parametrów zachowania źródła
+
+| Python | Typ | Default | SI | Walidacja | Znaczenie | Backend | Python → IR |
+|---|---|---|---|---|---|---|---|
+| world.geometry.geometry_name | str \| None | None | $1$ | Niepusty klucz bez otaczających spacji i kolizji globalnych; legacy default przy braku. | Klucz zasobu niezależny od etykiety i object_id. | FDM CPU/GPU i FEM CPU/GPU: wspólny authoring, bez nowej kwalifikacji solverów. | geometry.entries[].name; geometry_id |
+| world.domain_mesh.marker_owners | list[dict] \| None | None (initial legacy capture) | $1$ | Pełne pokrycie obu tabel i statyczne RegionRef; exact ID przed aliasem; odmowa zmiany ownera. | Asercja bieżącego modelu, bez historii IR v0.3 i bez remapowania. | FEM CPU/GPU: wspólny authoring; FDM CPU/GPU: odmowa jawnego FEM domain. | problem_meta.runtime_metadata.mesh_workflow.domain_marker_owners (authoring assertion only) |
+
+(fem-mesh-request-presence)=
+### Brak parametru authoringu a rozstrzygnięty default wykonania
+
+Pełny test wejść GSG ujawnił dopisywanie niezadanych parametrów w eksporcie.
+Cztery istniejące pola ScriptBuilderMeshState zachowują teraz brak jako None
+i nie są wtedy serializowane. Jawne wartości, w tym false i wartości równe
+defaultom, pozostają zapisane. Jawny null nadal odmawia w typowanym DTO;
+JSON Merge Patch usuwa pole przed deserializacją. Nie zmienia się wybór
+algorytmu lub progu jakości wykonywanego przez istniejący backend.
+
+| Parametr authoringu | Typ / brak | SI | Efektywna istniejąca wartość przy braku | Python → builder/scena → metadata |
+|---|---|---|---|---|
+| algorithm_2d | optional i64, None | $1$ | 6, Frontal-Delaunay | study.objects.mesh.defaults → mesh.algorithm_2d → mesh_workflow przy jawnym żądaniu |
+| algorithm_3d | optional i64, None | $1$ | 1, Delaunay | study.objects.mesh.defaults → mesh.algorithm_3d → mesh_workflow przy jawnym żądaniu |
+| compute_quality | optional bool, None | $1$ | dotychczasowy default wykonania true | istniejący compute_quality_configured rozróżnia jawne false od braku |
+| per_element_quality | optional bool, None | $1$ | dotychczasowy default wykonania true | istniejący per_element_quality_configured rozróżnia jawne false od braku |
+
+To rozdzielenie dotyczy authoringu FDM CPU/GPU i FEM CPU/GPU; nie zmienia
+obsługiwanych ścieżek meshingu, a FEM knobs nadal nie uruchamiają FEM w FDM.
+Nowy czytnik akceptuje wcześniejsze jawne wartości, a starszy czytnik
+stosuje swoje dotychczasowe serde defaults dla brakujących pól. Odczyt
+geometry_name/shared_domain_mesh_source nadal wymaga spójnego nowego pakietu.
+
+Źródła: runtime/script_builder.py::_export_global_mesh_state,
+world.py::_configure_object_mesh_defaults i _mesh_spec_to_metadata;
+crates/fullmag-authoring/src/builder.rs::ScriptBuilderMeshState;
+adaptery i tests/explicit_domain_python_roundtrip.rs. Dokładny test nie
+ignoruje różnic tych pól i nie zmienia whitelist porównania IR.
+
+Reset wariantu przez JSON Merge Patch zachowuje zwykłą semantykę scalania:
+oprócz kind=generated należy usunąć nullami pola wcześniejszego explicit.
+Samo usunięcie całej shared_domain_mesh_source przez null oznacza legacy
+brak nadpisania i nie jest resetem generated.
+
+(fem-gsg-source-roundtrip-dependency)=
+### Zależność odbioru zamrożonych wejść GSG od publicznego authoringu
+
+Ciągły test źródeł 50 nm i corner25 wymaga istniejącego w worktree konstruktora
+zamkniętego CPW. Do dostarczanego zakresu należy jego deklaracja Python,
+serializacja geometrii i eksport, bez nowego meshingu lub solvera. Jest to
+pełny skończony obwód 3D przyjęty wcześniej dla GSG. Połączenia składają się
+z trzech szyjek i poprzeczki na każdym końcu; ich zasięg wchodzi do bounds.
+Trzy nominalne gałęzie i terminale pozostają trzema gałęziami; połączenia
+nie stają się nowymi zewnętrznymi elektrodami.
+
+| Python | Typ | Default | SI | Walidacja | Znaczenie | Backend | ProblemIR |
+|---|---|---|---|---|---|---|---|
+| CPWAntennaLayout.closed_loop | bool | False | 1 | Jawne wymagane przy closed_loop=True; dodatnie długości i przewodności, rozłączne ID; crossbar krótszy niż connection. | Parametr skończonej geometrii połączeń GSG; szczegóły w tabeli noty. | FEM CPU authoring only; FEM GPU i FDM CPU/GPU bez nowej kwalifikacji solvera. | geometry.entries[].loop.enabled |
+| CPWAntennaLayout.inlet_connection_length_m | float \| None | None | m | Jawne wymagane przy closed_loop=True; dodatnie długości i przewodności, rozłączne ID; crossbar krótszy niż connection. | Parametr skończonej geometrii połączeń GSG; szczegóły w tabeli noty. | FEM CPU authoring only; FEM GPU i FDM CPU/GPU bez nowej kwalifikacji solvera. | geometry.entries[].loop.inlet_connection_length_m |
+| CPWAntennaLayout.outlet_connection_length_m | float \| None | None | m | Jawne wymagane przy closed_loop=True; dodatnie długości i przewodności, rozłączne ID; crossbar krótszy niż connection. | Parametr skończonej geometrii połączeń GSG; szczegóły w tabeli noty. | FEM CPU authoring only; FEM GPU i FDM CPU/GPU bez nowej kwalifikacji solvera. | geometry.entries[].loop.outlet_connection_length_m |
+| CPWAntennaLayout.inlet_crossbar_length_m | float \| None | None | m | Jawne wymagane przy closed_loop=True; dodatnie długości i przewodności, rozłączne ID; crossbar krótszy niż connection. | Parametr skończonej geometrii połączeń GSG; szczegóły w tabeli noty. | FEM CPU authoring only; FEM GPU i FDM CPU/GPU bez nowej kwalifikacji solvera. | geometry.entries[].loop.inlet_crossbar_length_m |
+| CPWAntennaLayout.outlet_crossbar_length_m | float \| None | None | m | Jawne wymagane przy closed_loop=True; dodatnie długości i przewodności, rozłączne ID; crossbar krótszy niż connection. | Parametr skończonej geometrii połączeń GSG; szczegóły w tabeli noty. | FEM CPU authoring only; FEM GPU i FDM CPU/GPU bez nowej kwalifikacji solvera. | geometry.entries[].loop.outlet_crossbar_length_m |
+| CPWAntennaLayout.inlet_connection_part_id | str \| None | None | 1 | Jawne wymagane przy closed_loop=True; dodatnie długości i przewodności, rozłączne ID; crossbar krótszy niż connection. | Parametr skończonej geometrii połączeń GSG; szczegóły w tabeli noty. | FEM CPU authoring only; FEM GPU i FDM CPU/GPU bez nowej kwalifikacji solvera. | geometry.entries[].loop.inlet_connection_part_id |
+| CPWAntennaLayout.outlet_connection_part_id | str \| None | None | 1 | Jawne wymagane przy closed_loop=True; dodatnie długości i przewodności, rozłączne ID; crossbar krótszy niż connection. | Parametr skończonej geometrii połączeń GSG; szczegóły w tabeli noty. | FEM CPU authoring only; FEM GPU i FDM CPU/GPU bez nowej kwalifikacji solvera. | geometry.entries[].loop.outlet_connection_part_id |
+| CPWAntennaLayout.inlet_connection_conductivity_s_per_m | float \| None | None | S m^-1 | Jawne wymagane przy closed_loop=True; dodatnie długości i przewodności, rozłączne ID; crossbar krótszy niż connection. | Parametr skończonej geometrii połączeń GSG; szczegóły w tabeli noty. | FEM CPU authoring only; FEM GPU i FDM CPU/GPU bez nowej kwalifikacji solvera. | geometry.entries[].loop.inlet_connection_conductivity_s_per_m |
+| CPWAntennaLayout.outlet_connection_conductivity_s_per_m | float \| None | None | S m^-1 | Jawne wymagane przy closed_loop=True; dodatnie długości i przewodności, rozłączne ID; crossbar krótszy niż connection. | Parametr skończonej geometrii połączeń GSG; szczegóły w tabeli noty. | FEM CPU authoring only; FEM GPU i FDM CPU/GPU bez nowej kwalifikacji solvera. | geometry.entries[].loop.outlet_connection_conductivity_s_per_m |
+
+Metry i przewodność w siemensach na metr są wielkościami SI; ID i boolean
+są bezwymiarowe. Konstruktor odmawia niepełnego opisu. Parametry nominalnego
+CPW i transformacja zachowują kontrakt. Istniejący StructuredCurrentClosure
+v2 przyjmuje dokładnie jeden przekrój w układzie obiektu: oś x dla GSG lub
+dotychczasową oś z. Pozostałe osie i układ world nadal odmawiają. Test źródła
+zachowuje przekrój i skok potencjału; nie wyznacza nowego prądu.
+
+**Interpretacja backendów.** FEM CPU: authoring zamkniętego źródła 3D;
+dyskretyzacja przewodnika i transport nie są wykonywane. FEM GPU: brak nowej
+realizacji lub kwalifikacji. FDM CPU i FDM GPU: przenoszenie deklaracji nie
+przyznaje możliwości rozwiązania FEM transportu. Równania LLG, transportu
+i pola, tolerancje i budżety pozostają bez zmian.
+
+**API, IR i runtime.** Python przechowuje parametry loop w istniejącym geometry
+IR i odtwarza je literalnie. Nie ma nowej wersji ProblemIR, endpointu, etapu,
+capability lub aktywacji fizyki z nazwy. Bounds i segmenty bryły zawierają
+połączenia, więc ich utrata w eksporcie jest błędem. Starszy Python bez tych
+keywordów odmawia; test wymaga spójnego pakietu źródeł. Nie migrujemy sesji,
+wyników lub provenance i nie podmieniamy działającego runtime.
+
+**Źródła i walidacja.** packages/fullmag-py/src/fullmag/model/geometry.py +
+CPWAntennaLayout jest jedynym konstruktorem; jego connection_solids opisuje
+bryły połączeń. packages/fullmag-py/src/fullmag/model/current_transport.py +
+StructuredCurrentClosure waliduje przekrój. Eksport:
+packages/fullmag-py/src/fullmag/runtime/script_builder.py +
+_render_antenna_layout_expr. Regresje konstrukcji, bounds i odmów:
+packages/fullmag-py/tests/test_cpw_closed_loop_layout.py +
+ClosedGsgLayoutTests. Ciągły test pełnego IR:
+crates/fullmag-authoring/tests/explicit_domain_python_roundtrip.rs +
+pinned_gsg_sources_preserve_full_ir_through_real_rust_adapters.
+Nominalne GSG odnosi się do Sushruth i in. (2020),
+[doi:10.1103/PhysRevResearch.2.043203](https://doi.org/10.1103/PhysRevResearch.2.043203);
+nieopublikowane połączenia są jawnym założeniem modelu, nie danymi pracy.
+
+**Kompletność i odroczenia.** Opis zawiera dziewięć pól, jednostki, odmowy,
+mapowanie Python–IR, cztery interpretacje backendów i źródła kodu.
+Testy source-only nie kwalifikują siatki, solvera, błędu H, wzbudzenia spinowego
+lub zgodności z publikacją. Native build, UI E2E i zbieżność fizyczna pozostają
+osobnymi, niewykonanymi tu bramkami.
+
+Warstwa Rust wymaga tej samej walidacji authoringu: cztery części mikrostripu
+albo pięć części GSG, z dokładną zgodnością nazw i przewodności z geometrią.
+Nie dopuszcza dowolnej liczby części. Źródło GSG leży wewnątrz centralnej
+szyjki wejściowej na osi x; dla mikrostripu pozostaje oś z i poprzedni zakres.
+Odmowy obejmują brak części, kolizję ID, zły materiał, oś i koniec szyjki.
+crates/fullmag-authoring/src/validation.rs + validate_scene_closed_loop_owner
+oraz crates/fullmag-ir/src/antenna.rs + CpwClosedLoopIR przechowują tę samą
+deklarację. crates/fullmag-ir/src/spin_transport.rs + StructuredCurrentClosureIR
+waliduje typowane X/Z; crates/fullmag-authoring/src/geometry.rs +
+cpw_layout_bounds uwzględnia połączenia w bounds. To zgodność czytnika
+authoringu z istniejącym Pythonem GSG, bez zmiany wykonawcy transportu.
+
+Eksport rewrite_overrides Rust przekazuje również typowane current_transports
+w liście current_modules czytanej przez kanoniczny renderer Python, tak jak
+adapter Python sceny. Zachowuje to istniejący transport i pełny fizyczny IR;
+nie jest nowym modułem, równaniem ani ścieżką wykonania.
+
 ## Import STL: reparametryzacja płatów i krótkie krawędzie źródła
 
 Status: ponowna próba z reparametryzacją jest w źródle od 2026-11-19

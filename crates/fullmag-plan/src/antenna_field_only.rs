@@ -29,24 +29,47 @@ pub fn plan_antenna_field_only_carrier(
         crate::compute_resources::validate_current_runtime_support(&resources)
             .map_err(|reasons| PlanError { reasons })?;
     }
-    let operation = plan_antenna_field_solve_execution(problem, stage_id, port_mode_id)?;
-    if typed_closed_loop && !matches!(&operation, AntennaFieldSolveExecutionPlan::ClosedLoopInspection { .. }) {
-        return Err(PlanError { reasons: vec!["typed field-only carrier requires a closed-loop inspection source".into()] });
-    }
-    let (source_mesh, source_object_segments, field_sampling, source_object_id) =
-        match operation {
-            AntennaFieldSolveExecutionPlan::ExternalLeadInspection { input, .. } => (
-                input.original_device_mesh, input.device_object_segments, input.field_sampling,
-                input.stage.source_object_id,
-            ),
-            AntennaFieldSolveExecutionPlan::ClosedLoopInspection {input,..} => (
-                input.source_mesh, input.source_object_segments, input.field_sampling, input.stage.source_object_id,
-            ),
-            AntennaFieldSolveExecutionPlan::FieldBasis(plan) => (
-                plan.conductor.mesh, plan.conductor.object_segments, plan.field_sampling,
-                plan.source_object_id,
-            ),
-        };
+    let retained = problem.antenna_field_solve_stages.iter()
+        .any(|stage| stage.id == stage_id && stage.retained_current_source.is_some());
+    let source_asset = problem.antenna_field_solve_stages.iter()
+        .any(|stage| stage.id == stage_id && stage.retained_source_preparation.is_some());
+    let direct = problem.antenna_field_solve_stages.iter().any(|stage| stage.id == stage_id
+        && stage.oersted_realization == fullmag_ir::AntennaOerstedRealizationIR::DirectTetraQuadrature);
+    let backend_plan = if direct && (retained || source_asset) {
+        BackendPlanIR::AntennaRetainedDirectFieldInspection(
+            crate::plan_retained_direct_field_inspection(problem, stage_id, port_mode_id)?)
+    } else if source_asset {
+        BackendPlanIR::AntennaRetainedPreparationFieldInspection(
+            crate::plan_retained_preparation_field_inspection(problem, stage_id, port_mode_id)?)
+    } else if retained {
+        BackendPlanIR::AntennaRetainedCurrentFieldInspection(
+            crate::plan_retained_current_field_inspection(problem, stage_id, port_mode_id)?)
+    } else {
+        let operation = plan_antenna_field_solve_execution(problem, stage_id, port_mode_id)?;
+        if typed_closed_loop && !matches!(&operation, AntennaFieldSolveExecutionPlan::ClosedLoopInspection { .. }) {
+            return Err(PlanError { reasons: vec!["typed field-only carrier requires a closed-loop inspection source".into()] });
+        }
+        let (source_mesh, source_object_segments, field_sampling, source_object_id) =
+            match operation {
+                AntennaFieldSolveExecutionPlan::ExternalLeadInspection { input, .. } => (
+                    input.original_device_mesh, input.device_object_segments, input.field_sampling,
+                    input.stage.source_object_id,
+                ),
+                AntennaFieldSolveExecutionPlan::ClosedLoopInspection {input,..} => (
+                    input.source_mesh, input.source_object_segments, input.field_sampling, input.stage.source_object_id,
+                ),
+                AntennaFieldSolveExecutionPlan::FieldBasis(plan) => (
+                    plan.conductor.mesh, plan.conductor.object_segments, plan.field_sampling,
+                    plan.source_object_id,
+                ),
+            };
+        BackendPlanIR::AntennaFieldOnly(AntennaFieldOnlyPlanIR {
+            schema_version: "antenna_field_only_plan.v1".into(),
+            stage_id: stage_id.into(), port_mode_id: port_mode_id.into(), source_object_id,
+            source_mesh_parts: crate::mesh::build_conductor_mesh_parts_from_segments(&source_mesh, &source_object_segments),
+            source_mesh, source_object_segments, field_sampling,
+        })
+    };
     Ok(ExecutionPlanIR {
         common: CommonPlanMeta { ir_version: problem.ir_version.clone(),
             requested_backend: problem.backend_policy.requested_backend,
@@ -54,15 +77,12 @@ pub fn plan_antenna_field_only_carrier(
             execution_mode: problem.validation_profile.execution_mode,
             material_field_plans: vec![],
         },
-        backend_plan: BackendPlanIR::AntennaFieldOnly(AntennaFieldOnlyPlanIR {
-            schema_version: "antenna_field_only_plan.v1".into(),
-            stage_id: stage_id.into(), port_mode_id: port_mode_id.into(), source_object_id,
-            source_mesh_parts: crate::mesh::build_conductor_mesh_parts_from_segments(&source_mesh, &source_object_segments),
-            source_mesh, source_object_segments, field_sampling,
-        }),
+        backend_plan,
         output_plan: OutputPlanIR { outputs: vec![] },
         provenance: ProvenancePlanIR {
-            notes: vec!["antenna_field_only_carrier:no_magnetic_dofs:no_llg_execution".into()],
+            notes: if retained {
+                vec!["antenna_retained_current_field_inspection:no_fresh_transport:no_magnetic_dofs:no_llg_execution".into()]
+            } else { vec!["antenna_field_only_carrier:no_magnetic_dofs:no_llg_execution".into()] },
             integrator_resolution: None, physics_graph: None, fem_eigen_execution_resolution: None,
         },
     })

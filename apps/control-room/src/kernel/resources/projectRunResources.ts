@@ -34,7 +34,12 @@ export function validateProjectRunsEnvelope(
   }
   const ids = new Set<string>();
   if (data.next_cursor != null) {
-    assertSolutionSetRunId(data.next_cursor);
+    if (typeof data.next_cursor !== "string" || !data.next_cursor ||
+        data.next_cursor !== data.next_cursor.trim() ||
+        new TextEncoder().encode(data.next_cursor).byteLength > 4096 ||
+        /[\u0000-\u001f\u007f]/.test(data.next_cursor)) {
+      throw new Error("Invalid saved run page cursor.");
+    }
     if (data.next_cursor === cursor) throw new Error("Saved run page cursor did not advance.");
   }
   for (const run of data.runs) {

@@ -16,6 +16,9 @@ use std::collections::BTreeMap;
 
 use crate::study::AcceptedStudySnapshot;
 
+#[path = "study_retained_current_tensor.rs"]
+pub(crate) mod retained_current_tensor;
+
 mod recovered_inspection;
 pub use recovered_inspection::publish_recovered_inspection_solution;
 
@@ -303,6 +306,9 @@ fn build_solution(
         )?;
         let inspection_tensors = if output.codec_id == fullmag_application::ANTENNA_INSPECTION_BUNDLE_CODEC_ID {
             crate::study_inspection_tensor::materialize(store, problem, step, &artifact, output,
+                claim, &provenance.run_spec_digest, &solution_set_id)?
+        } else if output.codec_id == fullmag_antenna_artifacts::retained_current::RETAINED_CURRENT_FIELD_CODEC_ID {
+            retained_current_tensor::materialize(store, accepted, step, &artifact, output,
                 claim, &provenance.run_spec_digest, &solution_set_id)?
         } else { Vec::new() };
         coverage.push(SolutionArtifactCoverage {

@@ -120,6 +120,8 @@ std::string source_digest() {
         "sha256sum \"" + root + "/backends/fdm/gpu/cuda/transport/context.cu\" \"" +
         root + "/backends/fdm/gpu/cuda/transport/charge/device_solver.cu\" \"" +
         root + "/backends/fdm/gpu/cuda/transport/charge/device_solver.hpp\" \"" +
+        root + "/backends/fdm/gpu/cuda/transport/charge/cudss_solver.cpp\" \"" +
+        root + "/backends/fdm/gpu/cuda/transport/charge/cudss_solver.hpp\" \"" +
         root + "/backends/fdm/include/fullmag/fdm/transport/gpu_abi_v1.h\" \"" +
         root + "/backends/fdm/tests/gpu_m1_charge_scalability_v1_contract.cpp\""
         " | sha256sum 2>/dev/null";

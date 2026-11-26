@@ -6,6 +6,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { MaterializedDatasetResource, SolutionSetArtifactResource } from "@/kernel/api/apiTypes";
 import { findElement, installSimulationPreparationTestDom, type TestElement } from "@/kernel/layout/simulationPreparationTestDom.test-support";
 import type { ModuleProps } from "@/kernel/types";
+import { KernelContext } from "@/kernel/KernelContext";
+import { ObjectVisualizationController } from "@/kernel/visualization/ObjectVisualizationController";
 
 import { SavedMaterializedArtifactRow } from "./SavedMaterializedArtifactRow";
 import { SavedResultsBrowser } from "./SavedResultsBrowser";
@@ -78,9 +80,12 @@ function dataset(index: number, quantity: string, unit: string): MaterializedDat
 function makeKernel() {
   let selection: { ref: unknown } = { ref: null };
   const set = vi.fn((next: { ref: unknown }) => { selection = next; });
+  const visualization = new ObjectVisualizationController();
+  vi.spyOn(visualization, "setSavedFieldPresentation");
   return {
+    api: { resourceCacheScope: "saved-field-labels-test" },
     selection: { set, get: () => selection },
-    visualization: { setSavedFieldPresentation: vi.fn() },
+    visualization,
   } as unknown as ModuleProps["kernel"];
 }
 
@@ -106,7 +111,11 @@ describe("saved field labels before inspection", () => {
     expect(fakes.active.size).toBe(0);
     dom.restore();
   });
-  const render = () => act(async () => root.render(<SavedResultsBrowser kernel={kernel} moduleId="results-navigator" />));
+  const render = () => act(async () => root.render(
+    <KernelContext.Provider value={kernel}>
+      <SavedResultsBrowser kernel={kernel} moduleId="results-navigator" />
+    </KernelContext.Provider>,
+  ));
   const clickText = async (text: string) => {
     const node = findElement(container, element => element.tagName === "BUTTON" && element.textContent === text, text);
     await act(async () => node.click());
@@ -137,6 +146,10 @@ describe("saved field labels before inspection", () => {
     expect(kernel.visualization.setSavedFieldPresentation).toHaveBeenCalledWith(
       expect.objectContaining({ artifactId: "opaque-2" }), "H_ant", "3",
     );
+    expect(kernel.visualization.getSnapshot().savedFieldPresentation).toEqual(expect.objectContaining({
+      selection: expect.objectContaining({ artifactId: "opaque-2", projectId: "project", runId: "run" }),
+      settings: expect.objectContaining({ activeQuantityId: "H_ant", vectorsVisible: true }),
+    }));
   });
 
   it("pages all fields with at most four simultaneous metadata owners and leaves scalar selection independent", async () => {

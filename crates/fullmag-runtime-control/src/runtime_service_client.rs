@@ -177,6 +177,41 @@ pub fn recover_container_empty(
     attestation_path: &Path,
     expected_attestation_sha256: &str,
 ) -> Result<RuntimeServiceContainerRecoveryReceipt> {
+    let a = load_container_recovery_admission(configuration_path, request_path, expected_request_sha256, attestation_path, expected_attestation_sha256)?;
+    let executor = fullmag_build_info::identity();
+    RuntimeServiceConfig::recover_container_with_proof(&a.store, &a.candidate, &a.configuration_bytes, &a.request,
+        &a.request_sha256, &a.attestation, executor.git_commit, executor.source_snapshot_sha256)
+}
+
+pub fn preview_container_recovery(
+    configuration_path: &Path,
+    request_path: &Path,
+    expected_request_sha256: &str,
+    attestation_path: &Path,
+    expected_attestation_sha256: &str,
+) -> Result<serde_json::Value> {
+    let a = load_container_recovery_admission(configuration_path, request_path, expected_request_sha256, attestation_path, expected_attestation_sha256)?;
+    let executor = fullmag_build_info::identity();
+    RuntimeServiceConfig::preview_container_with_proof(&a.store, &a.candidate, &a.configuration_bytes, &a.request,
+        &a.request_sha256, &a.attestation, executor.git_commit, executor.source_snapshot_sha256)
+}
+
+struct ContainerRecoveryAdmission {
+    store: fullmag_session::SessionStore,
+    candidate: RuntimeServiceConfig,
+    configuration_bytes: Vec<u8>,
+    request: RuntimeServiceContainerRecoveryRequest,
+    request_sha256: String,
+    attestation: RuntimeServiceContainerRecoveryProof,
+}
+
+fn load_container_recovery_admission(
+    configuration_path: &Path,
+    request_path: &Path,
+    expected_request_sha256: &str,
+    attestation_path: &Path,
+    expected_attestation_sha256: &str,
+) -> Result<ContainerRecoveryAdmission> {
     if expected_request_sha256.len() != 64
         || !expected_request_sha256
             .bytes()
@@ -253,17 +288,7 @@ pub fn recover_container_empty(
     }
 
     let store = fullmag_session::SessionStore::open_existing(candidate.store_root.clone())?;
-    let executor = fullmag_build_info::identity();
-    RuntimeServiceConfig::recover_container_with_proof(
-        &store,
-        &candidate,
-        &configuration_bytes,
-        &request,
-        &request_sha256,
-        &attestation,
-        executor.git_commit,
-        executor.source_snapshot_sha256,
-    )
+    Ok(ContainerRecoveryAdmission { store, candidate, configuration_bytes, request, request_sha256, attestation })
 }
 
 fn read_stable_container_recovery_document(

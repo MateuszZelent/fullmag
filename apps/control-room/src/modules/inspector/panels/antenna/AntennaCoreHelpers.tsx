@@ -51,9 +51,9 @@ import {
 } from "./AntennaTerminalSourceModel";
 import { committedAntennaTransactionScene } from "./AntennaTransactionAcknowledgement";
 import {
+  antennaCircuitFields,
   CPW_STATION_FIELDS,
   insertWidthStation,
-  MICROSTRIP_LOOP_FIELDS,
   type WidthStationDraft,
 } from "./MicrostripGeometryEditorModel";
 
@@ -262,6 +262,7 @@ export async function executeAntennaMergePatchTransaction({
   mutationKind,
   request,
   validateAck = false,
+  resolveCommittedScene,
 }: {
   kernel: ReturnType<typeof useKernel>;
   scene: SceneResource | null | undefined;
@@ -270,6 +271,7 @@ export async function executeAntennaMergePatchTransaction({
   mutationKind: "geometry" | "material" | "interaction";
   request: MergePatchTransactionRequest;
   validateAck?: boolean;
+  resolveCommittedScene?: (response: AuthoringTransactionResponse) => SceneResource;
 }): Promise<AuthoringTransactionResponse> {
   const historyGeneration = kernel.authoringHistory?.getGeneration?.();
   const isCurrentSessionScope = () =>
@@ -296,6 +298,7 @@ export async function executeAntennaMergePatchTransaction({
         sessionScopeKey ? { sessionScopeKey } : undefined,
       ),
     (res) => {
+      if (resolveCommittedScene) return resolveCommittedScene(res);
       if (validateAck && res?.committed_scene && scene?.scene?.id) {
         return committedAntennaTransactionScene(res, request, scene.scene.id);
       }
@@ -305,6 +308,8 @@ export async function executeAntennaMergePatchTransaction({
       ? { expectedSceneRevision: request.base_revision }
       : undefined,
   );
+
+  if (!isCurrentSessionScope()) return response;
 
   const committedRev =
     typeof response?.scene_revision === "number" && Number.isFinite(response.scene_revision)
@@ -643,16 +648,19 @@ export function EditableWaypointsEditor({
 }
 
 /* ============================================================================
- * Closed-Loop Inlet / Outlet Bridge Fields Editor (`MICROSTRIP_LOOP_FIELDS`)
+ * Closed-loop inlet and outlet connection fields
  * ============================================================================ */
 
 export function ClosedLoopBridgeFieldsEditor({
+  geometryKind,
   parameters,
   onChange,
 }: {
+  geometryKind: string;
   parameters: Readonly<Record<string, string>>;
   onChange: (next: Record<string, string>) => void;
 }): ReactNode {
+  const fields = antennaCircuitFields({ geometry_kind: geometryKind });
   return (
     <div className="flex flex-col gap-3" data-testid="antenna-closed-loop-bridges">
       {(["inlet", "outlet"] as const).map((end) => (
@@ -666,7 +674,7 @@ export function ClosedLoopBridgeFieldsEditor({
               : "Outlet bridge connection (closes return loop)"}
           </span>
           <div className="grid grid-cols-1 gap-2">
-            {MICROSTRIP_LOOP_FIELDS.filter((field) =>
+            {fields.filter((field) =>
               field.key.startsWith(`${end}_`),
             ).map((field) => (
               <div key={field.key} className="flex flex-col gap-1">

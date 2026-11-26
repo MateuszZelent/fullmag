@@ -116,6 +116,10 @@ class Budget:
     soft_reference_evals: int | None = None
     reference_raw_max_bits: int = 0
 
+    @property
+    def limits(self):
+        return LIMITS
+
     def activate(self, target):
         self.target=target
         self.target_started.setdefault(target,time.monotonic())
@@ -123,34 +127,34 @@ class Budget:
 
     def guard(self):
         elapsed=time.monotonic()-self.started
-        require(elapsed<=LIMITS["seconds_case"], "case wall-time exhausted")
+        require(elapsed<=self.limits["seconds_case"], "case wall-time exhausted")
         if self.target in self.target_started:
-            require(time.monotonic()-self.target_started[self.target]<=LIMITS["seconds_target"],
+            require(time.monotonic()-self.target_started[self.target]<=self.limits["seconds_target"],
                     "target wall-time exhausted")
         self.peak_ram=max(self.peak_ram,peak_ram_bytes())
-        require(self.peak_ram<=LIMITS["ram_bytes"], "actual peak RAM exhausted")
+        require(self.peak_ram<=self.limits["ram_bytes"], "actual peak RAM exhausted")
 
     def charge(self, kind, precision=None):
         self.counts[kind]+=1;self.by_target[self.target][kind]+=1
         if precision is not None: self.precision[str(precision)][kind]+=1
         target=self.by_target[self.target]
         if kind=="pairs":
-            require(target[kind]<=LIMITS["pairs_target"] and self.counts[kind]<=LIMITS["pairs_case"], "analytic pair limit")
+            require(target[kind]<=self.limits["pairs_target"] and self.counts[kind]<=self.limits["pairs_case"], "analytic pair limit")
         if kind in ("sqrt","log","log1p","atan2"):
             total=sum(self.counts[k] for k in ("sqrt","log","log1p","atan2"))
             local=sum(target[k] for k in ("sqrt","log","log1p","atan2"))
-            require(local<=LIMITS["transc_target"] and total<=LIMITS["transc_case"], "transcendental call limit")
+            require(local<=self.limits["transc_target"] and total<=self.limits["transc_case"], "transcendental call limit")
         if kind=="exact_predicates":
-            require(target[kind]<=LIMITS["predicates_target"] and self.counts[kind]<=LIMITS["predicates_case"], "exact predicate limit")
+            require(target[kind]<=self.limits["predicates_target"] and self.counts[kind]<=self.limits["predicates_case"], "exact predicate limit")
         if kind.startswith("reference_comparison_"):
             self.counts["reference_comparisons"]+=1;target["reference_comparisons"]+=1
             if precision is not None: self.precision[str(precision)]["reference_comparisons"]+=1
         if kind=="reference_comparisons" or kind.startswith("reference_comparison_"):
-            require(self.counts["reference_comparisons"]<=LIMITS["reference_comparisons_case"], "case reference comparison limit")
-            require(target["reference_comparisons"]<=LIMITS["reference_comparisons_test"], "target reference comparison limit")
+            require(self.counts["reference_comparisons"]<=self.limits["reference_comparisons_case"], "case reference comparison limit")
+            require(target["reference_comparisons"]<=self.limits["reference_comparisons_test"], "target reference comparison limit")
         if kind=="reference_evals":
-            require(self.counts[kind]<=LIMITS["reference_case"], "case reference evaluation limit")
-            require(target[kind]<=LIMITS["reference_test"], "target reference evaluation limit")
+            require(self.counts[kind]<=self.limits["reference_case"], "case reference evaluation limit")
+            require(target[kind]<=self.limits["reference_test"], "target reference evaluation limit")
             if self.soft_reference_evals is not None:
                 require(self.counts[kind]<=self.soft_reference_evals, "INCOMPLETE: soft execution allocation exhausted")
         if sum(self.counts.values())%256==0: self.guard()
@@ -170,7 +174,7 @@ class Budget:
                 "terminal_snapshot_rechecks_admission":False,
                 "primitive_arithmetic_status":"division calls instrumented; other scalar additions/multiplications NOT exhaustively counted",
                 "library_internal_counter_scope":"isolated reference ctx sqrt/log/log1p/atan2/exp/sinh/cosh/tanh entry calls; internal libmp arithmetic NOT exhaustively counted",
-                "limits":LIMITS}
+                "limits":self.limits}
 
 
 class Arithmetic:

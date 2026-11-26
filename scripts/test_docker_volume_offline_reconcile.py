@@ -145,6 +145,404 @@ class RuntimeOwnerValidationTests(unittest.TestCase):
             module._validate_owner_process(owner(), mismatched)
 
 
+
+class StoppedReadyOwnerTests(unittest.TestCase):
+    def ready_proof(self):
+        ready = owner("ready", children=("running", "running"))
+        tree = process("ready", service_owner=ready)
+        backend = stopped("backend")
+        backend["Config"]["Hostname"] = ready["host"]
+        frontend = stopped("frontend", identifier="f" * 64)
+        raw_owner = canonical(ready) + b"\n"
+        raw_process = canonical(tree) + b"\n"
+        proof = {
+            "schema": "fullmag.docker-abrupt-stop-proof.v1",
+            "authorization_pins": {
+                "backend_container_id": CONTAINER, "frontend_container_id": "f" * 64,
+                "old_image_id": IMAGE, "compose_project": "fullmag-demo",
+                "owner_sha256": hashlib.sha256(raw_owner).hexdigest(),
+                "process_receipt_sha256": hashlib.sha256(raw_process).hexdigest(),
+            },
+            "raw_records": {
+                "owner": {"raw_utf8": raw_owner.decode(), "sha256": hashlib.sha256(raw_owner).hexdigest()},
+                "process_receipt": {"raw_utf8": raw_process.decode(), "sha256": hashlib.sha256(raw_process).hexdigest()},
+            },
+            "containers": {"backend": backend, "frontend": frontend},
+        }
+        return ready, tree, proof
+
+    def test_v1_still_rejects_ready_owner(self):
+        ready, tree, _ = self.ready_proof()
+        with self.assertRaises(BuildControlError):
+            module._validate_owner_process(ready, tree)
+
+    def test_v2_requires_exact_stopped_ready_owner_and_abrupt_proof(self):
+        ready, tree, proof = self.ready_proof()
+        before = canonical([ready, tree, proof])
+        evidence = module._validate_stopped_ready_owner(ready, tree, proof)
+        self.assertEqual(evidence["owner_state"], "ready")
+        self.assertEqual(evidence["process_state"], "ready")
+        self.assertEqual(canonical([ready, tree, proof]), before)
+
+    def test_v2_rejects_changed_owner_or_process_bytes(self):
+        import copy
+        ready, tree, proof = self.ready_proof()
+        for field in ("owner_sha256", "process_receipt_sha256"):
+            bad = copy.deepcopy(proof)
+            bad["authorization_pins"][field] = "0" * 64
+            with self.subTest(field=field), self.assertRaises(BuildControlError):
+                module._validate_stopped_ready_owner(ready, tree, bad)
+        with self.assertRaises(BuildControlError):
+            module._validate_stopped_ready_owner({**ready, "owner_token": "foreign"}, tree, proof)
+        with self.assertRaises(BuildControlError):
+            module._validate_stopped_ready_owner(ready, {**tree, "state": "drained"}, proof)
+
+    def test_v2_rejects_active_container_foreign_identity_and_host(self):
+        import copy
+        ready, tree, proof = self.ready_proof()
+        for kind in ("running", "foreign_id", "foreign_host", "foreign_image"):
+            bad = copy.deepcopy(proof)
+            if kind == "running":
+                bad["containers"]["backend"]["State"].update(Status="running", Running=True, Pid=456)
+            elif kind == "foreign_id":
+                bad["containers"]["backend"]["Id"] = "1" * 64
+            elif kind == "foreign_host":
+                bad["containers"]["backend"]["Config"]["Hostname"] = "other"
+            else:
+                bad["containers"]["backend"]["Image"] = "sha256:" + "1" * 64
+            with self.subTest(kind=kind), self.assertRaises(BuildControlError):
+                module._validate_stopped_ready_owner(ready, tree, bad)
+
+    def test_v2_requires_ready_children_and_same_historical_identity(self):
+        import copy
+        ready, tree, proof = self.ready_proof()
+        for change in ("child", "historical_owner", "runtime_pid"):
+            bad_tree = copy.deepcopy(tree)
+            bad_owner = copy.deepcopy(ready)
+            if change == "child":
+                bad_owner["children"][0]["status"] = "unknown"
+            elif change == "historical_owner":
+                bad_tree["service_owner"]["process_start_token"] = "other"
+            else:
+                bad_tree["runtime_pid"] = 998
+            with self.subTest(change=change), self.assertRaises(BuildControlError):
+                module._validate_stopped_ready_owner(bad_owner, bad_tree, proof)
+
+    def test_v2_only_admits_interrupted_idle_iteration(self):
+        row = {"phase": "iteration", "state": "restarting-idle-backend"}
+        self.assertEqual(module._validate_operation_phase(row), "iteration")
+        self.assertEqual(module._validate_operation_phase(row, stopped_ready_owner=True), "iteration")
+        for bad in ({"phase": "iteration", "state": "starting"},
+                    {"phase": "activation", "state": "outcome-unknown-resources-retained"},
+                    {"phase": "iteration", "state": "succeeded"}):
+            with self.subTest(row=bad), self.assertRaises(BuildControlError):
+                module._validate_operation_phase(bad, stopped_ready_owner=True)
+
+    def test_v2_records_preserve_schema_and_remain_rejected_by_v1_reader(self):
+        control, plan, _ = offline_fixture()
+        plan["schema"] = "fullmag.docker-offline-control-reconciliation.v2"
+        intent, receipt = module._operation_records(plan)
+        self.assertEqual(intent["schema"], plan["schema"])
+        self.assertEqual(receipt["schema"], plan["schema"])
+        with self.assertRaises(BuildControlError):
+            module._verify_completed_record(control, receipt, canonical(receipt) + b"\n")
+
+
+    def test_v2_terminal_pins_include_every_run_and_reject_missing_metadata(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            run = root / "runs" / "run-one"
+            run.mkdir(parents=True)
+            (run / "run_intent.json").write_bytes(b'{"run_id":"run-one"}\n')
+            (run / "run_catalog.json").write_bytes(b'{"run_id":"run-one"}\n')
+            snapshot = {"runs": [{"run_id": "run-one"}]}
+            pins = module._retained_terminal_pins(root, snapshot)
+            self.assertEqual(len(pins), 1)
+            self.assertEqual(pins[0]["run_id"], "run-one")
+            self.assertIsNone(pins[0]["artifact_catalog_sha256"])
+            (run / "run_intent.json").unlink()
+            with self.assertRaises(BuildControlError):
+                module._retained_terminal_pins(root, snapshot)
+
+    def test_v2_checks_original_backend_incarnation(self):
+        original = {"state": "restarting-idle-backend",
+                    "backend_container": CONTAINER, "backend_started_at": "original"}
+        backend = {"id": CONTAINER, "started_at": "original"}
+        module._validate_iteration_incarnation(original, backend)
+        for bad in ({**backend, "id": "1" * 64}, {**backend, "started_at": "restarted"}):
+            with self.subTest(backend=bad), self.assertRaises(BuildControlError):
+                module._validate_iteration_incarnation(original, bad)
+
+    def test_parser_ready_owner_is_explicit_and_preview_is_default(self):
+        import docker_dev
+        parser = docker_dev._parser()
+        argv = ["--repo-root", "/repo", "reconcile-offline-volume",
+                "--source-root", "/repo", "--attempt", TOKEN, "--config-sha256", CONFIG,
+                "--operation-attempt", OPERATION, "--port", "3203"]
+        old = parser.parse_args(argv)
+        self.assertFalse(old.stopped_ready_owner)
+        self.assertFalse(old.apply)
+        new = parser.parse_args(argv + ["--stopped-ready-owner"])
+        self.assertTrue(new.stopped_ready_owner)
+        self.assertFalse(new.apply)
+
+
+
+class StoppedReadyTransactionTests(unittest.TestCase):
+    def fixture(self, active=None):
+        ready, tree, abrupt = StoppedReadyOwnerTests().ready_proof()
+        control, plan, _ = offline_fixture(active=active, extra_pins={
+            "runtime-control/runtime-services/OWNER.json": canonical(ready) + b"\n",
+            "runtime-control/runtime-service/process-tree.json": canonical(tree) + b"\n",
+        })
+        original = json.loads(control.records[plan["original_operation_receipt_path"]])
+        original.update(state="restarting-idle-backend", backend_container=CONTAINER,
+                        backend_started_at="2026-10-27T00:00:00Z")
+        raw = canonical(original) + b"\n"
+        control.records[plan["original_operation_receipt_path"]] = raw
+        plan["control_pins"][plan["original_operation_receipt_path"]] = hashlib.sha256(raw).hexdigest()
+        plan["original_operation_receipt_sha256"] = hashlib.sha256(raw).hexdigest()
+        plan["schema"] = module.READY_OWNER_SCHEMA
+        plan["abrupt_stop_proof"] = abrupt
+        plan.pop("plan_sha256")
+        plan["plan_sha256"] = hashlib.sha256(canonical(plan)).hexdigest()
+        intent, receipt = module._operation_records(plan)
+        control.records["offline-reconciliation/" + OPERATION + "/intent.json"] = canonical(intent) + b"\n"
+        control.records["offline-reconciliation/" + OPERATION + "/receipt.json"] = canonical(receipt) + b"\n"
+        control.records[module.CURRENT] = canonical(receipt) + b"\n"
+        return control, plan, receipt
+
+    def test_v2_pending_release_is_not_completed(self):
+        control, plan, _ = self.fixture(active=(TOKEN + "\n").encode())
+        result = module._read_completed_or_prepared_retry(
+            control, OPERATION, plan["plan_sha256"], stopped_ready_owner=True)
+        self.assertIsNone(result)
+        self.assertEqual(control.records["active"], (TOKEN + "\n").encode())
+
+    def test_v2_replay_requires_explicit_selection_and_all_original_pins(self):
+        control, plan, receipt = self.fixture()
+        with self.assertRaises(BuildControlError):
+            module.read_completed(control, OPERATION)
+        self.assertEqual(module.read_completed(control, OPERATION, stopped_ready_owner=True), receipt)
+        control.records["runtime-control/runtime-services/OWNER.json"] = b'{"state":"changed"}\n'
+        with self.assertRaises(BuildControlError):
+            module.read_completed(control, OPERATION, stopped_ready_owner=True)
+
+    def test_v2_changed_store_or_lease_retains_active(self):
+        from unittest.mock import patch
+        control, plan, _ = self.fixture(active=(TOKEN + "\n").encode())
+        args = SimpleNamespace(stopped_ready_owner=True, operation_attempt=OPERATION,
+                               expected_plan_sha256=plan["plan_sha256"])
+        changed = {**plan, "plan_sha256": "1" * 64}
+        with patch.object(module, "_read_existing_completed_for_apply", return_value=None), \
+             patch.object(module, "_collect_context", return_value={"plan": changed}), \
+             patch.object(module, "_run_transaction", side_effect=AssertionError("must not mutate")):
+            with self.assertRaises(BuildControlError):
+                module.apply(args)
+        self.assertEqual(control.records["active"], (TOKEN + "\n").encode())
+
+    def test_v2_real_transaction_releases_only_active_and_preserves_original_bytes(self):
+        control, plan, receipt = self.fixture(active=(TOKEN + "\n").encode())
+        original_records = dict(control.records)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "operation.lock").touch()
+            for relative, raw in control.records.items():
+                path = root / relative
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(raw)
+            intent, receipt = module._operation_records(plan)
+            script, preamble = module._transaction_script(
+                control_root=root, active_token=plan["original_operation_attempt"],
+                active_sha256=plan["control_pins"]["active"], pins=plan["control_pins"],
+                intent=intent, receipt=receipt)
+            result = subprocess.run(["bash", "-euo", "pipefail", "-c", script],
+                                    input=preamble + b"COMMIT\n", capture_output=True)
+            self.assertEqual(result.returncode, 0, result.stderr.decode())
+            self.assertFalse((root / "active").exists())
+            for relative, raw in original_records.items():
+                if relative != "active":
+                    self.assertEqual((root / relative).read_bytes(), raw, relative)
+            self.assertFalse((root / plan["original_operation_terminal_path"]).exists())
+            self.assertEqual(json.loads((root / module.CURRENT).read_bytes())["proof"]["iteration_outcome"],
+                             "interrupted-retained")
+
+    def test_private_ledger_transaction_mount_is_exact_and_readonly(self):
+        command = ["docker", "run", "--entrypoint", "/bin/bash", IMAGE]
+        module._transaction_mounts(command, store_root=Path("/store"), ledger_volume="private-volume",
+                                   ledger_subpath="private/ledger")
+        self.assertIn("type=volume,src=private-volume,dst=/ledger,readonly,volume-nocopy,volume-subpath=private/ledger",
+                      command)
+        with self.assertRaises(BuildControlError):
+            module._transaction_mounts(["docker", "--entrypoint", "/bin/bash"], store_root=Path("/store"),
+                                       ledger_volume="private-volume", ledger_subpath="../ledger")
+
+
+
+class StoppedReadyLockedProofTests(unittest.TestCase):
+    def fixture(self):
+        ready, tree, proof = StoppedReadyOwnerTests().ready_proof()
+        proof["docker_engine_id_sha256"] = "e" * 64
+        proof["storage_proof"] = {"runs": ["terminal"], "ledger": "released"}
+        proof["retained_terminal_runs"] = []
+        records = {}
+        for key, row in proof["raw_records"].items():
+            row["path"] = "retained/" + key + ".json"
+            records[row["path"]] = row["raw_utf8"].encode()
+        return {
+            "plan": {"abrupt_stop_proof": proof}, "owner": ready, "process": tree,
+            "control": SimpleNamespace(), "document": {},
+        }, proof["containers"], records
+
+    def validate(self, context, pair, records, *, engine=None, storage=None):
+        from unittest.mock import patch
+        import docker_volume_container_recovery as recovery
+        proof = context["plan"]["abrupt_stop_proof"]
+        with patch.object(module, "_control_raw", side_effect=lambda control, path: records[path]), \
+             patch.object(recovery, "_docker_engine_sha", return_value=engine or proof["docker_engine_id_sha256"]), \
+             patch.object(recovery, "_ledger_and_store_snapshot",
+                          return_value=storage or proof["storage_proof"]):
+            module._revalidate_stopped_ready_proof(context, pair)
+
+    def test_locked_proof_accepts_only_identical_captured_evidence(self):
+        context, pair, records = self.fixture()
+        before = canonical(context["plan"])
+        self.validate(context, pair, records)
+        self.assertEqual(canonical(context["plan"]), before)
+
+    def test_locked_proof_rejects_changed_engine_store_owner_and_incarnation(self):
+        import copy
+        for kind in ("engine", "storage", "owner", "incarnation"):
+            context, pair, records = self.fixture()
+            pair = copy.deepcopy(pair)
+            kwargs = {}
+            if kind == "engine":
+                kwargs["engine"] = "a" * 64
+            elif kind == "storage":
+                kwargs["storage"] = {"runs": ["changed"], "ledger": "reserved"}
+            elif kind == "owner":
+                records["retained/owner.json"] += b" "
+            else:
+                pair["backend"]["State"]["StartedAt"] = "changed"
+            with self.subTest(kind=kind), self.assertRaises(BuildControlError):
+                self.validate(context, pair, records, **kwargs)
+
+
+class StoppedReadySharedLockTests(unittest.TestCase):
+    def test_snapshot_reuses_real_shared_lock_only_with_authenticated_offline_observer(self):
+        import fcntl
+        import sys
+        from unittest.mock import patch
+        import docker_volume_container_recovery as recovery
+        backend = {"Image": IMAGE, "Mounts": [
+            {"Destination": "/state", "Type": "bind", "Source": "/state/source", "RW": True},
+            {"Destination": "/host-ledger", "Type": "bind", "Source": "/ledger/source", "RW": True},
+        ]}
+        output = canonical({"store_root_sha256": "1" * 64, "ledger_root_sha256": "2" * 64,
+                            "ledger_snapshot_sha256": "3" * 64, "run_records": []})
+        with tempfile.TemporaryDirectory() as directory:
+            ledger = Path(directory)
+            (ledger / "WRITER.lock").touch()
+            (ledger / "HOST_RESOURCE_LEDGER.json").write_bytes(
+                canonical({"policy": {}, "reservations": [], "node_policy": {}}))
+            with (ledger / "WRITER.lock").open("rb") as held:
+                fcntl.flock(held.fileno(), fcntl.LOCK_SH | fcntl.LOCK_NB)
+
+                def capture(argv, **kwargs):
+                    # Execute the production lock/read block in another process,
+                    # while this process retains the transaction's real SH lock.
+                    body = argv[-2].split("ledger=pathlib.Path('/host-ledger/ledger')", 1)[1]
+                    body = body.split("store=pathlib.Path('/state/runs/docker-all/session-store')", 1)[0]
+                    body = "ledger=pathlib.Path(" + repr(str(ledger)) + ")" + body
+                    body = body.replace("time.monotonic()+5", "time.monotonic()+0.1")
+                    code = ("import fcntl,hashlib,json,os,pathlib,time\n"
+                            "observation=json.loads(" + repr(argv[-1]) + ")\n"
+                            "def regular(path,label): return path.read_bytes()\n"
+                            "def canonical(value): return json.dumps(value,sort_keys=True,separators=(',',':')).encode()\n"
+                            + body)
+                    result = subprocess.run([sys.executable, "-B", "-c", code],
+                                            capture_output=True, timeout=3)
+                    return SimpleNamespace(returncode=result.returncode,
+                                           stdout=output if result.returncode == 0 else b"",
+                                           stderr=result.stderr)
+
+                with patch.object(recovery, "bounded_capture", side_effect=capture):
+                    with self.assertRaises(recovery.ContainerRecoveryError):
+                        recovery._ledger_and_store_snapshot(SimpleNamespace(project="fullmag-test"), backend)
+                    with patch.object(module, "_authenticate_snapshot_observer", return_value=None) as auth:
+                        recovery._ledger_and_store_snapshot(
+                            SimpleNamespace(project="fullmag-test"), backend,
+                            offline_control_observer={"locked": "exact-helper"})
+                        self.assertEqual(auth.call_count, 1)
+                    with patch.object(module, "_authenticate_snapshot_observer",
+                                      side_effect=BuildControlError("foreign helper")):
+                        with self.assertRaises(BuildControlError):
+                            recovery._ledger_and_store_snapshot(
+                                SimpleNamespace(project="fullmag-test"), backend,
+                                offline_control_observer={"locked": "foreign"})
+
+    def test_snapshot_observer_rejects_foreign_helper_or_exited_client(self):
+        from unittest.mock import patch
+        control, plan, _ = StoppedReadyTransactionTests().fixture()
+        control.helper_args = lambda script, name: ["docker", "run", "--entrypoint", "/bin/bash", IMAGE, script]
+        context = {"control": control, "plan": plan, "store_root": Path("/store"),
+                   "ledger_volume": "ledger", "ledger_mount": "type=volume,src=ledger,dst=/ledger,readonly"}
+        intent, receipt = module._operation_records(plan)
+        script, _ = module._transaction_script(
+            control_root="/control", active_token=plan["original_operation_attempt"],
+            active_sha256=plan["control_pins"]["active"], pins=plan["control_pins"],
+            intent=intent, receipt=receipt, lock_external=True)
+        name = "fullmag-control-offline-" + plan["operation_attempt"]
+        argv = control.helper_args(script, name=name)
+        module._transaction_mounts(argv, store_root=context["store_root"], ledger_volume="ledger")
+        process = SimpleNamespace(args=argv, stdin=object(), poll=lambda: None)
+        observer = {"context": context, "process": process, "helper_id": "b" * 64}
+        with patch.object(module, "_inspect_transaction_helper", return_value="b" * 64):
+            module._authenticate_snapshot_observer(control, observer)
+        with patch.object(module, "_inspect_transaction_helper", return_value="c" * 64):
+            with self.assertRaises(BuildControlError):
+                module._authenticate_snapshot_observer(control, observer)
+        process.poll = lambda: 1
+        with self.assertRaises(BuildControlError):
+            module._authenticate_snapshot_observer(control, observer)
+
+
+class StoppedReadyShellTests(unittest.TestCase):
+    def recipe(self, source="/source", suffix=" --stopped-ready-owner"):
+        repo = Path(__file__).resolve().parents[1]
+        return (f'python3 "{repo}/scripts/docker_dev.py" --repo-root "{repo}" reconcile-offline-volume '
+                f"--source-root '{source}' --attempt '{TOKEN}' --config-sha256 '{CONFIG}' "
+                f"--operation-attempt '{OPERATION}' --port '3203'" + suffix)
+
+    def invoke(self, recipe):
+        repo = Path(__file__).resolve().parents[1]
+        with tempfile.TemporaryDirectory() as temp:
+            spy = Path(temp) / "python-spy"
+            spy.write_text('#!/usr/bin/env bash\nif [ "$1" = "-c" ]; then exit 0; fi\nprintf "%s\\0" "$@"\n')
+            spy.chmod(0o700)
+            env = {**os.environ, "FULLMAG_STORAGE_PYTHON": str(spy)}
+            return subprocess.run(["bash", str(repo / "scripts/just_storage_shell.sh"), recipe],
+                                  capture_output=True, env=env)
+
+    def test_exact_offline_recipe_preserves_argv_and_explicit_apply_pair(self):
+        suffix = " --stopped-ready-owner --apply --expected-plan-sha256 '" + "1" * 64 + "'"
+        result = self.invoke(self.recipe(suffix=suffix))
+        self.assertEqual(result.returncode, 0, result.stderr.decode())
+        argv = result.stdout.decode().strip("\0").split("\0")
+        self.assertIn("reconcile-offline-volume", argv)
+        self.assertIn("--stopped-ready-owner", argv)
+        self.assertEqual(argv[-3:], ["--apply", "--expected-plan-sha256", "1" * 64])
+
+    def test_offline_recipe_rejects_injection_or_unpaired_apply(self):
+        for suffix in (" --stopped-ready-owner; touch /tmp/not-authorized",
+                       " --apply", " --expected-plan-sha256 '" + "1" * 64 + "'",
+                       " --stopped-ready-owner --restart-backend"):
+            result = self.invoke(self.recipe(suffix=suffix))
+            with self.subTest(suffix=suffix):
+                self.assertNotEqual(result.returncode, 0)
+                self.assertNotIn(b"reconcile-offline-volume\0", result.stdout)
+
+
 class StoppedPairTests(unittest.TestCase):
     def test_accepts_actual_stopped_incarnation_even_after_restart(self) -> None:
         pair = {"backend": stopped("backend"), "frontend": stopped("frontend", identifier="f" * 64)}
@@ -472,12 +870,12 @@ class ProjectInventoryScopeTests(unittest.TestCase):
                     {"Destination": "/store", "Source": source, "RW": False},
                     {"Destination": "/ledger", "Name": "ledger-volume", "RW": False},
                 ]}
-            def check(value, ledger_subpath=""):
+            def check(value, ledger_subpath="", **options):
                 with patch.object(module, "docker_capture", return_value=SimpleNamespace(
                         stdout=json.dumps([value]).encode())), \
                         patch("docker_compose_identity.source_labels", return_value={}):
                     return module._inspect_transaction_helper(
-                        control, "helper", "script", root, "ledger-volume", ledger_subpath)
+                        control, "helper", "script", root, "ledger-volume", ledger_subpath, **options)
             self.assertEqual(check(row), CONTAINER)
             if os.name != "nt":
                 # Docker Desktop rewrites both inspect sources to the same
@@ -511,6 +909,26 @@ class ProjectInventoryScopeTests(unittest.TestCase):
             with self.assertRaises(BuildControlError): check(private)
             private["HostConfig"]["Mounts"][0]["VolumeOptions"]["Subpath"] = "private/backend"
             with self.assertRaises(BuildControlError): check(private, "private/ledger")
+
+            alias_root = root / "desktop-aliases"
+            alias_directory = alias_root / "Ubuntu" / ("a" * 64)
+            alias_directory.parent.mkdir(parents=True)
+            alias_directory.symlink_to(root, target_is_directory=True)
+            alias = "/run/desktop/mnt/host/wsl/docker-desktop-bind-mounts/Ubuntu/" + "a" * 64
+            aliased = deepcopy(row)
+            aliased["HostConfig"]["Mounts"][1]["Source"] = alias
+            aliased["Mounts"][1]["Source"] = alias
+            with self.assertRaises(BuildControlError):
+                check(aliased)
+            # The canonical helper must compare actual inode identity, not prefixes.
+            with patch("docker_dev_codegen.Path", return_value=alias_root):
+                self.assertEqual(check(aliased, allow_wsl_alias=True), CONTAINER)
+                foreign = root / "foreign-store"
+                foreign.mkdir()
+                alias_directory.unlink()
+                alias_directory.symlink_to(foreign, target_is_directory=True)
+                with self.assertRaises(BuildControlError):
+                    check(aliased, allow_wsl_alias=True)
             for location, key in (("host", "Source"), ("runtime", "Source"),
                                   ("host", "ReadOnly"), ("runtime", "RW")):
                 changed = deepcopy(row)

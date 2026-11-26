@@ -10,6 +10,20 @@ describe("saved project run ownership", () => {
     expect(() => validateProjectRunsEnvelope(page, "project-a", "run-a")).toThrow();
     expect(() => validateProjectRunsEnvelope({ ...page, next_cursor: "" }, "project-a")).toThrow();
   });
+  it("accepts an opaque archive cursor longer than a run ID", () => {
+    const cursor = "eyJ2ZXJzaW9uIjox".repeat(40);
+    const page: ProjectRunListResource = { project_id: "project-a", runs: [], next_cursor: cursor };
+    expect(validateProjectRunsEnvelope(page, "project-a")).toBe(page);
+    expect(() => validateProjectRunsEnvelope(page, "project-a", cursor)).toThrow();
+  });
+
+  it("bounds opaque cursors in UTF-8 and rejects whitespace or control characters", () => {
+    for (const cursor of ["a".repeat(4097), "é".repeat(2049), " padded", "bad\nvalue", "bad\u007fvalue"]) {
+      const page: ProjectRunListResource = { project_id: "project-a", runs: [], next_cursor: cursor };
+      expect(() => validateProjectRunsEnvelope(page, "project-a")).toThrow();
+    }
+  });
+
   it("rejects a foreign project page even when it is empty", () => {
     const page: ProjectRunListResource = { project_id: "project-a", runs: [] };
     expect(validateProjectRunsEnvelope(page, "project-a")).toBe(page);

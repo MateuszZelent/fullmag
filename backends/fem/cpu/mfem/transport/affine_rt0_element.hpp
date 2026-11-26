@@ -25,6 +25,8 @@ public:
 
     AffineRt0Element(const mfem::FiniteElementSpace &space, int element);
     AffineRt0Element(const mfem::GridFunction &field, int element);
+    // Local mathematical data only; source ownership and closure are not certified.
+    explicit AffineRt0Element(const FrozenInput &input);
     // Owned copy for field operators; no MFEM pointers or rounded determinant.
     FrozenInput frozen_input() const;
     Point basis_value_at(const Point &physical_point, int local) const;
@@ -39,6 +41,7 @@ private:
     std::array<int, 4> signed_dofs_{};
     std::array<double, 4> signed_coefficients_{};
     bool coefficients_frozen_ = false;
+    bool signed_dof_map_available_ = false;
     long double determinant_m3_ = 0.0L;
 };
 

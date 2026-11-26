@@ -24,6 +24,8 @@ import {
 import {
   savedGeometryBinaryResourceKey,
   savedGeometryResourceKey,
+  useSavedFieldGeometryResource,
+  useSavedFieldTopologyResource,
 } from "./savedGeometryResources";
 import { useKernel } from "../KernelContext";
 import { useResource } from "./useResource";
@@ -329,39 +331,8 @@ export function useSavedFieldViewportResources(
 ): SavedFieldViewportResources {
   const { api } = useKernel();
   const datasetEnabled = enabled && dataset !== null;
-  const geometryLoad = useCallback(
-    ({ signal }: { signal: AbortSignal }) => {
-      if (!dataset) throw new Error("Pinned materialized dataset is required.");
-      return api.persistence.projects.savedFieldGeometry(dataset, { signal });
-    },
-    [api, dataset],
-  );
-  const geometry = useResource<SavedFieldGeometryResource>({
-    abortStaleInflight: true,
-    enabled: datasetEnabled,
-    load: geometryLoad,
-    retryPolicy: null,
-    resourceKey: dataset ? savedGeometryResourceKey(dataset) : "saved-field-geometry:idle",
-    resolveRevision: (data) => data.geometry_manifest.object_ref,
-  });
-
-  const topologyLoad = useCallback(
-    ({ signal }: { signal: AbortSignal }) => {
-      if (!dataset || !geometry.data) throw new Error("Pinned field geometry is required.");
-      return api.persistence.projects.savedFieldTopology(dataset, geometry.data, { signal });
-    },
-    [api, dataset, geometry.data],
-  );
-  const topology = useResource<DecodedTopology | null>({
-    abortStaleInflight: true,
-    enabled: datasetEnabled && geometry.data !== null,
-    load: topologyLoad,
-    retryPolicy: null,
-    resourceKey: dataset && geometry.data
-      ? savedGeometryBinaryResourceKey(dataset, geometry.data, "topology")
-      : "saved-field-topology:idle",
-    resolveRevision: (data) => data ? geometry.data?.topology_binary_sha256 ?? null : null,
-  });
+  const geometry = useSavedFieldGeometryResource(dataset, enabled);
+  const topology = useSavedFieldTopologyResource(dataset, geometry.data, enabled);
 
   const supportLoad = useCallback(
     ({ signal }: { signal: AbortSignal }) => {

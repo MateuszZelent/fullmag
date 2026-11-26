@@ -1,9 +1,11 @@
 """Focused interpreted regressions for volume bootstrap admission."""
 from contextlib import contextmanager
 import hashlib
+import io
 import json
 from pathlib import Path
 import subprocess
+import tempfile
 import unittest
 from unittest import mock
 
@@ -436,6 +438,98 @@ class BuildSpaceAdmissionTests(unittest.TestCase):
                                         minimum_free_bytes=control.MIN_FREE_CONTROL_BYTES):
                     self.fail("development must not accept cache-only budget")
         popen.assert_not_called()
+
+
+class BuildAttemptWindowTests(unittest.TestCase):
+    def _control(self):
+        with mock.patch("docker_control_namespace.resolve_namespace", return_value=None):
+            return control.BuildControl(
+                {"project_name": "fullmag-cache-test", "worktree_id": "test"}, HELPER)
+
+    def _admission(self, phase, count, blocker=None):
+        # Execute the actual shell admission, stopping before it creates a lease.
+        instance = self._control()
+        token = "a" * 32
+        script = instance.operation_script(phase, token)
+        boundary = "mkdir '" + instance.path(f"{phase}/attempts/{token}") + "';"
+        prefix, suffix = script.split(boundary, 1)
+        self.assertTrue(suffix)
+        with tempfile.TemporaryDirectory(prefix="fullmag-admission-", dir="/tmp") as directory:
+            root = Path(directory)
+            attempts = root / phase / "attempts"
+            attempts.mkdir(parents=True)
+            for number in range(count):
+                (attempts / f"{number:032x}").mkdir()
+            if blocker == "active":
+                (root / "active").write_text("retained owner")
+            elif blocker in ("closing", "dangling-closing"):
+                closing = root / "cache-retirement" / "closing.json"
+                closing.parent.mkdir()
+                if blocker == "closing":
+                    closing.write_text("{}")
+                else:
+                    closing.symlink_to(root / "missing")
+            lock = None
+            if blocker == "lock":
+                import fcntl
+                lock = (root / "operation.lock").open("w")
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            try:
+                result = subprocess.run(
+                    ["bash", "-euo", "pipefail", "-c", prefix.replace("/control", directory)],
+                    capture_output=True, text=True, timeout=5)
+            finally:
+                if lock is not None:
+                    lock.close()
+            self.assertEqual(len(list(attempts.iterdir())), count)
+            self.assertFalse((attempts / token).exists())
+            return result.returncode
+
+    @unittest.skipUnless(control.os.name == "posix", "Linux helper shell admission")
+    def test_toolchain_admits_64_and_127_but_refuses_128(self):
+        for count, allowed in ((63, True), (64, True), (127, True), (128, False)):
+            with self.subTest(count=count):
+                self.assertEqual(self._admission("toolchain", count) == 0, allowed)
+
+    @unittest.skipUnless(control.os.name == "posix", "Linux helper shell admission")
+    def test_other_phase_windows_are_unchanged(self):
+        for phase in ("image-dev", "image-backend", "development", "recreate-services"):
+            for count, allowed in ((63, True), (64, False)):
+                with self.subTest(phase=phase, count=count):
+                    self.assertEqual(self._admission(phase, count) == 0, allowed)
+        for count, allowed in ((127, True), (128, False)):
+            with self.subTest(phase="iteration", count=count):
+                self.assertEqual(self._admission("iteration", count) == 0, allowed)
+
+    @unittest.skipUnless(control.os.name == "posix", "Linux helper shell admission")
+    def test_toolchain_still_refuses_active_closing_and_locked_group(self):
+        for blocker in ("active", "closing", "dangling-closing", "lock"):
+            with self.subTest(blocker=blocker):
+                self.assertNotEqual(self._admission("toolchain", 0, blocker), 0)
+
+    def test_receipt_reports_the_phase_specific_attempt_limit(self):
+        for phase, limit in (("toolchain", 128), ("iteration", 128),
+                             ("image-dev", 64), ("image-backend", 64),
+                             ("development", 64), ("recreate-services", 64)):
+            instance = self._control()
+            logger = mock.Mock(stdin=io.BytesIO())
+            logger.wait.return_value = 0
+            with self.subTest(phase=phase), \
+                 mock.patch.dict(control.os.environ, {}, clear=True), \
+                 mock.patch.object(instance, "space", return_value={"available_bytes": 64 * 1024**3}), \
+                 mock.patch.object(instance, "helper_args", return_value=["helper"]), \
+                 mock.patch.object(instance, "_line", side_effect=["READY", "LOGGED"]), \
+                 mock.patch.object(instance, "_pin_operation_helper", return_value="b" * 64), \
+                 mock.patch.object(instance, "write") as write, \
+                 mock.patch.object(control.subprocess, "Popen", return_value=logger), \
+                 mock.patch.object(control, "mirror_console"):
+                with instance.operation(phase, {}) as operation:
+                    operation["receipt"]["state"] = "succeeded"
+                    self.assertEqual(operation["receipt"]["attempt_limit"], limit)
+                terminal = [call.args[1] for call in write.call_args_list
+                            if call.args[0].endswith("/terminal.json")]
+                self.assertEqual(len(terminal), 1)
+                self.assertEqual(terminal[0]["attempt_limit"], limit)
 
 
 if __name__ == "__main__":

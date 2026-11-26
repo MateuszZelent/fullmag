@@ -1,6 +1,379 @@
 # Anteny i transport — realizacja E0–E12, 11.10.2026
 
-## Bieżący checkpoint — 27.10.2026: pełne zapisane Universe i odczyt po restarcie
+## Stan bieżący — 11.11.2026: kontrola fizyki; ostatni start API nieudany
+
+### Blokada odbioru rzeczywistego V/J/H — 11.11.2026
+
+Obecny backend e3d432… nadal nie jest ready. Standardowy start
+150d277ce6e943429fdd06cd9e5bff85 zakończył się failed-confirmed.
+Istniejące just docker-dev-stop-diagnostic wykonane wyłącznie jako preview
+również zakończyło się failed-confirmed:4e98b1ee47df4c71bd107e8199aeffe9,
+„process receipt is not the exact retained diagnostic-only API state”.
+Żadnego stopu, recreate lub nowego Solve nie wykonano.
+
+Ta sama blokada wykonania utrzymuje się w trzech kolejnych turach:
+standardowy start → kontrola brakujących payloadów źródła → bieżące
+preview oficjalnej ścieżki. Dane starego corner25 nie pozwalają zastąpić nowego
+V/J/H odczytem. Nie rozwijamy kolejnych recovery zgodnie z decyzją użytkownika,
+nie obchodzimy guardów i nie przechodzimy do LLG. Pełny cel pozostaje nieukończony.
+Wznowienie wymaga poprawnego obsługiwanego startu tej samej grupy lub jawnej
+zmiany instrukcji dotyczącej naprawy nieobsłużonego stanu startupu.
+
+Audyt progu blocked: verification/antenna-source-priority-20261111/blocked-audit.json
+w prywatnym BuildControl.volume grupy3203. Technical receipt pozostaje w Dockerze.
+
+### Priorytet po korekcie użytkownika — najpierw źródło i pole anteny
+
+LLG, dalsze badania dyspersji i nowe porównania transmisji są odłożone.
+Gotowe testy skończonego k nie stanowią kwalifikacji pola anteny.
+Najbliższy odbiór dotyczy E3–E5: zaakceptowanego V/J/H, zbieżności prądu,
+niezależnego całkowania H i błędu w obszarze docelowej próbki.
+
+Potwierdzone9/9 kontroli H obejmuje3punkty dla3globalnych siatek
+i ten sam zaakceptowany prąd. Globalne eta50/eta75 około0,913 nadal nie
+przechodzi0,8; corner25 ma Failed/0accepted po odmowie walidatora punktu J.
+Bez kwalifikacji tej bazy nie uruchamiamy sprzężenia antena→LLG.
+
+Odczyt trzech zachowanych IR potwierdził wymiary nominalnego źródła:
+z30..120nm, magnetyczne próbkowanie z−22,4..−5nm, czyli35nm odstępu do
+wierzchu magnetyka (30nm izolatora+5nm cap). To zgodne ze skryptem geometrii,
+nie błąd przesunięcia renderera. Nośnik ma20punktów w centralnym4um x100nm
+oknie; nie stanowi pełnego obszaru próbki20um ani dowodu zbieżności H.
+Dowód: examples/sushruth_2020_closed_gsg/source_readiness_20261111/geometry-audit.json.
+
+Odczyt dokładnego run/task corner25 potwierdził brak pełnych V/J/H po odmowie:
+pozostały tylko metadane worker-start/live-observation, a catalog ma Failed
+i pustą listę artefaktów. Request zachował mesh, nie rozwiązane prądy i H.
+Świadek komórki28881 nie pozwala odtworzyć globalnego eta lub20wektorów H.
+Następny odbiór wymaga rzeczywistego V/J/H na poprawionym walidatorze;
+nie wolno zastąpić go kontrolą LLG lub samym licznikiem20/20.
+Dowód: source_readiness_20261111/corner25-payload-inventory.json obok audytu geometrii.
+
+### Kontrola skończonego k — definicja i pomiar gotowe, native Run niewykonany
+
+Przygotowano dwa jawne przykłady FDM CPU/double dla obrazów4/8.
+3/3 testy publicznego authoringu i9/9 testy pomiaru PASS; niezależny przegląd
+ujawnił trzy fałszywe akceptacje i wszystkie zostały odtworzone oraz naprawione.
+Kontrola obejmuje pełne m/H i trajektorię macierzową, bez dopasowania.
+Nowy rzeczywisty Run:0/2. Standardowy just docker-dev
+150d277ce6e943429fdd06cd9e5bff85 zakończył się failed-confirmed przy starcie API.
+Nie rozwijano kolejnego recovery i nie obchodzono bramki.
+[Raport kontroli i ograniczeń](2026-11-11-sushruth-finite-k-control-preparation.md).
+
+### Wynik fizyczny 11.11.2026: odstępy Fig.3 nadal niezgodne
+
+Odtwarzalny odczyt zachowanych danych potwierdził różnicę odstępów oscylacji
+dla S i GSG, dodatkowo minimami oraz zerami tego samego kierunku.
+Dla GSG minima: publikacja0,25663/0,24940GHz; literalny wzorzec0,370/0,345GHz.
+Sześć testów diagnostyki, focused validator i41 testów dokumentacji przeszły;
+niezależny review odtworzył identyczny JSON i potwierdził8 rozłącznych zakresów.
+To nie ustala przyczyny i nie kwalifikuje reprodukcji. Równania, parametry,
+kwadratura i zapisane wyniki pozostały niezmienione. Bez nowego Solve/build/recovery.
+[Raport i artefakty fizyczne](2026-11-11-sushruth-figure3-period-audit.md).
+
+
+
+**Cel E0–E12 i odtworzenie Sushruth2020 nadal nie są ukończone.**
+Użytkownik nakazał nie rozwijać kolejnych recovery; problemy wymagające uruchomienia rozwiązywać standardową przebudową kontenerową. Teraz priorytetem są poprawność fizyki, przyczyna rozbieżności Fig.3 i optymalizacja obliczeń.
+
+| Obszar | Potwierdzony stan | Ograniczenie |
+|---|---|---|
+| Istniejący ledger | Nowa odczytowa bramka wdrożona;197testów PASS po naprawie dwóch ustaleń review; rzeczywiste admission i composepreflight PASS. | Bez zmiany native polityki i bez nowego freshclaim. |
+| Build/start3203 | Późniejszy standardowy docker-dev150d277c… failed-confirmed przy starcie API; terminalny receipt odczytany. | API/UI i nowy native Run nieodebrane; bez dalszego rozwijania recovery. Wcześniejszy PASS25b2dc… jest historyczny. |
+| Zachowane wyniki | Pełny preflight5188plików/3runy PASS; nie było nowego Prepare/Solve/H-only/LLG. | Po starcie nie wykonano pełnego odczytu payloadów przez API. |
+| Nauka | V/J/H100/75/50nm oraz9kontroli H zachowane; kontrole LLGk0 iRF przeszły w swoim zakresie. | Brak reprodukcji Fig.3; zbieżność globalnej GSG i kwalifikacja bazy nadal otwarte. |
+| Git | HEAD8a09a0e19d855e34ffb3765683418a185151bd74;63chronione stagedentries bez zmian. | Własny patch i wcześniejszy WIP niezintegrowane; nie podano naukowej gotowości do merge. |
+
+[Dokładny odbiór i ograniczenia](2026-11-11-initialized-ledger-volume-identity-execution.md).
+Historyczne wpisy poniżej nie są opisem bieżącej dostępności usług.
+
+## Historyczny checkpoint — 11.11.2026 przed zatwierdzeniem bramki istniejącego ledgeru
+
+**Cel E0–E12 i reprodukcja Sushruth2020 pozostają nieukończone.**
+Poniższe datowane wpisy opisują historię, nie bieżącą dostępność API.
+
+| Obszar | Stan potwierdzony teraz | Pozostała bramka |
+|---|---|---|
+| Lease przerwanej iteracji a5927e6d… | Offline v2 zastosowany; active nie istnieje, stary wynik interrupted-retained. | Nie dopisano sukcesu dawnego buildu. |
+| Helper i storage recovery | Zatwierdzone oba patche wdrożone. 81/81 lekkich testów PASS, niezależny review bez uwag. Rzeczywisty helper ma Python, group-volume-v1 i group-ledger-v1. | Testy źródeł nie kwalifikują pełnego startupu. |
+| API/UI3203 | Jedna kontynuacja 366a2ae20a9d491e817736dcdc5707de: failed-confirmed,192,91s, przed usługami. Wszystkie3obrazy cache-hit. | Zachowany st_dev2112 różni się od obecnego2144 przy zgodnych inode/owner/mode. Potrzebny projekt trwałej identyfikacji wolumenu; bez pomijania bramki. API/UI nie działają. |
+| Dane i blokady | Pełny proof po odmowie identyczny:5188plików/3runy/ledger;4chronione rekordy native i indeks bez zmian. Active i kontenery grupy nieobecne. | Nie ma nowego Prepare/Solve, usuwania danych lub retry; jedna zgoda wykorzystana. |
+| Globalne GSG100/75/50nm | Zachowane zaakceptowane V/J/H;9/9 niezależnych kontroli H w3punktach×3siatkach PASS. | Zbieżność prądu FAIL; brak kwalifikowanej bazy H/I. |
+| Corner25 i walidacja J | Potwierdzony świadek porównania próbek w minimalnie różnych punktach; kod poprawki przygotowany. | Ostatni Run Failed/0 accepted; brak nowego odebranego wyniku na poprawionym runtime. |
+| Analityka i publikacja | LLG k=0 i RF zgodne z analityką w swoim zakresie; zapisane H porównano z uproszczonymi paskami. | Brak ilościowej reprodukcji Fig.3/transmisji i pełnego toru antena→LLG. |
+| Git | HEAD8a09a0e19d855e34ffb3765683418a185151bd74,63chronione staged entries zachowane. | Mały patch i dowody bez nowego commita/push/PR; wcześniejszy WIP zachowany. |
+
+[Aktualne wykonanie i dokładna diagnoza](2026-11-11-recovery-fresh-ledger-helper-image-execution.md),
+[poprzedni patch storage](2026-11-11-container-recovery-private-storage-inheritance-execution.md),
+[9kontroli H](2026-11-08-gsg-nine-point-reference-acceptance.md),
+[świadek odmowy J](2026-11-08-rt0-actual-center-failure-result.md).
+Zgoda na helper, testy i jedną kontynuację została wykonana. Nie ponawiamy samoczynnie startu ani historycznych obliczeń.
+
+Nowa diagnoza po tej odmowie: claim pierwszej inicjalizacji należy do failed-confirmed09064b…, a późniejszy verified894d4e… ma Succeeded i ten sam ledger. Nie wolno wymagać fałszywego sukcesu pierwszego twórcy. Przygotowano [projekt istniejącego ledgeru](2026-11-11-initialized-ledger-volume-identity-spec.md) i [konkretny plan wdrożenia](2026-11-11-initialized-ledger-volume-identity-plan.md), SHA256 b831748391fd9a317ffdee1d113699f965fd41a90fdceaead6e4f844e9c7c517. Samokontrola planu/linków/interfejsów PASS; produkcyjny kod nowej bramki nie istnieje, testy nowej ścieżki i dalsza kontynuacja0. Pytanie o ten zakres wysłano raz; dotychczasowe81PASS nie kwalifikują nowego projektu.
+
+Audyt kolejnej kontynuacji: ta sama blokada startu utrzymuje się w trzech kolejnych turach (wykonanie helpera → projekt z nowymi dowodami → rewalidacja oczekiwania). Ostatnia tura nie przyniosła postępu: brak nowej decyzji, kod/plany/indeks bez zmian, stara próba terminalna, active/usługi nieobecne. Audyt progu blocked zapisano w control volume: verification/initialized-ledger-volume-identity-design-20261111/blocked-audit.json. Nie wysłano drugiego pytania; nie wykonano nowej próby. Pełny cel pozostaje nieosiągnięty.
+
+## Historyczny odbiór — 06.11.2026: dziewięć kontroli pola PASS, źródło nadal niekwalifikowane
+
+Snapshot naukowego odbioru referencji: **2026-11-06T02:29:58+00:00**; wiersz przygotowania zaktualizowany po zatwierdzonej próbie AS4GiB i diagnostykach06.11.2026. Dalsze rozdziały są datowanym dziennikiem; stare liczniki i pytania o już zatwierdzone zmiany nie opisują obecnego stanu. Najnowsze receipty pozostają rozstrzygające.
+
+| Obszar | Potwierdzony wynik | Co pozostaje otwarte |
+|---|---|---|
+| GSG, transport i pole | 3/3 V/J/H Succeeded: 100/75/50nm, odpowiednio14299/25516/72911 Tet4; wspólny nośnik20punktów H. | Kwalifikacja źródła i pola na całej próbce. |
+| Niezależne H | **9/9 punktów PASS**, pełny terminalny result/worker-exit/receipt zgodne; operacja c9a5ddf707e341da9cc9d2a2b48bea3e succeeded, exit0, source_inputs_stable=true. Czas12886,734s, peakRSS417714176B. | To3punkty×3siatki i kontrola pola z tego samego RT0. Nie jest niezależną kontrolą transportu, całej domeny lub kwalifikacją bazy. |
+| Kontrakt GSG | Publiczny walidator CLI przyjął poprawny authored model i odrzucił9wadliwych kopii. Dodano2regresje Rust i dodatnią walidację geometrii. | Testy Rust niewykonane; parser i review nie zastępują CI, planera lub pełnego prepared mesh. [Raport](2026-11-06-gsg-ir-contract-regressions.md). |
+| Zbieżność prądu | I i porównywane H spełniają swoje kryteria; eta50 około0,03496. | **FAIL**: eta50/eta75 około0,913>0,8. Punktowe PASS referencji H nie znoszą tej odmowy. |
+| Zachowane H275 i UI | Archiwum i geometria rodzica działają; przekrój2D zachowuje ustawienia po przełączeniu3D/2D.131testów, typecheck/lint i rzeczywista kontrola przeglądarki PASS. Użytkownik potwierdził działanie UI. | H275 zachowuje historyczny Failed po błędzie publikacji. Czytelność pełnej wydłużonej domeny3D i kwalifikacja bazy pozostają otwarte. |
+| Zagęszczanie połączeń | Poprawka JSON commit8cfce0e19095609a921d4f92c15853c4ab8cb795;4/4regresje i odizolowany HEAD PASS. Po nowej zgodzie publiczny CLI prepare-only exit0:34265Tet4/12586węzłów,46,45MB compact request. | Operacja72d5a8ef… failed-confirmed: końcowy odbiór wykrył rozjazd mesh/source digestów. Ustalono mutację authored workflow przez prywatne statusy Gmsh i niewłaściwe zagnieżdżenie mesh_statistics. Bez nowego V/J/H/retry; historia i cache zachowane. |
+| Wspólny mesh próbki | Istniejący mesher zachował190węzłów/481Tet4 w dwóch otoczeniach. PlanT1–T10 obejmuje wersjonowanie, mapy indeksów, DOF i granicę kwalifikacji. | Nowy katalog domen, dokładny binding H→LLG oraz planowany wire nie są wdrożone; gotowy plan oczekuje na przegląd. |
+| Publikacja Sushruth2020 | Niezależny wzorzec równań,12krzywych i kontrole k=0; diagnostyka obserwabli Faradaya na zachowanych danych. | **Brak potwierdzonej reprodukcji Fig.3**. Rozbieżność rastra i literalnych parametrów pozostaje; brak propagacji z rzeczywistą anteną. |
+| Integracja Git | Ostatni spójny lokalny commit8cfce0e19095609a921d4f92c15853c4ab8cb795 (normalizacja parametrów siatki); zastane63wpisy indeksu zachowane. | Push/PR nieukończone: nieważne logowanie GitHub, użytkownik odłożył ponowne logowanie. Nowe zmiany pozostają WIP. |
+
+Końcowy result dziewięciu referencji: SHA256 e58e5f19010870ee0d1c711df01d3202a329516384be8e74daa70ebe3105dec5.
+Worker-exit: bbe2f0298fc3112757a486e0239fcc66eb820734e743bd181fcc164419facb51.
+Terminal i receipt: 8220ef250deda69312a018b76d4aa5c3b4d90bb97b725d40350d59b9e3e1c054.
+Dowody w prywatnym control volume: `verification/gsg-source-convergence-reference-20261105/one-approved-attempt` oraz `final-acceptance-20261106.json` w jego katalogu nadrzędnym.
+
+Szczegóły: [przygotowanie zagęszczania](2026-11-06-gsg-junction-preparation-inputs.md), [konkretny plan naprawy limitu AS](2026-11-06-gsg-prepare-address-space-proposal.md), [ustawienia przekroju](2026-11-06-saved-section-retention.md), [wspólne domeny i mesh](2026-11-02-antenna-magnetic-domains-implementation.md), [audyt obserwabli](2026-11-06-sushruth-voltage-observable-audit.md).
+
+Aktualizacja po zgodzie użytkownika: [wykonanie producenta cache](2026-11-06-gsg-explicit-mesh-cache-execution.md).
+Zgoda na patch i jedną nową próbę wpłynęła i została wykonana. Poniższy zapis
+oczekiwania na ten patch i oznaczenia blocked jest historyczny; nie wysłano
+ponownego pytania o tę samą zgodę. Źródło nadal niekwalifikowane, pełny cel
+nieukończony. Przeciwna faza czerwonej krzywej nie została uznana za wyjaśnioną.
+
+### Historyczny checkpoint przed zgodą na producenta cache
+
+Najnowszy krok wykonania: [AS4GiB i rozpoznanie zimnego cache](2026-11-06-gsg-prepare-address-space-execution.md).
+[Gotowy plan osobnego producenta cache](2026-11-06-gsg-explicit-mesh-cache-proposal.md)
+obejmuje patch3plików SHA2569cc8440818c57b8775b64e3b7dd7710fd56380340bd0e439e16ccb7dfcb407c6,
+30/30 testów offline i zamknięty niezależny review. Sprawdzenie git apply --check
+przeszło bez zapisu. Patch jest niewdrożony; pytanie o konkretny patch i jedną
+nową próbę prepare-only wysłano raz. Nie jest to ponowne pytanie o zatwierdzone4GiB.
+Rzeczywisty ciepły publiczny eksport nadal NOT VERIFIED.
+
+Pełny zakres **E0–E12 pozostaje nieukończony**. Po trzech kolejnych turach
+z tym samym nierozstrzygniętym pytaniem wykonanie celu oznaczono jako blocked,
+nie complete. Audyt potwierdził niezmieniony patch/pliki/indeks,30PASS kandydata
+i terminalną ostatnią próbę97b080… bez żywego procesu o tej tożsamości.
+To oczekiwanie na decyzję, nie na trwający build lub Solve.
+
+Następny wymagany krok: odpowiedź na już wysłany formularz o patchu
+9cc8440818c57b8775b64e3b7dd7710fd56380340bd0e439e16ccb7dfcb407c6 i jednej
+nowej próbie prepare-only50nm. Nie wysłano ponownego pytania i nie wykonano
+dalszej próby. Wymaganie przeglądu pochodzi z przekazanego AGENTS.md §8 oraz
+writing-plans/SKILL.md: „wait for that review before implementation”.
+Dowód w prywatnym control volume:
+verification/gsg-junction-preparation-20261106/cache-producer-proposal-v1/goal-blocked-audit-v1.json,
+SHA2564e3c13dd75b95157a2a7ee17b039361b1f43c4ce5152bb8a63318e90c0c4caac.
+ Brak kwalifikacji źródła blokuje jego użycie jako bazy do LLG i qualified source FFT. Działający inspection/UI i9punktowych kontroli nie oznaczają ukończenia tych etapów.
+
+### Historyczna blokada przed zgodą na AS4GiB — audyt 06.11.2026
+
+**Status historyczny, zastąpiony:** użytkownik następnie zatwierdził plan („tka”); limit4GiB wdrożono i jedną próbę wykonano. [Aktualny raport wykonania](2026-11-06-gsg-prepare-address-space-execution.md). Poniższy zapis zachowuje wcześniejszy audyt, nie oznacza aktualnego oczekiwania na zgodę na AS.
+
+Odczyt 2026-11-06T02:52:11+00:00: referencja9/9 zakończona exit0, oba nieudane prepare potomne
+zebrane; wskazane procesy już nie istnieją. To nie jest oczekiwanie na żywy
+build lub Solve. Kontroler nadal ma AS2GiB i hash941679608e38bb40e6b25d45a54cc1865bcb6f4b2ec5777f523d17b981bd0877.
+
+Ta sama decyzja o [planie4GiB](2026-11-06-gsg-prepare-address-space-proposal.md)
+pozostaje bez odpowiedzi przez trzy kolejne tury celu. Ostatnia tura mimo
+tego przyniosła postęp w regresjach i10kontrolach publicznego CLI; nie
+zastępują one rzeczywistego przygotowania siatki. Nie podnosimy limitu,
+nie tworzymy zastępczej drogi meshingu i nie zmieniamy kryterium eta.
+
+Dalsze wymagane CI/push/PR blokuje potwierdzone `gh auth status`: exit1,
+nieważny token. Użytkownik wcześniej odłożył ponowne logowanie; nie
+ponowiono pytania. Odrębny gotowy plan domen magnetycznych nadal oczekuje
+na przegląd; zatwierdzenie designu nie zostało zapisane jako zgoda na
+każdy późniejszy plan lub zmianę wersjonowanego kontraktu.
+
+Wniosek audytu: dalsze wykonanie krytycznej ścieżki wymaga odpowiedzi
+użytkownika lub zmiany stanu zewnętrznego. Pełny zakresE0–E12 i odtworzenie
+publikacji pozostają NIEUKOŃCZONE. Wyniki, usługi, HEAD i63wpisy indeksu
+zachowano. Nie wykonano nowego Solve, buildu, restartu, zmiany limitów lub
+usunięcia danych. Nie przestawiamy historycznego Failed H275 naSucceeded.
+
+Wymaganie decyzji: przekazane AGENTS.md §8 oraz `.agents/skills/writing-plans/SKILL.md`:
+„wait for that review before implementation”. Gotowe pytanie pozostaje
+to samo; nie wysłano kolejnego formularza. Dowód odczytu i audytu:
+`verification/gsg-ir-contract-regressions-20261106/goal-blocked-audit-v1.json`
+w prywatnym control volume, SHA2562f4bda6556f9f2d0967f49265f8270ff110cf97f8616315a8b734fa6175c5859.
+
+## Checkpoint historyczny — 04.11.2026: przygotowanie GSG i kontrola referencji publikacji
+
+Poniższy zapis zachowuje stan z 04.11.2026. Jego nieaktualne już liczniki i oczekiwania na decyzje należy czytać historycznie, zgodnie z bieżącą tabelą i późniejszymi receiptami.
+
+- UI: nowy wynik100nm otwarto przez Home → Open saved run, prawidłową drugą stronę SolutionSets i wynikowy member. H20 próbek wyświetlono w3D z właściwą anteną i wprzekrojuXZ. Dodano jawne powiększenie pionowe×10/×100 z domyślną skalą fizyczną×1; pole i zapytanie pozostają bez zmian.58 testów, typecheck, lint7 plików iAPI hygiene PASS. WebGL901×531 aktywny i0 klatek/2s idle; sonda tej samej próbki7,881A/m przy obu skalach. To mały nośnik porównawczy, nie pełny Universe/LLG. [Raport UI i ograniczenia](2026-11-04-gsg100-ui-and-section-aspect.md).
+- Dokładna ranga: kandydat patcha bea7963c5e1b6228d208d2dd56a410f9cab92158c0fd38e6619ee1ebe7c1d159 jest przygotowany, sprawdzony offline i niewdrożony. Decyzja o nim, jednym managed buildzie i jednej nowej próbie75nm oczekuje; serii nie wznowiono. Przegląd:D:/git/fullmag/artifacts/antenna-ui-20261103/2026-11-04-gsg-exact-incidence-rank-proposal.md.
+- Fig.3: dodatkowy odczyt dwóch dodatnich maksimów S/alfa0,01 wykazał odstęp0,265GHz w rastrze wobec0,375GHz we wzorcu. Trzy progi koloru dały ten sam odczyt; nie zmieniono parametrów. Przyczyna nadal otwarta. Raport:D:/git/fullmag/artifacts/antenna-ui-20261103/2026-11-04-sushruth-figure3-spacing-diagnostic.md.
+
+- Wariant100nm Succeeded i pełny odbiór22payloadów V/J/H PASS:14299 Tet4 bitowo zgodnych ze frozen,20/20 punktów,667,56s, I=17,5353µA, |H|=0,0744–24,449A/m, eta_RT0/H1=4,90971% (nie błądH). Wariant75nm Failed przedH: dokładna kontrola rzędu więzów przekroczyła limit pracy Bareissa2^32. Serię zatrzymano bez ponowienia. Rozpoczęte2/3, poprawne kompletne1/3, kontroleH0/9;50nm nieuruchomione, limit capture nadal oczekuje na decyzję. Bez nowego buildu i bez promocji do LLG. [Dziennik, piny i ograniczenia](2026-11-04-gsg-source-convergence-execution.md).
+
+- Natywne prepare-only zamrożonych wejść100/75nm przeszło w istniejącym pakiecie (15,18/18,89s). Pełne porównanie katalogów potwierdziło niezmienioną fizykę, siatki i role obiektów po jawnej normalizacji Rust. Ustalono wymagany cwd skryptu; domyślne `/build` nie znajduje relatywnego assetu. Bez Submit/Solve,52 katalogi i sesja bez zmian. To diagnostyka przygotowania, nie finalna kwalifikacja FEM;50nm i limit capture nadal oczekują. [Raport i piny](2026-11-04-gsg-native-prepare-verification.md).
+
+- Odczyt zachowanego H po restarcie doszedł przez Home → Open saved run do rzeczywistego UI: zweryfikowany dataset275 próbek, właściwa geometria anteny, czytelny przekrój XZ/y=0 z legendą A/m. WebGL901×531 aktywny,275 glyphów,0 klatek/2s idle; pełna wydłużona mapa3D nadal niezaliczona pod kątem czytelności. Poprawkę Results bez Run zapisano jako `e175f6b67314dae97b5cdc5af58436957aace763`, zachowując47 wcześniejszych wpisów indeksu. Bez Solve/buildu i bez zmiany52 prób. [Odtworzenie widoku i ograniczenia](2026-11-04-saved-antenna-field-ui-readback.md).
+
+- Zarządzany build poprawek `80b241d598374eb28c8a8c4f9ee9e4f7` PASS/exit0 (20,46min); nowy snapshot `cc6c72b553377971dde703ace5cfcae50562b21d5a2379f30020d37911c58a23`. Przywrócono scenę GSG bez Solve i zachowano bajtowo wszystkie52 katalogi prób. Publiczny binarny odczyt275 H_ant ma identyczne6600 bajtów jak oryginał. Znaleziono i naprawiono odczyt nieistniejącej obserwacji w Results bez Run: RED→10 testów PASS, typecheck/lint plików/api-hygiene PASS, kontrola przeglądarkowa bez wcześniejszego błędu. Nie oznacza to jeszcze odbioru zachowanego H w bieżącym Airboxie ani nowych obliczeń GSG. [Raport buildu i odtworzenia](2026-11-04-antenna-managed-build-and-authoring-restore.md).
+
+- Aktualizacja04.11: pełne3/3 zachowanych configów helpera100/75/50nm są zgodne z pinami po jawnym flat export;14 regresji i focused validator PASS. Wyznaczono wstępne granice pakietów51,1/90,2/247,2MiB przy rezerwie256MiB. To nie native prepare. NoweV/J/H0/3 i kontroleH0/9; build z patchem limitu capture czeka na wcześniej wysłaną decyzję; wariant100nm uruchomiono istniejącym zgodnym pakietem, jak opisano wyżej.
+- Niezależny wzorzec równań publikacji: dołożono brakujące częstotliwości i wyrenderowano12 krzywych Fig.3;72 nowe kontrole R/T względem niezależnej kwadratury PASS. Odczyt źródłowego rastra ujawnił nierozstrzygniętą różnicę: znacznik FMR około7,21GHz wobec7,50GHz z literalnego TableI; dodatnie maksimum S/alfa0,01 około7,34 wobec7,80GHz. Bez fitu i bez claimu wykonania Fullmaga/LLG. [Raport i ilustracje](2026-11-04-sushruth-figure3-reference-comparison.md).
+
+- Kontrola A8/A5 wykluczyła proste wyjaśnienie rozbieżności przez tłumienie: dla S/alfa0,01 maksimum przesuwa się7,800→7,805GHz, a dokładny swobodny biegun przy k=0 o−0,750MHz.7/7 testów i focused validator PASS; bez fitu i bez nowego Solve. Publiczne źródła TeX autorów potwierdzają jawne parametry, ale nie zawierają kodu generującego krzywe ani surowych tabel. [Raport diagnostyki i źródeł](2026-11-04-sushruth-a8-and-source-audit.md).
+
+- Wykonano jeden odrębny kontrolny Run LLG FDM CPU/RK4 dla k=0:20000 kroków/2ns i2001 zapisanych próbek. Pełna trajektoria przeszła wcześniejsze kryteria; max błąd m1,59e−13, częstotliwość7,499250074960GHz wobec7,499250074993GHz. Nie użyto pola anteny, nie policzono propagacji i nie odtworzono Fig.3. Tabela istnieje w zapisie workera, ale nie jest osobnym wpisem SolutionSet; scena anteny bez zmian. [Raport rzeczywistego Run](2026-11-04-sushruth-k0-native-control-result.md).
+
+- Rzeczywisty kontrolny Run RF k=0 ukończył24000 kroków/24ns. Wszystkie6 porównań amplitudy i fazy przy6/7,5/9GHz przeszło (max błąd względny0,00369351%); pełne okno20–24ns ma2000 próbek. To zadane jednorodne pole, nie antena. [Raport i wykres](2026-11-04-sushruth-k0-rf-native-control-result.md).
+- W tabeli znaleziono brak kroku11384 poza oknem pomiarowym. Surowy zapis go zachował. Dokładny replay odtworzył przyczynę: różne tolerancje zegara wyjść i tabeli. Poprawka TableStore i2 regresje Rust są w źródłach; arytmetyka RED/GREEN potwierdza12000→12001. Testów Rust nie kompilowano. Późniejszy managed build potwierdził obecność poprawki w nowym pakiecie; natywna kontrola jej zachowania nadal pozostaje niewykonana. Historyczne pliki pozostają bez zmian.
+- Projekt publikacji zachowanej tabeli do SolutionSet/API/UI jest przygotowany i czeka na odpowiedź; nie wdrożono nowego codec/API lub importu. Osobna wcześniejsza decyzja o limicie capture nadal oczekuje. Nie powtórzono pytań i nie uruchomiono GSG lub H-only.
+
+- Dodatkowa kontrola Fig.3:48 nowych zespolonych porównań R/T przy obu ekstremach przeszło wcześniejsze progi. Po odjęciu własnego FMR różnica maksimum nadal wynosi0,16765GHz; jedna wspólna zmiana skali również jej nie usuwa. Równań i parametrów nie zmieniono, przyczyna nadal otwarta. [Raport kontroli rezonansu i osi](2026-11-04-sushruth-figure3-resonance-and-origin-audit.md).
+
+- Wspólny rdzeń: istniejący mesher z jawną optymalizacją Gmsh zachował190 węzłów/481 Tet4 próbki400×200×17,4nm w dwóch różnych otoczeniach (2263/3735 Tet4). Ujawniono i naprawiono brak walidacji przed raportem sukcesu;7 kontroli PASS. Wariant bez optymalizacji miewał zdegenerowany element i nie jest zakwalifikowany. Bez nowego pakietu, nowych domen lub H→LLG. [Raport meshera](2026-11-04-shared-core-mesher-validation.md).
+
+Poniższe dowody03.11 pozostają zachowane i mają swój opisany zakres.
+
+- H-only policzyło 275/275 punktów w 5485,202511417 s, ale końcowy StoreWriterBusy pozostawił task Failed. Kompletny wynik jest zapisany i odczytywany; nie zmieniono historii ani statusu na Succeeded.
+- Zatwierdzony build source-context d2dad61a52ea400285f0393aa96597e4 zakończył się poprawnie. UI pokazuje właściwą antenę i zapisane H, przekrój XZ jest czytelny. Przeszły typecheck, 36 testów loadera, lint, 15 kontroli HTTP kontekstu i 66 kontroli przekrojów. Wszystkie 50 katalogów historycznych zachowano bajtowo. Domyślna czytelność glyphów pełnej wydłużonej domeny 3D pozostaje niezaliczona.
+- Nowa diagnostyka porównała 55 istniejących próbek z niezależnym finite-prism. To różne modele, bez dopasowania i bez kwalifikacji: w środku maksymalna różnica pełnego wektora 0,1069%, przy y=±9,5 µm około 8,42%; dla samych XY przy założonej osi z odpowiednio 0,0029% i 2,50%. Nie jest to porównanie m(k,ω) ani R/T.
+- Wykonano rzeczywisty geometry-only preflight źródła100/75/50nm:14333/25516/73204 Tet4, dodatnie objętości i pięć markerów. Nie policzono na nich V/J/H ani zbieżności. Preflight kosztu pełnego targetu pokazuje przekroczenie bieżących budżetów; nie podniesiono limitów ani nie uruchomiono wielodniowej mapy.
+- Publiczny konsument drive istnieje, ale closed-v2/H-only nadal nie są kwalifikowaną bazą. Potrzebne są konkretna prerejestracja, zamrożony wspólny mesh próbki, kosztowo wykonalna walidacja i bounded kontrakt kwalifikacji. Nie wykonano LLG, source FFT ani odpowiedzi magnetyzacji; cel E0–E12 i reprodukcja pracy pozostają otwarte.
+
+- Dalsza kontrola wspólnego rdzenia odtworzyła błąd wyboru węzła przy kolizji kwantyzacji. Minimalna poprawka zachowuje wszystkie indeksy, wybiera jedno dokładne dopasowanie lub odmawia. Przeszły 3 nowe i 5 istniejących regresji, w tym dwa rzeczywiste przypadki Gmsh; niezależny przegląd bez uwag. Nie jest to nowy kontrakt domen ani odbiór przez kolejny build. [Raport poprawki](2026-11-03-frozen-core-coordinate-collision-report.md).
+- Przez publiczne Python → ProblemIR zamrożono osobne wejścia nowego badania zbieżności: 100/75/50 nm mają 14299/25516/72911 Tet4 oraz identyczny jawny nośnik 20 węzłów/24 Tet4. Wszystkie objętości dodatnie; bez Solve. To inne zapisane meshe niż wcześniejszy preflight samych liczności. [Konkretny projekt eksperymentu](2026-11-03-gsg-source-convergence-experiment-proposal.md) obejmuje 3 nowe pełne V/J/H i 9 niezależnych kontroli; projekt oraz profil referencji zostały zatwierdzone. Jawny profil ma implementację i 9/9 nowych regresji, przy niezmienionych limitach domyślnych. Nie uruchomiono kolejnego H-only.
+
+- Zatwierdzony profil niezależnej kontroli jest zaimplementowany: 9/9 nowych testów, 52/54 istniejących testów referencji PASS (dwa istniejące testy ABI Windows pominięte w Linux), 41/41 testów dokumentacji i focused validator PASS. Oryginalny odcisk AST równań/bramek zachowany po normalizacji wyłącznie wyboru limitów. To jeszcze nie dziewięć rzeczywistych kontroli pełnego GSG.
+- Naprawiono zbędny mkdir istniejącego cache (4/4 regresji). Wszystkie trzy wejścia odtworzono z dokładnym SHA; chroniony capture odczytał przypięty cache bez zmiany audit hook i zachował identyczną geometrię. Wariant50nm daje9582471B metadanych i nie mieści się w8MiB. [Konkretny patch12MiB](2026-11-03-gsg-capture-metadata-bound-proposal.md) oczekuje na decyzję; nie został zastosowany, jeden zatwierdzony build pozostaje niewykorzystany. Nowe V/J/H:0/3, nowe pełne kontrole referencyjne:0/9.
+- Frontend odzyskano zarządzaną receptą po OOM bez zmiany backendu. W przeglądarce otwarto zachowany H_ant275, przełącznik geometrii działa, WebGLcontextactive901×531. To ograniczony smoke, nie pełna kwalifikacja stabilności/scroll/focus/request-count lub czytelności całej domeny3D. Lokalna zmiana widoczności nie uruchamia Solve.
+
+Szczegóły: [raport danych i następnego kroku](2026-11-03-gsg-saved-field-next-step-evidence.md) oraz [odbiór source-context](2026-11-03-saved-h-only-source-context-proposal.md). Starsze checkpointy poniżej są dziennikiem historycznym.
+
+## Historyczny checkpoint — 02.11.2026: GSG w sesji authoring i rzeczywisty build BORIS
+
+Historyczny stan z 02.11.2026; bieżący checkpoint jest powyżej.
+
+- UI na 3203 odpowiada HTTP200. Osobna sesja `fem_antenna_sushruth_2020_closed_gsg` ma scenę rev1 z dwoma obiektami: `antenna` (rola `antenna`, CPWAntennaLayout) oraz `sampling` (rola `geometry`, Box). Publiczny import oryginalnego przykładu dał HTTP201 i `round_trip=verified`. Solver ma `awaiting_command`, run=null; nie uruchomiono nowego Solve. Projekt FMS zapisano w hostowym storage WSL. Widok 3D nie ma jeszcze odbioru przeglądarkowego.
+- Nowy producent BORIS `40cd3a43fd7648e58fdad05ac7a1baf0` zakończył build/ABI stanem succeeded. Rzeczywiste porównanie N/F nie zakończyło się: pierwszy worker odmówił przed obliczeniami z powodu brakującego hostowego importu. Minimalna poprawka kontrolera jest zastosowana w worktree; 29 interpretowanych regresji z tych plików przeszło. Nowy managed build oraz nowe przypięcie producenta pozostają konieczne; aktualny pakiet nie odpowiada już temu zmienionemu kontrolerowi.
+- Trzy prerejestrowane punkty zachowanego H GSG przeszły jedną zatwierdzoną niezależną kontrolę. To nie kwalifikuje całego źródła, pełnego Universe, projekcji ani LLG.
+- Publiczna ścieżka H-only dla nowej domeny Universe pozostaje nieukończona. Kandydaci Python/IR/native ABI/Rust adaptera i manifestu dziecka są przygotowani oddzielnie, bez aplikowania. Nie ogłoszono odbioru E1–E12 ani odtworzenia odpowiedzi fal spinowych.
+
+
+## Bieżący checkpoint — 01.11.2026: rzeczywista siatka i przygotowanie źródła GSG
+
+Wykonano 6 interpretowanych regresji `packages/fullmag-py/tests/test_cpw_closed_loop_mesh.py` w istniejącym backendzie naszej grupy Docker. Wszystkie przeszły, bez skipów: rzeczywiste bryły OCC/Tet4, pięć materiałowych części, sześć kontaktów, przekrój w centralnej szyjce, odwrócenie normalnej, obrót/przesunięcie, pełne pokrycie materiałów, odmowy błędnej osi/regionu/starej płaszczyzny oraz publiczne Python `to_ir(include_geometry_assets=True)` i ponowne użycie cache. Istniejące receipt pozostają `materialized_not_solved`, bez certyfikatu prądu i bez kwalifikacji bazy. Kontrole używają małej geometrii regresyjnej GSG; nie są ponownym Solve przykładu publikacyjnego.
+
+Cały proces 7,27 s; testy 4,69 s, peak RSS około 151,7 MiB. Cache, pliki tymczasowe i logi pozostały w wolumenie kontrolnym: `verification/gsg-mesh-contracts-20261101`. Manifest potwierdza zgodność wszystkich 15 zależności GSG z poprzednim manifestem źródeł i przypina pliki testów oraz wersje narzędzi. Nie kompilowano testów natywnych ani aplikacji; nie zmieniano tolerancji, polityk, ledgera lub usług. To dowód bieżących funkcji Python/Gmsh, nie zarządzanego pakietu ani ścieżki UI→API→planner→solver.
+
+Audyt trasy przeglądarkowej wykazał dodatkową lukę wykonania: `justfile::verify-antenna-cpw-viewport-browser` i `verify-antenna-microstrip-stations-browser` delegują do `scripts/verify_pinned_dataset_browser.py::run`, który kopiuje źródła i uruchamia Next na hoście. Tej recepty nie uruchomiono, ponieważ codzienny build ma pozostawać w grupie Docker. `scripts/docker_dev_browser_qa.py` nie obsługuje izolowanego fixture: `_run` czyta publiczny origin, `_compose_document` i `_validate_browser_helper` przypinają `frontend:8080`; `--port` nie oznacza prywatnego portu fixture. Nie użyto go do wejścia na zablokowaną stronę 3203/3202.
+
+Kierunek naprawy testów: stała lista dwóch scenariuszy anten, oddzielny katalog fixture/cache we frontendowym subpathie prywatnego volume grupy, brak tras i proxy produkcyjnego API, przeglądarka wyłącznie do prywatnego portu fixture z blokadą obcych żądań, istniejąca blokada `BuildControl` i przypięty obraz. Wymagane zachowanie właściciela procesu, receiptów i źródeł. Ten opis nie jest implementacją ani zgodą na zmianę istniejących bramek. Obecny inspect potwierdził starą topologię grupy (oddzielne frontend/backend/ledger volumes); nie zadeklarowano zgodności z ADR 0076 i nie przeprowadzono migracji. Na D wolne 72 700 153 856 bajtów; brak miejsca nie jest obecnie główną blokadą, a właściwy launcher musi ponowić admission przed buildem.
+
+Do dalszego publicznego wykonania pozostają: oczekująca decyzja o [migracji ledgera grupy](2026-11-01-antenna-group-ledger-relocation-proposal.md), aktualny zarządzany pakiet z całym domknięciem GSG oraz kontenerowa trasa testów fixture i właściwy odbiór rzeczywistego UI. Brak nowego Solve, nowych wyników publikacji, bazy lub LLG. E0–E12 pozostaje otwarte.
+
+## Bieżący checkpoint — 01.11.2026: ochrona draftów geometrii i zależności GSG
+
+Status: implementacja WIP E2/E6, bez odbioru przeglądarkowego i bez nowego pakietu runtime. Ponowny fetch potwierdził `origin/master=c416e1b700ec582512859998940771072815cb00`; jest przodkiem HEAD `44a3088f53efd63f6242b3fd91ea01beec6e6691`. Git zgłosił „Already up to date”; lokalne zmiany i 11 wpisów indeksu pozostały identyczne.
+
+- `MicrostripGeometryEditor` zgłasza draft, pending i walidację przez istniejący `useRegisterInspectorEditSession`. Zapis używa `runAuthoringMutationWithHistory` i właściciela formularza/sesji/generacji historii; spóźniony ACK nie publikuje danych po utracie właściciela. Zablokowany obiekt nie pozwala na zapis.
+- `AntennaGeometryAuthoring` agreguje osobne sesje geometrii i położenia według wzorca Conductor. Dwa zmienione formularze wymagają osobnego zapisu i przeglądu pozostałego draftu; wspólne Discard obejmuje oba. Nie dodano drugiej subskrypcji sceny.
+- `committedAntennaGeometryScene` w istniejącym modelu potwierdzeń sprawdza tożsamość modelu, nowszą i spójną rewizję oraz zachowanie przesłanych wartości. To ochrona klienta istniejącego API, nie nowy format transportu ani zmiana fizyki.
+- Istniejący fixture i smoke rozszerzono o produkcyjną ochronę zaznaczenia, historię i scenariusze obu layoutów: błędny draft, jednoczesna edycja geometrii/położenia, Cancel/Discard, nowsza edycja podczas ACK i zmiana generacji historii. Scenariuszy przeglądarkowych **nie uruchomiono**; stabilność Object/Airbox i WebGL pozostaje NOT VERIFIED.
+
+Dowody źródłowe z istniejącego kontenera frontendowego: 27 interpretowanych kontroli modelu authoringu/ACK przeszło; dwie kontrpróby na modelu ACK z HEAD potwierdzają brak sprawdzenia obcego modelu/starej rewizji, a bieżący model je odrzuca. Produkcyjny TypeScript 7 noEmit, TypeScript 6 noEmit obejmujący również fixture, lint zmienionych plików, architecture hygiene i składnia skryptu smoke przeszły. Pierwsza próba fixture typecheck użyła pakietu CLI bez API kompilatora; zachowano tę nieudaną próbę, po czym wykorzystano już zainstalowane API TypeScript. Pełny lint przed zmianą E6 przeszedł w 281,43 s; po zmianie wykonano lint zakresu. Dodatkowo przeszło 10 interpretowanych testów Python (`test_cpw_closed_loop_layout`, `test_sushruth_closed_gsg_example`): geometria, jawne parametry, granice/przekształcenia i round-trip przykładu. Nie generowały siatki i nie uruchamiały Solve. Testów natywnych/jednostkowych nie kompilowano. Receipty: `verification/antenna-geometry-draft-guard-20261101` w wolumenie kontrolnym grupy.
+
+**Granica commita GSG:** nie commitować samego UI jako samodzielnej obsługi pełnego obwodu. Niezależny audyt źródeł potwierdził 15 istniejących, niezacommitowanych zależności. Authoring/round-trip: Python `model/geometry.py`, `model/current_transport.py`, `runtime/script_builder.py`; IR `antenna.rs`, `model.rs`, `lib.rs`, `spin_transport.rs`, `validation.rs`; authoring Rust `validation.rs`, `geometry.rs`. Compute wymaga dodatkowo Python `meshing/_gmsh_waveguides.py`, `meshing/_antenna_coincident_cut.py`, `runtime/antenna_coincident_materialization.py`, IR `antenna_current_source.rs` i planner `antenna_current_source.rs`, wraz z ich regresjami. Audyt nie uruchamiał buildu ani Solve. Zmiany recovery, ledgera, publikacji zapisanych wyników i optymalizacji natywnej nie należą do tego domknięcia. Przed wydzieleniem commita potrzebne są przegląd i adekwatna weryfikacja całej zależności; stary działający pakiet nie potwierdza bieżących źródeł.
+
+Dalsze bramki pozostają bez zmian: uzgodniona migracja ledgera przed aktualnym managed buildem; publiczny mesh/prepare/solve/cold-load; rzeczywisty odbiór przeglądarkowy. Nie uruchomiono nowej symulacji, bazy, LLG ani porównania BORIS. Zakres E0–E12 pozostaje otwarty.
+
+## Bieżący checkpoint — 01.11.2026: pełny GSG w edytorze Geometry
+
+Ten wpis aktualizuje wyłącznie postęp authoringu i podglądu E2/E6/E7. Nie oznacza odbioru tych etapów ani całego E0–E12. Zachowano kanoniczne kontrakty Python/IR i istniejące API transakcji; nie dodano solvera ani endpointu.
+
+- Edytor Geometry mikrostripu/CPW udostępnia teraz jawny pełny obwód GSG: długość połączenia, długość poprzeczki, ID części i przewodność na obu końcach oraz napięcie i przekrój źródła. Nowy draft nie narzuca napięcia ani parametrów połączeń.
+- Jedna istniejąca transakcja zapisuje geometrię, pięć przypisań materiałów, źródło w centralnej szyjce wejściowej, port v3 i aktualizację powiązanego etapu. Zachowuje obserwacje oraz ID; nie wyznacza prądów powrotnych z wag portu.
+- Podgląd CPW uwzględnia obie części połączeń: trzy szyjki i poprzeczkę na każdym końcu. Zachowuje szczeliny i przekształcenia; nie przedstawia bryły otaczającej jako przewodnika. Jest podglądem authoringu, nie siatką solvera.
+
+| Kontrola | Wynik i zakres |
+| --- | --- |
+| Regresja przed poprawką | Podgląd rzeczywistego zamkniętego GSG miał tylko trzy główne części; brakowało obu połączeń |
+| Model authoringu | 19 kontroli przechodzi; obejmują wspólny zapis, ponowne otwarcie, zmianę napięcia i odmowy niepoprawnych wejść |
+| Geometria podglądu | 15 kontroli przechodzi, w tym granice, objętość, szczeliny i walidacja połączeń |
+| Parzystość z Pythonem | 192 współrzędne połączeń rzeczywistego GSG zgodne dokładnie; zadeklarowany przed porównaniem próg geometryczny 1e-18 m |
+| Mikrostrip | 40 dotychczasowych kontroli przechodzi; osiem wariantów podglądu bitowo bez zmian |
+| Kanoniczny round-trip | Model transakcji edytora → SceneDocument → eksporter Python → loader → scena zachowuje geometrię, materiały, źródło i port; bez magnetyka i automatycznego Solve |
+| Gotowość | Produkcyjne walidatory portu, etapu i inspektora akceptują authoring; inspekcja nadal jawnie wymaga walidacji wykonania |
+| Kontrole źródeł | Typecheck produkcyjny bez emitowania, lint ośmiu zmienionych plików i bramki architecture/API hygiene przechodzą |
+| Przeglądarka | Rozszerzono istniejące regresje pending/ACK i WebGL o GSG; nie wykonano ich z powodu wcześniejszej blokady dostępu narzędzia. Brak nowych screenshotów i odbioru Object/Airbox/WebGL |
+
+Docelowa ścieżka do kontroli w przeglądarce: Add CPW Antenna → Geometry → Full 3D conducting circuit → jawne parametry obu połączeń, napięcie i przekrój w centralnej szyjce → Save conductor authoring. Wykonanie wymaga aktualnej siatki, materializacji źródła i zgodnego pakietu. Nie uruchomiono nowego Solve, LLG, bazy ani porównania BORIS.
+
+Właściciele kodu: `MicrostripGeometryEditor` i `buildMicrostripCircuitPatch` w istniejącym module Inspector; `buildAuthoredCpwGeometry` w `src/shared/domain/geometry/authoredMicrostripGeometry.ts`; eksporter `render_scene_document_as_script` i loader `load_problem_from_script` w `packages/fullmag-py`. Równania i model obwodu nie zostały zmienione.
+
+Dowody: `verification/gsg-full-circuit-authoring-20261101` w wolumenie kontrolnym grupy anten. Parzystość korzysta z zachowanego authoring receipt SHA256 `2b81a666925b8c742173145c6e8eb04126e8058a3b49b7efe22ea9cae2adacbe`. Wygenerowany i ponownie przechwycony Python ma SHA256 `4f1815fdb2393e76fba739c1a18b3c457c4fdbee58894e5ec325ed2f9e7cd9f5`. Wyniki pełnego lintowania zapisuje osobny receipt w tym samym katalogu. Testów jednostkowych nie kompilowano.
+
+Dalsze bramki: rzeczywiste stabilne UI/WebGL, zarządzany aktualny build po uzgodnionej migracji ledgera, publiczny mesh/prepare/solve i zapis/cold-load. Kwalifikacja H, bazy, LLG i wyników publikacji pozostaje otwarta.
+
+## Bieżący checkpoint — 01.11.2026: master zintegrowany, attestacja WSL naprawiona
+
+Ten checkpoint zastępuje datowane opisy działania usług poniżej. Historia pozostaje zachowana. Pełny zakres E0–E12 nie jest zakończony. Ostatni formalny odbiór pozostaje E0; bieżące dowody nie zamykają automatycznie pozostałych 12 etapów.
+
+- Backend Docker WSL działa; po zakończeniu buildu BORIS frontend 3203 został przywrócony. Obie usługi mają poprawny status; API health zwraca HTTP 200, active_session=false. Świeża obserwacja UI po tym restarcie pozostaje niepotwierdzona z powodu blokady protokołu zachowanej karty przez narzędzie przeglądarki. Ostatni build afaac712236a45208c618e329d6a980a ma succeeded; snapshot e177f8414046263c1dd5fbf6cd1b2c565aad1cbe26bc1d7bb968ada542ce204b. Testów jednostkowych Rust nie kompilowano.
+- GSG ma poprawnie zakończoną inspekcję V/J/H: 14 304 komórki źródła, 5990 węzłów V, 247 punktów H przy przyszłej próbce Co/Ni. To nie jest pełny Universe GSG ani działająca próbka magnetyczna. Wynik pozostaje inspection_only / not_verified.
+- Odzyskany mikrostrip ma pełne H na 1145 węzłach / 6428 Tet4 Universe. Przed buildem BORIS UI otwierał zapisany zestaw i pokazał czytelny przekrój YZ z obiegiem wektorów pola; nie jest to nowa obserwacja po obecnym restarcie. Historyczny task nadal Failed po awarii publikacji; odzyskany wynik nie zmienia tej historii.
+- Zoptymalizowano dokładną walidację RT0 bez zmiany tolerancji: rzeczywiste HTTP GSG około 33 s → 7,49 s, identyczny SHA odpowiedzi. Samo przyspieszenie nie jest kwalifikacją naukową.
+- Niezależna kontrola zachowanego GSG potwierdziła bilans P1 (backward residual 2,25e-16), zgodność oryginalnych reakcji oraz bilans mocy RT0 (względnie 1,09e-14). Różnica energii P1/RT0 0,241065% zgadza się z defektem projekcji; nie jest oszacowaniem błędu wobec rozwiązania ciągłego.
+
+- Niezależne kontrole zachowanego mikrostripu potwierdziły V/J: bilans mocy RT0 7,77e-16 względnie, backward residual P1 2,08e-14, kompletne 14 par przekroju źródła i 1294 ściany izolowane oraz znaki czterech terminali względem authoringu. Przy sprawdzaniu izolacji wykryto utratę cyfr we własnym walidatorze binary64; przeliczenie całej granicy rachunkiem wymiernym przeszło niezmienione progi. Obie próby zachowano.
+- Wykonano niezależne porównanie H mikrostripu w trzech punktach wybranych przed obliczeniem referencji (środek granic, minimum i maksimum zapisanego |H|). Każdy punkt obejmuje wszystkie 1856 komórek źródła; łącznie 66816 par analitycznych. Największa różnica normy wektorowej wynosi 4,58457e-12 A/m; wszystkie trzy mieszczą się w zapisanej skali precyzji native. Czas 496,44 s, peak RSS około 62,5 MiB. To porównanie punktowe przy tej samej siatce i modelu, nie kwalifikacja całej domeny, zbieżności siatki, GSG, bazy ani LLG. Raport: `verification/recovered-universe-frozen-parity-20261027/independent-h-comparison-20261031.json`, SHA256 `04de12b46a0708edffa71c19249cd0178c0675495850ef330fa391cf1e170341`.
+
+Niezależna analiza całego zapisanego prądu (01.11) objęła 1856 komórek mikrostripu i 14304 GSG, z dokładnymi całkami lokalnych śladów na Tet4. Wskaźnik normy całki J po objętości względem abs(I) L wynosi 5,85792e-18 / 2,28216e-18; znormalizowana symetryczna część pierwszego momentu 1,87524e-18 / 1,07106e-19. Zweryfikowano dokładną tożsamość translacji momentu i jawną partycję źródła na części. To dodatkowe globalne diagnostyki, bez nowego progu PASS i bez kwalifikacji pola/bazy. Czas 31,25 s, peak RSS 74,36 MiB, bez Solve. [Raport i ograniczenia](2026-11-01-retained-current-moments-audit.md). Raport zapisano w commicie `b0ff5103dac75f506ab1d3d158b157975cdd48de`.
+
+Aktualizacja mastera 01.11: pobrano i zintegrowano `c416e1b700ec582512859998940771072815cb00` w merge commicie `5208006a025ad32bf7c783b31bbd3dd88544676c`; bez konfliktów, zachowano 152 lokalne pliki i 11 wcześniejszych wpisów staged. Nie wykonano nowego buildu aplikacji.
+
+Poprawka gotowości GSG w UI (commit `d18c79926966807ccc7e23e5248201e46bb5fd40`): walidator dopuszcza istniejący kontrakt 3 gałęzi / 5 części, a inspektor źródła przekrój w osi x lub z w jawnym układzie obiektu. Powiązanie par obserwacji musi odpowiadać ID gałęzi. Potwierdzono RED→GREEN także na niezmienionym rzeczywistym authoring receipt GSG (SHA256 `2b81a666925b8c742173145c6e8eb04126e8058a3b49b7efe22ea9cae2adacbe`), rekonstruując wyłącznie otoczkę sceny dla funkcji produkcyjnych. 23 kontrole obwodu, 13 terminali, architecture/API hygiene, produkcyjny typecheck bez emitowania i lint 4 zmienionych plików przeszły w istniejącym kontenerze frontendu. Fixture Vitest uzupełniono, lecz testów jednostkowych nie kompilowano. Dowody: `verification/gsg-inspector-readiness-20261101` w wolumenie kontrolnym. Nie wysłano transakcji HTTP ani Solve; nie jest to odbiór przeglądarkowy, całego Inspectora ani kwalifikacja fizyczna. Aktualne źródła nie zastępują zgodnego pakietu backendu i oczekującej migracji ledgeru.
+
+Kontrola konsumenta walidacji wykryła nieaktualny skrypt kreatora: brak podłączenia wyodrębnionego walidatora portów oraz oczekiwania wymiarów Geometry w dedykowanym panelu Conductor. Commit `44a3088f53efd63f6242b3fd91ea01beec6e6691` naprawia skrypt, nie przenosi pól między panelami. 5 kontroli kreatora i 6 istniejących kontroli przewodnika oraz lint zmienionego skryptu przeszły. Pełny kreator nadal tworzy draft microstrip/CPW z portem v2 i terminalami; nie tworzy jeszcze kompletnego zamkniętego obwodu v3 GSG. Ten brak pozostaje w E2/E6, a zielona kontrola draftu go nie zamyka.
+
+Końcowa kontrola źródeł frontendu 01.11: pełny ESLint zakończył się kodem 0 (342,91 s, zero ostrzeżeń). Produkcyjny typecheck `tsconfig.typecheck.json` z `--noEmit --incremental false` przeszedł; konfiguracja wyklucza testy jednostkowe. Łącznie wykonano 47 interpretowanych kontroli: 23 obwodu, 13 terminali, 5 kreatora, 6 przewodnika. Sprawdzenie rzeczywistego receipt GSG i modelu transakcji jest oddzielnym dowodem, nadal bez HTTP zapisu i odbioru przeglądarkowego. Wszystkie te kontrole działały w istniejącym kontenerze frontend tej samej grupy; pełny lint nie jest buildem aplikacji. Nie pozostawiono aktywnego procesu kontroli.
+
+Szczegółowe źródła, identyfikatory, pomiary i ograniczenia: [audyt integracji i kontroli 30–31.10](2026-10-30-antenna-master-integration-audit.md).
+
+| Etap | Potwierdzony postęp | Otwarta bramka odbioru |
+| --- | --- | --- |
+| E0 | Zamrożenie wejść i mapa przepływów przyjęte wcześniej | Zachować aktualne piny i pełny zakres przy dalszych zmianach |
+| E1 | Adapter i regresje; nowy rzeczywisty build BORIS CPU oraz ABI binary64 przeszły | Aktualny rzeczywisty managed benchmark BORIS–Fullmag i pełne pochodzenie |
+| E2 | Pełne obwody microstrip/GSG i rzeczywisty source cut | Pełny odbiór authoringu terminali w UI i kwalifikacja geometrii |
+| E3 | Jeden accepted GSG V/J/H; bilanse GSG i mikrostripu; niezależne H mikrostripu w 3 punktach | Niezależne H GSG, zbieżność siatki i kwalifikowana baza |
+| E4 | Rzeczywisty field-only GSG bez ferromagnetyka; mikrostrip Universe | Kompletny odbiór obu scenariuszy i pełny Universe GSG |
+| E5 | Zapisane V/J/H oraz reopen przez API i UI | Pełna macierz archiwum/cold-load/odmów dla wszystkich wymaganych rodzin |
+| E6 | Istnieją dedykowane widoki i jawny saved quantity source | Pełny przegląd każdego węzła, edycji i stabilności Object/Airbox |
+| E7 | Rzeczywisty przekrój pełnego Universe mikrostripu i WebGL | Czytelna objętościowa prezentacja 3D, GSG Universe i wszystkie instrumenty |
+| E8 | Istnieją authoring/ref/projection/drives; nie odblokowano inspekcji jako bazy | Qualified FieldBasis → DC Relax / AC LLG, reuse i cache z prawdziwym wykonaniem |
+| E9 | Istnieją kod FFT i kontrakty źródła/odpowiedzi | Qualified source FFT, poprzeczna projekcja względem równowagi i m(k,omega) |
+| E10 | Kontrakty tensora i projekcji mają wcześniejsze poprawki | Rzeczywisty tensor runtime i pełny odbiór authoringu/renderowania |
+| E11 | Brak nowego pełnego odbioru w tym checkpointcie | Macierz rzeczywistych lanes spinowych i porównanie BORIS |
+| E12 | Dowody i bieżący plan uaktualniono | Cały wymagany end-to-end, dokumentacja użytkowa i finalny audyt E0–E12 |
+
+Tabela jest mapą otwartych bramek, nie procentowym oszacowaniem gotowości kodu. Nie utożsamia 1/13 formalnie odebranych etapów z ilością wykonanej implementacji.
+
+Oczekujące decyzje:
+1. [Jawny dodatek resamplingu H z zachowanego prądu](2026-10-31-retained-current-field-resampling-proposal.md). Obecny frozen mesh nie oznacza reuse V/J; aktualna ścieżka ponawia transport. Nie wdrożono nowego kontraktu bez decyzji.
+2. [Budżet niezależnej referencji H dla zachowanego GSG](2026-10-30-gsg-retained-field-reference-budget.md). Nie podniesiono limitów ani nie obchodzono ich dzieleniem jednego targetu na osobne budżety.
+3. [Relokacja historycznego ledgera grupy do nowego prywatnego wolumenu](2026-11-01-antenna-group-ledger-relocation-proposal.md). Potrzebne jawne native inspect/preview i transfer historii przed odtworzeniem grupy. Sama inicjalizacja nowego pustego ledgeru nie jest migracją. Wysłano pytanie o implementację i wykonanie po zaliczonych bramkach.
+
+Build BORIS `b83ab46ac347452d96d86b27cbfaf990` zakończył się succeeded: 409 plików źródłowych, linkowanie i ABI binary64 (8 bajtów, 53 bity precyzji). SHA256 BorisLin: `9c57da655ecabfecdab22ad0db2d8eda1eda1be4ec3020439150af246b08d9ca`; receipt producenta: `052fd6c3832594c815d04d7df4fe2f99cef5e698742a382bc5fcaed085409f53`. Źródła BORIS pozostają przypięte do `048503d2ca6475e91b073eb1762ecf9d3634c3e1`. Jest to build/ABI, nie benchmark ani kwalifikacja fizyczna. Dowód: `verification/boris-volume-reference-20261031/build-and-launch-checkpoint.json` w wolumenie kontrolnym.
+
+Próba porównania N/F `81d5af6c2e1542288bbe544253deca1a` odmówiła przed startem solvera na attestacji ścieżki eksportu WSL. Po jawnej zgodzie użytkownika 01.11.2026 ponowiono pełny preflight, zapisano dokładny zatwierdzony failed-confirmed receipt/terminal i potwierdzono zakończenie oryginalnego helpera kodem 0. Helper sam zwolnił active; blokady nie kasowano ręcznie. Kontener `bc862d9e8ceae7ba3c625c304d00285862a0566eacbd08f4186038fb1d012f6f` nadal jest Created, PID 0, bez startu solvera. Zastosowano dokładny patch attestacji WSL; 13 kontroli rzeczywistego kontenera/odmów i 20 testów kontrolera przeszło, a regresja odtwarza poprzedni błąd. Commit: `d48fc788818e0edbfa2584882a89514695ff55f2`. [Przegląd i wykonanie](2026-10-31-nf-wsl-export-attestation-recovery-proposal.md); dowody w `verification/nf-wsl-export-attestation-20261031` wolumenu kontrolnego.
+
+Po aktualizacji mastera działający pakiet jest nadal przypięty do starego commita i snapshotu; nowy source probe poprawnie wykazał niezgodność. Nie uruchomiono nowego porównania. Przez `just docker-dev-images` przygotowano aktualne obrazy dev/backend (odpowiednio `276163bee3d1…` i `31b8a6ea4989…`), toolchain został ponownie użyty z cache. To nie jest kompilacja nowej aplikacji ani wdrożenie nowego layoutu. Kontrola kodu i rzeczywistego ledgeru wykazała brak transferu 86 historycznych rezerwacji i ich dowodów ze starego volume do `private/ledger`. Dotychczasowe API/UI pozostają healthy, nie wykonano stop/recreate. Następny krok: jawna migracja z natywnym preflight, potem zgodny pakiet/referencja i jedno porównanie N/F. Stare wyniki i limity zasobów pozostają zachowane.
+
+Pierwsze dwa uruchomienia kontrolera porównania odmówiły wcześniej, przed admission, na Pythonie 3.8. Istniejący Python 3.12 jest w `/home/kking/.local/bin/python3`; dla zamkniętej ścieżki shell należy ustawić `FULLMAG_STORAGE_PYTHON`, nie tylko zmienną receptury storage_python. Po tym ustawieniu importy i admission przeszły. Nie zmieniono kodu solverów, helperów producenta ani globalnego PATH.
+
+
+Niezależnie od tych decyzji kontynuować aktualną kwalifikację BORIS i pozostałe nieblokowane bramki. Nie wykonywać kolejnego kosztownego Solve tylko w celu zastąpienia zachowanych wyników.
+
+
+## Checkpoint historyczny — 27.10.2026: pełne zapisane Universe i odczyt po restarcie
 
 Stan bieżący zastępuje poniższe datowane checkpointy historyczne. Pełne H1145/6428Tet4 odzyskano z natywnego Completed; pierwotny task zachowuje Failed/Unassessed. Siatka i20 wspólnych H są identyczne z zamrożonym wejściem/referencją. Zapisane V/J/H przeszły rzeczywisty klient → resource hooks → adapter również po restarcie API, bez nowego Solve. Obrazy naukowe nie są screenshotami UI.
 
@@ -4997,3 +5370,2894 @@ Stan tego checkpointu: sprawdzono źródła oraz sekcje artykułu, zapisano wyb�
 użytkownika i rozdzielono parametry. Nie dodano materiału do sceny, nie
 uruchomiono nowego Solve, nie zmieniono kwalifikacji źródła. Runtime nadal
 wymaga zakończenia kontroli recovery; wyniki i historia pozostają zachowane.
+
+
+## Kontynuacja reprodukcji publikacji — 28.10.2026, po PR #247
+
+Cel użytkownika: rozwinąć moduł aż do odtworzenia wyników Sushruth et al.,
+PR Research 2, 043203. PR #247 jest zmergowany; nie oznacza to zakończenia
+kwalifikacji naukowej. Kolejność i warunki odbioru:
+
+1. Parametry i domeny: rozdzielić nominalną próbkę, model tabeli I i fit rys. 6;
+   sprawdzić kanoniczne obniżanie geometrii oraz zachowanie SI.
+2. Prąd i pole: zamknięcie obwodu GSG, zbieżność źródła i próbkowania,
+   niezależne porównanie V/J/H na domenie Co/Ni, zachowany wynik i provenance.
+3. Sprzężenie: kwalifikacja źródła i projekcja H/I na osobną siatkę magnetyczną;
+   rzeczywisty stan równowagi, pole poprzeczne i H(k), bez ponownego transportu
+   przy każdym kroku LLG.
+4. Odpowiedź: rzeczywisty Run i m(k,f), odbiór indukcyjny oraz zespolone R/T;
+   zbieżność kroku czasu, przestrzeni i okna obserwacji. Parametry niepodane
+   dla eksperymentu nie mogą być po cichu wzięte z tabeli I.
+5. Porównanie i UI: liczbowy raport różnic do wskazanych krzywych publikacji,
+   oddzielnie model i eksperyment; odczyt zachowanych pól/widm w UI i smoke WebGL.
+
+Pierwsza poprawka: domena sampling w istniejącym GSG obejmuje teraz magnetyczne
+17.4 nm pod 5 nm Cu/Ta, z=-22.4..-5 nm względem wierzchu stosu. Centralne okno
+4 µm × 100 nm nadal jest autorskie, nie pełnym falowodem. Pole jest próbkowane
+w miejscu próbki, ale obiekt nie aktywuje jeszcze materiału ani LLG.
+Porównywarka odrzuca stare z=-10..0 nm i wymaga nowego hasha skryptu.
+12 testów interpretowanych PASS w zarządzanym helperze grupy; nie jest to
+wykonanie solvera. Dowód: verification/sushruth-coni-sampling-20261028/result.json
+w wolumenie kontrolnym.
+
+Audyt sprzężenia ujawnił dodatkową lukę: closed_loop_v2::require_qualified nie
+ma konsumenta. Loader LLG i loader widma po poprawnej weryfikacji v2 próbują
+parsowania legacy StoredSolutionManifest. Potrzebny jest jawny dispatch oraz,
+osobno, prawdziwa kwalifikacja naukowa i adapter v2 do wspólnej projekcji.
+CPWAntennaLayout nie ma pełnego obwodu; taki model istnieje tylko dla microstrip.
+Nie wolno włączyć GSG do LLG przez usunięcie odmowy albo zmianę etykiety.
+
+Runtime: odczyt Docker potwierdził, że dawny Fullmag_build_runner nadal działa,
+a nasz backend/frontend nie działa. Poprzednia zgoda obejmowała SIGTERM;
+proponowane wymuszone zakończenie nadal nie ma osobnej odpowiedzi. Żadnego
+sygnału ani Solve w tym etapie nie wysłano. Kontrole źródeł są niezależne od
+tej blokady; wyników publikacji nadal nie odtworzono.
+
+
+Weryfikacja fragmentu: 12 regresji porównywarki, 5 testów niezależnego
+wzorca V/J/H oraz 2 testy publicznego DSL/eksportu przeszły (19 PASS).
+Walidator noty 0950 i source-map zwrócił zero błędów. Test DSL używa
+include_geometry_assets=False; nie wygenerował siatki ani nie uruchomił
+solvera. Pierwsza próba pełnego to_ir zatrzymała się na readonly cache;
+nie stanowi dowodu meshingu. Szczegóły w tym samym wolumenie: tests.log,
+lowering-tests.log, reference-tests.log, documentation-errors.json.
+Nowa dokumentacja docker-isolated-session-recovery wprost rozdziela
+strukturalną walidację od kwalifikacji kopiowania/startu; sam wybór nowej
+przestrzeni nie zastępuje odzyskania runtime.
+
+
+## Checkpoint 29.10.2026 — zamknięte GSG i odzyskana blokada buildu
+
+Ten checkpoint aktualizuje wcześniejsze opisy braku zamkniętego GSG i blokady
+runtime; nie zamyka E0–E12 ani reprodukcji publikacji.
+
+Zamknięte GSG ma authoring pięciu części, sześciu kontaktów i pojedynczego
+źródła w centralnej szyjce. Rzeczywista geometria OCC/Tet4, przygotowanie
+przekroju, publiczny lowering Python, cache oraz eksport Python/sceny zostały
+sprawdzone. Zmiany Rust pozostają bez nowego buildu i wykonania solvera.
+Nowy `examples/fem_antenna_sushruth_2020_closed_gsg.py` używa publicznego
+`fm.study`, nominalnego przekroju i osobnego niemagnetycznego sampling Co/Ni.
+Zamknięcia i napięcie są jawnie autorskimi założeniami. Cztery testy nowego
+oraz starego przykładu PASS; nota 0950 i mapa źródeł zwalidowane. Dowody:
+`verification/gsg-closed-authoring-20261028/closed-public-example-tests-verified.log`
+i `closed-public-example-doc-validation-final.log` w wolumenie grupy.
+
+Zatwierdzony patch missing-owner zastosowano. Rzeczywiste preview przeszło,
+lecz pierwsze wykonania ujawniły dwie luki zgodności: bazowy obraz CUDA nie
+zawiera Pythona, a strict offline inspector nie rozpoznaje aliasu WSL.
+Poprawki zachowują zakres zatwierdzonej operacji: transakcja korzysta z obrazu
+zatrzymanego backendu przypiętego w request; tylko nowa ścieżka potwierdza
+alias przez device/inode przed i po ścisłym inspect. Legacy offline nie
+zmieniono. 54 testy PASS. Rzeczywisty helper przeszedł uwierzytelnienie
+w próbie ABORT, następnie managed preview i finalizację.
+
+Operacja `6894ea232a374be1b9ac4104b5511d6a` ma teraz `failed-confirmed`.
+Niezależny odczyt potwierdził identyczne terminal/receipt, zachowany oryginalny
+unknown receipt, brak active oraz niezmienione current/verified. Usługi
+backend/frontend pozostały zatrzymane; recovery nie uruchomiło Solve.
+Dowód: `verification/recovery-v5-20261028/missing-owner/image-fix/final-readback.json`.
+Ostateczny request SHA256:
+`dd8dccb2cba6a6a12ec5f07f226af0fc028bcb83cf206a996cc579232ce18a0d`.
+Przegląd poprawek i ich diff zachowano w tym samym katalogu. Wyniki, historia,
+cache i poprzednio zweryfikowany pakiet pozostają zachowane.
+
+Następny krok: nowy capture bieżących źródeł z właściwym mapowaniem examples,
+zarządzany build w backendzie tej grupy oraz rzeczywisty solve GSG. Przed
+kwalifikacją bazy E8 trzeba też uzupełnić diagnostykę rozmiaru całego obwodu:
+`antenna_validity.rs::conductor_metrics_for_drive` pomija obecnie zamknięcia
+i ich odrębne przewodności. Nie nadajemy statusu naukowo zakwalifikowanej bazy.
+Brak skilla `fullmag-build-stage-cleanup` w checkoutcie; obowiązuje fallback
+retencji z governance. Nie wykazano zbędności cache ani pakietów, więc nie
+kwalifikowano ich do usunięcia przed kolejnym buildem.
+
+
+## Checkpoint 29.10.2026 — build GSG przeszedł; odtworzenie usług w toku
+
+Aktualizacja poprzedniego checkpointu: zarządzany build
+`de0a6b0516cc4dfbadc2a6fe7b92788e` zakończył się poprawnie (exit 0).
+Pakiet obejmuje 24 artefakty; binarium zgłasza recovery v1–v5. Pełny Make
+trwał 895129 ms. Snapshot źródeł:
+`a2eb632b926aada5bae629437dd7a3d55e333b54b60264afc943b4b74333e88e`.
+Dowody znajdują się w `recovery-build/attempts/de0a6b0516cc4dfbadc2a6fe7b92788e/`
+w wolumenie kontrolnym. Build nie uruchomił API ani Solve; nie jest
+kwalifikacją naukową GSG.
+
+Późniejsze odtworzenie usług ujawniło dwie niezależne usterki. Launcher
+używał operacji niedostępnych w Python 3.8 hosta; poprawka zachowuje kontrolę
+liczby usług i bezpiecznego prefiksu ścieżki. Walidacja historycznych
+archiwów kandydatów wymagała natomiast zgodności z bieżącym shared cache.
+Rozdzielono integralność historycznego źródła od dopuszczenia pakietu do
+bieżącego reuse. 48 testów i odczyt obu rzeczywistych archiwów przeszły;
+stary pakiet nadal nie kwalifikuje się automatycznie do reuse.
+
+Próba `8a260b4f64784b08a8399aecda05ecad` zakończyła się przed capture.
+Frontend działa, backend pozostaje zatrzymany. Kolejny recreate ujawnił
+błędne skierowanie zachowanej autoryzacji do ścieżki wymagającej jej braku.
+Poprawka rozpoznaje typowany, uwierzytelniony kontekst, sprawdza również
+hash request/attestation/manifest, powtarza kontrolę pod blokadą i przypina
+inkarnacje usług przed usunięciem kontenerów. Odczyt rzeczywistego stanu
+potwierdził identyczną autoryzację i zatrzymany backend; usług nie zmieniono.
+28 testów kontekstu i pre-admission przeszło; dodatkowa regresja pełnego
+wyboru gałęzi jest przygotowywana. Dowody:
+`verification/recovery-v5-20261029/retained-recovery-routing/`.
+
+Nadal wymagane: wdrożenie poprawki archiwów przez zarządzane odtworzenie,
+start API, rzeczywisty solve GSG i ocena V/J/H. Żaden powyższy wynik nie
+zamyka E3, E8, E9 ani reprodukcji publikacji. Cache i wyniki zachowano.
+
+Weryfikacja dispatchu zakończona: 138 powiązanych testów PASS, w tym sześć
+nowych regresji rzeczywistego `_retained_operation`. Przywrócenie starego
+warunku tylko w pamięci kontenera odtwarza odmowę pre-admission; poprawiony
+warunek przekazuje identyczną autoryzację do startu. Testy odrzucają zmianę
+capability pod blokadą, restart backendu i zmianę stanu przed usunięciem.
+Starszy test startup-diagnostic wymagał uzupełnienia brakującej zmiennej
+`helper_source_binding` w fixture; produkcyjna funkcja start pozostała
+niezmieniona. Dowody: `all-related-regressions-final.log`,
+`dispatch-original-condition-fails.log`, `actual-readback.json` w powyższym
+katalogu weryfikacji. Następna próba to zarządzane recreate tej samej grupy.
+
+
+### Rzeczywiste odtworzenie i build po poprawce routingu — 29.10.2026
+
+Operacja recreate `69334855294844fcbad162e2523d2282` przeszła. Zachowano
+stan użytkownika i wolumeny. Nowy obraz backendu:
+`sha256:56100854ffcb5fb1a975e47fcb41663354e9e21f40f62570666348e28f84b407`.
+Development `49c3d8a558ca44208e119b187d8f8c5c`, konfiguracja
+`b27729fc769bc8b08942c0a9709372260f9c8c744a04db4744bc020ae1beeba8`.
+Capture: `543f2004a0e8ff34dcf91f6d2daeb001bf675c6b256ad0e408b63d862b73c38f`.
+Make zakończył się exit 0 po 1207775 ms; 24 pliki pakietu opublikowano
+i zweryfikowano. Bramka linux-native-v1 i worker-cgroup przeszły.
+
+Następnie entrypoint zatrzymał start runtime komunikatem
+`held-manual run pins require container recovery v4`; development ma
+`failed-confirmed`, działa wyłącznie API diagnostyczne. Host i natywne
+binarium obsługują v5, lecz `docker/all-in-one/runtime_service.py` nadal
+ma starszy zestaw schematów. Wymagana jest zgodność tego mostu z już
+zatwierdzonym kontraktem v5, z zachowaniem odmów v1–v4 i pełnych pinów.
+Nie uruchomiono Solve. Historyczny OWNER pozostaje Ready; aktualna
+przestrzeń kontenera zawiera tylko init, supervisor i diagnostyczne API.
+Nie wolno utożsamiać tych historycznych zapisów z żywymi schedulerami ani
+zakończyć ich przez ręczne przepisanie OWNER.
+
+
+Uzupełnienie mostu v5: entrypoint waliduje teraz osobno historię prób,
+obsługuje atestację braku kontenerów oraz wymaga capability v5 przed natywną
+mutacją. 80 testów PASS; rzeczywiste dokumenty 41 terminalnych, 2 held-manual
+i 2 historii przeszły odczytową walidację. Dowody:
+`verification/recovery-v5-20261029/runtime-v5-bridge/`.
+
+Diagnostyczny backend zatrzymano pojedynczym SIGTERM, bez SIGKILL, w operacji
+`b4e5c80846ea4b0fac9bf7b4212cd67c`. Preview i ponowna kontrola pod blokadą
+potwierdziły dokładny proces init → entrypoint → API, fence startup,
+health degraded/active_session=false, brak native receipt oraz zgodne
+oryginalne dokumenty recovery. Wyjście 0; frontend, OWNER, konfiguracja,
+historyczny process-tree, fence i autoryzacja pozostały niezmienione.
+Nie zwalniano historycznych rezerwacji, nie przepisywano OWNER, nie usuwano
+wyników i nie uruchomiono Solve. Dowody w
+`verification/recovery-v5-20261029/pending-diagnostic-stop/` obejmują probe,
+preview, pojedynczy signal intent i result. To ograniczona operacja
+diagnostyczna; nie rozszerza kontraktu v1 completed-stop ani nie zastępuje
+natywnego recovery. Dalszy start korzysta z zarządzanej receptury recreate
+oraz tej samej uwierzytelnionej pending capability.
+
+
+## Przegląd reprezentacji GSG — 29.10.2026
+
+- Niezależny przegląd geometrii nie wykazał blokera OCC/Tet4, ale wskazał
+  pominięcie połączeń CPW w publicznym `solid_segments()`. Test regresji
+  odtworzył brak inlet/outlet w obwiedni brył.
+- Poprawiono `CPWAntennaLayout.solid_segments()` i zachowano tożsamość części
+  w sekcjach połączeń. Po zmianie 16 testów Python geometrii, eksportu
+  przykładu i siatki przeszło (exit 0); testy Rust nie były kompilowane.
+- Dodatkowa rzeczywista siatka przy ukośnej rotacji 3D i obu zwrotach normalnej
+  źródła przeszła: 1804 Tet4, 8 par ścian, pole przekroju 1.8e-14 m²,
+  błąd położenia płaszczyzny około 1.59e-22 m. Jest to kontrola geometrii,
+  nie prądu, pola ani zbieżności solvera.
+- Dowody i hashe źródeł: `verification/gsg-review-20261029/` w wolumenie grupy.
+- Na moment przeglądu recovery v6 oczekiwało na decyzję; aktualny wynik wykonania opisano w checkpointcie poniżej.
+
+
+## Checkpoint: recovery zakończone, publiczna aktywacja GSG — 29.10.2026
+
+Recovery v7 zostało zatwierdzone i zastosowane po pozytywnym native preview.
+Szczegóły, hashe oraz kontrola zachowania danych:
+[raport v7](2026-10-29-unstarted-preparation-recovery-v7-proposal.md).
+API grupy 3203 odpowiada HTTP 200, backend i frontend są healthy.
+Zweryfikowano 43 katalogi runów, 108 przypiętych rekordów i 2417 obiektów CAS.
+To zamyka bieżącą naprawę recovery, nie kwalifikację anteny ani reprodukcję publikacji.
+
+Następnie wykonano publiczną receptę `docker-dev-script-pinned` dla
+`examples/fem_antenna_sushruth_2020_closed_gsg.py`, z development
+`ba3e16643157426c9d163b2048821edb` i konfiguracją
+`336cb7ec65dc8b6826c73020e4e7ea3be96ebcb55f59f7965da8b069b95420f6`.
+Aktywacja `10cd5a00f44b4758ab61397214a5b58e`, request
+`antenna-gsg-inspection-20261029-01`, zakończyła się `failed-confirmed`,
+`activation_state: rejected`; nie przydzielono session_id ani run_id.
+API zwróciło 400: `current_transports[0] closed loop requires an explicitly enabled MicrostripAntennaLayout loop`.
+Źródło ma SHA256 `414546c2c2f4c6bef2230ac0d9a51f8fb3635d16e7bba5dc35c2affc08675069`.
+Receipt odrzucenia zachowano w control volume:
+`backend/script-activation-7fadba39af12254210e798ca96bd8320154e6e4f5d7733503835f6b6dc121cb8/activation.json`.
+
+Potwierdzona luka: `validate_scene_closed_loop_owner` w
+`crates/fullmag-authoring/src/validation.rs` nadal wymaga mikrostripu,
+czterech części i położenia przekroju właściwego tylko mikrostripowi.
+Obsługa GSG w dalszych warstwach nie dowodzi publicznej wykonalności.
+Trwa dostosowanie tego walidatora do kanonicznego kontraktu pięciu części GSG,
+z zachowaniem kontroli przewodności, właściciela i położenia źródła.
+Nie ponowiono odrzuconego requestu. Kolejna odrębna próba wymaga najpierw
+wdrożenia i weryfikacji poprawki. Wynik V/J/H GSG nadal nie istnieje.
+
+
+### Publiczny GSG: poprawka authoringu i rozpoczęty run
+
+`validate_scene_closed_loop_owner` obsługuje teraz jawne GSG: pięć części,
+zgodne przewodności, oś x oraz przekrój wewnątrz centralnej szyjki wejściowej.
+Reguły mikrostripu zachowano. Dodano trzy regresje źródłowe Rust; nie były
+kompilowane ze względu na obowiązujący zakaz. Rzeczywisty build aplikacji
+przeszedł w iteracji `b30a64be2de54e7fb1770433852aefd5`, exit 0,
+make 437847 ms, pakiet 24 plików. Snapshot:
+`e45cf8a50d2f36aa27064db399a606e4d47f0b9a9f2f0832d5503a771b85b1d5`.
+
+Kolejna aktywacja (`aca540d37a3e4afb9beda449a79394e4`) przeszła walidację
+GSG, lecz capture odrzucił całe `examples`: niezwiązany `bowl_3_cprt.stl`
+ma 18040484 bajty, przekraczając agregat źródeł 8 MiB. Zachowano ten plik
+i wszystkie limity. Identyczny skrypt umieszczono w osobnym katalogu
+`examples/sushruth_2020_closed_gsg/`; odczyt inventory i eksport sceny
+przeszły (1973 rekordy, 5841 bajtów źródła, 92364949 bajtów runtime).
+To osobna, samowystarczalna kopia źródła próby; oryginalny przykład zachowano.
+
+Aktywacja `d8acafe0d5514d1d80330c25a03f84d5` ujawniła limit 1 mln par
+źródło–target. Diagnostyczny publiczny lowering wykazał 14329 komórek
+źródła i 246 węzłów targetu, 3524934 par. W obu kopiach przykładu jawnie
+wybrano istniejący, zatwierdzony `volume_inspection_v1` (4 mln par), bez
+zmiany siatki, tolerancji ani równań. Dwie regresje authoringu/round-trip
+przeszły w działającym backendzie. Aktualny skrypt SHA256:
+`e73b4af090cd65d6963b3d4a1b90216da0025c135841a487b6a7db6ba7565e8b`.
+
+Aktywacja `6aa32a30ec8e461eaf123fc20f644ce5` zakończyła się sukcesem.
+Request `antenna-gsg-inspection-20261029-04` przyjęto przez publiczny przepływ.
+Run: `run-live-4a938c17b3c42fb093e45e47da42677fcbe8dc6b07a56a6c2fb803792cdbbf18`.
+Etap: `script-execution-f20ccba613173164fda2353ab224ae1c0b938eae8e6109837c386810f20cf4d4`.
+Żądano i rozwiązano FEM CPU/double. Przejściowe `waiting_for_compute`
+zmieniło się automatycznie na `running`; dodatkowego POST Solve nie wysłano,
+ponieważ kontrola stanu przed mutacją wykryła tę zmianę.
+
+Rzeczywista telemetria wykonawcy: `preparing_source`, 14302 komórki źródła,
+248 targetów (3546896 par), około 183 s na pierwszym zachowanym odczycie.
+Te liczności są autorytatywne dla przyjętego runu i różnią się od osobnego
+loweringu diagnostycznego. Dowód w control volume:
+`verification/gsg-public-run-20261029/stage-observation.json`.
+Stan ten NIE dowodzi zakończenia V/J/H ani kwalifikacji. Wymagane są końcowy
+status, artefakty, bilanse, odczyt API i następnie walidacja zbieżności.
+Nie restartować ani nie ponawiać tej próby na podstawie samego timeoutu obserwacji.
+
+
+### Korekta interpretacji telemetrii bezpośredniej kwadratury
+
+Odczyt kodu po uruchomieniu GSG wykazał, że `preparing_source` jest dla
+`direct_tetra_quadrature` ostatnią znaną etykietą, a nie dowodem bieżącej fazy.
+`closed_loop_execution.rs::execute_antenna_closed_loop_inspection_observed_typed`
+emituje ją przed wywołaniem native. W `native_fem/steady_transport.rs`
+obserwator natywny jest podłączony wyłącznie do gałęzi `AnalyticRt0Surface`.
+Bezpośrednia kwadratura pozostaje bez pośrednich callbacków; aktualizowany
+elapsed jest czasem operacji, nie pomiarem ukończonych punktów. Nie można
+wyznaczać procentu ani ETA z obecnego 0/248. Worker PID 70015 w istniejącym
+backendzie pozostaje aktywny; około 469 s run nadal miał status running,
+bez opublikowanej inspekcji. Nie wysłano dodatkowego Solve ani restartu.
+
+Komparator `scripts/compare_sushruth_2020_gsg.py` jest przypięty do starego
+przykładu otwartych pasków i `SIGNAL_CURRENT_A=1e-3`. Nowy pełny obwód ma
+jawny skok 1 mV i rozwiązany podział prądu, z udziałem połączeń końcowych.
+Nie uruchomiono tego komparatora jako bramki nowego modelu i nie zmieniono
+jego pinów ani tolerancji, aby dopasować wynik. Przyszła ocena wymaga
+właściwej normalizacji, bilansów i osobnej oceny wpływu pełnego obwodu.
+
+### GSG: zakończenie próby i diagnostyka limitu — 29.10.2026
+
+Próba `run-live-4a938c17b3c42fb093e45e47da42677fcbe8dc6b07a56a6c2fb803792cdbbf18` zakończyła się statusem `failed` po 473,336 s. Publiczne API podało `constraint-rank resource budget exceeded`; inspekcja pozostała `absent/no_retained_inspection`. Dowód końcowy zachowano w wolumenie kontrolnym grupy: `verification/gsg-public-run-20261029/terminal-execution.json`. Nie ponowiono Solve.
+
+`ConservativeConstraintRank::ValidateResourceCounts` sprawdza osiem limitów, lecz dotąd nie ujawniał przekroczonego licznika. Dodano nazwę, wartość i limit do wyjątku, z zachowaniem kolejności kontroli, typu wyjątku, progów i warunku `actual > limit`. Rozszerzono istniejącą regresję o dokładny komunikat dla każdego limitu. Nie zmieniono algorytmu ani polityki zasobów. `git diff --check` przeszedł; testów natywnych nie kompilowano zgodnie z ograniczeniem zadania. Poprawka wymaga zarządzanego buildu i rzeczywistej weryfikacji. Na podstawie starego komunikatu nie można ustalić, który limit został przekroczony.
+
+### Wdrożenie diagnostyki limitów GSG — 29.10.2026
+
+Zarządzana iteracja `0f795d966c6446b9a80334408ba638ee` zakończyła się `succeeded`, exit 0. Kompilacja trwała 124890 ms, pakiet zawierał 24 zweryfikowane pliki; bramki `linux-native-v1` i `worker-cgroup` przeszły. API odpowiedziało `status=ok`. Pierwsza iteracja `eb857dfe6d674b2d9b89de4e12609ead` poprawnie odmówiła przez dwie historyczne pozycje `accepted`; wykorzystano istniejący wariant `allow_prepared_session=true`, zachowując je i natywny drain. Nie usuwano cache ani danych.
+
+Nowa aktywacja diagnostyczna: `antenna-gsg-rank-diagnostic-20261029-01`, ten sam izolowany skrypt GSG. To nowa próba po potwierdzonym `failed`, nie wznowienie wcześniejszego Solve. Kompilacja regresji jednostkowej pozostaje niewykonana zgodnie z ograniczeniem. Sam poprawny build nie kwalifikuje rozwiązania prądowego ani pola.
+
+### Audyt kosztu analizy więzów — 29.10.2026
+
+Aktywacja diagnostyczna `3ee764fca1bf4b8fb396bdddc29d80ca` przeszła; nowy run `run-live-15d58a410b9365a4210d5f3c721b710c8eb794d71a0d63456f162742b91b97bb` rzeczywiście działa. Przy 252,3 s API nadal zgłaszało `running`. Aktualna realizacja ma 14292 komórki źródła i 250 targetów, mimo niezmienionych ustawień skryptu; poprzednia miała 14302/248. Nie traktować różnicy czasów jako benchmarku tej samej siatki.
+
+Niezależny przegląd `reduce_bareiss_row` wskazał możliwą optymalizację dokładnej tożsamości: gdy `factor == 0 && pivot == previous_pivot`, współczynniki i racjonalny RHS nie zmieniają się. Można ominąć tworzenie zbioru kolumn oraz mnożenia/dzielenia, zachowując opłatę za odwiedzenie bazy. Samo `factor == 0` jest niewystarczające. Limity, kolejność wierszy, typ odmowy i dokładność Bareissa muszą pozostać. Jest to kandydat, NIE wdrożona ani zmierzona poprawka.
+
+Przed wdrożeniem: uzupełnić kanoniczną notę 0980 i mapę źródeł; regresje rozłącznych wierszy z niezerowym RHS, zgodnej/niespójnej sumy, pivotów +2/−2 i nierównych kolejnych pivotów, pustego wiersza z niezerowym RHS oraz granicy faktycznej pracy. Weryfikacja natywna pozostaje ograniczona zakazem kompilacji testów; nie deklarować jej zaliczenia. Najpierw odczytać precyzyjny limit z działającej próby.
+
+### Implementacja pominięcia tożsamości — 29.10.2026
+
+Po niezależnym przeglądzie dodano w `reduce_bareiss_row` warunek `factor == 0 && pivot == previous_pivot` po istniejącym naliczeniu dwóch jednostek pracy. Pozostałe ścieżki i limity są niezmienione. Dodano trzy regresje obejmujące RHS/sumy, pivoty ±2 i granicę pracy 128/127. Regresje natywne NIE URUCHOMIONE i NIE KOMPILOWANE. `git diff --check` PASS.
+
+Uzupełniono kanoniczną notę 0980 o równanie, tabelę symboli/SI, zakres FEM CPU, brak zmian Python/IR i jawny status weryfikacji; uzupełniono mapę źródeł. Walidator strony PASS, 41 testów walidatora PASS. Trwająca próba diagnostyczna korzysta jeszcze z wcześniejszego pakietu; tej optymalizacji nie zbudowano ani nie przypisano jej wyniku aktywnego runu.
+
+
+### Końcowy limit GSG i przygotowanie powtórzenia — 29.10.2026
+
+Run `run-live-15d58a410b9365a4210d5f3c721b710c8eb794d71a0d63456f162742b91b97bb` zakończył się `failed` po 712,902 s. Zweryfikowany zapis `verification/gsg-public-run-20261029/rank-diagnostic-terminal.json` w wolumenie kontrolnym podaje dokładnie `Bareiss work units=4294967297; limit=4294967296`. Inspekcja pozostaje `absent/no_retained_inspection`; brak wyniku V/J/H. Ten wynik dotyczy pakietu z diagnostyką, bez przygotowanej optymalizacji tożsamości. Poprzednie wpisy o działającym workerze są obserwacjami historycznymi, nie bieżącym stanem.
+
+Odczyt `crates/fullmag-session/src/store.rs::apply_retry_decision` potwierdza, że jawne retry zachowuje zaakceptowany RunIntent i task input fingerprint; czyści przypisanie próby, zasobu oraz resolved input fingerprint. `crates/fullmag-runtime-control/src/study.rs::prevalidate_accepted_worker_step` i `load_accepted_worker_step_locked` sprawdzają trwałe przygotowanie i zgodność bindingu. Jest to kandydat do powtórzenia tej samej siatki, a nie dowód wykonanego retry. Przed oceną optymalizacji należy porównać tożsamości przygotowania i payloadów obu prób oraz przypięcie nowego pakietu wykonawczego. Nie wysłano retry ani kolejnego Solve.
+
+### Czyszczenie cache i stan dysku — 29.10.2026
+
+Na zlecenie użytkownika usunięto 25 wskazanych nieużywanych rekordów BuildKit: około 10,835 GB raportowanego cache. Liczba rekordów spadła z 715 do 690. Nie usuwano wolumenów, wyników naukowych ani historii runów. Lista i wyniki operacji: `verification/disk-cleanup-20261029/` w wolumenie kontrolnym grupy, podsumowanie `cleanup-summary.json`.
+
+TRIM zamontowanego dysku Dockera zgłosił 13252161536 bajtów wolnych bloków. Nie jest to dowód odzyskania tej pojemności na Windows: kolejny pomiar D: wyniósł 33931345920 bajtów, nadal poniżej 32 GiB. Plik `D:/DockerDesktop/wsl/disk/docker_data.vhdx` ma 753531879424 bajty długości. Pytanie o wyłączenie Docker Desktop/WSL i kompaktowanie wyłącznie tego dysku pozostaje oczekujące. Nie wyłączono usług, nie kompaktowano dysku, nie uruchomiono buildu optymalizacji.
+
+
+### Obwiednia zamkniętego GSG w authoringu — 29.10.2026
+
+Potwierdzono rozbieżność: `packages/fullmag-py/src/fullmag/model/geometry.py::CPWAntennaLayout.world_bounds` uwzględnia obie końcowe grupy brył, natomiast `crates/fullmag-authoring/src/geometry.rs::cpw_layout_bounds` pomijał ich wysunięcie. Dodano skrajne przekroje połączeń dla jawnego `loop.enabled=true`, z istniejącą transformacją sztywną. Nie zmieniono modelu fizycznego, siatki przyjętej próby ani parametrów źródła.
+
+Dodano regresję Rust `cpw_closed_loop_bounds_include_transformed_end_connections`: nierówne długości 0,2/0,3 µm, obrót o 90°, translacja, zachowanie otwartego CPW i odrzucenie ujemnej długości. Oczekiwane bounds potwierdzono rzeczywistym Python DSL w istniejącym backendzie: min=(1,2e-6; −0,7e-6; 15e-9) m, max=(2,6e-6; 0,8e-6; 25e-9) m, tolerancja 1e-18 m, exit 0. Jest to dowód geometrii Python i oczekiwanej wartości testu, NIE wykonania zmienionego Rust. `git diff --check` PASS. Testów Rust nie kompilowano. Zarządzany build, rzeczywiste API bounds i browser pozostają NOT VERIFIED z powodu oczekującego odzyskania miejsca na D:.
+
+
+### Zatwierdzone kompaktowanie i przywrócenie grupy — 29.10.2026
+
+Po jawnej zgodzie użytkownika ponownie sprawdzono brak aktywnych workerów obliczeń i procesów kompilacji. Kolejka zawierała tylko dwie historyczne pozycje accepted; GSG był failed. Docker Desktop zatrzymano bez force, następnie WSL; obie dystrybucje potwierdziły Stopped. DiskPart skompaktował wyłącznie D:/DockerDesktop/wsl/disk/docker_data.vhdx, exit 0. Długość pliku zmalała z 753531879424 do 739467329536 bajtów (odzysk 14064549888 bajtów, około 13,1 GiB). Bezpośrednio po operacji D: miał 47975337984 wolnych bajtów. Log konserwacji hosta: D:/git/fullmag/task-storage/docker-disk-compaction-20261029/diskpart.log; result.json zawiera pomiar końcowy. Wolumenów ani kontenerów nie usunięto.
+
+Docker Desktop uruchomiono ponownie. Przypięte `just docker-dev-resume ba3e16643157426c9d163b2048821edb 336cb7ec65dc8b6826c73020e4e7ea3be96ebcb55f59f7965da8b069b95420f6 /home/kking/git/fullmag/worktrees/antenna-transport-e2e-20261011 3203 true` zakończyło się succeeded, exit 0, operacja 817839898bd04e768297ff6912d61fb2. Build aktualnych źródeł trwał 123215 ms; 24 pliki pakietu zweryfikowane, linux-native-v1 oraz worker-cgroup PASS. Snapshot źródeł: 7f1d584b1ea1678f1821c3384695c463d9075b1fc5d5beb9d9da97983dc516d8. API status=ok, active_session=false; backend i frontend healthy; rewizja kolejki identyczna jak przed zatrzymaniem. Nie ponowiono Solve.
+
+Po buildzie D: miał 41859743744 wolnych bajtów. Pierwszy HTTP /workspace przekroczył 30 s podczas kompilowania tej strony przez Next; sam healthy nie stanowi dowodu UI. Kompilacja poprawek Bareissa i bounds nie zastępuje ich weryfikacji obliczeniowej ani browserowej.
+
+
+### Nowa próba GSG po optymalizacji — 29.10.2026
+
+Dokumenty wcześniejszego runu potwierdzają trwałe `DoNotRetry` (reported-failure-73b7cb93129c4c33a0d861b25a325f0908f85355c83d34105687ede0611e6548). Nie wysłano niedopuszczalnego retry ani nie zmieniono historii. Snapshot dokumentów wejściowych i zakończenia: control volume `verification/gsg-public-run-20261029/optimized-retry-before.json`.
+
+Użyto istniejącej recepty `docker-dev-script-pinned` z tym samym anchor/config/source i skryptem `examples/sushruth_2020_closed_gsg/fem_antenna_sushruth_2020_closed_gsg.py`, request `antenna-gsg-rank-optimized-20261029-01`. Aktywacja 49f43ff745ea46589e3d1ad6cc690824: succeeded, exit 0. Nowy run: run-live-3926fcbd084cf93d924a7f29af0726974a719301104d867ee46b01a200bf3cf6; task-6e3d8981518cc80066c13c9171c35f8a4b404487cf62d0cb3d56d7d0431688c0. Rzeczywisty worker PID 34410 w zachowanym kontenerze backendu potwierdzony. API revision 79: running, 36,54 s, 14304 komórki źródła i 247 targetów. Dowód: `optimized-run-latest.json` w tym samym katalogu kontrolnym.
+
+Nowa siatka różni się od wcześniejszej 14292/250; nie jest to benchmark identycznych danych. Nadal obowiązuje ograniczenie telemetrii direct_tetra_quadrature: preparing_source i 0/247 nie identyfikują bieżącej fazy ani procentu. Wynik V/J/H nie jest jeszcze opublikowany. Nie wysyłać kolejnego Solve ani restartu na podstawie timeoutu obserwacji.
+
+HTTP /workspace po pierwszej kompilacji Next zwrócił 200; wizualny odbiór nie został tym zastąpiony.
+
+
+### Odbiór obwiedni przez API i przegląd telemetrii direct — 29.10.2026
+
+Rzeczywiste `GET /v2/sessions/current/model/geometry/realizations/current` potwierdza dla `antenna` / `CPWAntennaLayout` status `ready` i bounds min=(-5,5e-7; -1,2e-5; 3e-8) m, max=(5,5e-7; 1,2e-5; 1,2e-7) m. Obwiednia obejmuje odcinek główny 20 µm oraz oba połączenia końcowe po 2 µm. Dowód zachowano w wolumenie kontrolnym: `verification/gsg-public-run-20261029/closed-gsg-api-realization.json`. Zastępuje to wcześniejszy status NOT VERIFIED dla API bounds; odbiór przeglądarkowy nadal nie został wykonany. API ostrzega o rozmiarach 90 nm i 17,4 nm poniżej zadanych 100 nm siatki. Ta próba pozostaje rozruchem, nie kwalifikacją zbieżności.
+
+Przejrzano osiem plików poprawki telemetrii bezpośredniej kwadratury, w tym eksport C, deklarację Rust, wywołanie runnera, miejsce emisji postępu oraz testy. Nowy `fullmag_fem_solve_prepared_closed_loop_rt0_oersted_observed_v1` jest dodatkiem; stary eksport v2 deleguje bez obserwatora. Metadane callbacku są sprawdzane i kopiowane przed resetem wyjść; callback Rust kopiuje diagnostykę przez istniejący kanał i przechwytuje panikę. Emisja `evaluating_field` następuje na wejściu (0/N) oraz po obliczeniu i sprawdzeniu wszystkich trzech składowych każdego punktu. Nie jest to publikacja częściowego wyniku naukowego ani licznik kroków LLG. Brak obserwatora nie wywołuje zegara ani callbacków. Przegląd nie wykazał zmiany równań, kolejności sumowania ani limitów zasobów.
+
+Ochrona przed aliasowaniem zachowuje dotychczasowy kontrakt direct; nie należy utożsamiać jej z pełniejszą kontrolą wszystkich wejść/wyjść osobnego ABI surface. Kopia metadanych chroni nowy callback przed nadpisaniem jego deskryptora przez reset wyjść. Wskaźnik user_data pozostaje odpowiedzialnością wywołującego zgodnie z kontraktem callbacku.
+
+`git diff --check` przeszedł. Wcześniejsze kontrole autora poprawki: 9 kontroli prepared ABI oraz 4 kontroli adaptera źródłowego przeszło; w zestawie snapshot-source pozostały 2 wcześniej istniejące błędy (6/8). Nie uznaje się całego zestawu za zielony. Dodana regresja C++ sprawdza identyczne pole/liczniki pracy z obserwatorem i bez, sekwencję 0..N oraz brak postępu po odmowie admission. Testów natywnych NIE kompilowano. Poprawka wymaga zarządzanego buildu, rzeczywistego odczytu postępu przez API i odbioru UI; nie jest jeszcze wdrożona.
+
+Przy rewizji API 2862 ta sama próba `run-live-3926fcbd084cf93d924a7f29af0726974a719301104d867ee46b01a200bf3cf6` pozostaje `running` po 1435,03 s, bez opublikowanej inspekcji. Nie restartowano jej ani nie wysłano kolejnego Solve. Do wdrożenia telemetrii trzeba poczekać na potwierdzony stan końcowy tej próby. Dalsza kwalifikacja wymaga wyniku V/J/H, bilansów, archiwum i osobnych kontroli zbieżności oraz porównania z publikacją; sam dłuższy czas pracy nie dowodzi przejścia analizy więzów.
+
+
+### GSG: zakończone obliczenie i integralność paczki — 29.10.2026
+
+Ta sama próba `run-live-3926fcbd084cf93d924a7f29af0726974a719301104d867ee46b01a200bf3cf6` przeszła przez `validating_result` (247/247, 1550,68 s) do `publishing_result` (1567,86 s). Receipt `worker_execution_completed.v1.json` dla `attempt-b7609941043348c5bef39407cfb7b2e3`, epoch 1, potwierdza status `completed`, jeden ukończony krok oraz wynik kodeka `fullmag.antenna.closed_loop_bundle/v1`. Odczytano rzeczywiste 53250316 bajtów pliku `antenna-inspection.bundle`; SHA256 `78c081976051b3681e186ca415404f8e0743875cba54ab5dd0f797b1e89624a9` zgadza się z receipt. Dowód: control volume `verification/gsg-public-run-20261029/optimized-bundle-integrity.json`.
+
+Projekt odczytany z trwałego RunIntent: `project-live-66cd495ce3ccc80762d5bb0ee6652a43966f7c0ecd7989a3b0a52457a800781a`. Trwały katalog zawiera dwa opublikowane artefakty (paczka i manifest), ale lifecycle pozostaje running/reconciling; publiczny katalog antenna-inspections nadal pusty. Worker PID 34410 nadal istniał i pracował. Nie utożsamiać receipt obliczenia z końcowym Completed całego runtime ani odbiorem UI. Nie uruchomiono ponownie Solve, nie wykonano restartu.
+
+Następna bramka: po ukończeniu publikacji użyć istniejącego `scripts/validate_accepted_antenna_closed_loop_http.py` z tym projektem i runem; sprawdzić payloady V/J/H, SI, SHA, owner, cache/range i odmowę obcych pinów. Narzędzie `antenna_inspection_export.py` jest przypięte do zewnętrznego fixture 16-node/4-probe, więc nie nadaje się do tej paczki GSG i nie zostało do niej użyte. Integralność pliku nie dowodzi naukowej kwalifikacji, zbieżności siatki ani odtworzenia publikacji.
+
+
+### GSG: trwały sukces i odrębna awaria schedulera — 29.10.2026
+
+Publiczny trwały run osiągnął `lifecycle=succeeded`, katalog revision 722. Publiczna inspekcja zawiera właściciela `inspect_gsg`, przypiętego do wcześniej zweryfikowanej paczki SHA256 `78c081976051b3681e186ca415404f8e0743875cba54ab5dd0f797b1e89624a9` i manifestu `be6c777c0ba9422eec1c86bf33e84d3d1571846efd56f2ce1a7a19c8296c3319`. Live stage ma `completed`, completed_at_unix_ms=1793301305444, czyli około 31,53 min od startu. Proces workera zakończył się.
+
+Uruchomiono istniejący `validate_accepted_antenna_closed_loop_http.py` dla dokładnego projektu i runu. Katalog i metadane zostały odczytane, ale kontrola przerwała się przed payloadami: warunkowy GET metadanych z If-None-Match oczekiwał 304, otrzymał 503 `runtime_unavailable`. Bramka HTTP NIE przeszła, raport sukcesu nie powstał. Nie uruchomiono Solve.
+
+Log aktualnego compute schedulera zawiera: `accepted task scheduler failed: session store writer is busy`, conflict=native descriptor, observed_owner_pid=4144, observed_owner_released=true. Owner runtime przeszedł w unknown, compute exited_failure, preparation exited_success. Nadzorca pozostawił API w trybie diagnostycznym i zamknął admission. To odrębna awaria po udanym obliczeniu, nie dowód utraty lub niepoprawności paczki. Dowód z terminalnym stanem live i pełnym logiem compute: `verification/gsg-public-run-20261029/optimized-terminal-and-runtime-failure.json` w wolumenie kontrolnym.
+
+Audyt wskazuje możliwy nieobsłużony busy w `accepted_scheduler_main.rs`: po join błędnego nadzorcy `task_outcome_settled(...)?` może wypropagować konflikt po wyczerpaniu bounded retry i zakończyć cały scheduler. Wymaga potwierdzenia i regresji; nie wolno zamieniać nieustalonego wyniku w sukces ani ponawiać Start. Recovery ma zachować paczkę oraz historię i nie wykonywać Solve. Nie usunięto blokad, markerów ani danych.
+
+
+### Poprawka odczytu settlement i warunek recovery — 29.10.2026
+
+W `crates/fullmag-api/src/accepted_scheduler_main.rs` dodano `wait_for_task_outcome_observation`. Po join zakończonego supervisora zachowuje pierwotny błąd i tożsamość zadania, a przy typowanym `StoreWriterBusy` ponawia wyłącznie odczyt settlement z dotychczasowym idle_poll_interval i pojedynczym logiem. Pewne false i wszystkie inne błędy nadal prowadzą do fail-stop. Nie ponawia admission/Start/Solve. Dodano dwie regresje Rust obejmujące busy→true/false, zachowanie błędu i odmowę retry dla tekstowego busy, corruption oraz ENOMEM. Przegląd diff i diff-check przeszły; testów Rust nie kompilowano. Poprawka nie jest zbudowana ani wdrożona.
+
+Kontrola rzeczywistego ledgera przed buildem wykazała jedną rezerwację `quarantined`, należącą dokładnie do zakończonego GSG, attempt-b7609941043348c5bef39407cfb7b2e3, epoch 1, CPU 0/1/2, z consumed worker launch gate. Pozostałe rezerwacje są released. Diagnostyczny build recovery wymaga wszystkich rezerwacji released, więc nie został uruchomiony. Nie wolno oznaczać udanego runu Failed/DoNotRetry, aby użyć recovery przeznaczonego dla błędnych prób. Następny krok: odszukać i wykonać poprawny preview odzyskania tej rezerwacji przy zachowanym succeeded, następnie managed build i powtórzenie kontroli HTTP istniejącej paczki.
+
+Aktualne piny dowodów: process-tree SHA256 `7e4b115e30841be9801731570b21341fc8851fca7692bacdbcc134caba5dcbd3`, owner SHA256 `c5f08b05eaf7a62bf24aaeb1097d4b654938bd86745865f7a30a2ef97b0fa9f8`; wymagają ponownego sprawdzenia przed operacją. Skill `fullmag-build-stage-cleanup` nie istnieje w tym checkoutcie (również brak śledzonej ścieżki); zastosowano odczytowe zasady governance. Zachowano cache, aktualny pakiet i wszystkie wyniki; niczego nie usunięto.
+
+
+### 29.10.2026 — zakres poprawki schedulera po sukcesie GSG
+
+Odczyt bieżącego kodu i logu potwierdza, że przygotowany patch w
+`accepted_scheduler_main.rs::wait_for_task_outcome_observation` usuwa wyłącznie
+wtórną utratę obserwacji wskutek StoreWriterBusy. Nie zwalnia lokalnego lease.
+`task_outcome_settled` wymaga braku rezerwacji, więc dla obecnego Active zwróci
+false także po skutecznym odczycie. Nie deklarować tego patcha jako kompletnej
+naprawy pozostawiania zasobów po sukcesie.
+
+W `accepted_study_supervisor.rs::reconcile_worker_exit` dwa wywołania
+`validate_study_task_completion` (pending Start i terminal success) nie są
+opakowane retry_store_writer_busy. Funkcja walidacji czyta accepted snapshot,
+manifest i CAS. Jest to kandydat do sprawdzenia w regresji z rzeczywistą
+kontencją, nie potwierdzona przyczyna tej konkretnej próby: końcowy log schedulera
+zawiera tylko błąd odczytu settlement, który zastąpił pierwotny błąd supervisora.
+Docelowa naprawa musi zachować pierwotny błąd w diagnostyce i zweryfikować drogę
+Completed → lokalny Released → host Released, bez ponowienia Start/Solve.
+
+Ponowny odczyt ledger potwierdził Quarantined dokładnie dla GSG
+run-live-3926fcbd084cf93d924a7f29af0726974a719301104d867ee46b01a200bf3cf6.
+Nie zmieniano runtime ani rezerwacji. Decyzja operatora dla osobnego recovery
+sukcesu pozostaje otwarta; zakres w
+`2026-10-29-succeeded-worker-release-recovery-proposal.md`.
+
+
+### 29.10.2026 — przygotowana obsługa kontencji walidacji completion
+
+W `accepted_study_supervisor.rs::reconcile_worker_exit` opakowano dwa odczytowe
+wywołania validate_study_task_completion istniejącym retry_store_writer_busy.
+Cała walidacja pozostaje obowiązkowa; potwierdzenie inboxu i release są poza
+ponawianą operacją. Helper ponawia typowane StoreWriterBusy lub I/O ENOMEM,
+z istniejącym pięciosekundowym limitem rozpoczynania ponowień. Sam pojedynczy
+cold validator może trwać dłużej; nie deklarować pięciosekundowego limitu całej
+operacji. Nie zmieniono limitów, równań ani warunków sukcesu.
+
+W `accepted_scheduler_main.rs` diagnostyka odroczonego odczytu i kontekst jego
+końcowego błędu zachowują teraz pierwotny błąd supervisora. Typowanym źródłem
+zwracanego błędu nadal pozostaje błąd obserwacji.
+
+Niezależny przegląd tylko do odczytu nie znalazł blokera tego wąskiego diffu.
+`git diff --check` przeszedł. Testów Rust/native nie kompilowano zgodnie z
+ograniczeniem; nie wykonano managed buildu ani regresji realnej kontencji.
+Status: przygotowane źródła, NOT VERIFIED runtime. Po wyczerpaniu istniejącego
+retry nadal obowiązuje fail-stop; patch nie zwalnia obecnej kwarantanny i nie
+zastępuje oczekującego zatwierdzenia recovery sukcesu.
+
+
+### 29.10.2026 — zgoda na recovery udanej próby i rozpoczęcie implementacji
+
+Użytkownik odpowiedział „ok” na konkretne pytanie o wdrożenie i weryfikację
+`2026-10-29-succeeded-worker-release-recovery-proposal.md`; zakres przyjęto jako
+zatwierdzony. Nie jest to zgoda na kolejne Solve ani ogólne usuwanie danych.
+Przygotowywane są oddzielna natywna ścieżka release Succeeded i wąskie admission
+buildu kandydata w istniejącym backendzie diagnostycznym tej grupy.
+
+Zachowano snapshot 734 plików runu (56757264 bajtów):
+`verification/gsg-public-run-20261029/succeeded-recovery-before.json`, SHA256
+`cf8f77a38f15ebf312ad6fe08f48795d361288d50e44b6248fbc1c1cf2090965`.
+Read-only dowód admission buildu wiąże 723 dokumenty; walidacja rzeczywistych
+wejść przeszła. Plik `succeeded-build-proof.json` w tym samym katalogu,
+SHA256 `517b4140c2a2da04e4e287ecdad98858ffb26cf3158287516d12a3b7d9d7a317`.
+Regresja wrappera just: nowy przypadek odmówił przed zmianą, po zmianie wszystkie
+7 testów przeszły w istniejącym backendzie. To nie jest jeszcze native preview
+ani dowód wykonania recovery.
+
+
+### 29.10.2026 — build kandydata zaliczony, preview zatrzymany przez storage
+
+Pierwszy build `1127765bb8e84b0085469117ab09ee75` zakończył się błędem przed
+kompilacją przez użycie `str.removeprefix` niedostępnego w Pythonie 3.8 hosta.
+W `backend_control_path` zastąpiono je wycięciem wcześniej zweryfikowanego
+prefiksu; zachowano walidację ścieżek. Powtórzony zarządzany build
+`527faec8dc6e4abfa88fc1b88339f058` zakończył się z exit code 0.
+Kandydat `.backend-package-candidate-ipoaf43c`, receipt SHA256
+`47df114929197dbed14d4077d734caf6902e0300062bfe86afb4727f7e0f28a8`,
+snapshot `7e63153f74be244d4fa4dcf1412da7ace55770d99f8deaec669e689e4cdcea3c`.
+Kandydat nie został promowany; usług ani Solve nie uruchomiono.
+
+Rzeczywisty native preview requestu
+`793c1ee8446c8a9b5060f135736f9dca67b63497a1ea0bea7a4b17fc8938689a`
+odmówił z komunikatem `current executable hash differs from runtime provenance`.
+Storage porównuje nowy program z opublikowanym starym pakietem, zanim recovery
+może przeprowadzić swoje sprawdzenia. Nie zwolniono rezerwacji. Rozszerzenie
+kontraktu opisano w `2026-10-29-succeeded-recovery-candidate-storage-proposal.md`;
+pytanie do użytkownika pozostaje bez odpowiedzi. Nie wdrożono tego rozszerzenia.
+
+Po buildzie i odmowie preview ponownie porównano wszystkie 734 pliki runu:
+zero zmienionych, brakujących i dodanych plików. Dowód w wolumenie kontrolnym:
+`verification/gsg-public-run-20261029/succeeded-recovery-post-preview-integrity.json`,
+czas 2026-10-29T20:14:34Z. Status wyników: zachowane, niezmienione bajtowo.
+Status recovery/API/UI: nadal niezweryfikowane; build nie stanowi ich odbioru.
+Nadal brak zakończonej kwalifikacji naukowej GSG i odtworzenia odpowiedzi LLG
+z publikacji. Zakres E0–E12 pozostaje otwarty.
+
+
+### 29.10.2026 — zatwierdzenie dostępu kandydata i pełne testy kontrolera
+
+Użytkownik zatwierdził rozszerzenie opisane w
+`2026-10-29-succeeded-recovery-candidate-storage-proposal.md`, SHA256
+`d257a9e55eb99574658bdc997e33c9e48ef884b26c7ef542ecfa523bf9b30978`.
+Implementacja zachowuje zwykły kontrakt storage; przygotowywane jest jawne,
+przypięte uprawnienie wyłącznie dla kandydata succeeded-worker recovery.
+
+Wyjaśniono wcześniejsze błędy fixture Python: `/tmp` kontenera jest `noexec`,
+więc kontrola wykonywalności odrzuca tam nawet pliki z trybem 0755. Po użyciu
+`TMPDIR=/build/tmp` pełne `test_docker_dev_recovery_build` oraz
+`test_just_development_recovery_shell` przeszły: 36 testów, exit 0. Nie zmieniono
+fixture ani kodu, aby uzyskać ten wynik. Raport w wolumenie kontrolnym:
+`verification/gsg-public-run-20261029/recovery-build-python-tests-executable-temp.json`.
+To testy interpretowane; nie kompilowano testów Rust/native.
+
+
+### 29.10.2026 — walidacja obrazów kandydata recovery
+
+Zarządzany build `a06d1058331e4c6da7cf221d07b48261` przeszedł. Kandydat
+`.backend-package-candidate-3kv_324q`, receipt SHA256
+`e4b3dddca5d19cf7ae49f3681b166641aee56e6d1f44c4ffe754a8c19b23e409`.
+Rzeczywisty preview odmówił przed zwolnieniem rezerwacji: walidator porównywał
+obraz runtime z obrazem toolchainu. Poprawiono rozróżnienie tych tożsamości;
+fixture używa teraz celowo różnych obrazów. Rustfmt i kontrola diff przeszły,
+bez kompilowania testów Rust. Uruchomiono kolejny zarządzany build.
+Poprzedni kandydat zachowany w kwarantannie; nie uruchomiono Solve.
+Odbiór natywny i przywrócenie API pozostają otwarte.
+
+Build `e5d25907791b427caa6df50858d6ecfa` zakończył się poprawnie
+(kompilacja 143492 ms, 24 pliki pakietu). Kandydat
+`.backend-package-candidate-jvy3quiu`; receipt
+`14f53f4867a638b81d6743503b0ff5b3fc976b8cf35643a39b3c217f7ddbd2ea`.
+Preview requestu `5928187c66ffd677c451696ad277623ccdebe332670ce3bdfd3e0e4797cbd747`
+przeszedł bramkę obrazów, lecz odmówił przez założenie, że hostname jest
+prefiksem ID kontenera. Compose używa własnej nazwy hosta. Trwa korekta
+oparta na rzeczywistym kernel mountinfo, bez pomijania tożsamości kontenera.
+Pięć rzeczywistych kontroli odmowy (request, marker, terminal, result, receipt)
+przeszło; raport `candidate-negative-pins-results.json` w katalogu dowodów GSG.
+Ponowny audyt 734 plików: zero zmian, usunięć i nowych plików
+(`succeeded-recovery-imagefix-integrity.json`). Recovery nie zastosowano.
+
+
+### 29.10.2026 — dostęp kandydata zweryfikowany i rezerwacja zwolniona
+
+Build `a18a2cfb1faa4517ad289c186ef4d882` przeszedł (Make 307397 ms).
+Kandydat `.backend-package-candidate-7_f21yvh`, receipt SHA256
+`ce454edb85302ae0c64b292f39761928642b9b93eaecc15c13c5287e149aaf13`.
+Pełny natywny preview requestu
+`46c6f65e11d23dc4cfcb11ab68345a89e04e91b061ce422a6feafd1ec35d8d0d`
+przeszedł. Zwykły dostęp bez capability nadal odmówił; błędne snapshot,
+commit i executable hash również odmówiły. Wcześniejsze pięć kontroli
+request/marker/terminal/result/receipt także przeszło. Testów Rust nie kompilowano.
+
+Zatwierdzone apply i replay zakończyły się exit 0 z tym samym dowodem release
+`e2d871392e05cec4842b690e0a911852947bf9adf1ffafe7988bca0331357ea7`.
+Status `released_succeeded_worker`; `terminal_state_modified=false`,
+`solve_replayed=false`. Audyt 734 plików po apply: zmieniony wyłącznie
+`resource_leases/docker-all.compute.cpu/lease-0959fde86bca435a8391d86853744251.json`,
+brak nowych i usuniętych plików. Pozostałe 733 pliki, w tym wyniki, identyczne.
+
+Dowody w `verification/gsg-public-run-20261029/`: pliki
+`succeeded-native-candidate-mountfix-preview.json`,
+`succeeded-native-candidate-mountfix-apply.json`,
+`succeeded-native-candidate-mountfix-replay.json`,
+`mountfix-negative-results.json`, `succeeded-recovery-post-apply-integrity.json`.
+Pakiet nadal niepromowany. Nie wykonano jeszcze przywrócenia API,
+kontroli HTTP ani wizualnego odbioru UI. To odbiór recovery, nie kwalifikacja
+naukowa GSG, LLG ani zakończenie E0–E12.
+
+
+### 30.10.2026 — zachowana historia i rozpoczęte przywracanie API
+
+Pobrano origin/master `aee17a54d4c283f2fdf5aa3d89acc5ecdb638e19`;
+nie scalono go z gałęzią zadania. Diagnostyka kandydata
+`895290b28ad44c249a03edf1a5b98c7f` zweryfikowała 44/46 prób. Dwie pozostałe
+są Accepted/Blocked z jawną polityką manual i bez start_release; sprawdzono
+je przez istniejący kontrakt held-manual recovery v7. 17508 plików danych
+pozostało niezmienionych, zmienił się tylko techniczny WRITER.owner.json.
+
+Naprawiono import scripts/docker_volume_stop_failed.py na Pythonie 3.8 przez
+future annotations (2 dodane linie). Import na hoście i 51 interpretowanych
+testów stop_failed/stop_diagnostic w backendzie przeszło. Preview stop
+`c286c8dc735e43d3aac6dbc5d0945f07` oraz apply
+`1ccab6b33ea84714938b1fd89078acd3` przeszły. Frontend zatrzymany pod blokadą
+w operacji `1dde9d24f324418c83b85a78277afd19`, bez usuwania danych.
+
+Preview i publikacja recovery v7 przeszły dla 44 terminal + 2 held-manual,
+z zachowaniem starych historii prób oraz pending/absent inboxów.
+Operacja przygotowania `322f731df82540e9b3cdf486445db469`. Autoryzacja
+`runtime-services/container-recovery/619883b4-c2d6-4c9e-99c0-c085994c1bce/operator.json`,
+SHA256 `7d890be20fd61e9a560bc250978429e78a7ce1602bb6ec565bfb8494c930915e`.
+Uruchomiono just docker-dev-recover-container. Nowy backend i frontend
+wystartowały; backend buduje aktualny pakiet. Gotowość API i odczyt V/J/H
+pozostają niepotwierdzone do końca tej operacji. Solve nie zlecono.
+
+
+### Kontrola zachowanego GSG po restarcie — 30.10.2026
+
+Zarządzany restart `d553366ed35041029ca6e9a1b4420214` zakończył się poprawnie. Publiczny walidator `scripts/validate_accepted_antenna_closed_loop_http.py` zakończył się kodem 0: 33 kontrole PASS dla projektu `project-live-66cd495ce3ccc80762d5bb0ee6652a43966f7c0ecd7989a3b0a52457a800781a` i runu `run-live-3926fcbd084cf93d924a7f29af0726974a719301104d867ee46b01a200bf3cf6`. Raport w wolumenie kontrolnym grupy: `verification/gsg-public-run-20261029/optimized-http-validation.json`.
+
+Sprawdzono cold-load V/J/H, zgodność digestów i rozmiarów, jednostki SI, skończone i niezerowe wartości, ETag, zakresy bajtowe oraz odmowy dla obcych pinów i nieznanych payloadów. Odczyt nie zmienił sesji, sceny ani poleceń; nie uruchomiono Solve.
+
+| Payload | Liczba wartości f64 | Bajty | SHA256 |
+|---|---:|---:|---|
+| V [V] | 5990 | 47920 | `52322d0f8429660079cc240132d73d659e991aa5864987e06d10d92ea4c82fc3` |
+| J lokalne [A/m²] | 171648 | 1373184 | `d46eab4b255db6f2f583c33013f696b9a3e1de133cffb6158d9f55809a196180` |
+| H [A/m] | 741 (247 wektorów) | 5928 | `0643c4fd8526d6553c18ecfca6f2733aa75a1a03e4b4f9ca101a0022e2ab7121` |
+
+Dalszy odczyt HTTP potwierdził, że datasety istnieją w osobnym grafie SolutionSet; sam katalog artefaktów runu nie był wystarczającym dowodem. SolutionSet `solution-1a1825642d498e62793f412ccad2726299c84616559af7b02c3436df073c0363`, rewizja `2`, digest `sha256:74da78778346d0369085453baaddb6360356bbfb533996691b08aef8fda6c39a`, ma stan closed/succeeded, 2 członków i 11 artefaktów. Członek `member-11ee3b1d115aa5c19dd4ff0666a1531884ebeab20edbcd34b5efd877b74b38e1` zawiera bundle oraz 3 materialized_dataset, 3 solution_field_geometry i 3 tensory. Nie wykazano potrzeby poprawki materializatora. Następny krok: wybrać ten zapisany projekt i wynik przez istniejące Saved Results, następnie sprawdzić rzeczywisty viewport. Nie fabrykować tożsamości live i nie powtarzać obliczeń. Kwalifikacja naukowa (unassessed) oraz odbiór widoku 3D nadal NOT VERIFIED.
+
+Pobrano nowy origin/master `57395376d43c85851ae2e7d5f81f5da2eae5138b` (PR #366); nie scalono go z bieżącą gałęzią.
+
+
+### Potwierdzona luka wejścia do zapisanych wyników — 30.10.2026
+
+Odczyt trzech materialized-dataset przez publiczne API zwrócił HTTP 200, integrity=verified i availability=ready. H_ant ma 247 wektorów [A/m], V_electric 5990 wartości [V], J_charge 57216 lokalnych próbek wektorowych [A/m²]. Metadane odwołują się do pierwotnej rewizji ownera 1 (running), zachowanej w końcowej rewizji 2 (succeeded); nie wolno tego mylić z trwającym Solve.
+
+Przeglądarka Home na 3203 pokazuje jedynie starsze archiwum Universe, a filtr Results pokazuje 0 folderów. Nie jest to dowód braku powyższych datasetów. Audyt wykazał:
+- `shellCommands.ts`, workspace.open-project: otwiera archiwum, nie identyfikator istniejącego projektu/runu;
+- `ScriptProjectActivation.ts`, openAndActivateAuthoringProject: może tworzyć sesję authoring;
+- `SavedResultsBrowser.tsx`: wymaga gotowego ProjectDocumentSnapshot;
+- `useViewport3DSceneModel.ts`: porównuje projekt wybranego datasetu z otwartym projektem.
+
+Plan naprawy frontendowej: jawny kontekst odczytu zachowanego runu, zweryfikowany istniejącym GET run; przekazanie jego tożsamości do wspólnego Saved Results i viewportu. Bez fałszywego ProjectDocumentResource, bez podstawiania ID innego archiwum, bez tworzenia sesji i Solve. Weryfikacja: błędny project/run odrzucony, zgodność pinned dataset, widoczny canvas i pole H, poprawne jednostki, zachowanie immutable ownera, brak zmiany runów/sesji. Implementacja tego wejścia jeszcze nie wykonana.
+
+
+### Implementacja wejścia read-only do runu — 30.10.2026
+
+Dodano frontendowy kontekst SavedRunController, komendę workspace.open-saved-run i techniczny formularz Home. Istniejący GET run sprawdza właściciela; wspólny useSavedResultScope wiąże projekt i run w Saved Results, Inspectorze i viewportcie. Widok nie tworzy sesji ani Solve; odłącza live connectors i skróty transportu. Zachowano guard niezapisanych formularzy, apiScope i konkurencyjnego otwierania.
+
+W istniejącej usłudze frontend grupy wykonano `node scripts/check-saved-run-navigation.mjs`: 8 kontroli nawigacji i 3 kontroli ownera PASS. Końcowy `pnpm typecheck` po zmianie SessionRuntimeConnectors zakończył się kodem 0 (kontrola kodu produkcyjnego, bez kompilacji testów). Wcześniejszy przebieg podczas edycji wykrył i pomógł poprawić typowanie kontekstu; pierwszy helper regresyjny wymagał jawnej synchronizacji promise zamiast założenia jednej mikrotaski.
+
+Rzeczywista przeglądarka na 3203: otwarcie run3926, rewizja 2, wybór H_ant, Inspect pinned dataset. Inspector wyświetla jednostki A/m, 247 wektorów i prawdziwe wartości (pierwsza składowa 0.0092604759 A/m). Viewport załadował zapisaną geometrię anteny i domenę. Przejściowy komunikat braku topologii ustąpił po pobraniu zasobów. Status końcowy `Saved field ready · representation not verified` jest domyślnym tekstem HUD przy braku błędu zasobów, a nie odmową backendu. Czytelne strzałki H oraz kontrola WebGL/drawing buffer nadal wymagają weryfikacji. Nie uznano E7 za ukończone.
+
+Pozostaje produktowa luka: formularz surowych project/run IDs jest technicznym wejściem; docelowo użytkownik powinien wybierać nazwane zapisane obliczenia. Nie zastępuje to normalnego discovery ani pełnego odbioru E5–E7. Stan API przed testem zapisano w wolumenie kontrolnym jako `verification/gsg-public-run-20261029/saved-results-before-ui.json` (3 ready/verified datasets, active_session=false). Zmiany nie zostały jeszcze zacommitowane.
+
+
+### 30.10.2026 — długość wektorów zapisanego pola
+
+Naprawiono przekazanie `vectorLengthScale` z ustawień zapisanego wyniku do pełnego passu i carriera sparse w `savedFieldViewportAdapter.ts`; hook zachowuje ten parametr w memo. Kontrola `scripts/check-saved-field-vector-length.mjs` w istniejącym kontenerze frontend porównuje rzeczywiste segmenty przy skali 1 i 2: oba zakresy próbek i oba passy przechodzą, środki, amplitudy i kolory pozostają niezmienione. Mutacja przywracająca stałą skalę jest odrzucana. Dotychczasowa kontrola kolorów: cztery przypadki PASS.
+
+Ponownie otwarto zapisany run `run-live-3926fcbd084cf93d924a7f29af0726974a719301104d867ee46b01a200bf3cf6` przez Home, rewizję 2 i H_ant (247 próbek). UI pokazuje succeeded, brak aktywnej sesji oraz geometrię anteny. Przy włączonych wektorach i zmianie skali strzałki nadal nie są czytelnie widoczne. Odbiór przeglądarkowy E7 pozostaje NIEZALICZONY; nie potwierdzono końcowego glyphCount ani braku utraty WebGL przez diagnostykę kontekstu. Nie uruchamiano Solve.
+
+
+### 30.10.2026 — rzeczywista domena H247 i czytelność widoku
+
+Udostępniono istniejący panel Render details także dla zapisanych wyników; dane diagnostyczne pochodzą z wybranego datasetu, nie z nieaktywnej sesji. Browser potwierdził 247 przygotowanych segmentów i wykonanie budowy glyphów. Zerowe pole upload w zestawieniu worker pipeline nie dowodzi braku uploadu GPU (to oddzielny rekord diagnostyczny); wcześniejsza hipoteza o zatrzymaniu uploadu nie została potwierdzona.
+
+Rzeczywisty publiczny klient -> dekodery topology/support/field -> adapter -> geometry glyphów potwierdził 247 skończonych wektorów i transformacji. Dowody w wolumenie grupy: `verification/gsg-public-run-20261029/real-glyph-diagnostic/result.json`, `sampling-topology.json` i odtwarzalny `real-glyph-diagnostic.cjs`. Domena ma 4 um x 100 nm x 17,4 nm, 247 węzłów i 495 komórek. Długości glyphów przy skali 1 wynoszą około 12,78 nm: przy widoku całej anteny 20 um są subpikselowe. To domena próbki, a nie pełny Universe.
+
+W rzeczywistej przeglądarce ustawiono odległość kamery 5e-6 m, skalę długości 5, wyłączono surface/wireframe i wybrano kolor Magnitude. Wektory oraz legenda H_ant [A/m] 0,07441–24,45 stały się widoczne; geometria źródła częściowo zasłania próbkę. Canvas widoczny, bufor 775x457. Brakuje jawnego pomiaru gl.isContextLost(), kwalifikacji czytelności wszystkich glyphów oraz docelowego wygodnego kadrowania/sterowania źródłem. E7 pozostaje częściowy. Nie uruchamiano nowego Solve.
+
+TypeScript po podłączeniu panelu: PASS. Lint plików viewportu bez błędów; jedyne ostrzeżenie własnego skryptu (nieużywana zmienna support) usunięto i ponowny lint tego pliku przeszedł.
+
+
+### 30.10.2026 — ponowny odczyt pełnego Universe w przeglądarce
+
+Po pobraniu origin/master 7f18e9c98713433482c949826424709789086419 (bez merge)
+otwarto przez formularz Open saved run projekt project-1f48487cf16342ca9524e0795d39597b,
+run-5654db21201dd6c660f7ecae78baf8588477fe2a7d90480d9d64b30e4d050080,
+recovered-solution-82e8f2e82ae2989cdd17519be89552b34085aa792e9d47b46285797bd9a1687a rev1.
+Lista publicznego UI potwierdziła H_ant 1145 x 3, V_electric 677 x 1 i J_charge 7424 x 3.
+Po Inspect pinned dataset dla H widok przeszedł z przejściowego braku geometrii do
+Saved field ready; screenshot narzędzia pokazuje mikrostrip i kolorowe strzałki
+w jego otoczeniu. Nie jest to nowszy GSG H247 w próbce. Historyczny Failed oraz
+Unassessed są jawnie zachowane. Nie uruchamiano Solve.
+
+Canvas DOM: visible=true, width=775, height=457. Konsola zwróciła wyłącznie
+ostrzeżenie deprecacji THREE.Clock. Nie zmierzono gl.isContextLost ani drawingBuffer;
+nie zapisano screenshotu do trwałego pliku. To częściowy dowód wizualny,
+nie pełna kwalifikacja browser/WebGL ani kwalifikacja naukowa. Pozostają czytelne
+kadrowanie, przekrój UI, trwały screenshot i pełne bramki E0–E12.
+
+
+### 30.10.2026 — jawne kadrowanie zapisanej domeny i sceny
+
+Dodano Fit field / Fit scene do istniejącego paska zapisanego viewportu.
+Kontroler prywatnej kamery zachowuje izolację identity/epoch; Fit field bierze
+bounds zapisanej topologii, Fit scene dotychczasowe wspólne bounds z geometrią
+źródła. Obsługa aspect pochodzi z rzeczywistego canvasu. Dopasowanie kamery
+ortograficznej aktualizuje też pionowy zakres widoku. Nie zmieniano pola,
+gęstości glyphów ani backendu.
+
+Production typecheck w istniejącym frontendzie: exit0 (handle33879).
+Lint trzech plików przerwano SIGTERM wyłącznie własnego procesu: Next zajmował
+około3.98GB RSS, ESLint3.93GB RSS, grupa osiągnęła7.976/8GiB i opóźniała odczyty.
+Lint pozostaje NOT VERIFIED. Po zakończeniu ESLint UI ponownie odczytało rewizję
+Universe, wyświetliło oba przyciski i H1145. Kliknięcie Fit field zachowało
+Saved field ready oraz widoczny obraz anteny i wektorów. Nie potwierdza to jeszcze
+różnicy kadrowania małego targetu GSG względem dużego źródła, ortografii ani
+pełnej bramki WebGL; wymagają dalszej regresji. Nie uruchomiono Solve.
+
+
+### 30.10.2026 — regresja kadrowania oraz rzeczywisty GSG
+
+Nowy scripts/check-saved-camera-fit.mjs interpretuje produkcyjny kontroler,
+callback i funkcję fit bez budowania testów jednostkowych. Exit0: odrębne bounds
+pola/sceny, przesunięty carrier, ortho aspect0.4/1/2, przywrócenie A po B/null,
+jawne bounds versus domyślna scena, odmowa null i starego callbacka A po zmianie
+identity na B. Clip-plane helper jest zastąpiony stubem; test nie kwalifikuje
+clip planes, React lifecycle ani WebGL. Niezależny statyczny review nie wykazał
+konkretnych błędów jednostek, aspect ani identity fence.
+
+Rzeczywisty browser: GSG run3926, solution1a18 rev2, H247 ponownie załadowany.
+Fit scene pokazał pełne paski, Fit field wyraźnie przybliżył domenę próbki;
+screenshoty narzędzia potwierdzają różne kadry. To nie dowodzi jeszcze czytelnego
+przekroju cienkiej warstwy ani braku zasłaniania przez złoty przewodnik.
+Brak nowego Solve. Lint uruchomiony osobno z --max-old-space-size=2048 zakończył
+się V8 heap out of memory (exit1), bez wyniku kontroli; pozostaje NOT VERIFIED.
+Nie zwiększano zasobów grupy ani nie zatrzymywano usług. Typecheck z poprzedniego
+kroku pozostaje zielony dla niezmienionych od tego czasu źródeł produkcyjnych.
+
+
+### 01.11.2026 — wykonana migracja rejestru grupy i kontrola startu
+
+To odbiór infrastruktury jednej grupy anten, nie nowa kwalifikacja fizyki ani UI.
+Po odrębnej zgodzie usunięto nieuruchomiony kontener N/F
+`bc862d9e8ceae7ba3c625c304d00285862a0566eacbd08f4186038fb1d012f6f`, bez wolumenów.
+Stary rejestr pozostał w `fullmag-dev-group-ledger-v1-53ccd28e1e5e92314892bfc2`.
+97 jego plików jest nadal identycznych z inspekcją sprzed migracji. W aktywnym
+rejestrze zachowano dokładnie 86 rezerwacji, ich 86 dowodów zwolnienia oraz politykę.
+Roboczy `runtime_state` i jego nieosiągalne snapshoty CAS podlegają istniejącemu
+`HostResourceLedger::gc_unreachable_snapshot_cas_locked`; nie są historią rezerwacji.
+
+Transfer `f65358f1885f447a928edec5293200fc` przeszedł source fence, porównanie bajtów,
+native target preview i końcowe potwierdzenie niezmienności źródła. Backend/cache,
+frontend i ledger używają subpaths `private/backend`, `private/frontend`,
+`private/ledger` istniejącego prywatnego wolumenu grupy. Dane użytkownika pozostały
+w dotychczasowym hostowym storage WSL. Zachowano stare wolumeny i pakiety:
+pełna kontrola 24 artefaktów każdego poprzednika `297b0642…` i `67918155…` przeszła
+w niezmiennym magazynie współdzielonym.
+
+Naprawiono błędy ujawnione przez rzeczywisty przepływ: adapter argumentów odczytu
+Docker, dostęp do bibliotek sterownika bez urządzenia GPU dla helpera pakietu CUDA,
+porównanie kolejności mountów i potwierdzone inode aliasy WSL, kolizję wskaźnika
+relokacji z `BuildControl` oraz brak Pythona w bazowym obrazie inicjalizatora.
+Kontynuacja po zakończonym finish wymaga przypiętej historii ukończenia i błędu
+przed alokacją, rzeczywistej nieobecności usług oraz ponownego native preflight;
+nie przepisuje starych operacji i nie wykonuje ponownego usuwania ani Solve.
+104 interpretowane regresje kontrolerów i storage: PASS. Nie kompilowano testów Rust.
+
+Zarządzany build/start `ac7dd8833ba4477488f8c92a18a2496e`: succeeded.
+Bieżący pakiet: commit `9072d474456bc521339c3aa0e3c0fb3fd7e9d6aa`, snapshot
+`5e8e7e92fe34e8faef986edfecc79ed525745bc0b3b5fe24b9efb87650a06eba`.
+Restart bez zmian `10a21637cea2492db67fcebaa84e9357`: succeeded, cache-hit,
+zero nowych linii kompilacji. API na 3203 zwraca health=ok i runtime=ready;
+oba kontenery są healthy. 24 zachowane zestawy rozwiązań odczytano przez publiczne
+API po restarcie. Wszystkie 71 plików wyników i 4568 obiektów pozostały identyczne
+z bazowymi SHA256. Brak nowego Solve; brak aktywnej sesji obliczeniowej.
+Dwa dawne wpisy accepted z 25.10 pozostają w kolejce bez uruchamiania i zmiany historii.
+
+Dowody w control volume: `verification/group-ledger-relocation-20261101/`,
+w szczególności `final-runtime-and-results-verification.json`,
+`preserved-predecessor-packages.json` oraz `controller-tests-after-start-fix.json`.
+Nie podnosi to statusu E1–E12 ani odtworzenia wyników publikacji.
+
+
+### 01.11.2026 — konsumenci cache BORIS/N-F po migracji grupy
+
+Przegląd wykazał utratę subpath w kopii prywatnych zależności BORIS oraz w
+montowaniu pakietu, prefiksu i pomocniczej kopii wyników N/F. Poprawiono
+`scripts/docker_boris_volume.py::copy_args` oraz
+`scripts/docker_nf_common_volume.py::{cache_subpaths,copy_args,specification}`.
+Wszystkie ścieżki korzystają z tych samych subpaths co zweryfikowany profil
+backendu; odczyty naukowe pozostają readonly. Nie zmieniono schematów, limitów,
+równań, tolerancji ani bramek zgodności producenta z bieżącym pakietem.
+
+29 interpretowanych regresji dwóch kontrolerów: PASS. Dodatkowa kontrola
+`compare_boris_fullmag_she_nf::_concat_qia` sprawdza dziewięć różnych składowych
+w czterech punktach i dwóch materiałach oraz odrzuca historyczną transpozycję.
+Nie jest to nowe porównanie solverów ani kwalifikacja jednostek/torque.
+Szersza próba importu testów pytest nie wystartowała: bieżący backend nie ma
+pytest; zachowano błąd w controller-regressions.log, niczego nie instalowano.
+
+Build pierwszej części poprawki, iteration `49a766a2ebf9447489e59333476f11d9`,
+zakończył się succeeded/exit0. Snapshot
+`63a337aa1fd6ba860d82ea5bef6c8c6fc1c56a22789561aedd7a94feb31cbde6`.
+API health=ok, runtime=ready, brak aktywnej sesji. 24 zachowane rewizje rozwiązań
+ponownie zwróciły HTTP200; wszystkie 71 plików solutions i 4568 objects mają
+identyczne bajty jak przed migracją. Nie uruchomiono Solve. Indeks Git pozostał
+niezmieniony. Uzupełnienie ostatniej kopii zastosowano dopiero po zakończeniu
+buildu; wymaga kolejnej zarządzanej aktualizacji pakietu przed producentem BORIS.
+
+Dotychczasowy producent BORIS `b83ab46ac347452d96d86b27cbfaf990` pozostaje
+ważnym dowodem dawnego buildu, ale jest przypięty do poprzedniego obrazu i
+pakietu. Nie przypisano go do nowego runtime ani nie promowano E1 do ukończonego.
+Przegląd read-only nie znalazł innego blokera głównej trasy. Legacy
+`recover_docker_orphan::maintenance_compose` nadal nie jest zakwalifikowaną
+trasą dla tej topologii; nie rozszerzano bieżącego patcha na recovery.
+Dowody: control volume `verification/boris-current-package-20261101/`,
+zwłaszcza `final-controller-checks.json/log` i
+`retained-results-after-first-update.json`. E1–E12 pozostają otwarte.
+
+
+### 01.11.2026 — drugi build po migracji i zachowanie ścieżki CPU N/F
+
+Zarządzany `docker-dev-restart-idle` zakończył iterację
+`0c7ab1324f324f6182c9871aae4a62e4` stanem `succeeded` i kodem 0.
+Snapshot źródeł: `a69c921a584d5cb00d7248064386b2595cad54894cde532c5e5615ad62c64ea1`.
+Zweryfikowano 24 pliki pakietu; bramki storage i cgroup przeszły. API jest
+zdrowe, native service ma stan `ready`, aktywnej sesji brak. Odczytano przez
+publiczne API wszystkie 24 zachowane SolutionSets. Wszystkie 71 plików
+solutions i 4568 plików objects pozostały identyczne bajtowo względem stanu
+sprzed migracji. Dowód: control volume,
+`verification/boris-current-package-20261101/retained-results-after-second-update.json`.
+Nie uruchomiono nowego Solve.
+
+Przed nowym benchmarkiem sprawdzono loader CPU. Wywołanie N/F omija
+`docker/all-in-one/entrypoint.py::_configure_device_access`, przez co pomijało
+istniejącą w obrazie ścieżkę `/usr/local/cuda/compat`. Bez niej zależność
+libCEED wymagała nieodnalezionego `libcuda.so.1`. Zastosowana minimalna
+poprawka dopisuje tę ścieżkę wyłącznie roli Fullmag. BORIS i porównanie
+zachowują swoje ścieżki bibliotek; wszystkie role zachowują `runc`,
+`NVIDIA_VISIBLE_DEVICES=void`, brak DeviceRequests/Devices, sieć `none`
+oraz dotychczasowe limity CPU/RAM/PID. Regresja przed poprawką zawodzi;
+31 interpretowanych kontroli kandydata oraz surowe mapowanie tensora
+4 punktów / 2 materiałów / 9 składowych po poprawce przechodzą.
+Nie kompilowano jednostkowych testów Rust.
+
+Próba rzeczywistego bieżącego `fullmag-bin --version` z dokładnym mountem
+pakietu odczytanym z inspect przeszła: SHA256 binarium
+`b0550b58db34bd44e5eeb72594f5a6fdfceb55636102e892e0c904786a24f8bd`.
+Driver zwrócił `CUDA_ERROR_NO_DEVICE` (100), nie było urządzeń NVIDIA ani
+`/dev/dxg`. Jest to dowód loadera CPU, a nie wykonania benchmarku.
+Dowód: `verification/boris-current-package-20261101/cpu-current-cli-exact-package-diagnostic.json`.
+Pierwsza próba CLI wskazała wcześniejszy zachowany namespace pakietu;
+jej zakres został jawnie skorygowany i nie służy jako dowód bieżącego pakietu.
+
+Odrzucono alternatywę `nvidia` + `NVIDIA_VISIBLE_DEVICES=none`: rzeczywista
+próba WSL nadal enumerowała jeden GPU. Nie zastosowano tego kandydata.
+Sam brak plików `/dev/nvidia*` nie dowodzi izolacji WSL, które używa `/dev/dxg`.
+Kontrolowana próba z dodatkowym maskowaniem dxg także została zachowana
+wyłącznie jako diagnostyka; nie jest częścią wybranej implementacji.
+Źródła pierwotne: [konfiguracja NVIDIA](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/docker-specialized.html)
+i [poprawka WSL none, PR 2025](https://github.com/NVIDIA/nvidia-container-toolkit/pull/2025).
+
+Kolejny krok: powtórzyć 31 kontroli na zastosowanych źródłach, wykonać
+zarządzaną aktualizację pakietu, a dopiero potem zbudować nowego producenta
+BORIS przypiętego do bieżącego pakietu i uruchomić nowe porównanie N/F.
+Stary producent pozostaje zachowanym wcześniejszym wynikiem; nie zmieniono
+jego provenance ani nie podniesiono statusu kwalifikacji naukowej.
+
+
+### 02.11.2026 — dowody GSG, producenta BORIS i granicy importów N/F
+
+| Przepływ | Stan potwierdzony | Granica dowodu |
+|---|---|---|
+| GSG Python → projekt → aktywna scena | publiczne `/v2/persistence/projects/from-script`: HTTP201, exact antenna/transport round-trip verified; `replace_scene`: rev0→1 | Bez uruchamiania solvera i bez odbioru obrazu w przeglądarce |
+| Antena i próbka | `antenna`: CPWAntennaLayout, rola antenna; `sampling`: Box, rola geometry | Co/Ni ma geometrię próbkowania 17,4 nm; nie ma jeszcze magnetycznego materiału/LLG |
+| Nowy build BORIS | producent `40cd3a43fd7648e58fdad05ac7a1baf0`, 409 jednostek kompilacji, build/ABI succeeded | Nie jest benchmarkiem ani kwalifikacją torque |
+| Nowy N/F | próba `bafad58d35164304a9a99f871747cdd5`: failed-confirmed, worker0 exit1, bez OOM | `ModuleNotFoundError: docker_dev_host` w eager import przed dispatch; brak porównania solverów |
+| Naprawa importów | `scripts/docker_nf_common_volume.py`: osobny dokładny worker entrypoint; host zachowuje pełne admission; 29/29 interpretowanych regresji PASS z worktree | Brak nowego managed package i brak ponowienia benchmarku po poprawce |
+| H-only | Zastosowano 11 plików natywnego adaptera C++/Rust frozen RT0 i zintegrowano notę 0950/source-map; dziecko/proof/publiczny runtime nadal przygotowywane | Parser 5 plików Rust, focused dokumentacja i 6 kontroli ekstrakcji PASS; bez kompilacji, native call i publicznego accepted→archiwum→API→UI |
+
+Scena jest dostępna pod `http://127.0.0.1:3203/session/fem_antenna_sushruth_2020_closed_gsg`.
+Session ID: `session-18e432232b2984c700004f36`; project ID: `project-12a89e5144084a5ab7bf501d1593cf56`.
+Skrypt `examples/fem_antenna_sushruth_2020_closed_gsg.py`: SHA256
+`e73b4af090cd65d6963b3d4a1b90216da0025c135841a487b6a7db6ba7565e8b`.
+Projekt użytkownika:
+`/home/kking/git/storage/projects/sushruth-2020-gsg/project-12a89e5144084a5ab7bf501d1593cf56.fms`,
+SHA256 `9195f808bc9d59f7e337f3daf2c79dca7996ccede2b284c900365f673d2e70ed`.
+Import zachowuje nominalny przekrój GSG; skończone połączenia końcowe i długość źródła są jawnymi założeniami przykładu, nie kopią nieopublikowanych padów.
+
+Bieżący build przed poprawką kontrolera: iteration `33ad8d9dbe3649638e58215a5b547d5f`,
+snapshot `b0d7a06ad0b75146814426484336d1ca60515163dc5e15d9393fc7bf68fe18b2`,
+package receipt `01b5743237b639d76416ef2b5ebc329d2720779cd65b23a0be5c769a5cd310c4`.
+Natywny receipt producenta BORIS: `d7f10e9471849b998552e5531f6c02eef39d015ba8149c2ae1df73cbf5524c71`.
+Receipt pomocnika ma inny hash (`b177de2ca2eb8d4089322320166e6e1bcd2c73103a2cd1793f5a0aa6778dcb61`); pierwsza próba admission z nim poprawnie odmówiła przed uruchomieniem workerów. Nie zastąpiono ani nie przepisano tego wcześniejszego dowodu.
+
+Poprawiony kontroler N/F: SHA256 `857f4833b5e3c6b5e9fb80ef46a7e18f3c4095fff2a940dbac81bc3b2ddf5676`;
+testy `6184a9a2b03405301b3ff3f1c15adf4454a643d54bec34a5d3303fe9576a36d0`.
+Regresje odtwarzają brak modułu hostowego w odizolowanym Pythonie `-I -S`, sprawdzają trzy dokładne role workerów oraz zachowanie odmowy dla importu hostowego. Nie wykonują solverów ani nie kompilują testów Rust. Istniejące funkcje kontrolera zachowano bez zmiany AST; nie wyłączono source/package guard, izolacji CPU ani kontroli sesji. `git diff --check`: PASS. Indeks pozostaje identyczny: binary cached-diff SHA256 `7f72832743fed62f61b3d1b0f8ecdbd9544c25d85c0c951c47f36b3131fa02d2`.
+
+Jedna zatwierdzona kontrola H GSG zakończyła wszystkie punkty 196/7/66. Różnice bezwzględne wynoszą odpowiednio około `8,12483e-6`, `6,66771e-15`, `4,52466e-6 A/m`, przy prerejestrowanych progach około `2,20726e-5`, `1,07441e-6`, `2,54491e-5 A/m`. Sprawdzono 514944 par komórka/punkt; pełna próba trwała 3777,17 s. To kontrola zachowanego pola w cienkiej domenie próbki, bez ponownego transportu; nie jest pełną mapą Universe ani badaniem zbieżności. Wynik: `THREE TARGETS WITHIN GATE / NOT FULL QUALIFICATION`.
+
+Dowody w prywatnym control volume grupy:
+`verification/gsg-ui-authoring-import-20261102/`,
+`verification/nf-worker-import-boundary-20261102/`,
+`verification/gsg-reference-profile-20261102/one-approved-attempt/final-audit.json`,
+`verification/retained-current-h-only-20261102/`.
+Przeglądy kandydatów H-only usunęły trzy konkretne błędy: podmianę kapsuły dowodowej na inną tego samego ownera, niezależne od źródła argumenty digest oraz kopiowanie source przed kontrolą obowiązkowych kosztów. Parser Rust jest zielony; kompilacja, wykonanie ABI i cały publiczny tor pozostają niewykonane.
+
+Następne działania: zintegrować spójną dokumentację 0950 i implementację H-only (resolver accepted, publikacja dziecka i domknięcie archiwum), wykonać managed build przez `just`, zachować/odtworzyć sesję GSG, a następnie zweryfikować nowe pole w Universe i publiczny cold-load. Dla dokończenia E1 potrzebny jest osobno producent/benchmark odpowiadający nowemu pakietowi. Obecna trasa producenta nie ma legalnego cache/rebind: nowy producer ponownie kompiluje 409 źródeł; tego ograniczenia nie obchodzono.
+
+
+### 02.11.2026 — zastosowany adapter H-only i zatwierdzony projekt domen
+
+Projekt `.superpowers/brainstorm/2026-11-02-antenna-magnetic-domains/design.md`
+został zatwierdzony. Plan `2026-11-02-antenna-magnetic-domains-implementation.md`
+ma 10 zadań i oczekuje na przegląd oraz wybór metody wykonania. Nie zastosowano
+nowego katalogu domen ani proponowanego opt-in wire.
+
+Niezależny, wcześniej zatwierdzony dodatek H-only przeszedł od kandydatów do
+źródeł: 6 plików C++/nagłówka/CMake, 1 FFI Rust i 4 pliki wrappera/eksportów.
+Każdy baseline/candidate SHA256 został sprawdzony przed zapisem. Zmiana root
+w wrapperze ogranicza wynik do `SurfaceRt0Snapshot`; źródłowe digests pochodzą
+wyłącznie z metadata zachowanego źródła. Na tym etapie publiczne Python/IR/study
+admission nie były jeszcze zmienione; dalszy stan źródeł opisano poniżej.
+
+Dowody w `verification/retained-current-h-only-20261102/applied-native-lower-layer/`:
+manifest aplikacji; parser pięciu faktycznych plików Rust exit 0; focused scientific
+source-map exit 0 po poprawie literalnego mapowania SI i deklaracji ABI; sześć
+kontroli źródeł potwierdzających niezmienność starego nagłówka, operatora i helperów.
+Pierwsza kontrola dokumentacji zakończyła się błędem i pozostaje zachowana.
+To kontrole źródeł, nie build, wywołanie ABI ani kwalifikacja naukowa.
+
+Końcowa weryfikacja dotychczasowych poprawek UI: pełny lint i typecheck exit 0,
+pełny Vitest 899 plików PASS, 517.27 s. Nie wykonano nowego browser/WebGL proof.
+Poprawka workera N/F została zakommitowana jako
+`2b97b1e3f25f30fb24fac145c77b3e4563af5501`; zapisane 29 interpretowanych regresji
+dotyczy tej samej wersji źródła `857f4833b5e3c6b5e9fb80ef46a7e18f3c4095fff2a940dbac81bc3b2ddf5676`.
+Nie ponowiono benchmarku ani trzytargetowego reference.
+
+Najbliższy krytyczny krok H-only: pod tym samym `ReadTransaction` zwrócić pełny
+zweryfikowany source/manifest/payload oraz porównać exact artifact ID; potem
+osobna operacja/preparation/worker, codec dziecka i typed portable closure.
+Obecne collectory accepted_provenance nie przechodzą automatycznie z pakietu
+dziecka do parent capsule/package. Referencje w JSON bez tych collectorów nie
+zapewniają eksportu, importu ani retencji i nie zaliczają E5. Dopiero spójny
+publiczny tor kierujemy do kolejnego managed buildu i odbioru z charge-call=0.
+
+
+### 02.11.2026 — plan domen po kontroli procedury buildu; stan integracji H-only
+
+Plan domen nadal oczekuje na przegląd i wybór metody wykonania: T1–T10 mają
+0 odebranych zadań. Sprawdzono receptury w bieżącym justfile i poprawiono
+instrukcję odbioru: docker-dev-build uruchamia usługi, więc nie jest build-only.
+Istniejąca zapisana scena GSG wymaga zarządzanej ścieżki saved-authoring
+z dokładnym checkpointem, pustym oknem i drain. Ta aktualizacja dokumentacji
+nie uruchomiła buildu, migracji ani Solve.
+
+Niezależny zatwierdzony H-only: publiczny konstruktor i eksport Python, opcjonalna
+referencja IR, wspólny carrier, manifest/kapsuła/codec dziecka oraz producent runnera
+są już zastosowane w źródłach. Dziewięć testów publicznego Python przeszło
+(exit 0; source SHA256 `04b7b2ae54db142f63f734ccbbaa289d73b18506084ffda981ad763e0e56ba47`).
+Parser dziewięciu plików Rust i końcowy focused source-map 0950 przeszły; parser
+nie sprawdza typów, linkowania ani ABI. Stary planer jawnie odmawia H-only,
+zamiast uruchamiać nowy transport. Producent przyjmuje także rzeczywistego
+rodzica direct-v2 po pełnej weryfikacji; nowy surface operator wymaga jeszcze
+porównania na wspólnych punktach. Nie stwierdzono zgodności numerycznej.
+
+Dowody: `verification/retained-current-h-only-20261102/public-shape-tests.json`,
+`artifact-applied/checks.json`, `runner-producer-applied/manifest.json` oraz
+`integrated-source-checks/`. Nie wykonano kompilacji nowych warstw, ABI, publicznej
+operacji H-only ani cold-load jej wyniku. Nadal brakuje kanonicznego odczytu rodzica
+pod wspólną blokadą z dokładnym artifact ID, nowego admission/preparation/workera,
+ponownej kontroli fizycznej tożsamości źródła przy publikacji oraz pełnej przenośnej
+closure archiwum. H-only i T1–T10 nie są zgłoszone jako ukończone.
+
+
+### 02.11.2026 — kanoniczny reader zachowanego J i unieważnianie źródła H-only
+
+Zastosowano wspólny callback completion i prywatny reader
+`load_saved_retained_current`: dokładny project/run/task/attempt/epoch/artifact ID/CAS,
+przygotowanie, accepted fingerprint, genesis i Succeeded/Completed pozostają pod
+tą samą natywną blokadą odczytu. Pełny verifier v2 dekoduje RT0 raz; późniejsze
+wiązanie kapsuły nie powtarza fizycznej weryfikacji. Cienki HTTP reader zachowuje
+dotychczasowy format. To integracja źródeł, nie dowód publicznego H-only.
+
+Nowy wspólny builder source preimage zachowuje literalną konstrukcję istniejącego
+`antenna_coincident_prepared_input.v2` oraz normalizację stable IDs. Comparator
+przelicza material binding z bieżących assignments i zweryfikowanych przewodności,
+sprawdza aktualne powiązanie obiektu fizycznego z geometrią i porównuje source
+preimage. Producent H-only oraz verifier publikacji wymagają teraz rzeczywistego
+ProblemIR i wykonują tę kontrolę. Sampling/output/polityka H nie są częścią
+source preimage; zmiana ustawień odziedziczonych przez przewodnik pozostaje
+zmianą źródła. Nie podniesiono kwalifikacji ani limitów.
+
+Kontrole źródeł: parser dziewięciu plików readera oraz pięciu końcowych plików
+comparatora exit 0; focused scientific source-map exit 0. Istniejąca regresja
+`scripts/check_saved_inspection_single_verification.py` najpierw odtworzyła
+IndexError po zmianie sygnatury, następnie przeszła po aktualizacji call graph.
+Asercje wszystkich dotychczasowych bramek zachowano i rozszerzono o H-only oraz
+exact artifact ID. To test źródłowy; testów Rust nie kompilowano. Niezależny
+przegląd readera nie znalazł blokera po tej korekcie; osobny przegląd comparatora także nie znalazł konkretnego błędu
+(końcowy moduł SHA256 `2861ea9cf7779fda797f0a75c9bf25400a62e21d4435c46f74bdffdd1aea3467`).
+Kompilacja i dowód wykonawczy nadal są niewykonane.
+
+Managed build nie wystartował. Istniejący preflight saved-authoring odmówił
+z powodu dwóch starych własnych startupów z 25.10, nadal accepted i bez
+attempt/epoch. Audyt: przygotowania exit 0, właściwe rezerwacje released,
+wszystkie 86 rezerwacji ledgeru released. API anulowania tych dokładnych dwóch
+żądań istnieje, ale automatyczna kontrola odrzuciła jego wykonanie z powodu
+braku bezpośredniej zgody na ich trwałą terminalizację. Nie anulowano ich,
+nie zmieniano katalogów i nie zatrzymano usług. Wysłano osobną prośbę o zgodę
+z gotowym przeglądem `2026-11-02-abandoned-antenna-startup-cancellation-review.md`.
+SHA256 żądań: `8e21427f59e41f8459982d2ac93d32e2e7941295d9bcff2be8b923b384fe082c`.
+Kopia archiwum GSG w canonical runs/projects ma nadal SHA256
+`9195f808bc9d59f7e337f3daf2c79dca7996ccede2b284c900365f673d2e70ed`;
+oryginał pozostał bez zmian.
+
+Nadal otwarte: dedykowany accepted stage/plan/carrier, preparation/worker,
+opt-in profiler, typed child codec w runtime i SolutionSet, portable parent
+closure, rzeczywisty H-only z charge-call=0, porównanie wspólnych targetów,
+cold-load i browser/WebGL. Nowy katalog domen T1–T10 nadal oczekuje na przegląd
+planu. Nie zaliczono nowego zadania wykonawczego ani UI na podstawie parsera.
+
+Dowody w `verification/retained-current-h-only-20261102/durable-source-reader/`,
+w tym `source-intent-extraction.json`, `source-intent-parser.json`,
+`source-intent-scientific-source-map.log`, `source-regression-before.log`,
+`source-regression-after.json`, `managed-build/history-audit/audit.json` oraz
+`managed-build/history-audit/approval-review-rejection.json`.
+
+
+## 02.11.2026 — czysty plan H-only i odmowa kwalifikacji przez token wyjścia
+
+W zatwierdzonym dodatku retained-current dodano `AntennaRetainedCurrentFieldPlanIR`
+oraz `plan_retained_current_field_inspection`. Plan zawiera dokładny stage/locator,
+nowy sampling i jawne FEM CPU/strict/double. Nie zawiera source mesh, danych RT0
+ani deklaracji autoryzacji. Źródło nadal musi przejść kanoniczny durable reader
+i comparator fizycznego zamiaru. Dotychczasowy planer charge nadal odmawia
+retained source. Osobny sesyjny carrier, accepted preparation/worker i publikacja
+nie są jeszcze zintegrowane; publiczny H-only pozostaje NOT VERIFIED.
+
+Wspólna bramka IR `antenna_solution_source_is_basis` teraz odmawia retained
+inspection mimo historycznej nazwy H_ant_basis. Nie odblokowano LLG, Relax ani FFT.
+Gotowe są źródła ośmiu testów planera i jednej regresji IR; nie kompilowano ich
+ani nie uruchamiano. Kontrole parsera sześciu plików oraz końcowej poprawki wersji
+planu, naukowej source-map/changed-pages, istniejącej regresji odczytu i whitespace
+przeszły. Niezależny review źródeł nie znalazł konkretnego błędu przed końcowym
+prostym guardem wersji; nie stanowi to dowodu kompilacji lub runtime.
+
+Dowody: `verification/retained-current-h-only-20261102/operation-plan/result.json`
+i pozostałe logi w tym katalogu prywatnego control volume. Dodano do indeksu
+wyłącznie dwa nowe pliki planera/testów dla przyszłego snapshotu; pierwotnych
+11 wpisów nie zmieniono (SHA cached diff 7f72832743fed62f61b3d1b0f8ecdbd9544c25d85c0c951c47f36b3131fa02d2).
+Nie commitowano niezweryfikowanego pakietu H-only.
+
+Końcowy odczyt API: health/status HTTP 200, run:null, solver awaiting_command.
+Nie zatrzymano usług, nie anulowano zadań, nie wykonano buildu ani Solve.
+Zarządzany build nadal czeka na konkretną zgodę na anulowanie dwóch dawnych
+nieuruchomionych zadań: automatyczna kontrola odrzuciła tę trwałą zmianę historii
+z powodu braku jawnej zgody na te dwa zadania. Nie ponawiano zablokowanej operacji.
+
+Nowy plan domen T1–T10 pozostaje do przeglądu i wyboru metody wykonania:
+`docs/superpowers/plans/2026-11-02-antenna-magnetic-domains-implementation.md`.
+Zatwierdzono projekt i przygotowanie tego planu; implementacja nowego kontraktu
+domen nie została rozpoczęta przez kontynuację dodatku H-only.
+
+
+## 02.11.2026 — sesyjny carrier H-only, własny sampling i jawne odmowy legacy
+
+Dodano BackendPlanIR::AntennaRetainedCurrentFieldInspection oraz routing obu
+kanonicznych ścieżek planowania przed legacy planerem charge. Dotychczasowy
+AntennaFieldOnly nadal posiada rzeczywistą siatkę przewodnika; retained plan ma
+locator i nowy sampling, bez source mesh i autoryzacji. API zachowuje dokładne
+inline Global/Object target assets, digest i kolejność; nie podstawia meshu
+próbkowania jako źródła J. Wspólny apply snapshot czyści odziedziczone m,
+frozen_spins oraz stary H_eff. Nie utworzono sztucznego magnetyka.
+
+Runner i CLI rozpoznają nowy carrier oraz jawnie odmawiają LLG, magnetic
+continuation, native source prepare i ogólnego remeshu. Metadata mają osobne
+sampling counts/digest oraz null source counts do trwałego odczytu rodzica;
+nie dublują numerycznych tablic sampling. Stary accepted lowering/preparer/worker
+i live archive jawnie odmawiają do chwili integracji osobnej typed operacji,
+parent-bound receipt i portable closure. Nadal nie ma publicznego działającego
+H-only. Główny nowy plan domen T1–T10 nie został przez to wdrożony.
+
+Kontrole: parser 30 plików z końcowym odświeżeniem czterech zmienionych po review,
+scientific source-map, changed-pages i diff-check exit0. Review źródeł wykrył błąd
+pola selekcji study w CLI; poprawiono go na rzeczywiste selection.stage_id.
+Parser nie wykrywa tego rodzaju błędów typów. Przygotowano łącznie 17 testów
+Rust H-only (10 planera, 2 runnera, 3 target integrity, 1 snapshot, 1 IR basis
+refusal); żadnego nie kompilowano ani nie uruchamiano. Kompilacja i runtime
+pozostają NOT VERIFIED. Brak nowego Solve, buildu, anulowania lub restartu usług.
+
+Dowody: verification/retained-current-h-only-20261102/session-carrier/result.json
+w prywatnym control volume. Zachowano bitowo pierwotnych 11 wpisów indeksu
+(SHA256 cached diff 7f72832743fed62f61b3d1b0f8ecdbd9544c25d85c0c951c47f36b3131fa02d2).
+Odświeżono tylko własny nowy plik testów planera dla przyszłego snapshotu;
+nie commitowano niezweryfikowanego pakietu H-only. Zarządzany build nadal czeka
+na konkretną zgodę na anulowanie dwóch dawnych nieuruchomionych zadań po odmowie
+automatycznej kontroli; nie ponawiano tej operacji ani nie obchodzono guardów.
+
+
+## 02.11.2026 — H-only: własne przygotowanie, udany build i zachowana scena
+
+Aktualizacja zastępuje wcześniejsze bieżące statusy „oczekuje na zgodę/anulowanie”
+i „kompilacja NOT VERIFIED” dla źródeł objętych snapshotem
+`2da47f62190b3981654702f2a41201116e0ce53316b437792bc33ed07105218d`.
+Historyczne wpisy wyżej opisują stan w chwili ich zapisu.
+
+Po bezpośredniej zgodzie anulowano dokładnie dwa stare zadania z przeglądu
+`2026-11-02-abandoned-antenna-startup-cancellation-review.md`: oba cancelled,
+rev. 4. Przygotowano parent-bound receipt H-only bez certyfikatu siatki źródła,
+własny binding, resolved input v6 i worker protocol v6, zachowując odmowy legacy.
+Nowy plik receiptu dodano do indeksu osobno; pozostałe wpisy były identyczne.
+
+Managed iteration `aa51b93b69a84eedbc4570d8d23f1f17` zakończyła się succeeded;
+pełny backend i rozszerzenie Pythona skompilowano w tej samej grupie Docker WSL.
+Nowe API działa. Przywrócono scenę GSG przez authoring bez Solve; run:null,
+awaiting_command, pusta kolejka. Frontend HTTP 200, bez browser/WebGL proof.
+46 katalogów runów i 14 plików przygotowań zachowano bitowo, 86 rezerwacji released.
+Zachowany GSG wraca przez nowe API po zimnym starcie: metadane, binarne H i
+cell-local J HTTP 200; hashe, rozmiary i skończoność zgodne z manifestem.
+
+To kompilacja kontraktów oraz odczyt starego wyniku 247 próbek H, a nie wykonany
+publiczny H-only na nowym Universe. Nadal otwarte: pinned parent capsule loader
+z dokładnym CAS closure, accepted preparer/worker, profilowanie, publikacja/
+SolutionSet/portable archive, rzeczywiste charge-call=0 i browser. Testów Rust
+nie kompilowano ani nie uruchamiano. Plan domen T1–T10 pozostaje niewdrożony.
+
+Pełny raport i dowody: [raport buildu przygotowania H-only](2026-11-02-retained-current-preparation-build-report.md).
+
+
+## Priorytet naukowy potwierdzony 03.11.2026
+
+Użytkownik ponownie wskazał nadrzędny cel: odtworzenie wyników Sushruth et al.,
+Phys. Rev. Research 2, 043203 (2020), DOI 10.1103/PhysRevResearch.2.043203.
+Budowa pakietów, kontrakty importu i UI służą temu celowi; nie są jego odbiorem.
+Kolejność odbioru naukowego: zgodność parametrów i zasilania → profil pola
+w próbce → widmo przestrzenne → odpowiedź magnetyzacji i porównanie wykresów.
+Każde porównanie wymaga zapisanych danych, wskazanego panelu/parametrów pracy,
+normalizacji i mierzalnej różnicy; samo podobieństwo obrazu nie wystarcza.
+
+Stan potwierdzony: nominalny model GSG ma rzeczywisty solve transportu
+14 304 elementów; 1 mV daje 17,535399911674784 µA; H zapisano w 247 punktach,
+a lokalne J zawiera 171 648 składowych. Ponowny publiczny odczyt zachował
+bajty H/J. To wynik inspekcyjny skończonego pełnego obwodu, bez kwalifikacji
+bazy i bez ilościowego dowodu zgodności z publikacją. Zewnętrzne połączenia,
+przewodność i okno obliczeń są jawnymi przybliżeniami autora modelu.
+Nowe Universe H-only i odpowiedź fal spinowych nie są jeszcze wykonane.
+Nie przedstawiać starego pola mikrostripu jako wyniku GSG lub reprodukcji pracy.
+
+
+## 03.11.2026 — działający producer H-only, rzeczywisty błąd przygotowania
+
+Kolejna zarządzana iteracja `b034376ae95849ddb49b543f7d654355` przeszła
+(snapshot `7d8d862c9de15dc11e9a16e1415944ae7df89e0ebdd244e7fabb4e618cdc2d36`).
+Scena GSG odtworzona bez Solve; końcowe lekkie regresje Python 24/24.
+Publiczny prepare-only i kanoniczny plan już przechodzą, z oddzielnym source
+14304 Tet4 / 5990 węzłów i Global Universe 960 Tet4 / 275 węzłów. Stare
+statusy o odmowie na etapie all-air lub wyboru starego planera są historyczne.
+
+Po timeout Submit odczytano rzeczywisty accepted run zamiast ponawiać POST.
+Run `run-689c5cfd0ab6e59a5a51e7e183bb96c607af852d97469d8556d99b46b5912c41`
+przyjęty, następnie zmaterializowany przez API; jego preparer zakończył się
+przed compute: nie mógł odnowić lease z powodu długiego SH odczytu rodzica.
+Lease released, brak compute attempt i nowego H. Zarchiwizowano zredagowane
+receipt/launch/lease/catalog i odczyt API; nie zmieniano historii ręcznie.
+
+Historyczny następny krok (aktualny wynik opisano niżej): skrócenie SH przez spójny owned capture, pełną walidację
+immutable danych poza blokadą i dokładny recheck przed użyciem. Bez zmiany
+fizyki, schematów, limitów, heartbeat lub kontroli CAS/provenance. Potem
+regresja współbieżności i odmów, zarządzany build oraz rzeczywiste H-only.
+Cel naukowy pozostaje otwarty: pole w próbce → kwalifikacja i widmo → LLG
+oraz porównanie m(k,omega) z publikacją. Pilotaż Universe nie kwalifikuje FFT.
+
+Dowody: prywatny control volume, `verification/retained-current-h-only-20261102/accepted-store-v2/producer-dispatch-build/`.
+Dokładne aktualne statusy i ograniczenia są w kanonicznej nocie 0950,
+sekcja „03.11.2026: publiczny producer przeszedł, przygotowanie zatrzymane”.
+
+
+### Domknięcie nieudanej próby i kontrola przed naprawą blokady
+
+Własne żądanie H-only `run-689c5cfd0ab6e59a5a51e7e183bb96c607af852d97469d8556d99b46b5912c41`
+zamknięto istniejącym API cancellation z dokładnym expected catalog revision 1,
+po ponownym potwierdzeniu nieudanego receipt, released lease i nieobecności
+procesu preparera. Odczyt końcowy potwierdził `cancelled`, rev. 3, brak compute
+attempt/epoch/wyników oraz pustą kolejkę. Bez usuwania danych, ledger edits lub
+ponownego Submit. Żądanie i odpowiedź: `preparation-lock-failure/cancellation-*`
+w katalogu dowodów producenta; SHA256 request body
+`97b4ce5c36f9524a770f599cda47d0d312c6689d927e4cde72cc2e4c05c980c8`.
+
+Nowy pakiet przeszedł 9/9 istniejących regresji cold HTTP starego GSG; H/J
+bitowo zgodne. Native preview następnego zapisu authoring przeszedł dla
+47 terminalnych katalogów i 87 released reservations. Preview nie jest buildem;
+launcher ponownie sprawdzi stan przed wykonaniem. Checkpoint
+`lock-scope-fix-build/current-authoring-checkpoint.json`, SHA256
+`26190e8128a5dab24da53696c4c51464775a212fd3277783648521588406885a`.
+
+Niezależny audyt późniejszej publikacji potwierdził granicę
+`accepted_study_worker.rs::apply_accepted_start_effect`: `Completing` i
+`finish_worker_control` poprzedzają EX publikacji.
+`accepted_study_supervisor.rs::renew_resource_lease` po `Completing` nie wymaga
+kolejnych heartbeat. Nie rozszerzamy poprawki preparera na tę granicę.
+Pozostaje osobny koszt i ryzyko szerokiego SH w cold-readerze
+`study_retained_current_field.rs::load_saved_retained_current_field_inspection`;
+nie wykonywać kosztownego odczytu dziecka równolegle z pilotowym przygotowaniem.
+To ograniczenie, nie deklaracja naprawy współbieżności wszystkich czytników.
+
+
+### Pierwsza ilościowa diagnostyka pola w obszarze próbki — bez Solve
+
+Z istniejących 247 próbek starego GSG wyodrębniono cztery rzeczywiste regularne
+linie po 41 punktów, x od −2 do 2 µm co 100 nm, y=±50 nm,
+z=−5/−22,4 nm. Indeksy i hashe pochodzenia zachowano; brak interpolacji,
+nowego transportu, pola lub FFT. Wynik pochodzi z finite closed-loop inspection,
+nie z modelu odpowiedzi magnetycznej ani z opublikowanej bazy pola.
+
+| Diagnostyka dla y=−50 nm | Wartość | Zakres wniosku |
+|---|---:|---|
+| Hx przy x=0, z=−5 nm | −24,449138388 A/m | Zapisana składowa H dla prądu 17,5353999117 µA |
+| Hx przy x=0, z=−22,4 nm | −21,439971921 A/m | Ten sam source/current i druga powierzchnia próbkowania |
+| Zmiana modułu względem dolnej powierzchni | 14,0353097% | Opisowa zmiana po grubości; nie próg kwalifikacji |
+| Maksymalny residual parzystości Hx czterech linii | 1,9755656883e−4 A/m | Opisowa kontrola symetrii; brak nowej tolerancji |
+
+CSV 35 313 B: SHA256 `246df96f5aa8adbb132105dc9b4b1a3d17f21059af006a5664dbf1e905397b91`.
+JSON metryk 15 639 B: SHA256 `1826bfc53843dd96acb3e7bbfcb3d4379e14695e6cdde570a2649355f2dcec51`.
+Pliki w prywatnym control volume:
+`verification/gsg-public-run-20261029/field-profile-postprocessing-20261103/`:
+`przekroje_pola_inspekcyjne.csv`, `metryki_przekrojow_inspekcyjnych.json`.
+Pierwszy postprocessor nie wygenerował wykresu, ponieważ matplotlib nie ma
+w istniejącym backendzie. Następnie istniejące ECharts 6.1.0 i sharp 0.35.0
+frontendu wygenerowały SVG/PNG bez instalacji. Dwie linie y=−50 nm pokazano
+bez wygładzania; po poprawie odstępów wykonano wizualny odbiór jednostek,
+osi, etykiet i ograniczeń. PNG SHA256
+`aaf351c8a3c45515d5e14d1d3e3444ae4ace7b71b8b5bd30c2860dfc27335c0c`,
+SVG SHA256 `4b87aa0cbe3b31e0a58a111631b6b858f7a8cbfdafe6273da4a8917b0573b6c7`.
+Pliki: `przekroj_Hx_inspekcyjny.svg/.png`, `wykres-receipt.json` i odtwarzalne
+`render-gsg-field-profile.cjs`, `render-input.json` w tym samym control volume.
+CSV zawiera także diagnostyczne H/I, ale źródło zachowuje
+inspection-only i odmowy per-A/source_fft/llg. Znak przekroju źródła nie ma
+jeszcze niezależnej kwalifikacji; iloraz nie odblokowuje bazy.
+
+Korekta odniesienia do pracy: Eq. 6–8 i widmo GSG należą do Fig. 1.
+Fig. 2 przedstawia odpowiedź częstotliwościową pojedynczego paska, a Fig. 6
+transmisję eksperymentalną i model; samo statyczne H nie odtwarza tych figur.
+Nie wykonywano porównania nowego widma lub odpowiedzi z publikacją.
+Pełne równania/referencje i granice porównania pozostają w nocie 0951.
+
+
+### Nieudana kompilacja naprawy SH i minimalna korekta
+
+Iteracja `69303c762adb4ee9979ab2fad2df2d8c`: native 302/302, Make exit 2 po
+999 261 ms, pojedynczy E0603 dla prywatnego `repository_path::reject_link`.
+Parser i review źródeł nie zastąpiły kompilacji. Root poprawił dokładnie
+import i dwa redundantne wywołania, zachowując publiczne checked_path i jego
+odmowy symlinków dla wszystkich odczytów. Integrity SHA256 po korekcie:
+`985f8e3578d8cfc7bdf0287bdb3384bd693e31b9264aafceaba692e447ecfb18`.
+Source preparation nadal SHA256
+`96ab5f9aaf9d73c8991c30d624acf153668f557aee0cdf8ac57cc7f4b9031858`.
+Niezależny przegląd poprawki bez blokera. Backend zakończył się kodem 2,
+frontend działa; nie ma nowego H ani compute attempt. Dane/caches zachowano.
+
+Existing failure-only reconciliation preview przeszedł dla dokładnego request
+SHA256 `d55cf5e61e78a4ab69e1d60d8bd53250bbd007e5450d41b290de9bc9f1331918`.
+Zastosowanie i następny managed build mają własne receipty; preview sam ich
+nie zastępuje. Dowody w `producer-dispatch-build/lock-scope-fix-build/`.
+
+
+### 03.11.2026 — resume PASS i preparer HB15; native H zatrzymane przez inbox v7
+
+Managed resume `634bd858968847deb56268b65b084685` zakończony succeeded,
+Make exit0/1 782 238ms (Rust23min27s, Python6min06s). Snapshot pakietu
+`5db4bae3f5f5ebc20095692f2bce9afef768889a373852d55e3dba89b37ef218`;
+runtime provenance SHA256
+`626e233f7ba5fa87a7f96a40f65e8f989af593c8f79fcce3217d91cad6867d31`,
+terminal receipt SHA256
+`04658a8523a282522c8aafeac77f153fde342e4a8fd8ddc5707c073bd2800ff2`.
+24gates pakietu, linux-native-v1 i worker-cgroup przeszły. Build nie jest dowodem H.
+
+Zapisana scena FMS SHA256
+`b71d196c98697e15f86f59aa08d0f2380fe515256b7155ebd89d4050b5b9f5d9`
+odtworzona bez zmian wszystkich pól, dwa obiekty i bez Solve. Publiczny prepare-only
+exit0/26,814769s,1979assets zweryfikowane; ProblemIR i execution plan identyczne,
+study plan różni się wyłącznie zweryfikowanym nowym run ID.
+
+Jeden Submit miał klientowy timeout30s; GET najpierw404, następnie200 potwierdził
+przyjęcie exact fingerprint
+`580e194717548c9f229bf13f69cb3a860e461d371f5097fa568a954feb2829e7`.
+Nie ponowiono Submit. Materializacja200 runu
+`run-328c367b68bf3ea37df0f165873df3f1d1f285a26b99bb53f8096bff9f6a99d2`.
+Task `task-0dc36fda1b9e791ebdee6607a61bf17220f17e74bb1b35d9c5c79ab7c714f6a0`
+przygotowany poprawnie: preparer exit0,około20s i heartbeat15. Naprawiono wykazane
+starvation tego preparera; nie uznano za naprawione wszystkich cold-readerów.
+
+Następny compute admission utworzył `attempt-28de213842244d7896093de0b9d744f6`,
+epoch1. Zapisany fence ma active compute lease i heartbeat0; journal tylko
+Prepare sequence1/protocolv7. Scheduler odmówił przed inbox/worker launch:
+`worker inbox command identity or sequence mismatch`. Zbudowane
+`worker_inbox.rs::FmsWorkerInboxRecord::validate` ma whitelistęv1–v6 i nie
+przyjmuje już istniejącego protokołuv7 tej operacji. **Native H NOT STARTED**;
+to nie wynik całkowania pola ani jego niekonwergencja.
+
+Minimalna poprawka dodaje v7 do whitelisty, zachowując identity/claim/sequence
+checks i odmowę v8. `crates/fullmag-session/src/worker_inbox.rs` SHA256
+`77ad52f89126e14d73fdf79c615df969d201112a9c734d83d6b236aeb9f164f5`;
+dwie regresje inline v7 są tylko źródłowe, niekompilowane i niewykonane.
+Parser/diff i niezależny review bez blokera nie zastępują buildu/runtime.
+Poprawka nie należy do snapshotu5db4 i nie została jeszcze zbudowana.
+
+API po failed compute owner exit jest diagnostic-only503; poprzednie health200
+po buildzie jest historyczne. Recovery pozostaje read-only audytem, bez mutacji
+owner/lease, cleanup i ponowienia Submit/Solve. Następne kroki: bezpieczne recovery
+konkretnej operacji, managed build minimalnej poprawki i rzeczywisty odbiór H-only.
+Nowe pole, charge-call=0, publikacja/cold-load dziecka i browser nadal otwarte.
+
+Dowody w prywatnym control volume:
+`verification/retained-current-h-only-20261102/accepted-store-v2/producer-dispatch-build/lock-scope-fix-build/build-verification.json`
+oraz `public-retry-02/preparation-pass-and-admission-failure.json` i przypięte
+receipt/admission/journal. Pełny checkpoint jest w kanonicznej0950,
+`DOC-ANCHOR:antenna-h-only-preparation-runtime-checkpoint-20261103`.
+
+[Projekt kwalifikowanej bazy](2026-11-03-gsg-qualified-basis-contract-proposal.md)
+po review ma SHA256 `de20a22c76d15ee6bf02a945bc40ad18a9bd4ee19c95962fe5e99de69825a56e`.
+Jest kierunkiem architektonicznym, nie gotowym kontraktem kwalifikatora/rulesetu.
+Progi/check-result DTO closedGSG, pasmo/full-circuit validity i closure budget
+wymagają osobnej prerejestracji. Inspection-only, stary V/J/H, ograniczony oracle
+trzech punktów i status reprodukcji publikacji nie otrzymują nowej kwalifikacji.
+Nie wykonano source FFT, Relax/LLG ani m(k,omega).
+
+
+## Aktualizacja 04.11.2026 — narzędzia korekty i zbieżności GSG
+
+Nowe V/J/H0/3, pełne kontrole H0/9, nowy zatwierdzony build niewykorzystany.
+Dokładny estymator weighted-L2 RT0/H1 wdrożony i12/12 testów PASS.
+Odczyt historycznych14304 Tet4 dał eta0,04909839411834733; to korekta prądu,
+nie błąd względem publikacji i nie wynik którejkolwiek z trzech nowych siatek.
+11/11 testów sumowania H po ostatnim imporcie PASS; focused validator0950 PASS.
+Limit publicznego pakietu anteny jest min(storage,RAM/16,512MiB), więc przy4GiB
+rezerwacji obowiązuje256MiB. Wielkość nowych wyników wymaga kontroli przed Submit.
+Patch helpera4581df0a… nadal nie jest zastosowany i czeka na wysłaną decyzję.
+Nie wykonano nowego Solve, H-only, LLG ani zmiany wyników/historii.
+Pełny raport: [analiza prądu](2026-11-04-gsg-current-analysis-progress.md).
+
+
+## Aktualizacja 04.11.2026 — rezerwa pakietów trzech GSG
+
+Odczytowa kontrola struktury źródeł/siatek dała górne granice53607406,94569422
+i259242510B dla100/75/50nm, przy obecnym admission268435456B. Najgęstszy
+przypadek ma9192946B zapasu; nie zwiększono zasobów. Formaty/counts sprawdzono
+na historycznym pakiecie, a założenia podziału materiałów/cut/obserwacji
+na wszystkich trzech przypiętych IR. To nadal nie jest native admission
+ani kwalifikacja zużycia RAM. NoweV/J/H0/3, nowe kontroleH0/9, build niewykorzystany.
+Patch limitu capture nadal oczekuje na wysłaną decyzję, bez zastosowania.
+Szczegóły: [kontrola rezerwy](2026-11-04-gsg-output-reserve-preflight.md).
+
+
+## Aktualizacja 04.11.2026 — pełny config eksportu GSG
+
+Checker verify_frozen_gsg_config sprawdził wszystkie pola3/3 zachowanych
+eksportów100/75/50nm z dokładnymi pinami IR/skryptów, bez mocków. Dopuszcza
+tylko jawny flat export i shared assets; nie usuwa nieznanych metadanych.
+14/14 regresji PASS, focused validator0950 PASS. To zgodność helper config,
+nie publicznego katalogu/native prepare ani accepted ownera. NoweV/J/H0/3,
+nowe kontroleH0/9, zatwierdzony build niewykorzystany; patch limitu nadal
+oczekuje na wcześniej wysłaną decyzję.
+Szczegóły: [pełny eksport](2026-11-04-gsg-frozen-export-verification.md).
+
+
+## Bieżący checkpoint 04.11.2026 — udana nowa próba GSG 75 nm
+
+Ten checkpoint zastępuje jako opis bieżącego stanu wcześniejsze wpisy o
+„nowe V/J/H 0/3”, niewykorzystanym buildzie oraz oczekiwaniu na próbę 75 nm.
+Tamte wpisy dokumentują chronologię; nie wolno ich czytać jako aktualnego
+stanu. Nie przepisano statusów historycznych runów.
+
+| Element | Zweryfikowany stan | Dowód i granica wniosku |
+|---|---|---|
+| Zatwierdzony patch dokładnej rangi | Zastosowany | SHA256 `bea7963c5e1b6228d208d2dd56a410f9cab92158c0fd38e6619ee1ebe7c1d159`; cztery preimages i wyniki sprawdzone, bez zmiany indeksu |
+| Zarządzany build WSL/Docker grupy 3203 | Succeeded | Build `c8666d122223401baa7ffd34e9e08f73`, snapshot `d1080ea1f357d8e7fb9072091d4587f2ea3253d767e1b18b29b0315215c1d7a3`; rzeczywista kompilacja zmienionego C++, bez kompilacji testów jednostkowych |
+| Nowe V/J/H 100 nm | Succeeded, wynik zachowany | 14 299 Tet4, 5 990 węzłów, 20 próbek H, I = 17,53528156 µA |
+| Pierwsza próba 75 nm | Nadal Failed | Historyczny błąd budżetu Bareiss pozostaje; oryginalna seria pozostała zatrzymana po tym błędzie |
+| Osobno zatwierdzona nowa próba 75 nm | Succeeded, wynik zachowany | Run `run-545a7b8559eda8e264e1272489bd7fa47c536a0f5e7f916d3a9a4899fc3da884`; 25 516 Tet4, 10 155 węzłów, 20 próbek H, 221,986 s |
+| Publiczne V/J/H nowego 75 nm | Sprawdzone | 22/22 binarnych payloadów zgodne z pakietem/CAS; V, J i H mają jednego zaakceptowanego właściciela i zamrożoną geometrię |
+| Natywny certyfikat rangi 75 nm | Zgodny z niezależnym oczekiwaniem siatki | 25 530 wierszy, ranga 25 529, jeden pominięty wiersz, residual 0; nie jest to ogólna kwalifikacja wszystkich macierzy |
+| Porównanie 100/75 nm | Dwa poziomy porównane | Zmiana I: 0,0378213%; maksymalna względna zmiana wektora H: 0,0380222%; H/I: 0,000360941%; nie jest to błąd względem rozwiązania dokładnego |
+| 50 nm | Nie uruchomiono | Poprzednia decyzja dotyczyła dokładnie jednej nowej próby 75 nm; nie rozszerzono jej na 50 nm |
+| Dziewięć niezależnych kontroli H | 0/9 | Prerejestracja wymaga najpierw kompletnych trzech poziomów. Porównanie dwóch siatek, bilans prądu i kontrola rangi nie zastępują tych kontroli |
+| Zachowanie historii | Sprawdzone | 54 stare katalogi identyczne bajtowo, jeden nowy katalog, łącznie 55; obie rezerwacje nowej próby released |
+| Zakwalifikowana baza / projekcja / LLG | Nieukończone | Inspection-only zachowane. Nie uruchomiono nowego H-only, source FFT, LLG ani m(k,omega) |
+| Reprodukcja publikacji | Niepotwierdzona | Pole źródła jest obliczone; Fig.3 ma nierozstrzygniętą rozbieżność wzorca równań z oryginalnym rysunkiem; brak ilościowej reprodukcji transmisji |
+
+Pełny wynik, piny i ograniczenia:
+[raport 75 nm](2026-11-04-gsg-75nm-exact-rank-result.md).
+Ścieżka dowodów w prywatnym wolumenie kontrolnym:
+`verification/gsg-exact-rank-approved-build-20261104/`.
+Końcowy verifier SHA256
+`f8c3e468281ea69bbd1862e2b836e83215f5e56cb9586597380f5dc2f1a0eab9`.
+
+### Compute dla świeżej niemagnetycznej anteny — kandydat, nie wdrożenie
+
+Rzeczywisty odczyt świeżej sceny nadal ujawnia błędne wymagania magnetyczne.
+Prywatny, sześcioplikowy patch gotowości i właściwego wykonawcy `study.run`
+ma SHA256 `ce3ea02c1fb4c9c1a8fd890f5c38a4d7a6f5beccf13270e98e82c53114a05368`.
+112 testów frontendu, TypeScript, lint i higiena API dla zmienionych plików
+przeszły; niezależny przegląd nie znalazł dalszych potwierdzonych usterek.
+To nadal kandydat poza worktree, bez kompilacji Rust i regeneracji OpenAPI,
+bez wdrożenia oraz bez rzeczywistego publicznego Compute w przeglądarce.
+Decyzja o nowym kontrakcie i jednym buildzie została zadana osobno; nie
+traktujemy kontynuacji celu jako odpowiedzi na to pytanie.
+
+Przegląd i dokładny patch są w katalogu
+`D:/git/fullmag/artifacts/antenna-ui-20261103/`, pod nazwą
+`2026-11-04-antenna-field-only-compute-readiness-proposal.md` i plikami obok.
+Zmiana ta nie odblokowuje LLG ani nie nadaje kwalifikacji bazie.
+
+### Następna granica naukowa
+
+Dokończyć kontrolę źródła, potem dostarczyć pole na docelowy mesh
+ferromagnetyka, oddzielić widmo źródła od odpowiedzi m(k,omega) i porównać
+konkretne wyniki publikacji. Mały kontrolny nośnik 20 punktów (5 × 2 × 2)
+nie jest meshem próbki ani podstawą do ogłoszenia widma fal spinowych.
+Aktualizacja planu nie zmienia progów, polityk, historii wyników ani zakresów
+zatwierdzonych prób. E0–E12 i reprodukcja publikacji pozostają otwarte.
+
+
+## Aktualizacja gotowości Compute — 04.11.2026, po zgodzie i buildzie
+
+Wcześniejszy wpis o oczekiwaniu na decyzję dotyczącą patcha gotowości jest historyczny. Użytkownik zatwierdził patch `ce3ea02c…05368`, jeden zarządzany build i weryfikację bez Solve. Zmiana jest zastosowana; build `47fad1e68461425fac7b94faf2bd314c` zakończył się powodzeniem (1346,99 s), kontrakty API i klienci zostały zregenerowane. Przeszło 112 testów frontendu, TypeScript, lint, generator Python oraz osiem rzeczywistych przypadków HTTP. UI pokazuje aktywne Compute i spójne wyjaśnienie przygotowania siatki anteny. Scena odtworzona, rewizja 19, wszystkie 55 katalogów zachowane, bez nowego Solve.
+
+Retencja compiler outputs została wykonana (14 399 836 686 bajtów), automatyczna retencja pakietów zakończona, zachowane current i bezpośredni rollback. Odczyt H z zachowanej próby 75 nm nadal działa w przeglądarce: 20 próbek, legenda 0,07444–24,46 A/m, WebGL aktywny, drawing buffer 834 × 423 px. Pełny raport: `2026-11-04-antenna-field-only-compute-readiness-result.md`. Nie jest to kwalifikacja fizycznej zgodności z publikacją ani nowa próba obliczeniowa.
+
+
+## Aktualizacja E7 — duże zapisane J, 04.11.2026
+
+Prywatny kandydat kolorów został wdrożony przez HMR, bez nowego buildu backendu i bez Solve. Saved korzysta ze wspólnego asynchronicznego workera; maskowanie zachowuje aktywne scalarValues/vectorValues także przy pustej tablicy RGB. Przeszło 212 testów, TypeScript i lint. Przeglądarka po pełnym odświeżeniu potwierdza legendy Jx/Jy/Jz/|J| zgodne z zachowanym surowym wynikiem, palety, ręczny zakres i Auto, aktywny WebGL 842 × 423 px oraz 1200 strzałek. Idle: 0 klatek / 2,01 s. Wszystkie 55 katalogów są zachowane, 101 rezerwacji zwolnionych. Pełny raport: `2026-11-04-saved-large-current-field-colors-result.md`.
+
+Nie kwalifikujemy jeszcze przełączeń datasetów z opóźnionym starym workerem ani pełnej czytelności trajektorii w widoku długiego, cienkiego obwodu. Kwalifikacja naukowa, E8/E9 i końcowa integracja pozostają otwarte. Aktualna propozycja kontynuacji 50 nm ma SHA256 `4083593441859bba5baed621166d63aa0db6e838a48f058065a9e259cb3ac8e3`; obejmuje przypięty patch metadanych, jeden dodatkowy build i jedną nową próbę, bez automatycznej kontynuacji LLG/referencji H. Pytanie o decyzję zostało zadane; patch nie jest zastosowany.
+
+## Dodatkowa kontrola E7 — H i przekrój, 04.11.2026
+
+W zapisanym wyniku 75 nm potwierdzono Hx/Hy/Hz/normę H oraz zakresy legend zgodne z surowymi 20 próbkami. Wykryto granicę czytelności 3D: fizycznie cienki obszar daje około 29,54 nm domyślnej długości glyphu. WebGL i dane są poprawne, ale nie zaliczamy czytelności strzałek tego kadru. Nie powiększono arbitralnie globalnej reguły.
+
+Istniejący widok 2D pokazuje rzeczywisty przekrój XZ przy y = 0, z czytelnymi wektorami oraz jawnym oznaczeniem pionowej skali ×100. Jest to rekonstrukcja inspekcyjna z 20 punktów, nie gęsta mapa całego Universe ani kwalifikacja LLG. Nie wykonano nowego Solve ani buildu. Raport: `2026-11-04-saved-h-browser-section-verification.md`. Priorytetem naukowym pozostaje zbieżność źródła i odtworzenie publikacji; dodatkowa próba 50 nm nadal oczekuje na odpowiedź.
+
+
+## Zatwierdzona kontynuacja 50 nm — 04.11.2026
+
+Użytkownik zatwierdził patch metadanych 8→12 MiB przy zachowanym źródle 8 MiB, jeden dodatkowy build i jedną nową próbę V/J/H 50 nm. Poprzednie wpisy o oczekiwaniu na decyzję są historyczne. Build `04a0fa4008524190b0fb63e073cda098` zakończył się powodzeniem; publiczny prepare zachował pełny zamrożony model. Próba `run-bc05bbf73072ea18dd6726455fe6f23f44fd7d3f3c2f624ec4630e5117a38e7e` zakończyła się powodzeniem na 72 911 Tet4; dokładnie jeden Submit i jedna materializacja, bez retry. Publiczny odczyt 22/22 payloadów i certyfikat rangi przechodzą. Trzy poziomy 100/75/50 nm nie przechodzą kontrakcji η (iloraz 75→50 = 0,91308 przy granicy 0,8), mimo małych zmian H i I. Połączenia końcowe skupiają 99,89775% energii korekty. UI pokazuje zapisany H 50 nm i przekrój XZ; nie jest to kwalifikowana baza ani reprodukcja fal spinowych. Pozostało uzgodnienie jednej rezerwacji committed, mimo lifecycle succeeded; nie zwalniano jej ręcznie. Capture zapisany w commicie cd3a505a7dfe1224e17a3b5c56fddd2dafb52d7d z zachowaniem 47 pozostałych staged wpisów. Izolację właściciela kolorów sprawdzono 215 testami i ograniczonym smoke przeglądarki J→H. Szczegóły: `2026-11-04-gsg-50nm-continuation-result.md`. Nie wykonano dodatkowego H-only, niezależnej referencji ani LLG.
+
+
+## Zatwierdzone recovery brakującego exit receipt — 04.11.2026, implementacja
+
+Użytkownik odpowiedział „ok” na projekt o SHA256 `7d3f804ce60ff653c640f1cf2a91e5296142980c8d5fb5ba80ecd04b7a5846fd`. Obejmuje on zapobieganie utracie rzeczywistego wait outcome, osobny dowód zwolnienia po usunięciu starego namespace, jedną warunkową operację wyłącznie grupy 3203 i jeden zarządzany build. Nie obejmuje nowego Solve, H-only, referencji H ani LLG. Stary rollback pozostaje zachowany, lecz po publikacji nowego proof nie będzie zgodnym czytnikiem tej grupy.
+
+W źródłach dodano Linux slot v4 z surowym wait przed cleanup/globalnym writerem i oddzielnym potwierdzeniem zakończenia potomków; konsument zamienia autentyczną obserwację w kanoniczny exit receipt bez ponawiania poleceń. Dla obecnej próby bez tej obserwacji powstaje addytywny release proof v3 `SucceededWorkerNamespaceTeardown`: task pozostaje Succeeded, rzeczywisty dawny exit pozostaje unknown, launch gate pozostaje Consumed. Preview i apply sprawdzają typed journal/inbox, manifest/CAS, jedną rezerwację i rzeczywiste surowe potwierdzenia Engine. Po Released archiwizowany jest slot, a jawne zakończenie starego właściciela usług nie zmienia historii taska. Wszystkie stare ścieżki zachowują swoje odmowy.
+
+Kontrole źródłowe i parser Rust oraz 70 interpretowanych regresji kontrolera/build admission przeszły. Niezależny przegląd wykrył i doprowadził do poprawienia m.in. replay fsync, walidacji historycznych namespace, rzeczywistego SIGTERM, związku pakietu producenta oraz tożsamości inode blokad. Nie kompilowano testów Rust. Przegląd kontrolera odtworzenia i guest handoff trwa; nie oznaczamy tego mechanizmu jako natywnie zweryfikowanego.
+
+Świeży runtime-free FMS zapisano przez istniejący publiczny authoring API, z pełną aktualną sceną i zachowaniem źródła importu. SHA256 `6af101c6af9b1787692fae334ff601db2af702e9a4e9cdd2e73068813251264d`, 11 493 bajty; dowód: `verification/succeeded-namespace-recovery-20261104/fresh-authoring/verification.json` w control volume. Legacy eksport sesji odmawiał z powodu pustego script_path; nie obchodzono go ręczną edycją ZIP. Aktywna scena, sesja i 56 katalogów pozostały niezmienione.
+
+Stan przy tym wpisie: API 200, 102 rezerwacje Released i jedna Committed. Nie wykonano stopu, usunięcia kontenera, release ani nowego buildu. Nowe moduły Rust zostały dodane do snapshotu z zachowaniem 47 wcześniejszych wpisów indeksu. Pełne wykonanie nadal wymaga pozytywnego preview, jednego zarządzanego buildu, kwalifikacji nowego pakietu i końcowego odczytu wyników. Zgoda nie jest dowodem wykonania. Kontrakcja η pozostaje niezaliczona; odtworzenie publikacji i cel E0–E12 pozostają otwarte.
+
+
+## Wykonanie zgody i nowa odmowa inkarnacji — 05.11.2026
+
+Wcześniejszy wpis sprzed stopu/buildu jest historyczny. Zatwierdzony build eb855b5c3ea84ef28784daa93738b49f przeszedł; kandydat pozostaje nieopublikowany. Oryginalny backend 96c7 został zatrzymany SIGTERM i usunięty z zachowaniem dowodów Engine i warstwy zapisu. Pierwszy recreate odmówił, ponieważ Docker init zajął PID1; poprawkę i usunięcie dokładnie zakończonego 52a3 użytkownik jawnie zatwierdził. Operację domknięto przez jej własnego helpera, usunięto 52a3 bez wolumenów i wykonano dokładnie jeden poprawiony managed recreate aa139233b7ba41269a5d61ea605edb23.
+
+Backend f4c1f89a1e7304320c6ec68936b9ff0117bc8e173a67be029c44eeed345e4848 działa z init=false; guest PID1 uruchomił diagnostyczne API PID7. To nadal degraded/fenced, nie normalna gotowość. Kolejna bramka odmówiła, ponieważ nowy numer PID namespace pid:[4026532639] jest równy historycznemu numerowi usuniętego 96c7. Niezależny przegląd potwierdził ten sam wymóg w natywnym attestation validator i zwykłym readerze; poprawka samego Pythona nie wystarczy. Helper aa139 i active pozostają zachowane; nie wykonano ręcznego zwolnienia, fałszowania proof, następnego startu ani następnego buildu.
+
+Po poprawionym starcie zweryfikowano 903/903 chronione pliki, 521777858 bajtów, zero różnic. Ledger: 102 Released + dokładnie jedna Committed. Wynik 50 nm nadal Succeeded; dawny exit unknown. Frontend 497dec pozostał niezmieniony. Nowych Solve/H-only/LLG: zero. Nowa natywna kwalifikacja release i normalne API nadal NOT VERIFIED.
+
+Przygotowano osobny projekt `2026-11-05-recycled-pid-namespace-recovery-proposal.md`: addytywna attestacja v2, jawny admission buildu w replacement guest, jeden dodatkowy managed build oraz kontrolowane wycofanie dokładnie f4c1 i jeden nowy start backendu. Nowy zakres czeka na decyzję; dotychczasowa zgoda jawnie wykluczała kolejny build i nie obejmowała usunięcia f4c1. Stary projekt zgody SHA40915 pozostaje niezmieniony. Wyniki naukowe, brak kontrakcji eta i cel reprodukcji publikacji pozostają bez zmian.
+
+
+## Niezależna praca podczas oczekiwania na decyzję recovery — 05.11.2026
+
+Przeanalizowano wyłącznie zachowane tablice H i H/I 100/75/50 nm: hashe payloadów zgodne, 20 punktów na poziom, 8 par lustrzanych i 4 punkty osiowe. Dla 50 nm największa względna różnica lustrzana wynosi 0,00762123%; dla kolejnych zagęszczeń nie maleje monotonicznie. Nie jest to błąd względem rozwiązania dokładnego ani nowa bramka. Arytmetyczna zgodność H/I przechodzi na poziomie binary64; kwalifikacja źródła i eta nadal FAIL. Utworzono i obejrzano wykresy zapisanych danych, bez Solve, całkowania referencyjnego, nowego buildu/startu lub zmiany profilu. Raport: `2026-11-05-retained-gsg-symmetry-diagnostic.md`; dowody i wykresy: `D:/git/fullmag/artifacts/antenna-ui-20261103/retained-gsg-symmetry-20261105/`. Decyzja o projekcie recovery SHA42cf11 nadal oczekiwana; nie interpretowano automatycznej kontynuacji jako zgody.
+
+
+## Master zintegrowany przed czystym startem — 05.11.2026
+
+Zgodnie z najnowszą decyzją użytkownika odłożono rozbudowę starego recovery i wybrano czysty start z zachowaniem wyników. Przed nim pobrano81 commitów i włączono origin/masterf7fee545085646442efe08f82c133e821c026c18 przez merge5332b5570db1c58a2c651c8f7cc158385bec5699. HEAD280151b6cf165de9a1b37f9427333ffdd64498fd zawiera też dwuliniowy fix TypeScript. Siedem konfliktów przywróconego WIP rozwiązano;54 oryginalne staged blob/mode i122 nowe pliki zachowane. TypeScript,26 testów mapy pola,243 regresje skryptów Docker i odczytowy capture we właściwym kontenerze przeszły. Pięć nowych testów PNG z mastera nadal wymaga środowiska DOM; nie zaliczono ich. Nie uruchomiono buildu, restartu, Solve ani nowego proof v2. Raport: `2026-11-05-master-integration-before-clean-start.md`. Następnie wybór wspieranej izolacji czystego runtime bez zmiany starej rezerwacji i wyników.
+
+
+### 05.11.2026 — obecny worktree i audyt świeżego startu
+
+Użytkownik wybrał obecny worktree; nie wykonujemy planu drugiej grupy ani attestacji v2. Aktualny fresh-state pomija stare recovery i archiwizuje ledger bez zwalniania committed; poprzednia globalna ocena odmowy była nieprawidłowa. Rzeczywiste blokery: stary CID w development receipt, działający guest f4 i aktywny helper aa139. Projekt: `2026-11-05-same-worktree-fresh-start-proposal.md`, SHA256 0109f932102abd08439fd4e38c3d93080c6776f3f4b69f685484cc12dce9857b. Audyt źródeł i rzeczywisty odczyt wykonane; lifecycle, stop/remove, archiwizacja, build i Solve niewykonane. Wymagana decyzja dla tego kontraktu i dwóch wskazanych kontenerów.
+
+
+### 05.11.2026 — doprecyzowanie retencji i wycofana próba testów PNG
+
+Użytkownik podkreślił unikanie zbędnych danych i zapytał o kasowanie starego stanu. Wyjaśniono: usuwać zastąpione kontenery i wykazane jako zbędne generacje po sprawdzeniu następcy; zachować unikalne wyniki, provenance i jeden sprawdzony rollback. To pytanie nie jest jeszcze zatwierdzeniem operacji świeżego startu ani autoryzacją usunięcia wszystkich starych danych. Nie tworzymy dodatkowego worktree/grupy. Brak lokalnego skilla fullmag-build-stage-cleanup; stosować odpowiedni fragment build-storage governance i rzeczywistą zarządzaną retencję, bez globalnego prune. Nie obiecywać odzyskanych bajtów bez pomiaru i kwalifikacji referencji.
+
+Niezależna próba naprawy pięciu testów fieldMapPngCapture.test.ts została wycofana. Potwierdzono pięć błędów document is not defined. Wariant jsdom wymaga zależności testowej. Błędnie uruchomiono pnpm add w działającym frozen workspace frontendu: zmiana prywatnego pnpm-lock.yaml zatrzymała frontend przez ochronę seed file hash changed. Nie osłabiono tej ochrony. Przywrócono dokładny package.json SHA256 4d2c0fc341428dfb342ec0f3adc95a8335e670c71e99922757087b33df6f0508 oraz pnpm-lock.yaml SHA256 9f41a360e06c4445299fe1896b88d5fbca42bfb8aec80377b400e126093d4eec. Test source przywrócony dokładnie do c36e148d861f55abcba9d9d324697698003fa03ffac59e5ed3c8c1ff86287ad1; brak netto diff tych trzech plików. Zależności odtworzono przez frozen install pod kanoniczną blokadą shared pnpm, bez skryptów i bez nowych zależności; exit0, 1.2s. Next16.3.8 i Vitest5.0.4 ponownie rozwiązywane.
+
+Ten sam frontend497dec45…c7aa2 uruchomiono diagnostycznie po przywróceniu plików, bez tworzenia kontenera lub zmiany obrazu/konfiguracji; StartedAt 2026-11-05T11:20:10.341375824Z. Potwierdzono Engine healthy i HTTP200 dla strony sesji (tytuł Workspace | Fullmag Control Room). To przywrócenie skutku własnej błędnej próby, nie kwalifikacja nowej generacji DEV ani dowód widoku 3D. Backend f4 pozostaje diagnostyczny/degraded; świeży start, nowy build i Solve nie nastąpiły. Przed właściwą operacją ponownie przypiąć aktualne StartedAt. Logi/małe kopie tej wycofanej próby są wyłącznie w private/frontend/workspace/.verification/png-capture-dom-20261105, nie w nowym wolumenie. Ująć je w kwalifikowanym cleanupie po zachowaniu końcowego dowodu; nie usuwać współdzielonego pnpm store. Naprawa testów pozostaje otwarta i wymaga zmiany źródłowego manifestu/lockfile oraz właściwej nowej generacji frontendu, bez modyfikowania działających seed files.
+
+
+### 05.11.2026 — zatwierdzenie świeżego startu w tym samym worktree
+
+Użytkownik odpowiedział „tka” (tak) na pytanie wskazujące przegląd SHA256 0109f932102abd08439fd4e38c3d93080c6776f3f4b69f685484cc12dce9857b: zatwierdzony projekt, implementacja, testy, review, rzeczywisty preview oraz warunkowe wykonanie SIGTERM i usunięcia tylko f4/497 bez wolumenów, domknięcie operacji przez jej helpera, archiwizacja runtime/ledgeru i jeden managed build grupy3203 bez Solve. Po weryfikacji następcy kwalifikowana retencja przy zachowaniu wyników i jednego sprawdzonego rollback. Nie pytać ponownie o ten sam zakres; zmieniony stan podlega ponownemu preview, nie uznaniowej podmianie pinów.
+
+
+### Checkpoint 05.11.2026 — zgoda na świeży start i kontroler przed preview
+
+Odpowiedź użytkownika „tka” na przypięte pytanie o procedurę `0109f932102abd08439fd4e38c3d93080c6776f3f4b69f685484cc12dce9857b` stanowi zgodę na jej implementację i warunkowe wykonanie w obecnym worktree. Nie pytamy ponownie o ten sam zakres. Nowego worktree, Solve, zwolnienia starej committed rezerwacji ani attestacji v2 nie obejmuje wykonanie.
+
+Spójny fragment testów PNG zapisano jako commit `006e8f024f891dfaab7a3a2672910ec18ce8dfe0`: jawne środowisko DOM dla istniejących pięciu testów i przypięte jsdom, bez zmiany ich asercji. Trzy pliki / dziesięć testów, lint i TypeScript przeszły w izolowanym zestawie narzędzi wewnątrz istniejącego frontendu. Zamrożone manifesty działającej usługi pozostały identyczne; pierwotne 54 wpisy indeksu są zachowane. Nie jest to dowód kwalifikacji nowego runtime ani widoku WebGL.
+
+Dodano osobny kontroler porzucenia nieudanego START, proof akceptowany wyłącznie przez istniejący fresh-state, zamknięte argumenty just/powłoki i testy integracji. Pierwszy przegląd wykrył rzeczywisty błąd serializacji MappingProxyType; obie granice publikacji otrzymały serializowalne kopie, a regresja używa rzeczywistego MappingProxyType i serializuje receipt. Pięć testów caller/CLI po poprawce przeszło. Wcześniejszy niezmieniony zestaw powłoki i integracji obejmował 42 przechodzące testy. Kontroler miał 19 przechodzących testów offline w Dockerze; po dodatkowych zmianach wymagane są adekwatne nowe wyniki.
+
+Przegląd całego kontrolera ujawnił dwa warunki do domknięcia przed apply: dokładne zachowanie dwóch dodatkowych ścieżek frontendu oraz fsync nowo tworzonych katalogów nadrzędnych dziennika. Nie rozszerzamy starej whitelisty kontrolera ani jego przypiętego SHA. Osobny request preview zapisano w prywatnym wolumenie jako `verification/same-worktree-fresh-start-20261105/preview-request.json`, SHA256 `5f7d7611f8b6cddeca8faef9f91a5fea6f9ac1bfddcc4c09104c58b776df90e9`, UUID `a44491e4-34ce-4e2a-801f-55735d01371f`; zawiera aktualne CID/image/StartedAt/fingerprint i placeholder 64 zer. Zapis tego dokumentu nie jest pozytywnym preview. SIGTERM, usunięcie dwóch usług, terminalizacja helpera i nowy managed build pozostają niewykonane na tym checkpointcie.
+
+Odczyt miejsca: D: wolne 102435377152 B. Pomiar prywatnych podkatalogów w control volume: backend 12039897088 B, frontend 2991783936 B, ledger 684032 B. To stan przed retencją, nie deklaracja odzyskanego miejsca; pomiar filesystemu Docker i miejsca Windows należy raportować oddzielnie.
+
+
+### Checkpoint 05.11.2026 — rzeczywisty preview i dwa zakończone SIGTERM
+
+Rzeczywiste preview przez `just docker-dev-abandon-diagnostic` przeszło. Pierwsza kolizja z okresowym procesem Dockera została zdiagnozowana: wyłącznie dokładne argv `/usr/local/bin/python3 /opt/fullmag/healthcheck.py` może naturalnie zakończyć się w ciągu 2 s; inny proces lub timeout nadal odmawia. 28 testów kontrolera w Dockerze przeszło. Integracyjny zestaw źródłowy przed tym dodatkiem: 49 testów bez pominięć. Nowa regresja kolejności diff i dwa testy CLI po normalizacji proof również przeszły.
+
+Pierwsze apply odmówiło PRZED sygnałami z powodu niestabilnej kolejności tekstu `docker diff`. Dwa niezależne odczyty potwierdziły zmienne raw SHA, lecz identyczne canonical SHA: backend `0fe0f82801d9b0d49558f2fa8a7d940d51b2e928d1aa7df05bfa2b4f7608567b`, frontend `ff1197b690557a2fe78c6c36c6cd03b628dec46046448162de490aeecd2a2c6d`. Observation wiąże nadal pełne posortowane ścieżki/metadane oraz payload SHA; pomija jedynie niestabilny digest kolejności surowego tekstu. Niezależny przegląd tej delty przeszedł. Zapisane obserwacje sprzed i po poprawce różnią się wyłącznie SHA kontrolera i tymi dwoma raw SHA; protected inventory jest identyczny.
+
+Pozytywna obserwacja `7b6912646366c34f2fb024ffa8a6d77048b57e27d572ca70d37a774b4c2bd818`, request `verification/same-worktree-fresh-start-20261105/apply-canonical-request.json`, SHA256 `8d4e9f864cbef37bce041eaabfc0444d4d3a75a9fccc3631db15879b04379ee1`. Protected: 23339 plików, 1857645468 B, inventory SHA256 `232de2d8480fc9dc568d146d3d61708f72aeb468856292d551b052b0f25802a3`.
+
+Wykonano dokładnie dwa autoryzowane SIGTERM, bez SIGKILL: backend f4 zakończony 12:33:15.036196302 UTC, frontend 497 zakończony 12:33:23.316746479 UTC. Oba Exited/ExitCode=0/Pid=0/OOMKilled=false. Nie usunięto kontenerów. Oryginalny helper c967 nadal utrzymuje operację; nie zmieniono wyniku naukowego Succeeded ani dawnej committed rezerwacji. Nowego buildu i Solve nie uruchomiono.
+
+Kontynuację zatrzymał post-stop read-only helper: brak `/state/runs/docker-all/session-store/runtime-services/OWNER.json`. Pełny traceback wskazuje pominięte zagnieżdżone montowanie tego katalogu; jego rzeczywisty named volume i subpath są dostępne w przypiętym Docker inspect. Nie jest to brak wyniku ani powód do ponowienia sygnałów. Przed naprawą zachowano dokładne źródło fazy stop jako `verification/succeeded-guest-abandon/a44491e4-34ce-4e2a-801f-55735d01371f/pre-stop-controller.py`, SHA256 `7b67e74f3efabe9002669640fe42928240770106564749cd463eb99e63708092`.
+
+Po powtórzeniu błędu porównano trzy ścieżki na podstawie dokumentacji Docker: (1) odtworzenie dokładnego dodatkowego mountu readonly wraz z volume-subpath w istniejącym helperze — wybrane, najmniejsza zmiana; (2) osobny helper z pełnym zestawem odczytowych mountów oryginalnej konfiguracji — większy zakres niż potrzebny; (3) bounded kopiowanie z zatrzymanego kontenera przez Docker cp — wymaga dodatkowej kwalifikacji archiwizacji i transportu wielu małych plików. Źródła: [bind mounts](https://docs.docker.com/engine/storage/bind-mounts/), [volumes i subpath](https://docs.docker.com/engine/storage/volumes/), [cp dla działającego lub zatrzymanego kontenera](https://docs.docker.com/reference/cli/docker/container/cp/). Poprawka nie może ukrywać zmiany źródeł: końcowy dowód musi oddzielnie przypiąć controller fazy pre-stop i aktualny controller odczytowej kontynuacji.
+
+
+### Świeży start w tym samym worktree — rzeczywisty checkpoint 05.11.2026
+
+Zrealizowano zgodę użytkownika „tka” dla przeglądu `0109f932102abd08439fd4e38c3d93080c6776f3f4b69f685484cc12dce9857b`. Dokładnie backend `f4c1f89a1e7304320c6ec68936b9ff0117bc8e173a67be029c44eeed345e4848` i frontend `497dec45698d52be2fdd9b59c9e2d3a241b30367975bc78ddf36acc0629c7aa2` zakończyły się po SIGTERM z kodem 0. Nie wysłano SIGKILL. Oryginalny helper sam zakończył nieudany start; dowód `verification/succeeded-guest-abandon/a44491e4-34ce-4e2a-801f-55735d01371f/proof.json` ma SHA256 `6626cec4fec79a67892c5c6d05cdf12ffdd8324861634d8731c04321ba36db96`.
+
+Zarządzane recreate `e8f5877644ad4cd5b0d7e8648602d2c9` zakończyło się poprawnie: usunięto tylko te dwa kontenery, bez wolumenów; zachowano ich warstwy oraz całe dawne runtime-control i ledger w archiwum. Inwentarz 23 339 chronionych plików (1 857 645 468 B) pozostał identyczny, SHA256 `232de2d8480fc9dc568d146d3d61708f72aeb468856292d551b052b0f25802a3`. Historyczny wynik 50 nm pozostaje Succeeded; nie zwolniono starej rezerwacji ani nie uruchomiono Solve.
+
+Toolchain miał cache-hit. Obrazy development `sha256:5620c4e7a166a3b76c9db8d8803e14fe6602fd1eb6c3cfb7e9963a08275d7cec` i backend `sha256:098568de0076be53ea36a7b99c02e8b8e263f3311aec36ba0b8de07451fea682` zostały przygotowane przez BuildKit. Kompilacja aplikacji jeszcze nie rozpoczęła się: próba `bf4a798146c9429ebff50358b2c66dfb` zakończyła się failed-confirmed przed tworzeniem usług, ponieważ lokalny adapter relokacji błędnie wymagał zainicjalizowanej historii również po jawnym archiwizowaniu starej generacji.
+
+Naprawa pierwszej inicjalizacji zapisuje wcześnie wyłącznie zamiar, a jednorazowy trwały claim dopiero po preflight Compose i przed pierwszym create. Wiąże dokładne archiwum, generację, inode, właściciela, daemon, grupę i aktywnego helpera. Claim jest poza liściem ledgeru: późniejsza utrata historii nadal odmawia startu. Nie inicjalizuje ledgeru natywnie ani nie resetuje zapisanej historii. 109 lekkich testów rejestru, receiptów oraz granicy Compose przeszło (exit 0); kompilacji testów Rust nie wykonywano.
+
+Rzeczywisty odczyt przed dalszym startem potwierdził brak usług i aktywnej operacji, zgodne archiwum e8, brak zużytego claim oraz pusty nowy ledger `2112:4755172`, właściciel 65532:65532, tryb 750. Następna operacja to zwykłe `just docker-dev` tego samego worktree na 3203, bez skryptu startowego. Nie powtarzać recreate ani sygnałów do usuniętych kontenerów. API/UI i kompilacja aplikacji pozostają na tym checkpointcie NOT VERIFIED; niezależny przegląd poprawki trwa.
+
+Dalszy review wykrył brak Pythona w domyślnym helperze CUDA. Ścieżka uwierzytelnionej świeżej generacji wybiera teraz przypięty obraz dev przed utworzeniem helpera; aktualizacja nie zmienia obrazu działającego helpera ani obrazu aplikacji. Rzeczywista próba odczytowa obrazu potwierdziła Python 3.10.21. Cztery regresje rzeczywistego wywołującego start oraz trzy granicy claim/Compose przeszły; niezależny przegląd nie wykazał dalszego blokera. Końcowy zestaw 121 testów: PASS, exit 0. Jedna starsza atrapa została urealniona przez jawne None dla nieistniejącego dokumentu; asercje pozostały bez zmian. Pełny wynik: `verification/same-worktree-fresh-start-20261105/first-admission-tests.json` w control volume.
+
+
+### Wynik rzeczywistego buildu 09064 i poprawki integracji — 05.11.2026
+
+Pierwsza inicjalizacja przeszła: powstały backend `dc444bca873f3bb223575063173bbb2670b32e37327882b770c93a97980e7d07` i frontend `725a55ad76e770d414991ef47741195ecb5efd97310a7c7a233a9d960c163c47`. Wszystkie trzy obrazy miały cache-hit. Próba `09064b744fb045bea6ffff853dd25c1f` zakończyła się failed-confirmed. Backend po 595 871 ms w Make zgłosił cztery błędy kompilacji workera API: dwa niezwiązane `completion` oraz dwa inicjalizatory bez tego pola. Nie wystąpił OOM. Stan natywnych 302 obiektów FEM jest dowodem postępu kompilacji, nie kwalifikacją runtime.
+
+Poprawka dwóch plików workerów przekazuje prawdziwe StageCompletionIR z wrappera do istniejącej walidacji i receipt; H-only jawnie odrzuca magnetyczne completion zamiast je gubić. Kontrola wywołań i whitespace przeszła, kompilacja poprawionego kodu pozostaje NOT VERIFIED.
+
+Frontend zakończył się kodem 1: niezgodny hash next-env.d.ts. Przyczyną było zachowanie pliku wygenerowanego przez poprzedni Next po usunięciu starego freeze w legalnej zmianie metadanych. Seeder teraz przywraca oryginalny seed przed nowym freeze; przy istniejącym freeze zachowuje wygenerowane pliki, a nieznane zmiany zależności nadal odrzuca. Regresja rzeczywistego skryptu odtwarzała błąd przed poprawką i przeszła po niej. Łącznie 124 lekkie testy PASS; zapis `verification/same-worktree-fresh-start-20261105/seed-fix-tests.json` w control volume.
+
+Kontynuacja ma korzystać z istniejącej recepty `docker-dev-resume` dla próby 09064, CAS Compose `0b2bae70f17f628a22b7b6ff841c17f08d56f3a0c6ce5de9c3de9341f0e5742b`, portu 3203 i restart_backend=true. Oba te same kontenery są zakończone; nie usuwać ich, nie powtarzać archiwizacji ani pierwszej inicjalizacji. Nullable config_sha256 w terminalu nie jest uzupełniane: launcher sprawdza CAS bezpośrednio z dokumentem Compose. Zachowane compiler outputs mają służyć poprawionej kompilacji. API i UI nadal nie działają na tym checkpointcie. Bez nowego Solve.
+
+
+### Odmowa resume 60f7397f — checkpoint wymagający decyzji
+
+Rzeczywiste resume bazy09064 odmówiło przed startem usług: brak dziedziczenia private_group_storage oraz zbyt wczesne daemon_pending pozostawiły własnego helpera60f7397f. Nie skasowano blokady ani nie zmieniono terminalu. Przyczyny są poprawione; 128 lekkich testów PASS. Obie aplikacje nadal Exited, native OWNER/config nie istnieją. Poprawki Rust nie są jeszcze skompilowane. Istniejące recovery wymaga innych dowodów i nie pasuje do tego stanu. Konkretny przegląd dodatkowej ścieżki potwierdzenia odmowy: D:/git/fullmag/artifacts/antenna-ui-20261103/same-worktree-clean-start-20261105/przeglad-domkniecia-resume-60f7397f.md, SHA256 c7da209d32544f7e81682c57448613423cea6811ab7b636f563959489b5ad0c4. Nowa ścieżka nie została wdrożona ani wykonana; następny krok to decyzja zgodna z AGENTS.md §8. Nie traktować wcześniejszego przeglądu source-only jako sukcesu runtime.
+
+
+### Prace niezależne podczas oczekiwania na decyzję — 05.11.2026
+
+Po ponownym odczycie rzeczywisty helper60 nadal żyje, obie aplikacje pozostają Exited. Bez stosowania recovery. Draft przeglądu doprecyzowano w D:/git/fullmag/artifacts/antenna-ui-20261103/same-worktree-clean-start-20261105/resume-preflight-candidate/plan-zrodlowy-pl.md (SHA256 909df0887f1901956c6c4003b5d9aa19ad9785b122baa68949b5189c5181b41b): obecny interrupted controller nie nadaje się do żywego ownera; trzeba zachować observer-lock i finalizację przez oryginalnego helpera, uwzględniając partial-apply. To plan źródłowy, nie wdrożony patch lub zaliczone testy implementacji.
+
+Niezależnie od blokady ponownie odczytano oryginalną trajektorię RF i sprawdzono jej hash ef05fe5d6ce64e797d11b36659fb144d065b09fd63c5407ce63ede970778466c oraz hash oryginalnego receipt 68a802aa98b0c5c75c4f9b9e3e7736508ec0365ff6f2cc9507ba611a6fff544d. W odczytowym helperze grupy ponownie uruchomiono istniejący postprocessor: wszystkie6 porównań i kompletne2000 próbek okna pomiaru PASS, max względny błąd 3.693510037387942e-05. Nie wykonano Solve/builda i nie podniesiono scientific assessment. Wynik jest kontrolą zachowanych danych, nie dowodem nowego runtime albo reprodukcji transmisji; raport control volume: verification/same-worktree-fresh-start-20261105/retained-rf-recheck.json.
+
+
+### Blokada oczekująca na decyzję — trzeci kolejny checkpoint
+
+Ponownie potwierdzono bezpośrednio w Dockerze: helper cb86b48ab9fb40f025b8559cba3ca39142bfcf7e9a6f28eb6d2bd3ce1d9f4f6b nadal żyje w tej samej inkarnacji; backend dc444bca873f3bb223575063173bbb2670b32e37327882b770c93a97980e7d07 i frontend725a55ad76e770d414991ef47741195ecb5efd97310a7c7a233a9d960c163c47 nadal Exited z niezmienionymi czasami. Receipt resume60 ma niezmieniony SHA e7a328af9ee23b58e3b0a01a8d725acc801666524c160c0b5c3f793c00deb84d i stan outcome-unknown-resources-retained. Zgoda na dodatkową ścieżkę recovery nie wpłynęła. Niezależne poprawki i odczytowe weryfikacje są ukończone w dostępnym zakresie; pełne zadanie pozostaje niezrealizowane. Następny krok: odpowiedź na istniejące pytanie dotyczące przeglądu c7da209d32544f7e81682c57448613423cea6811ab7b636f563959489b5ad0c4, następnie zatwierdzona implementacja/preview/domknięcie i kanoniczne wznowienie. Nie zwolniono blokady ani rezerwacji, nie wykonano Solve.
+
+
+## Domknięcie resume 60f7397f — zgoda i odczyt archiwum 05.11.2026
+
+Użytkownik zatwierdził domknięcie i jedną kontynuację buildu w tych samych kontenerach, zgodnie z przeglądem SHA256 `c7da209d32544f7e81682c57448613423cea6811ab7b636f563959489b5ad0c4`. Zakres nie obejmuje Solve ani usuwania kontenerów lub danych.
+
+Rzeczywiste odczytowe haszowanie starego magazynu przez archiwalne, wyłącznie readonly mounty potwierdziło wszystkie 23 339 plików (1 857 645 468 bajtów), inventory SHA256 `232de2d8480fc9dc568d146d3d61708f72aeb468856292d551b052b0f25802a3`. Nowy katalog `private/ledger/ledger` istnieje i jest pusty. Adapter archiwum i zamknięty dispatcher: 5 testów PASS; wraz z regresjami istniejących ścieżek startu/wznowienia 133 testy Python PASS. Nie kompilowano testów Rust. Pełne recovery i kolejny build nadal wymagają rzeczywistego preview i wykonania; ta sekcja nie stanowi dowodu ich ukończenia.
+
+
+### Wynik zatwierdzonego domknięcia resume 60f7397f
+
+Końcowe preview przez dedykowaną recepturę `just` przeszło. Request SHA256 `95c6310a56adea63c732c0b044e3374f40cbd0fb564bba5b57a06fad0f8406ce`; wynik deterministyczny SHA256 `590d8ba47ac7b079bb94b7a71c25122e2e48762096f6be25cef81f641904d4bd`. Zatwierdzone apply zakończyło się kodem 0 i statusem `failed-confirmed`. Oryginalny receipt został zachowany, log pozostał niezmieniony, oryginalny helper sam zakończył lease; `active` nie istnieje. Nie uruchomiono usług ani Solve i nie usuwano danych/kontenerów. Osobno przeszło 211 testów Pythona obejmujących nową transakcję i osiem wcześniejszych zestawów reconcile; niezależny przegląd źródeł nie znalazł blockerów. Przerwanie observera po BEGIN pozostaje fail-closed i nie oznacza automatycznego recovery dowolnej awarii. Dowody w wolumenie kontrolnym: `verification/same-worktree-fresh-start-20261105/resume-preflight/`. Następny krok: jedna zatwierdzona kontynuacja buildu 09064 w tych samych kontenerach, bez Solve.
+
+
+### Zakończenie jednej zatwierdzonej kontynuacji buildu — 05.11.2026
+
+Kanoniczne `just docker-dev-resume` zakończyło się kodem 0; terminal `resume/attempts/5275318ed7ec449aad7b33141b32b47c/terminal.json` ma status `succeeded`. Wykorzystano te same kontenery backend `dc444bca873f3bb223575063173bbb2670b32e37327882b770c93a97980e7d07` i frontend `725a55ad76e770d414991ef47741195ecb5efd97310a7c7a233a9d960c163c47`. Oba są healthy, bez OOM, źródła są montowane readonly. Build nie był package cache-hit. Faza CLI/API/workers zakończyła się po 13 min 45 s; pełny Make wraz z modułem Python zakończył się kodem 0 po 1 034 711 ms. Pakiet 24 plików został opublikowany i zweryfikowany. Cztery uprzednie błędy kompilacji workera zostały potwierdzone jako naprawione w rzeczywistym buildzie kontenerowym. Nie kompilowano testów Rust i nie uruchomiono Solve.
+
+HTTP z hosta Windows: `/workspace` na 3203 zwraca 200 (40 615 bajtów HTML). API odpowiada; brak bieżącej sesji zwraca jawne 404. Jest to poprawne dla świeżego runtime bez uruchomienia projektu. Timeout próby przez WSL localhost nie jest dowodem awarii serwera dostępnego przez port hosta Windows.
+
+Korekta importu: zachowany plik SHA256 `6af101c6af9b1787692fae334ff601db2af702e9a4e9cdd2e73068813251264d` jest archiwum projektu v1 z `manifest/project.json`, nie snapshotem sesji. Początkowa próba użyła niewłaściwego endpointu importu sesji i została odrzucona bez importu. Właściwe publiczne `POST /v2/persistence/projects/open` zwróciło projekt `project-12a89e5144084a5ab7bf501d1593cf56`, nazwę „Sushruth 2020 — closed GSG”, revision 4, tryb read_write, kompletną scenę authoring i brak migracji/ostrzeżeń. Otwarcie API nie publikuje projektu do stanu przeglądarki i nie uruchamia sesji ani Solve. Identyczna kopia użytkowego projektu do otwarcia w UI: `D:/git/fullmag/artifacts/antenna-ui-20261103/gsg-authoring-preserved.fms`.
+
+Ponowna kontrola pełnego starego magazynu po buildzie: 23 339 plików, 1 857 645 468 bajtów, inventory SHA256 `232de2d8480fc9dc568d146d3d61708f72aeb468856292d551b052b0f25802a3` — bez zmian. Raport w wolumenie kontrolnym: `verification/same-worktree-fresh-start-20261105/resume-preflight/managed-build-result.json`. Nowe trwałe kontenery nie powstały; krótkie helpery zakończyły się w swojej ścieżce zarządzanej. Nie wykonano ogólnego cleanupu ani usuwania wyników/cache.
+
+Kontrola wizualna nadal NOT VERIFIED: stare karty przeglądarki są stronami błędu, a po wcześniejszej blokadzie narzędzia wymagają świeżo otwartej karty HTTP przez użytkownika. Poproszono o nią przez formularz. Nie użyto alternatywnego dostępu do zablokowanych kart. Odtworzenie publikacji i kwalifikacja antenowego pola dla LLG pozostają otwarte; udany build nie jest dowodem zgodności naukowej.
+
+
+### Kontrola rzeczywistego UI po otwarciu świeżej karty — 05.11.2026
+
+Użytkownik potwierdził widoczną stronę; karta 8 jest prawidłową kartą HTTP. Zachowany projekt otwarto przez Browse i wybór identycznej kopii FMS. Formularz „Add file by path” służy ścieżkom hosta backendu Linux i odrzucił ścieżkę Windows jako nieabsolutną; nie zmieniono walidatora. Poprawny publiczny wybór pliku w UI odtworzył scenę na `/session/sushruth-2020-closed-gsg`, z połączeniem Local API i statusem Awaiting command. Nie klikano Compute ani nie uruchamiano Solve.
+
+Zaliczone: widoczna geometria pełnego obwodu GSG, drzewo Universe → Airbox → Visualization, osobne obiekty GSG antenna / Co/Ni field sampling, inspektor anteny z `var(--fm-surface-antenna)`. Telemetry → Antenna rozpoznaje `inspect_gsg` / `gsg_charge` i jawnie pokazuje „Antenna stage configured — not started”, zamiast błędu braku etapu. Zakładkę aktywowano standardową klawiaturą Enter po tym, jak automatyczne kliknięcia nie zmieniły wyboru. Nie zmieniano kodu widgetu.
+
+Render details potwierdził „context active” i drawing buffer 944 × 367 px; screenshot pokazuje niepustą geometrię oraz skalę SI. W konsoli brak zaobserwowanych błędów, jedynie deprecjacja THREE.Clock. Odczyt getContext z ograniczonej kopii DOM narzędzia nie jest obsługiwany; stan WebGL zweryfikowano przez natywny panel diagnostyczny aplikacji. Kamera ma odległość 20 µm, bez zmiany geometrii lub fizyki.
+
+Natywny eksport PNG aplikacji sprawdzono wizualnie: `D:/git/fullmag/artifacts/antenna-ui-20261103/antenna-geometry-ui-20261105.png`, 88 802 bajty, SHA256 `7caf74c98094b89343247ba65d4a743d7370b33fff5a9550595ef6906c1c1b72`. Nowy plik przeniesiono z domyślnego Downloads na D:; innych plików nie usuwano. Karta pozostaje otwarta. Raport w wolumenie kontrolnym: `verification/same-worktree-fresh-start-20261105/resume-preflight/browser-smoke-result.json`.
+
+Granica tego odbioru: projekt authoring nie zawiera zrealizowanej siatki ani dołączonej mapy H. Kontrola potwierdza otwarcie projektu, renderowanie geometrii i gotowość telemetrii, nie wyświetlenie zachowanego pola Oersteda. Przyłączenie zapisanych wyników do nowej sesji pozostaje kolejnym zadaniem; nie wolno zastąpić tego nowym Solve ani zerowym polem.
+
+
+### Zachowane pole GSG po świeżym starcie — integralność i przekrój 05.11.2026
+
+Niezależny odczyt aktualnego kodu i HTTP potwierdził przyczynę pustego katalogu wyników: backend grupy 3203 korzysta z nowego `/state`; archiwalny magazyn generacji `77a796a26a15481090ffb3d0feefa27a` nie jest jego mountem. Publiczne GET listy runów projektu zwraca `runs=[]`, a GET SolutionSet historycznego H275 zwraca 404 `accepted run intent is missing`. Samo otwarcie projektu FMS nie przywraca accepted run store. Nie jest to dowód utraty danych lub konieczności ponownego Solve.
+
+Odczyt archiwum zidentyfikował cztery wyniki: historyczne H-only275 oraz trzy pełne V/J/H100/75/50nm. Nie zmieniono statusów: H-only ma task Failed z opublikowanym wynikiem inspekcyjnym, a trzy pełne rozwiązania są Succeeded. W istniejących FMS znaleziono wyłącznie projekty authoring GSG i starsze, inne sesje solved — nie ma gotowego przenośnego archiwum tych czterech wyników.
+
+Dodatkowy wykonywalny odczyt sprawdził rzeczywiste bajty H275, nie tylko metadane: SHA256 wszystkich ośmiu wejść (RunIntent, RunCatalog, ArtifactCatalog, manifest dataset, manifest geometrii, manifest tensora, geometria próbek i chunk H), zgodność identyfikacji nośnika i jednostek, 275 unikalnych próbek, 960 Tet4 i poprawne indeksy, skończone niezerowe wektory. Po renderze ponownie sprawdzono wszystkie osiem wejść. Norma H wynosi 0,020726185528905552–25,40102879836274 A/m. Nie są to wartości błędu ani dowód zgodności z publikacją.
+
+Odtwarzalny pomocniczy postprocessing istniejących próbek utworzył na D: CSV oraz przekrój y=0 (55 próbek) z kierunkami (Hx,Hz) i normą pełnego H. Dolny panel pokazuje 11 rzeczywistych próbek Hx/Hy/Hz przy z=−13,7nm; odcinki tylko łączą punkty, nie wykonano ponownej całki ani resamplingu. Nie utożsamiać tego wykresu ze screenshotem działającej mapy w UI, z kwalifikacją bazy ani z transmisją z rys.3. Nie wykonywano builda, Solve, importu, zmiany mountów lub danych archiwum. Wykres jest pomocniczą analizą na hoście, nie weryfikacją natywnego runtime.
+
+Artefakty użytkownika w `D:/git/fullmag/artifacts/antenna-ui-20261103/`:
+
+- `verify_retained_h275_20261105.py` — odtwarzalny skrypt, odmawia nadpisania dowodów;
+- `h275-retained-samples-20261105.csv`, SHA256 `52faa6e112a6e81692f8beafb767344cd9f9d70f7704070b2ed22357d8db7e10`;
+- `h275-cross-section-20261105.png`, SHA256 `d6e0f11eeb06be527edd3ca0c2202b92e41ccba2fada51eade48a380b9264ba6`, sprawdzony wizualnie;
+- `h275-archive-integrity-20261105.json` — dokładne piny i ograniczenia odczytu.
+
+Następny krok UI: udostępnić zachowany store kanonicznemu odczytowi wyników bez odzyskiwania uprawnień schedulera i bez ponownego transportu. Obecny historical exporter obsługuje tylko kompletne Succeeded; nie wolno użyć go do podmiany Failed H275 na sukces. `imports/inspections` również zapisuje staging, mimo swojej nazwy, więc nie jest operacją tylko do odczytu. Rozwiązanie musi zachować osobną tożsamość i provenance archiwum; ręczne kopiowanie katalogów runów do bieżącego writable store albo ponowne Solve nie jest kwalifikowanym restore.
+
+
+## Zatwierdzony odczyt archiwum wyników — 05.11.2026
+
+Użytkownik zatwierdził projekt `2026-11-05-retained-results-readonly-archive-proposal.md` (SHA256 `80684c35a379089fab093a858f771d124bb18944a58145910f618db7dd02bb0d`), implementację, jeden managed build i okno wyłącznie grupy 3203. Zakres obejmuje read-only źródło czterech zachowanych runów H275 i V/J/H100/75/50nm pod istniejącymi GET persistence. Nie obejmuje nowego Solve, zmiany statusów, przywrócenia schedulera ani rezerwacji.
+
+Przygotowano niezależne oczekiwania pełnych payloadów 10 tensorów (`readonly-archive-http-expectations-20261105.json`, SHA256 `10f1fc6f38deb0e1fda636184ba6057dbe545329b1aad3e00fcf968c3e63bbc9`). Osiem regresji dekodera odczytu przeszło w obecnym stałym backendzie. Dowód: `verification/readonly-result-archive-20261105/http-verifier-tests.json` w prywatnym control volume grupy. Jest to kontrola transportu i integralności, nie kwalifikacja dokładności pola. Nowe testy Rust resolvera nie były kompilowane. Rzeczywisty build, HTTP i UI pozostają do wykonania.
+
+
+### Wykonanie zatwierdzonego okna readonly archive — build i API zaliczone, UI oczekuje
+
+- Regresje launchera: 122/122 PASS, zero skip; niezależny review źródeł bez P1/P2. Regresje binarnego weryfikatora HTTP: 8/8 PASS. Nie kompilowano testów Rust.
+- Preview i publikacja manifestu: SHA256 `dccef48a118e59685dcbb2f003e0468770d922f04393273c38df4a2585006a37`; request `readonly-results/dccef48a118e59685dcbb2f003e0468770d922f04393273c38df4a2585006a37/request.json`, SHA256 `c477353e1bb802640c3f0403ccc956bfd054593d7481a9d7c49f97b30732c33f`.
+- Aktualna scena zapisana do świeżego FMS SHA256 `273097a79355802f6cc6f75b5ff79ca72dd41cf349e81d75ba383bef3efd9306`, scene revision1 i SHA256 `5a78f67548162c0e33c78324573ebf680b9bf6f4de9d0cd2aa0cc6600173c864`. Checkpoint w control `verification/readonly-result-archive-20261105/saved-authoring-checkpoint-80286ddca7b413b2.json`, SHA256 `80286ddca7b413b2e4cf2fd2da501789b265d3303f6d5500859280d712a33a26`. Pełny istniejący preflight PASS: zero runów i rezerwacji.
+- `docker-dev-stop-saved-authoring`: iteration `73b28713ea6142dda0b10d6f81ecfb5f`, succeeded; oba zatwierdzone kontenery wyszły z kodem0.
+- `docker-dev-recreate-readonly-results`: recreate `75f6bb4559644945924016326727c63b`, succeeded. Jedyny managed build/start zakończony `succeeded`, development `5657831c0b4a4a5896b75a5dc171c4a3`, config SHA256 `280f0c71caa8fdd17c154d3b84a2a5c9731dbacff645d9dfb8e9120e917a37ec`; nowy backend `60bd0d1e15f28392507655f2a36d9f377957899a0de174cb6b06a6da6ffca8a5`. Oba rzeczywiste mounty archiwum RW=false. Toolchain i obrazy były cache hit; aplikacja została skompilowana i opublikowana w 24-pliku pakiecie. Nie uruchomiono Solve.
+- Następny odbiór: gotowość nowego API → jawne przywrócenie świeżego FMS → `verify_archived_solution_http.py` z przypiętym oczekiwaniem 10 tensorów → istniejący saved planar verifier → rzeczywisty widok UI/WebGL. Tych kontroli nie oznaczono jeszcze jako wykonane.
+
+
+### Wynik rzeczywistego odbioru readonly archive — 05.11.2026
+
+- **Managed build PASS**, exit0. CLI/API/workery: 17m45s; pakiet Python: 4m04s; `make install-cli-dev`: 1 322 940ms. Pakiet24 plików opublikowany i zweryfikowany. Obie bramki `linux-native-v1` i `worker-cgroup` PASS. Wersja `0.1.0-dev.20261105.g006e8f024f89.dirty.s80fc9cf8d4ca+9805`, source snapshot `80fc9cf8d4cae4d142c2b4cef72a1f2f6329bc1829dfe95d5741eb592e3eb6f8`.
+- **Scena przywrócona przez publiczne API**: `projects/open` → `sessions.create` → scoped `replace_scene`, bez Prepare/Compute/Solve. Projekt `project-12a89e5144084a5ab7bf501d1593cf56`, sesja `session-18e540e26e49907700004d92`, scene revision1. Porównanie zapisanych pól sceny PASS. Receipt: `verification/readonly-result-archive-20261105/restore-authoring-3d6fd9c2f3364c438e3d0b6b6b184302.json`.
+- **Pełny odczyt HTTP PASS**: 59 wyłącznie GET, cztery runy, discovery z limitem1 i odmowa starego niepoprawnego cursora, wszystkie10 pełnych tensorów V/J/H identyczne bajtowo z niezależnie przypiętymi oczekiwaniami. Historyczny H275 nadal Failed,100/75/50nm nadal Succeeded. Receipt: `verification/readonly-result-archive-20261105/http-readback-attempt1.json`.
+- **Przekroje H275 PASS**: istniejący `verify_saved_planar_http.py`,66 żądań, XY/XZ/YZ, topologia i support oraz niezależna interpolacja zapisanych Tet4. Receipt: `verification/readonly-result-archive-20261105/h275-planar-readback-attempt1.json`. To dowód odczytu i rekonstrukcji danych, nie niezależna kwalifikacja fizycznego H ani odtworzenie transmisji z publikacji.
+- **Całe archiwum bez zmian**: 23 339 plików /1 857 645 468B; inventory SHA256 `232de2d8480fc9dc568d146d3d61708f72aeb468856292d551b052b0f25802a3`, identyczne z poprzednim pinem. Receipt: `verification/readonly-result-archive-20261105/archived-protected-after-http.json`.
+- **Granica runtime PASS**: backend `60bd0d1e15f28392507655f2a36d9f377957899a0de174cb6b06a6da6ffca8a5`, frontend `f4b4ada739df7ab8c44919239e48c47587f7cefe96e9c3a7a0fa76fd7c0df05a`, oba healthy/bez OOM. Dwa mounty archiwum RW=false; manifest montuje dokładny subpath `readonly-results/dccef48a118e59685dcbb2f003e0468770d922f04393273c38df4a2585006a37`. Frontend nie ma tych aliasów. Writable run directories=0, current run=null, solver awaiting_command. Receipt: `verification/readonly-result-archive-20261105/runtime-boundary-after-http.json`.
+- **Dodatkowa poprawka frontendu**: cursor archiwum nie może być walidowany limitem256B dla RunId. `projectRunResources.ts` przyjmuje teraz opaque cursor do4096B UTF-8, nadal odrzuca puste/control/trim i brak postępu. Pięć Vitest PASS, ESLint PASS, niezależny review bez P1/P2. Globalny typecheck po regeneracji API PASS. Logi: `frontend-cursor-*` i `frontend-typecheck.*` w tym samym katalogu verification.
+- **OpenAPI codegen PASS** przez `just generate-api-openapi` już zbudowanego pakietu; receipt `backend/codegen/openapi-v2/831f98573146ad455055f4609aafcaa825bfbfe1e031c7b7b6baaeea8dfcde12.json`. Bez dodatkowego managed buildu i bez kompilacji testów Rust.
+- **UI/WebGL po tym buildzie: NOT VERIFIED**. Dotychczasowa karta8 przeszła na stronę błędu `data:` podczas restartu; polityka Browser Use odrzuciła jej odczyt. Nie ponawiano tej ścieżki, nie użyto innej przeglądarki ani CDP. Zadano jedno oczekujące pytanie o świeżą kartę `http://127.0.0.1:3203/workspace`. Następny krok: rzeczywiste otwarcie zachowanego H275 przez Saved Results i kontrola 3D/2D/canvas; nie przedstawiać poprzedniego screenu geometrii jako dowodu obecnego pola.
+
+Dowody techniczne pozostają w prywatnym control volume grupy. Wyniki i historia nie zostały przepisane, żaden nowy Solve nie został uruchomiony. Kwalifikacja bazy, niezależne kontrole fizycznego H i transmisja Fig3(e) pozostają osobnymi nieukończonymi zadaniami.
+
+
+### Odbiór UI readonly i zależność rodzica H275 — 05.11.2026
+
+Świeża karta 3203 działa. Przez Home → Open saved run otwarto H275, revision2,
+member f0651f8c… i dokładnie materialized dataset26fc60f6…. Inspektor pokazuje
+H_ant/A/m i 275 węzłów. Przekrój XZ przy y=0 jest widoczny: x od −2 do2 µm,
+z od −0,3 do0,3 µm, zakres rastra 0,06048–24,37 A/m, wektory i równe skale
+osi. Jest to rekonstrukcja inspekcyjna zachowanych danych, nie nowy Solve
+ani kwalifikacja dokładności pola. Panel Render details potwierdził aktywny
+WebGL i bufor944×587px. Ogólne API/planar PASS z poprzedniego checkpointu
+pozostają dowodami dla niezmienionych danych.
+
+Odbiór ujawnił brak piątego rodzica na liście archiwum: sam context H275
+jest poprawny, lecz dalszy GET rodzica dołączał błąd404. Nie usuwano tego
+błędu przez fallback do bieżącej geometrii. Użytkownik zatwierdził dokładny
+przegląd `2026-11-05-h275-parent-readonly-dependency-proposal.md` (pierwotny
+SHA c86f66e4bd6a3a2b13411a2091ff2f4cc6b88fbfad9f1e541e7342da8cd27506),
+pierwszy managed preview/przygotowanie pięciu runów przeszły. Zatwierdzone okno i build pięciu wyników zakończyły się poprawnie;
+pełny odczyt źródła anteny przez API również przeszedł. Końcowy wspólny
+widok anteny i pola po tym ostatnim restarcie pozostaje do sprawdzenia.
+
+Niezależna seria referencyjna nie została uruchomiona (0/9). Przygotowano
+wąski driver, 30 regresji profilu/agregacji/dispatchu i19 regresji launchera
+przeszło; testy używają małych danych lub zastąpionego kernela. Wymagane
+kontrole noty0950 i41 testów scientific-documentation-contract przeszły.
+Nie jest to porównanie dziewięciu punktów ani odtworzenie transmisji z pracy.
+
+
+### Wykonanie zatwierdzonego piątego wyniku — 05.11.2026
+
+- **Managed build i start PASS**: development attempt
+  `894d4efb43eb483eb6179d8d49fd449e`, konfiguracja
+  `1c0a74f52438f272836dd5c248dd06559cf19774c2c92b8394efd23a4ec10bd4`.
+  Stop `0bafe0a696d749baa7180fbe234d6806` i recreate
+  `18d55f6576e04f1891c0d730074228b4` zakończone poprawnie.
+  Backend `05de79a8e6d4f33d1c7b8b201c69cc9813fa3beec0ccbe9d99013941de301ced`,
+  frontend `271d8c4d455871a1b7b4b2fc34c55b9a122a3df305e0cd0c3382f072ac6779c4`:
+  running/healthy, bez OOM. Port frontendu 127.0.0.1:3203.
+- Pakiet24 plików opublikowany; CLI/API/workery15m04s, cały `make install-cli-dev`
+  1 131 247ms. Wersja `0.1.0-dev.20261105.g006e8f024f89.dirty.s42d570eca01a+9805`,
+  snapshot `42d570eca01aac3227a40056198a15605b983bd5b669b1530818f2ce694fd23a`.
+  `linux-native-v1` i `worker-cgroup` PASS. Testów jednostkowych Rust nie kompilowano.
+- Manifest pięciu wyników
+  `087acfc293e919102335bfcb13330c22091473b6b1a0aad1f2363da26d6789c5`,
+  request `378d6de31723e26ba5261af1235065be4c13e39f97433b3b83cadeb3b738029d`.
+  Rzeczywiste środowisko oraz dwa mounty readonly zgodne; brak zagnieżdżonego
+  zapisywalnego mountu w archiwum. Nie rozszerzono grantów poza zatwierdzony manifest.
+- **Przywrócenie sceny PASS**, przez publiczny parser FMS i transakcję modelu,
+  wyłącznie we własnej świeżej sesji `session-18e545178161094900004cbe`.
+  Zapisane pola sceny zgodne; revision1, bieżący run=null, bez Prepare/Solve.
+  Dowód `verification/h275-parent-readonly-20261105/restore-authoring-7f6b3f959e14e3ad.json`,
+  SHA256 `7f6b3f959e14e3ad695ea3b7abc9844223a9624d21e3d5ccee537c3e64526dc2`.
+  Dwa wcześniejsze helpery zachowano: pierwszy miał błędny odczyt metody HTTP,
+  drugi odrzucał kanoniczne pominięcie pustej listy objects. Końcowy helper
+  sprawdził dokładną tożsamość utworzonej sesji i jej niezmodyfikowaną revision0.
+- **Zgodność czterech poprzednich runów PASS**:61 żądań wyłącznie GET,
+  wszystkie10 tensorów zgodne z wcześniejszymi niezależnymi pinami.
+  Dowód `verification/h275-parent-readonly-20261105/four-run-compatibility-http.json`.
+- **Pełny łańcuch rodzica PASS**: H275 context → stronicowane discovery rodzica
+  → revision2 → dokładny member/bundle → unikatowy V_electric → geometria,
+  topologia i support.5990 węzłów,14304 komórki. Topologia658784B SHA256
+  `2e05c1002a6bae5fa14795322922ae8c6c8be8abb0aeda55d57ad714a6823cc2`,
+  support773B SHA256 `9999e10fda46c58a56488f6ef9e4aa0c242add667db295b6d260a33b3ad90a97`.
+  H275 nadal Failed; rodzic Succeeded/reconciling. Historia nie została przepisana.
+  Dowód `verification/h275-parent-readonly-20261105/parent-public-complete-5a95d44f22b62604.json`,
+  SHA256 `5a95d44f22b62604393b1b69ba22561a2ba90a0268b7a340bcd917d0a5d455ea`.
+- Frontend HTTP `/workspace`:200,40615B. Pierwsze otwarcie po odtworzeniu
+  kompilowało trasę. **Odbiór wizualny po ostatnim buildzie: NOT VERIFIED**:
+  karta8 przeszła na stronę błędu data:; nie ponawiano zablokowanej ścieżki.
+  Oczekuje prośba o świeżą kartę HTTP. Wcześniejszy widoczny przekrój XZ
+  jest dowodem poprzedniej konfiguracji, nie obecnego wspólnego widoku.
+- Automatyczna retencja ma rzeczywisty receipt `succeeded`, exit0,
+  `/opt/fullmag/runtime-control/runtime-service/cache-maintenance.json`:
+  current + direct-rollback zachowane; usunięta kwalifikowana generacja pakietu
+  `dd3126c4e980d44df94cc326a537d9c4bdc7d4cd43f28b631e28ec9350d4cb24`.
+  To dowód tej operacji, nie kompletnego sprzątnięcia historycznych tożsamości
+  ani odzyskania miejsca w Windows VHDX. Build zwiększył zajętość filesystemu
+  Docker z754927669248 do757834469376B; nie deklarujemy odzyskanych bajtów na C:.
+
+Seria niezależnych dziewięciu kontroli fizycznego H pozostaje osobną pracą;
+przygotowanie managed przeszło, preflight w toku, rzeczywistych ocen nadal0/9.
+Nie uruchomiono ponownie V/J/H ani H-only, nie odblokowano LLG. Bramka
+zbieżności eta nadal FAIL; wyników transmisji publikacji jeszcze nie odtworzono.
+
+
+### Końcowy odbiór piątego rodzica w UI — 05.11.2026
+
+Karta7 zmieniła stan ze starego błędu na rzeczywistą stronę HTTP
+`http://127.0.0.1:3203/home`; dopiero ten nowy stan został otwarty narzędziem.
+Karty8 data: nie odczytywano. W działającym UI wykonano Home → Open saved run
+→ H275/revision2 → member f0651f8c… → dataset26fc60f6… → Inspect pinned dataset.
+
+**Odbiór 3D PASS w zakresie odczytu i rysowania**: widoczna złota rzeczywista
+antena GSG rodzica razem z wektorami H. Etykieta domeny:
+`saved sampling domain · archived antenna source`; stan `Saved field ready`.
+Render details: context active, drawing buffer944×587px,275 glyphs,
+`degradation=none`. Kamerę zbliżono ręcznie przez publiczny panel parametrów:
+pozycja(5,5,3)µm, target(0,0,0), FOV42deg. To widok centralnego fragmentu,
+nie całego dwudziestomikrometrowego obwodu. Nie zmieniono źródła ani domeny.
+
+**Przekrój 2D PASS wizualnie**: XZ przy y=0, magnitude/A/m, Vertical×1,
+Vectors on,36864 piksele rastra, równe fizyczne skale osi. Widoczne strzałki
+rotacji i mapa barw, x od−2 do2µm, z od−0,3 do0,3µm; zakres renderowany
+0,06048–24,37A/m. Karta pozostała otwarta na tym przekroju, oznaczona deliverable.
+Zrzuty obu widoków pokazano natywnie w rozmowie. Nie utworzono pliku PNG na D:;
+nie podajemy nieistniejącego pliku jako dowodu. Poprzednie NOT VERIFIED dla
+końcowego widoku po tym buildzie jest tym odbiorem zastąpione.
+
+H275 korzysta z jego dokładnego historycznego rodzica14304Tet4; nie jest to
+podmiana na źródła serii100/75/50nm(14299/25516/72911Tet4). Nadal jest to
+rekonstrukcja inspekcyjna niezakwalifikowanej bazy, nie odtworzona transmisja
+Fig3(e). Historyczny status Failed H275 zachowano. Nowych obliczeń nie było.
+
+### Kontrola wstępna serii referencyjnej — rzeczywisty wynik
+
+Managed prepare `556f9fad01894fe6b4efc6391f39010d` PASS;
+request SHA256 `d046d0f02ed832237b27cf7b4426dacd126ec093b49056b034e4d350825dd559`.
+Managed preflight `4f6f7e90918345438dcf15097f243321` zakończył się
+failed-confirmed/exit1 przed matematyką: własny driver błędnie wymagał
+`manifest.qualification`, którego istniejący FMACLB01 nie zawiera.
+Rzeczywiste manifesty mają status inspection_only; brak pola nie oznacza
+kwalifikacji. Zachowano request/prepared i pełny stderr, nie ponawiano run.
+Nie powstały launch/started/result/preflight markery. Referencje nadal0/9.
+
+Fixture wejściowy poprawiono tak, aby odtwarzał brak pola z rzeczywistego
+formatu: przed poprawką dokładny test daje KeyError, po usunięciu błędnego
+założenia wszystkie10 testów drivera PASS. SHA256 poprawionego drivera
+`78adc3da44436e3c03577c310b6cb2281657a90c9965638e7d9f3f914115da5c`.
+Dowody w `verification/gsg-source-convergence-reference-20261105/`:
+`driver-actual-manifest-before-fix.{log,json}` i
+`driver-actual-manifest-fixed.{log,json}`. Testy dispatchu mają zastąpiony kernel;
+ich tekst NINE CHECKS PASS nie jest dziewięcioma ocenami naukowymi.
+
+Poprawiony kod nie zastąpił immutable prepared; jego kolejny rzeczywisty
+preflight wymaga przygotowania nowego, zachowanego snapshotu z utrzymaniem
+jednego wspólnego prawa do uruchomienia serii. Nie obchodzono odmowy
+niezgodności requestu i nie wprowadzano kolejnego recovery runtime.
+Wcześniejszą receptę just poprawiono tak, aby nie wysyłała pustego opcjonalnego
+request SHA w prepare; dry-run prepare/preflight oraz19 testów launchera PASS.
+Bramka eta pozostaje FAIL, a LLG i transmisja pozostają niezakwalifikowane.
+
+Kontrola indeksu Git: wszystkie54 wcześniejsze wpisy zachowują identyczne
+metadane; obecnie63 staged entries, bez dodawania ani commita w tym odbiorze.
+`git diff --check` PASS. HEAD `006e8f024f891dfaab7a3a2672910ec18ce8dfe0`.
+
+
+### Uruchomienie niezależnej serii dziewięciu referencji — 05.11.2026
+
+Poprzedni goal turn: **postęp** — zakończony build i rzeczywisty odbiór
+archiwum/3D/2D. Bieżąca kontynuacja również zmienia stan: poprawione
+przygotowanie, rzeczywisty preflight i pierwsze uruchomienie matematyki.
+
+Przygotowania są teraz niezmiennymi snapshotami pod
+`one-approved-attempt/snapshots/<requestSHA>/`, natomiast launch/started,
+wyniki i dowód wyjścia pozostają we wspólnym `one-approved-attempt`.
+Nie zmieniono schematów publicznego API/ProblemIR, profilu, progów ani
+uprawnień do ponowienia. Pierwszy snapshot i jego odmowa pozostają zachowane.
+Globalne open(x) i guard czterech markerów blokują drugą serię niezależnie
+od snapshotu.30 testów wejść/przygotowania/dispatchu PASS; niezależny review
+bez P1/P2. Nie są to testy dokładności fizycznego pola.
+
+Piny przejrzanych źródeł:
+- controller `5a27239f7d6ae36218b279afc2bdc1fe398385351069f1c935da2809a5224acd`;
+- driver `7aa1a1c39add89459a580aa2ee4a000d7314f6995a0dc42819d5c43d8f31c186`;
+- test kontrolera `596df87876c994088370535396b5bc40dd94f4238716158f74fa1e144f0920bb`.
+
+Niezależny audyt rzeczywistych trzech CAS i112726 wierszy źródła PASS,
+bez kernela, HTTP lub Solve. Pełne hashe pakietów/payloadów, węzły, stableIDs,
+lokalne J/XYZ, materiały, przekrój i20 punktów zgodne z zamrożonym IR.
+Dowód `verification/gsg-source-convergence-reference-20261105/structural-format-audit-independent.json`,
+SHA256 `4990c338687ce5ddbac1de34b473802a9310687845fa6eb09450641d7c80116e`.
+
+Managed `just docker-dev-gsg-reference <WT> 894d4efb43eb483eb6179d8d49fd449e
+1c0a74f52438f272836dd5c248dd06559cf19774c2c92b8394efd23a4ec10bd4
+prepare` PASS, operation `979bf33de6484055b9a02be82da2cf44`.
+Request SHA256 `b7b187aac685b1113abc935b97cc3d78c848e6f5dab595c07e8639bad4d8806f`.
+Ta sama recepta z `preflight <requestSHA>` PASS, operation
+`e0fd2fa1380d45a9b306050083b95f76`; wszystkie trzy pełne źródła przeszły.
+Dopiero potem `run <requestSHA>` uruchomił jedyną serię, operation
+`c9a5ddf707e341da9cc9d2a2b48bea3e`, klient exec59332.
+
+Rzeczywisty proces w backendzie05de79a8…: PID23265, start token38693805,
+affinity[0]. Potwierdzono istnienie procesu i zgodność tokenu. Pierwszy
+checkpoint postępu:4352/14299 komórek pierwszego punktu100nm,0/9 ukończonych,
+158,65s punktu, ETA362,60s dla tego punktu. RSS80168KiB,
+VmPeak367804KiB. To pomiar chwili, nie prognoza całej serii. Limit pozostaje
+43200s/2GiB. Dowód started/progress jest w stałym katalogu próby; końcowe
+result/worker-exit jeszcze nie istnieją. Nie należy uruchamiać serii ponownie
+z powodu braku wyjścia klienta — najpierw sprawdzić ten sam proces i jego token.
+
+Następny krok: dokończenie dziewięciu ocen lub zachowanie pierwszej odmowy,
+porównanie każdego native H z pełną niezależną sumą i raport. Nadal nie
+kwalifikuje to bazy, całej próbki, LLG ani transmisji. Bramka eta pozostaje FAIL.
+
+
+Pierwszy rzeczywisty wynik referencji: **1/9 PASS**, `100nm-target-0.json`
+w stałym katalogu próby. Punkt(-2µm,-50nm,-22,4nm), pełne14299 komórek,
+czas522,748107807s. Native H w A/m:
+(0,01124238137714336;1,405886973650897e-7;−0,07356049513118926).
+Różnica normowa od sumy referencyjnej120digits:8,551248935954861e-15A/m,
+prerejestrowany próg0,001074414632855345A/m, within_gate=true.
+Wynik obejmuje wszystkie lokalne i globalne kontrole precyzji/formuły tej oceny;
+nie kwalifikuje całego pola, źródła, fizyki RF ani porównania z publikacją.
+Bieżący proces przeszedł do punktu8 tej samej siatki; klient59332 pozostaje
+żywy, nie ma końcowego result/worker-exit i nie wolno go ponawiać.
+
+Dalszy audyt źródeł wyjaśnił zakres eta: helper
+`antenna_gsg_current_correction.py::weighted_rt0_h1_correction` normalizuje
+absolutną normę korekty RT0/H1 po **całym** przewodniku; native
+`conservative_current_view.cpp::solve_weighted_rt0_projection` publikuje
+absolutne correction_norm_mw. Raport50nm lokalizuje99,89775% energii korekty
+w inlet/outlet. To wskazanie do następnej osobno prerejestrowanej siatki,
+nie dowód przyczyny ani prawo do usunięcia części źródła. Próg0,8 pozostaje.
+Nowe lokalne refinement należy najpierw przygotować i zmierzyć, bez Solve;
+obecne helpery mają limit72911 komórek, native20targetów×N≤4mlnpar.
+Nie uruchomiono nowego eksperymentu siatki ani nie podniesiono limitu.
+
+
+### Kontynuacja 06.11.2026 — 4/9 referencji i commit porównania publikacji
+
+Postęp rzeczywistej serii: **4/9 PASS**. Wszystkie trzy punkty100nm przeszły;
+pierwszy75nm(target0, pełne25516Tet4) również przeszedł, czas908,280484027s.
+Różnica normowa native−referencja wynosi5,952580083164925e−15A/m
+przy ustalonym progu0,0010744429341677605A/m. To niezależna suma całego
+zachowanego prądu RT0, nie nowy Solve ani H-only. Kontrole formuły i precyzji
+pozostały włączone. Rozpoczął się target8 siatki75nm; dotychczasowy proces
+PID23265/start-token38693805 nadal żywy. Klient59332 pozostaje tym samym
+klientem; result/worker-exit jeszcze nie powstały. Nie ponawiać serii.
+
+To zaliczenie czterech ocen pola, **nie zaliczenie bramki eta**, która nadal
+pozostaje FAIL(eta50/eta75=0,913078649>0,8). Baza/projekcja/LLG i transmisja
+Fig.3(e) pozostają niezakwalifikowane. Nie zmieniono limitów ani tolerancji.
+
+Gotowe porównanie właściwego panelu(e) GSG/alfa0,01: oryginalny raster APS
+obok601 zachowanych próbek modelu, bez nowego całkowania, fitu amplitudy
+ani przesunięcia częstotliwości. Maksimum około7,59759GHz z rastra wobec
+8,175GHz w literalnym modelu; po odjęciu własnego FMR nadal pozostaje
+różnica około0,21235–0,24127GHz. Zakres rastra nie jest pełnym boundem
+błędu digitizacji. Przyczyna nie została rozstrzygnięta, a reprodukcja
+publikacji pozostaje NOT VERIFIED. Obejrzano pełny oryginał i porównanie.
+
+Artefakty w D:/git/fullmag/artifacts/antenna-ui-20261103:
+- panel-e-comparison-20261105.png, SHA256
+  921ca9b9c5f278bd2aa174162e4a6553fa8d107570f7012e1fc1726c606f2cca;
+- panel-e-comparison-20261105.svg, SHA256
+  ac280b308e3c329ab74eafa298c2244c2958564835d89e6b33874df9678cc605;
+- metadata SHA25604ec009c912c04aeb2b9551e3a3d5661bbff49362657614dbc2bf7b0f1e71b4e.
+Dowód odczytu/testów w control volume:
+verification/sushruth-figure3e-raster-20261105/verification.json,
+SHA256263eebaf448d5a80a874d27442f6fc94c896cb1fcd1033c392b42c76b990b42f.
+Dziesięć regresji rastra PASS, domyślny odczyt(a) bajtowo niezmieniony.
+
+Commit etapu **4b4ddceb5ef1b240a51101b0c7a9224970ef8569** obejmuje dokładnie
+19 plików: referencje/diagnostyki, dwa publiczne przykłady k0 z testami,
+porównanie rastra i notę0951 z mapą oraz pięć datowanych raportów.
+Nie zawiera runtime recovery, aktywnych narzędzi referencji, justfile,
+gateway, poprawki natywnego zapisu tabeli ani pozostałego WIP. Wszystkie
+63 wcześniejsze wpisy indeksu zachowały identyczne metadane, w tym54
+pierwotne; osobny odczyt cached listy wykonano bezpośrednio przed commitem.
+Niezależny review nie znalazł P1/P2 kodu; wymagane poprawki dokumentacji
+(przeniesienie bibliografii/indeksu na koniec i czysty LaTeX SI) zastosowano.
+Focused validator i validate_changed_scientific_docs względem006e8f024f891dfaab7a3a2672910ec18ce8dfe0
+PASS. Testów niezmienionej logiki nie powtarzano wyłącznie z powodu commita.
+To commit lokalnego fragmentu, nie merge pełnego zadania lub zakończenie E0–E12.
+
+Następny krok siatki: najpierw prepare-only zagęszczenia obu połączeń;
+bez nowego Solve lub podniesienia limitu72911. Kod _gmsh_fields.py::_apply_mesh_options
+ustawia dolny globalny limit hmin, dlatego samo dodanie Box przy min=max
+nie gwarantuje zagęszczenia. Geometria OCC otrzymuje transformację przed
+meshingiem(add_antenna_layout_parts_to_occ); granice regionów należy
+sprawdzić na rzeczywistej siatce i jawnie przypiąć. Nie przygotowano jeszcze
+nowej siatki. Semantykę Box/Thickness i globalnego ograniczenia rozmiarów
+sprawdzono w pierwotnym podręczniku Gmsh:
+https://www.gmsh.info/doc/texinfo/gmsh.html .
+
+
+### Kontynuacja 06.11.2026 — 5/9 referencji i gotowe wejścia refinement
+
+Aktualna seria ma **5/9 PASS**: trzy punkty100nm i dwa75nm. Nowy punkt8
+75nm przeszedł po910,178576430s; różnica native−oracle3,58369615099157e−7A/m
+przy progu0,02244794481338939A/m. Trwa punkt16 tej samej siatki. Potwierdzono
+ten sam PID23265/start-token38693805; brak terminalnego result/worker-exit.
+Nie uruchamiać ponownie. Nadal eta FAIL, brak kwalifikowanej bazy lub LLG.
+
+Równolegle powstały trzy rzeczywiste wejścia publicznego DSL z lokalnym
+50/35/25nm i globalnym75nm, przygotowane bez meshera lub Solve. Pełne
+oczekiwane różnice IR, world bounds połączeń oraz kanoniczny round-trip
+workspace/etapu przeszły. Zmieniono wyłącznie nazwy i metadane siatki;
+typy antenna/geometry, materiały, zasilanie, źródło i20targetów zachowane.
+Nie są to trzy nowe siatki, wyniki lub zatwierdzona nowa seria Solve.
+
+Raport: [wejścia zagęszczenia](2026-11-06-gsg-junction-preparation-inputs.md).
+Dowód control verification/gsg-junction-preparation-20261106/runtime-free-inputs-v1/input-validation.json,
+SHA2569bfb62d363aa14632829fa55b369d5c12c9403dc9f378d41814b38ec50fb623a.
+Wcześniejsza odmowa tuple/list zachowana; wartości były identyczne, po
+normalizacji obu stron do JSON trzy przypadki PASS bez zmiany fizyki.
+Rzeczywisty mesh i koszt wymagają kolejnego prepare-only po aktywnej referencji.
+Istniejący cap72911 nie upoważnia do obcięcia źródła ani pominięcia korekty;
+większy mesh może być zmierzony, ale nie uruchomiony przez stare bramki.
+
+
+### Kontynuacja 06.11.2026 — 6/9, zgodność requestu i launcher przygotowania
+
+Użytkownik potwierdził działający interfejs po przywróceniu sceny.
+Niezależna seria pola ma6/9PASS: komplet100nm i75nm. Ostatni punkt16
+75nm trwał962,856039084s; delta3,71778488301754e−15A/m przy progu
+0,00107444257794706A/m. Trwa50nm punkt0; ten sam PID23265/start-token
+38693805, brak końcowego result i worker-exit. Bez ponownego Solve.
+To kontrola całkowania zachowanego prądu, nie reprodukcja publikacji.
+Kryterium eta nadal FAIL, brak kwalifikowanej bazy lub odblokowania LLG.
+
+Commit `ede824b64f20c069a6f823992ac6ca5f50c55770` naprawia rozjazd
+pomocniczego submittera64MiB z istniejącym publicznym CLI96MiB.
+Dotyka wyłącznie dwóch plików scripts/docker_dev_submit_accepted.py
+oraz scripts/test_docker_dev_submit_accepted.py. Regresja RED pokazała
+odmowę prawidłowego requestu96MiB, GREEN19testów PASS; dokładnie jeden
+bajt ponad granicą jest odrzucany przed procesem CLI. Nie zmienia limitu
+archiwum/capture, tolerancji ani budżetów. Dowody:
+verification/accepted-submit-request-limit-20261106/red.log/json oraz
+green.log/json. Wszystkie63wcześniejsze wpisy indeksu byte-for-byte zachowane.
+
+Nowy launcher przygotowania lokalnych siatek i exact route mają20testów
+PASS po poprawce wykrytej w niezależnym review. Szczegóły i granice:
+[raport przygotowania](2026-11-06-gsg-junction-preparation-inputs.md).
+Rzeczywisty meshing czeka na zakończenie aktywnej referencji; żadnej nowej
+operacji managed nie uruchomiono. Nowa ścieżka i zależny kontroler nadal
+WIP; nie commitujemy jej z brakującą zależnością ani cudzym wcześniejszym WIP.
+
+Próba push brancha zakończyła się odmową braku uwierzytelnienia HTTPS;
+Windows gh auth status potwierdził nieważne zapisane logowanie. Nie zmieniono
+remote/master. Użytkownik wcześniej odłożył ponowne logowanie, więc nie
+ponawiano pytania. Zdalna integracja pozostaje niewykonana, praca lokalna trwa.
+
+
+### Kontynuacja 06.11.2026 — walidator na trzech rzeczywistych IR i dwóch requestach
+
+Poprzednia tura była postępem: commit zgodności requestu oraz kod prepare-only
+po20testach i review. W bieżącej potwierdzono ten sam żywy PID/start-token
+referencji,6/9PASS; żadnego ponowienia. Równolegle nowy mesh_report przeszedł
+pełne zachowane IR100/75/50nm, w tym72911Tet4, wszystkie5części oraz18par
+sourcecut najdrobniejszej siatki. Pomiary są w raporcie przygotowania.
+
+Dwa rzeczywiste oryginalne requesty100/75nm, odpowiednio49969273 i56473579B,
+przeszły kompletną normalizację do43402292 i45144053B, bez zmiany wartości,
+provenance lub oryginałów. Nie wykonano Submit, CLI, meshera lub Solve.
+Dowody: retained-mesh-schema-v1/result.json SHA256
+cbbdfc087e4103777895f59442a59dd020edc0ebf8c74be30344a29f4e62ac69;
+retained-request-normalization-v1/result.json SHA256
+54272a9528bb0e459b27444c4a4b657a2e09f673ef803f19ac105f83f11c5309;
+oba pod verification/gsg-junction-preparation-20261106 w control volume.
+To rzeczywiste dane, ale wciąż pomocnicza kontrola nowego kodu, nie dowód
+wykonania nowego prepare-only lub kwalifikacji naukowej. Brak pełnego
+application report w coincident receipt zapisano jawnie zamiast mylić
+metadane żądane z applied. Istniejące eta FAIL pozostaje bez zmian.
+
+
+### Kontynuacja 06.11.2026 — wykluczona samodzielna korekta obserwabli Fig.3
+
+Niezależny ponowny review źródeł nie znalazł nowego błędu Eq1–3/6–10;
+sprawdził Jacobian, normalizację h²/|h|² w GS, definicję r i pełnego Heff.
+Nowa niskiej pewności hipoteza dotyczyła różnicy indukcyjność/SEM/pasywne
+napięcie. Przed przetworzeniem danych zapisano równanie dla exp(+i*omega*t),
+komplet jednostek i parametrów oraz lokalizator ekstremów w nocie0951.
+
+Rzeczywista pochodna znanego strumienia i demodulacja potwierdziły znak
+oraz skalę;4testy PASS. Następnie na zachowanych12przebiegach701próbek
+wykonano tylko postprocessing, bez nowej kwadratury lub Solve. Maksimum
+GSG/alfa0,01 wynosi8,175GHz w Re(T),8,440GHz w SEM i8,265GHz w przeciwnym
+pasywnym napięciu. Żadne nie zgadza się z odczytem7,59759GHz; FMR nadal
+7,5GHz. Nie zmieniono domyślnego modelu, renderera, fazy lub parametrów.
+To ogranicza hipotezę, nie rozstrzyga błędu autorów lub wszystkich modeli.
+
+Commit fragmentu `4c14ea4e5328629dbc7b1a7a5903514611a23eae` obejmuje
+wyłącznie5plików: helper, jego test, notę0951/mapę i raport obserwabli.
+4testy, focused validator, changed-page validator względem
+ede824b64f20c069a6f823992ac6ca5f50c55770, local links i diff-check PASS.
+Niezależny review całości bez P1/P2. Wszystkie63wcześniejsze wpisy indeksu
+pozostały byte-for-byte identyczne;6narzędzi aktywnej referencji niezmienione.
+Dowody w verification/sushruth-faraday-observable-20261106 w control volume:
+source-checks.json, retained-data.json SHA256
+7fce12db325881ba888f65b08b439677c1e7d9aa0527234bbcb9be4c8bde9e25,
+commit-selection.json, commit-result.json i changed-page-validation.json.
+[Raport](2026-11-06-sushruth-voltage-observable-audit.md) rozróżnia ten krok
+od runtime/bazy/kalibracji S21 i odmienny lokalizator dawnych odstępów.
+
+Ostatni odczyt żywej referencji: ten sam PID23265/start-token38693805,
+6/9PASS,50nm target0 ma48896/72911komórek, elapsed2105,23s, brak terminalnego
+result/worker-exit. Nie restartować z powodu upływu czasu obserwacji.
+Nowy managed mesh nadal czeka na koniec tej operacji. Dzisiejsza tura to
+postęp (kontrole rzeczywistych danych i nowy zweryfikowany commit), nie
+ukończenie E0–E12. EtaFAIL, kwalifikacja bazy/LLG i reprodukcja publikacji
+pozostają otwarte; zdalną integrację blokuje wcześniej zgłoszone logowanie.
+
+
+### Kontynuacja 06.11.2026 — rzeczywiste rozkłady rozdzielczości przed refinement
+
+Nowy raport prepare-only zawiera P05/P50/P95 najdłuższej krawędzi komórki
+oraz objętości, liczone po wszystkich Tet4 osobno dla5części. Definicję
+zapisano przed pomiarem; są to statystyki ważone liczbą komórek, nie normy
+błędu, volume coverage lub progi spełnienia h. Review potwierdził znaczenie
+metryk. Konkretny malformed fixture odtworzył overflow długości mimo
+skończonych węzłów i dodatniego det; dodano odmowę niefinitywnej krawędzi.
+Po nowych zmianach23testy kontrolera/trasy PASS, bez meshera/Solve.
+
+Na rzeczywistych IR100/75/50nm wszystkie wcześniejsze pola raportu są
+identyczne; nowe metryki zgadzają się z niezależnym NumPy przy rtol1e−10,
+atol0, największa różnica8,6203e−15. Np. dla75nm inlet median/P95
+najdłuższej krawędzi to104,704/136,523nm, dla50nm70,466/96,696nm.
+Nie interpretujemy tego jako przekroczenia ścisłego h: takiej gwarancji
+sterowanie Gmsh nie daje. Objętości zachowanych siatek pozostają spójne.
+Pełny pomiar i ograniczenia w raporcie przygotowania; dowód
+verification/gsg-junction-preparation-20261106/retained-mesh-statistics-v1/result.json
+SHA2562cbedfc52993bad016816912c94ec9c857e5191ef497bd92e42926fe4a443a57.
+To postęp narzędzia i rzeczywista kontrola danych, nie nowa kwalifikacja FEM.
+
+Ostatnia referencja: ten sam PID23265/start-token38693805,6/9PASS,50nm
+punkt0 ma66048/72911komórek, elapsed2769,94s. Brak terminalnego result/exit,
+więc nie ponawiać. Po jej końcu nadal trzeba odebrać dwa kolejne punkty50nm
+oraz pełny receipt całej9serii przed nową managed operacją. Eta nadal FAIL.
+
+
+### Kontynuacja 06.11.2026 — pierwszy punkt50nm PASS, razem7/9
+
+Zapisany50nm-target-0.json potwierdza pełne72911komórek i PASS po
+3033,736629241s. Różnica norm native−oracle2,11464033787304e−16A/m
+przy prerejestrowanym progu0,00107444933281005A/m. SHA256 pliku
+0dbef39e15be4185f454a0a86f7682e0df7f209f3ce7bd835b20b3bd6df569f1.
+Dowód pozostaje w one-approved-attempt istniejącej serii. Następny odczyt
+progress pokazał7/9 i50nm target8:1536/72911komórek, elapsed56,14s.
+To ta sama operacja, bez nowego Submit/Solve, wynik końcowy/exit jeszcze nieobecny.
+Pozostały punkty8 i16 tej siatki oraz odbiór całej serii9referencji.
+
+Przejrzano także położenie następnego etapu sprzężenia: istnieje
+2026-11-02-antenna-magnetic-domains-implementation.md, ale proponowane
+study_domains.rs/model/study_domains.py oraz domain_binding.rs nie są
+wdrożone. Istniejący frozen core i projection materializer nie dowodzą
+realizacji nowego kontraktu domen. Nie ogłaszamy H→LLG lub dwóch Airboxów
+jako ukończonych z powodu samego działania H275 w UI. Pełny E0–E12 pozostaje
+celem; następna kolejność:9referencji → nowe prepare-only → prerejestracja
+kwalifikacji źródła → publiczne binding/projection → rzeczywista odpowiedź.
+Dzisiejszy pomiar geometrii i nowy punkt są postępem; eta nadal FAIL.
+
+
+### Kontynuacja 06.11.2026 — self-review planu wspólnych domen
+
+Uzupełniono plan 2026-11-02-antenna-magnetic-domains-implementation.md, SHA256 0a38dd71fda24bae357a0b8383613dee5782593b972adbbba7967b9c1ac01427. Root sprawdził plan według writing-plans, a niezależne rozpoznanie kodu ustaliło istniejących producentów map i scalar-space evidence. Poprawiono zgodność ir_version/script_api_version/serializer_version, odmowę niewersjonowanego katalogu przed typed read/migration, źródło map rdzenia i dowodu DOF oraz rozdzielenie inspection od kwalifikowanego loadera bazy. Nie zmieniono zatwierdzonej fizyki, IR, runtime ani układu działającej sceny.
+
+Diff-check planu PASS; zastane 63 wpisy indeksu i sześć zamrożonych plików aktywnej referencji identyczne. Dowód: verification/domain-plan-self-review-20261106/result.json w control volume grupy. Nowe formaty nadal oczekują przeglądu gotowego planu, o który wysłano jedno pytanie; nie blokuje to trwającej niezależnej kontroli dziewięciu punktów. T1–T10 pozostają nieukończone. Ostatni sprawdzony proces tej samej referencji jest żywy, 7/9 zakończone, target8 siatki50nm w toku; nie uruchomiono ponowienia ani nowego Solve.
+
+
+### Kontynuacja 06.11.2026 — spójny commit profilu matematycznej referencji
+
+Commit b709f6d65f8cb0c0b0ccb5dc2a43c13c048f1914 (parent 4c14ea4e5328629dbc7b1a7a5903514611a23eae) zapisuje osiem plików: istniejący Budget i jego test, profil/agregator GSG z dwoma modułami testów, dokładny zatwierdzony projekt eksperymentu oraz wyłącznie rozdziały profilu i agregacji z source-map noty0950. Kontroler, driver, receptury i szersze WIP archiwum pozostały poza commitem; niezależny przegląd wykazał ich odrębne zależności.
+
+Izolowany widok źródeł HEAD zawierał226 istniejących mapowanych plików oraz tylko wybrany fragment. Nowa kontrola domknięcia zależności:21 testów PASS,0 błędów/pominięć, wszystkie trzy importowane moduły z tego widoku zamiast pozostałego WIP. Focused validator i changed-page gate PASS. Nie powtarzano niezmienionego pełnego zestawu54 testów ani41 testów kontraktu dokumentacji. Review pięciu plików źródeł/testów bez Required findings.
+
+Commit wykonano przez osobny indeks Git, następnie zaktualizowano wyłącznie osiem własnych wpisów indeksu głównego. Wszystkie63 wcześniejsze wpisy i pliki robocze zachowane dokładnie; sześć zamrożonych plików aktywnej referencji ma niezmienione SHA. Dowody: verification/gsg-math-profile-commit-20261106/{selection.json,validation.json,selected-tests.json,commit-result.json,changed-page-validation.json} w control volume. Bez nowej siatki, Solve, buildu lub push; końcowa referencja nadal nieodebrana i GSG pozostaje niekwalifikowane.
+
+
+### Kontynuacja 06.11.2026 — ósmy punkt PASS, 3D i granica archiwum
+
+Ta sama referencja (PID23265, niezmieniony token startu i session59332) ukończyła50nm target8: wszystkie72911 komórek,2726,836556055001s. Różnica normy wobec native2,416036979854443e−6 A/m przy bramce0,0224506580002049 A/m; PASS. Artefakt50nm-target-8.json ma SHA2567c22d8b63c2177a6f2b7f58163788be11bec4c697c47d77ecf7ff706f8a5b937. Odczyt01:14:47UTC potwierdził8/9 i żywy target16 (2560/72911); bez finalnego result/exit receipt i bez nowego Solve. To nie zmienia FAIL eta ani statusu kwalifikacji.
+
+Odbiór przeglądarkowy istniejącej karty7 na3203 potwierdził właściwy H275/revision2 i źródłową geometrię. Przełączenie2D→3D wymagało odczekania na zasób; nie uznano chwilowego unavailable za utratę danych. Diagnostyka: aktywny WebGL, drawing buffer944×587,275 glyphów/segmentów,0 klatek w2,01s idle po ustawieniu kamery. W całym wydłużonym kadrze domyślne strzałki są niemal niewidoczne; kontrolne4× oraz zbliżenie ujawniają grupy wektorów, lecz nie zaliczają czytelności3D. Przywrócono długość1× i kadr całej domeny. Podejrzenie podwójnego mnożnika wykluczono kodem buildVectorLineSegmentsFromPositions: przy jawnym vectorGlyphLengthScale bazowy scale jest pomijany. Nie zmieniono kodu, długości fizycznych pól, gęstości lub danych. Zrzuty są natywnymi obrazami narzędzia; nie zadeklarowano nieistniejącego pliku PNG.
+
+Niezależny przegląd granicy commita archiwum wykazał zależność semantyczną: get_run→project_run_task_execution_by_id→StudyProblemCatalog::validate_for→ProblemIR::validate. Wszystkie pięć wyników wymaga istniejącego WIP kontraktu CPW/GSG loop/5części/6terminali/3gałęzi; H275 dodatkowo typowanego retained-current H-only i retained preparation. Sam reader+mounty nie działałby na czystym HEADb709f6d65f8cb0c0b0ccb5dc2a43c13c048f1914. Nie pominięto walidacji i nie dodano alternatywnej projekcji dla mniejszego commita. Następne granice integracji muszą obejmować osobno spójny model CPW/GSG i retained H-only; dotychczasowy szeroki managed snapshot nie dowodzi kompilacji hipotetycznie wyciętego fragmentu. Brak mutacji indeksu/runtime w tym przeglądzie.
+
+
+### Kontynuacja 06.11.2026 — zapamiętywanie przekroju i rzeczywisty odbiór UI
+
+Naprawiono reset przekroju XZ→YZ przy zmianie kart 2D→3D→2D. Małe
+preferencje należą do istniejącej prezentacji dokładnego datasetu/revision,
+bez ukrytego renderera i bez kopiowania pól. 131 testów, lint, TypeScript
+i architecture hygiene PASS; niezależny review bez Required findings.
+Po pełnym odświeżeniu strony wymaganym dla nowej klasy kontrolera
+przeglądarka zachowała XZ/0,05µm/Hx/strzałki off/pion10×, a druga próba
+potwierdziła pan/zoom: dokładnie te same x=[−1,28;1,92]µm,z=[−0,24;0,24]µm
+przed i po remount. WebGL active944×587px,0 klatek/2,01s idle.
+Przywrócono czytelne XZ/y0/moduł/strzałki on/pion1×/Fit. Nie wykonano
+Solve, nowego buildu lub restartu usług. Pełny kadr3D nadal niezaliczony
+pod względem czytelności; wykluczono nieoświetlany materiał, normalizację
+koloru i podwójny lengthScale jako przyczynę.
+
+[Raport i ograniczenia](2026-11-06-saved-section-retention.md), dowody
+verification/saved-section-retention-20261106 w control volume. Zastane63
+wpisy indeksu i6 zamrożonych źródeł identyczne; poprawka UI pozostaje
+w zależnym WIP, bez pozornie samodzielnego commita. Ta sama referencja
+01:46:26UTC ma8/9PASS,51456/72911komórek ostatniego targetu; bez terminalnych
+receiptów. EtaFAIL i reprodukcja pracy pozostają otwarte.
+
+## Checkpoint: niezależna kontrola fazy GS — 07.11.2026
+
+Commit8e88448cbd338f552d7170070e66a37ac5609579, parent8cfce0e19095609a921d4f92c15853c4ab8cb795:
+dwa testy w scripts/test_sushruth_response_normalization.py oraz sekcja i source-map noty0951.
+Kernel równań i dotychczasowe parametry pozostały niezmienione.
+
+Potwierdzono równoważność konsekwentnego zespolonego kwadratu i modułu kwadratowego
+dla idealnych widm S/GS/GSG. Dla GS dodatkowy minus występuje zarówno w liczniku,
+jak i normalizatorze; sama zmiana konwencji nie odwraca znormalizowanej odpowiedzi.
+Celowo niespójny wariant z mieszanym mianownikiem odwraca znak; wzorzec go nie używa.
+To wykluczenie jednej hipotezy, nie wyjaśnienie wszystkich rozbieżności Fig.3.
+
+Dwa nowe testy PASS w istniejącym backendzie,36porównań zespolonych R/T,
+czas2,586s,1CPU/AS2GiB; bez native meshera/prepare/Solve.
+Focused validator strony oraz dokładny changed-page review zakresu commita PASS.
+Nie powtarzano niezmienionych wcześniej zielonych testów samego walidatora.
+Źródła wzorca536c053c4ea67deca0e44c86b0ae0e3500f14e03263bb4184a47ac94543aa093
+i widmab84ab6aae6005b568bd18631ea9680f7585dbe639486bfa2aa53d74e775c0dbd
+są zgodne z HEAD. Nowy testdc601afdba4783a30b45ad10a3070f86ed194ce9363c3920498d07ec2454e590.
+
+Automatyczna kontrola dwukrotnie odmówiła przygotowanej ręcznej synchronizacji indeksu.
+Nie wykonano odrzuconych poleceń. Bezpieczna alternatywa standardowego git add
+i git commit --only dokładnie trzech plików przeszła; nie zastosowano update-index
+po commicie. Wszystkie wcześniejsze63staged entries identyczne:
+f8c8d727f21451b25db1d2050015b469ad6bdb00b07fdba84136095367eb6fd3.
+Commit jest lokalny; nie wykonano push przy wcześniej zgłoszonym nieważnym logowaniu.
+
+Dowody wyłącznie w private control volume:
+verification/sushruth-complex-square-normalization-20261106/
+(result.json,stdout.log,stderr.log,documentation-final-result.json,
+changed-page-review.json,commit-result.json).
+Wdrożenie patcha metadanych4290ce… i jedna nowa próba prepare-only nadal
+czekają na odpowiedź na istniejące pytanie; nie ponawiamy go.
+Plan34c906… zachowano bez zmian — dotyczy tych samych bazowych plików,
+których nowy commit diagnostyki nie modyfikuje.
+Kwalifikacja źródła eta nadal FAIL; publikacja NOT VERIFIED; cały celE0–E12 aktywny.
+
+## Zatwierdzone wykonanie patcha i jednej próby — 07.11.2026
+
+Użytkownik zatwierdził patch4290ce… oraz dokładnie jedną nową próbę prepare-only50nm.
+Patch wdrożono bez zmian.11/11 regresji PASS na rzeczywistych źródłach oraz
+11/11 PASS na czystym HEAD z wyłącznie tym patchem. Zachowano poprzednie63staged entries.
+
+Próba155483362d284e87a8113daddc76119b zakończyła się state=succeeded,
+recepta just exit0, publiczny CLI exit0, cztery fazy helperów exit0 i dzieci zebrane.
+Nie ma aktywnej próby99799 — uchwyt zakończył się exit0. Czas recepty154,344s.
+Raw mesh12573węzły/34243Tet4; po sourcecut12589węzłów/34243Tet4,18par.
+Raport mesh_size_field_realization.v1 recorded, oba pola applied z rzeczywistymi IDs1 i2.
+Numeryczna siatka/źródło producenta i publicznego CLI zgodne, statystyki zachowane
+dokładnie w receipt, workflow bez _gmsh_*, nośnik20/24 niezmieniony.
+Cache22eda141… jest identyczny po odczycie i zachowuje raport.
+
+Compact request58dc1e2a4cde747c18a88920960789d5e25fd2f7df3ba0640581fc3650f7737e.
+Result63dde92ee34f9296d857feff80d2bd3616cede25b16fc5a9e450c24f56365259.
+Commit19cca253829a64916fe6ee2822e15d6b2a0c9b11 obejmuje wyłącznie poprawkę
+czterech plików i jej plan/odbiór; nie dołącza starszego WIP GSG.
+Indeks63wpisów zachowany bajtowo, pliki robocze nie nadpisane przez commit.
+Nie wykonano push z wcześniej zgłoszonej przyczyny nieważnego logowania.
+
+Dowody: cold-warm-provenance-proposal-v1/approved-execution-20261107/
+(application/tests/isolated-tests/managed-recipe-result/final-acceptance/commit-result.json)
+i attempts/155483362d284e87a8113daddc76119b/ w prywatnym control volume grupy.
+Pełny odbiór zapisany w wykonanej wersji planu gsg-cold-warm-provenance-proposal.md.
+
+Bieżąca blokada metadanych jest rozwiązana. Nie policzono V/J/H na tej nowej siatce.
+Zachowano Failed dawnych prób, eta pierwotnej serii nadal FAIL i reprodukcja NOT VERIFIED.
+Przygotowano osobną konkretną propozycję jednego Solve bez nowego meshingu:
+2026-11-07-gsg-prepared-junction-solve-proposal.md. Tylko odczytowa walidacja
+gotowego requestu przeszła; Submit i Solve nie zostały wywołane.
+Ostatnia zgoda jawnie wykluczała Solve, więc ta dalsza operacja wymaga decyzji.
+
+## Jedno zatwierdzone zgłoszenie V/J/H — odmowa przed solverem,07.11.2026
+
+Zgodnie z decyzją wykonano dokładnie jeden Submit requestu58dc1e… przez
+istniejącą receptę just. CLI exit1, HTTP409 execution_profile_reference_conflict:
+w accepted-run store brakuje opublikowanego exec:default@1.
+GET profili:revision0,total0; GET żądanego runu404, lista projektu bez tego runu.
+Nie wystartował solver i nie powstało nowe V/J/H. To błąd przygotowania
+operacyjnego, nie zmierzona awaria solvera lub wynik naukowy Failed.
+Przed Submit nie sprawdzono obecności profilu; jest to pominięty preflight.
+
+Zachowano stary fencef010325e…, request, pełny stderr781B i result.
+Nie ponowiono Submit i nie usunięto blokady. Siatka/cache34243Tet4 i wyniki
+historyczne pozostają. Nowych buildów/restartów/meshingu/H-only/LLG brak.
+
+Przygotowano do jawnej decyzji: publikacja dokładnej zachowanej definicji
+exec:default@1 oraz jedno nowe zgłoszenie50b1accd… z nowym run_id.
+W całym payloadzie zmienione wyłącznie run_intent.idempotency_key i
+run_intent.specification.run_id; archive/study/catalog/fizyka/zasoby identyczne.
+Stary fence i historia pozostają. Nie zmieniono kontrolera lub zasad retry.
+Publication bodyd89e3d… pozostaje niewysłany, profil nieopublikowany.
+Istniejący image-private mechanizm operatora jest włączony i ma prywatny plik;
+token nie został odczytany/utworzony lub ujawniony.
+
+Plan konkretnego zakresu:2026-11-07-gsg-profile-publication-and-resubmission-proposal.md.
+Dowody w verification/gsg-junction-solve-20261107/ w prywatnym control volume.
+Pełny celE0–E12 i publikacja pozostają nieukończone. Nie nadano nowej kwalifikacji
+i nie zmieniono wcześniejszego eta FAIL. Do czasu nowej decyzji brak dalszego Submit.
+
+
+### Checkpoint — sukces V/J/H i diagnoza przyczyn różnic, 07.11.2026
+
+Poprzedni zapis oczekiwania na publikację profilu jest historyczny. Zgoda użytkownika wpłynęła: profil exec:default@1 opublikowano HTTP201, wykonano jedno nowe Submit i jedną materializację tego samego runu40c6990b…. Task Succeeded, worker exit0, V/J/H zapisane i publicznie zweryfikowane. Raport:2026-11-07-gsg-profile-publication-and-resubmission-result.md. Rezerwacja solvera pozostaje quarantined po writer busy; bez recovery lub kolejnego Solve.
+
+Na polecenie dalszej diagnozy wykonano wyłącznie analizę zachowanych danych.99,89957% energii korekty jest w połączeniach,83,1239% ich korekty do100nm od wklęsłych krawędzi. Krytyczne elementy mają praktycznie tę samą rozdzielczość co dawna globalna50nm; lokalne50/bulk75nie jest nowym drobniejszym poziomem przy narożach. H na20targetach różni się od prostej niezależnej referencji maksymalnie0,116654%; użycie rzeczywistych prądów powrotnych redukuje największą różnicę5,14raza. Nie przenosimy tego wyniku na całe Universe ani na kwalifikację bazy.
+
+Niezależny odczyt obu oryginalnych obrazów Fig.3 wskazuje różne położenia szarych znaczników FMR między panelami. Nie dopasowano Heff/gamma, nie rozstrzygnięto generatora krzywych i nie potwierdzono reprodukcji publikacji. Raport diagnozy:2026-11-07-gsg-discrepancy-diagnosis.md. Dowody:verification/gsg-discrepancy-diagnosis-20261107/ w control volume. Pełny celE0–E12 nadal nieukończony; dalsze prace mają zachować priorytet odtworzenia publikacji.
+
+## Checkpoint 08.11.2026 — runtime odzyskany, publiczny eksport odtworzonej sceny
+
+Historyczny zapis o quarantined run40c699 nie opisuje już bieżącego stanu:
+istniejący opublikowany nadzorca rozliczył jego autentyczny exit, obie rezerwacje
+są Released, a zadanie pozostaje Succeeded. Aktualizacja
+8857232e70bc47aca8dea77ad9da0f86 zakończyła się sukcesem; API/CLI/Python
+mają spójny nowy pakiet ze snapshotu08b4e431e3fefee766ff997dc73ca65de7ed9f1dbd945bf2b7524dcd6bab810c.
+[Odbiór operacyjny](2026-11-07-succeeded-supervisor-reconciliation-execution.md).
+
+Przywróconą scenę wyeksportowano przez publiczne model/syncs i ponownie
+odczytano przez persistence/projects/from-script. Import HTTP201 zgłasza
+round_trip=verified; aktywna scena, sesja i lista runów nie zmieniły się.
+Sprawdzone deklaracje zasilania/portu/pola są dokładnie zgodne; surowe JSON
+różnią się normalizacją i pustymi domyślnymi polami. Skrypt oraz FMS mają
+odczytane, zgodne kopie na ext4 WSL.
+[Zakres dowodu i ograniczenia](2026-11-08-restored-gsg-authoring-runtime-readback.md).
+
+Nie wykonano nowego prepare corner25 ani Solve. Wartość eta ostatniego
+local50 pozostaje0,03464604656814306 i nie kwalifikuje źródła.
+[Konkretny następny eksperyment](2026-11-08-corner25-post-update-experiment-proposal.md)
+proponuje jedno przygotowanie i jeden warunkowy V/J/H, bez retry,
+z niezmienioną fizyką i limitami; wymaga decyzji, bo ostatnia zgoda
+jawnie wykluczała Prepare/Solve. Kontrola Browser/WebGL oczekuje świeżej
+karty użytkownika. Cały celE0–E12 i reprodukcja publikacji pozostają otwarte.
+
+## Checkpoint 08.11.2026 — zamknięty odbiór dziewięciu kontroli referencyjnych
+
+Odczytano końcowy receipt próbyc9a5ddf707e341da9cc9d2a2b48bea3e:
+succeeded/exit0,9/9PASS,worker zebrany i źródła stabilne.
+Stare progress8/9 jest historyczne. Właściwy snapshot żądania b7b187…
+zgadza się z result i worker-exit; root/request.json był starszym dokumentem.
+Audyt bez nowego całkowania ponownie uwierzytelnił trzy pełne źródła,
+sprawdził20GET i przeliczył normy różnic z zapisanych wektorów.
+Maksymalna różnica9kontroli wynosi4,0531741e−6A/m; wszystkie ustalone bramki PASS.
+
+Komplet32plików/419235853B wejść, kodu, danych i wyników zachowano również
+na ext4 WSL i zweryfikowano jako właściciel worktree, przy prywatnym0700.
+[Raport, piny i ograniczenia](2026-11-08-gsg-nine-point-reference-acceptance.md).
+Nie wykonano nowego Prepare/Solve/reference. EtaFAIL, kwalifikacja źródła
+oraz odtworzenie publikacji pozostają otwarte. W chwili tego odbioru eksperyment
+corner25 i kontrola w świeżej karcie UI oczekiwały odpowiedzi; późniejszą zgodę
+i wynik przygotowania opisuje następny checkpoint.
+
+## Checkpoint 08.11.2026 — zatwierdzone corner25, odmowa przed Solve
+
+Po jawnej zgodzie wykonano jedno przygotowanie e3103f240fcc49559ff0032e2d91e536
+na nowym pakiecie. Producent utworzył40703Tet4/14184węzłów i zachował nośnik20H.
+Publiczny CLI nadal odrzucił dwie flagi wykonania; failed-confirmed/exit2,
+child zebrany/exit1, compact request nie powstał. Nie wykonano Submit/Solve,
+retry, buildu lub restartu. API dostępne, kolejka pusta i active_workers0.
+
+Zlokalizowano bezpośrednie wywołanie parsera selekcji w kontroli zgodności
+migawek, z pominięciem wcześniejszego filtrowania flag w materializerze.
+Wspólny parser poprawiono w źródłach, zachowując odrzucanie złych typów
+oraz nieznanych pól; dodano dwie regresje. Rust/CI i odbiór pakietu tej poprawki
+pozostają niewykonane. Nie utożsamiać działającego eksportu sceny z pełną
+zgodnością ścieżki Prepare.
+
+20plików/3360660B próby i cache zachowano na WSL, manifest oraz hashe PASS.
+[Pełny wynik, przyczyna i piny](2026-11-08-corner25-post-update-experiment-result.md).
+Nie ma nowego pomiarueta/I/H; kwalifikacja źródła i reprodukcja publikacji otwarte.
+
+### CI selektora anteny — 08.11.2026
+
+Poprawka e78009f7c46c5f65da2c795e9650c371c490e071 jest wypchnięta.
+CI42492318729 potwierdza ten HEAD: job przeglądarkowy success,
+etap execution-intent Rust success; końcowy job Rust nadal w toku.
+Nie deklarujemy pełnego CI ani wdrożenia nowego parsera w grupie3203.
+Wynik Prepare e3103f24 pozostaje failed-confirmed, bez nowego V/J/H.
+
+[Gotowy następny zakres aktualizacji i eksperymentu](2026-11-08-antenna-selector-update-and-corner25-proposal.md)
+czeka na pełny odbiór CI i nową decyzję: ostatnia zgoda wykluczała build/restart,
+a pojedyncza próba została wykorzystana. Nie wykonano nowej sekwencji.
+
+### Rzeczywiste zagęszczenie corner25 — 08.11.2026
+
+Analiza zachowanych surowych cache, bez Prepare/Solve, potwierdza drobniejszą
+siatkę we wszystkich8wklęsłych narożach: mediana maksymalnej krawędzi Tet4
+w pasie centroidów do100nm spadła70,4202→39,9583nm. Liczba komórek w tym
+pasie wzrosła993→5852. Wszystkie lokalne ilorazy median0,5221–0,5809.
+Nie jest to dowód poprawyeta lub nowy próg kwalifikacji; wybór centroidowy
+nie obejmuje dokładnie identycznej objętości obu siatek.
+Kod, wynik i pełne wejścia (8plików/3678462B) zachowano na WSL i sprawdzono
+hashami. Szczegóły w raporcie2026-11-08-corner25-post-update-experiment-result.md.
+
+### Końcowy CI selektora — 08.11.2026
+
+Historyczny zapis „job Rust nadal w toku” jest zamknięty:
+CI42492318729 zakończone success dla e78009f7c46c5f65da2c795e9650c371c490e071.
+Oba wybrane joby Rust i browser success. Pełny log46698452B, SHAec6652ab…,
+potwierdza obie nowe regresje ok w filtrze execution-intent i pełnym zestawie
+materializacji aplikacji. Lokalnych testów Rust nie kompilowano.
+Szczegóły i pełne piny w2026-11-08-corner25-post-update-experiment-result.md.
+
+Gotowy zakres aktualizacji i jednej nowej warunkowej próby pozostaje
+niewykonany/do decyzji. W tej kontynuacji nie wykonano nowego Prepare/Solve,
+buildu ani restartu. Nadal nie ma nowegoeta/I/H i kwalifikacji źródła.
+
+
+## Checkpoint 08.11.2026 — zgoda na aktualizację, odmowa odczytowego preflightu
+
+Użytkownik zatwierdził aktualizację i jedną warunkową próbę corner25.
+Przed wywołaniem recepty kontrola bieżącej sesji odmówiła: wcześniejszy eksport model/syncs
+utworzył kanoniczny scene_document.py, a saved-authoring wymaga script=null.
+Scena zgadza się dokładnie z trwałym FMS; run=null, kolejka pusta i workers0.
+Nie zatrzymano usług; build0, Prepare0, Submit0. Nie ponawiano operacji.
+
+[Diagnoza i konkretny projekt naprawy preflightu](2026-11-08-generated-authoring-restart-preflight-proposal.md).
+Wymagane rozszerzenie chronionego checkpointu nie jest wdrożone. Stary pakiet
+nadal działa. Nie ma nowegoeta/I/H ani potwierdzonej zgodności z publikacją.
+
+
+## Checkpoint 08.11.2026 — niezależna kontrola spójności Table I
+
+W czasie oczekiwania na decyzję o preflight wykonano odrębną diagnostykę,
+bez buildu lub nowego Prepare/Solve. Trzy testy PASS: jednostki, niezależne
+różnice dyspersji i zgodność ze statyczną podatnością istniejącego wzorca.
+Trzy pochodne wiersze Table I nie zgadzają się jednocześnie przy wspólnym k:
+długości różnią się około8.26 razy. Tabela nie podaje k, więc nie deklarujemy
+błędu autorów. Nie zmieniono parametrów ani wykresów do dopasowania Fig.3.
+Sam wpis105m/s nie jest wejściem naszej całki i nie wyjaśnia jej rozbieżności.
+
+[Raport, źródła i dowody](2026-11-08-sushruth-table-one-consistency-audit.md).
+Pełne11plików/9577452B zachowano i odczytano na ext4 WSL; manifestf3615a49….
+Kwalifikacja źródła GSG i reprodukcja publikacji pozostają otwarte.
+
+
+## Checkpoint 08.11.2026 — zatwierdzony generated-authoring, preflight PASS
+
+Po jawnej zgodzie wdrożono addytywny wariant checkpointu, zachowując odmowy
+legacy i wszystkich istniejących ścieżek recovery.6 nowych i65 starych testów
+PASS; niezależny przegląd bez blokera. Pełny rzeczywisty preflight PASS,
+z zachowaniem źródła/sceny i released lease, bez Start lub Solve.
+Publiczny authoring save zachował nowy FMS revision6 na ext4 WSL.
+
+[Wdrożenie i dokładne dowody](2026-11-08-generated-authoring-restart-execution.md).
+Pozostała jedna zatwierdzona aktualizacja3203, jedno Prepare corner25
+i warunkowo jedno V/J/H. W chwili checkpointu żaden z tych kroków nie ruszył.
+
+
+## Etap2/5 — generated authoring i jedna próba corner25,08.11.2026
+
+Zatwierdzona naprawa preflightu wdrożona w c15f3072f7378b0693580b5c219aeb4e5b442d6e:
+6nowych+65regresji PASS, pełny rzeczywisty preflight PASS.
+Jedna managed aktualizacja99705446a054490e996e10338f84bca1 succeeded.
+Scena/Python identyczne;63odczyty archiwum PASS.
+Jedno Prepare9440b363eda74047ba4d768dac1baaa1 succeeded:40728Tet4,
+14194węzły,ten sam nośnik20H. Jeden Submit i jedna materializacja tego runu.
+Run0b9ca0be… failed po20/20H na bramce cell-local J interpolation mismatch;
+brak nowego solution_set lub eta. Oba lease i obie rezerwacje hosta released.
+Bez retry,nowego recovery,zmiany tolerancji lub dalszego Solve.
+[Pełny audyt i następny brakujący dowód](2026-11-08-generated-authoring-corner25-sequence-result.md).
+Nadal NOT VERIFIED: kwalifikacja źródła, Fig.3, napęd LLG i odbiór browsera.
+
+
+## Etap2/5 — odczytowa diagnoza centroidu RT0,08.11.2026
+
+Nowego buildu/Prepare/Submit/Solve nie wykonano. Na rzeczywistej geometrii
+i syntetycznym RT0 uzyskano świadek naruszenia obecnej nierówności center J:
+różnica/budżet18,352888; po dokładnej translacji0. Sześć kontroli arytmetycznych PASS.
+Nie jest to przyczyna potwierdzona dla rzeczywistego Failed ani kwalifikacja źródła.
+Brakują bity odrzuconej komórki; walidacja poprzedza publikację artefaktów.
+[Audyt](2026-11-08-rt0-centroid-readonly-diagnosis.md) i
+[osobna propozycja diagnostyki](2026-11-08-rt0-center-first-failure-diagnostic-proposal.md).
+Świadek ma zmieścić się w istniejącym raporcie błędu; predykat/tolerancje bez zmian.
+Plan oczekuje na przegląd i nową decyzję, bez automatycznego ponowienia.
+
+
+## Etap 2/5 — zapisany wynik V/J/H i kontrola fizyczna, 12.11.2026
+
+Bieżący stan zastępuje opis oczekiwania z historycznych checkpointów 08.11;
+ich Failed i dowody pozostają bez zmiany. Zatwierdzona nowa próba V/J/H
+zakończyła się sukcesem: run
+run-8f1144dd8f74eb7f2799ce192fef164dd9d8859c9c4ae2807244d62da88fc0e8,
+40 728 Tet4, 14 194 węzły potencjału, 20 próbek H,
+prąd 17,549315667730878 µA. Wynik, zimny odczyt i publiczne binarne V/J/H
+zostały zweryfikowane. Bundle SHA256:
+05df2b7c899b92686ccb54ab62bfd62ffea3b0cc5710fa7d3dfdd0f8dfa67d3a.
+
+Niezależna kontrola trzech jednorodnych pasków: maksymalna różnica wektora
+H/I 0,110560831% w tych 20 punktach, bez dopasowania znaku lub skali.
+To inne modele źródła; wynik nie stanowi odtworzenia danych publikacji.
+Pomiędzy dwiema zachowanymi siatkami zmiana H/I wynosi maksymalnie
+0,0155287%, ale pełne badanie zbieżności nie jest zaliczone.
+[Raport i wykres](../../../examples/sushruth_2020_closed_gsg/restart_20261111/analysis/raport-kontroli-analitycznej.json).
+
+Nowa pełna partycja źródła potwierdziła η=0,02424061426967989:
+99,9520144% energii rozbieżności RT0/H1 leży w końcowych połączeniach
+dotykających y poza ±9,8 µm. Analiza obejmuje wszystkie 40 728 komórek,
+odtwarza globalną energię i nie wyznacza błędu H.
+[Partycja i pochodzenie](../../../examples/sushruth_2020_closed_gsg/restart_20261111/analysis/partition-current-correction.json).
+
+Przygotowano publiczny eksport zachowanego źródła oraz jawne 92 punkty
+przy krawędziach pasków i obu powierzchniach przyszłej próbki. Obliczono
+niezależne wartości odniesienia dla 92 punktów; nowych H Fullmaga nie ma.
+Stary profil odmawia dla 40 728 komórek nawet przy jednym punkcie.
+[Plan H-only i przypięty kandydat profilu](2026-11-12-gsg-edge92-retained-current-proposal.md)
+oczekują na decyzję. Propozycja zmienia limity na punkt, zachowując globalne
+liczniki, tolerancje, czas, RSS i zasoby zadania; nie jest zastosowana.
+
+W tym checkpointcie nie wykonano nowego Solve, buildu, restartu ani zmiany
+polityki runtime. Brak kwalifikacji źródła i ilościowej reprodukcji
+widma/transmisji z pracy. LLG pozostaje odłożone do odbioru pola anteny.
+
+
+### Checkpoint — 12.11.2026: H92 obliczone, publikacja Failed
+
+Wykonano zatwierdzony profil `5a2a124e56e1fb0525914285649c8de7a78f96f40337c25fff736b35fd4e20ca` i dokładnie jeden worker H-only z zachowanego źródła 40 728 Tet4. Bez nowego V/J, buildu, restartu lub retry. Native potwierdził Completed i 92 wektory; czas 5380,494 s, RSS 1148,285 MiB. Pakiet 456 783 B, SHA256 `df291040f1e1ad83d64a8e960cb7579356d5bd3f98fe14dd479a0bb03b6c9628`, znajduje się w sąsiednim WSL `.zarr`.
+
+Weryfikacja: pięć pinów prądu i wszystkie payloady są zgodne, kontrole MPFR obejmują 92 punkty, a 20/20 kotwic spełnia niezmienioną bramkę metod. Największa różnica H/I od zamrożonego modelu trzech pasków to 0,110560831% w 92 punktach i 0,001049465% w 84 punktach przy |x| ≤ 650 nm. Największa próbka H = 24,468538 A/m przy I = 17,549316 µA. Wykres PNG/PDF zapisano i obejrzano.
+
+Publiczny run `run-9a169afad84675796b23704b306d574ffe399b2a6405be4c5bbf72c04abf77f1` ma jednak Failed. Po zapisaniu poprawnego wyniku funkcja `execute_accepted_worker_start_from_snapshot`, wywołana ponownie do odczytu receipt przed publikacją (`accepted_study_worker.rs:4027`), odmówiła przy aktywnym writerze magazynu. Nie zmieniano historii. Katalog inspekcji API zwraca 404; odbiór API/UI pozostaje NOT VERIFIED. Wszystkie cztery rezerwacje są zwolnione, kolejka jest pusta, a health odpowiada 200.
+
+Raport i pełne ograniczenia: [kontrola H92](../../../examples/sushruth_2020_closed_gsg/edge_field_20261111/verification/raport-kontroli-92-punkty.md). Wynik nadal ma inspection_only / not_verified. Dawny FAIL zbieżności 100/75/50 nm nie został zamknięty. Publikacja naukowa, FFT i LLG nie są odtworzone. Dane są zachowane i nie wymagają ponownego liczenia do dalszej analizy.
+
+Checkpoint12.11 — lokalizacja przyczyny korekty: wykonano autentykowany postprocessing40728Tet4, bez Solve/H/build/restart. Rozłączna partycja27klas daje96.45672267092456%funkcjonału RT0/H1 w r<=200nm od8naroży,66.42987494240652%w r<=50nm;36komórek przy samym source-cut ma0.000041683860559581006%. Cut36ścian, pole każdej strony1.8e-14m2, tylko signal200x90nm/y=-11um. Globalne etaidentyczne0.02424061426967989; różnica sumowania<5e-118. To lokalizacja defektu, nie granica błęduH. Raport examples/sushruth_2020_closed_gsg/edge_field_20261111/verification/corner-cut-correction-report.md.
+Plan kolejnego eksperymentu przygotowany do decyzji: docs/superpowers/plans/2026-11-12-gsg-corner12p5-source-qualification-proposal.md SHA c43eb7b0c56b9673590781cebb355ee8a7f579174b98f810c6f993594c6c5198. Kandydaci skryptu12.5nm/patcharead-retry pozostają niezastosowani; AST różni tylko h naroży/nazwa, gitapply--checkPASS. Rust test/build/Prepare/SolveNOTRUN. Pytanie o plan i nową sekwencję zadane request_user_input_async; nie traktować opcji formularza ani upływu czasu jako zgody. Ostatni goalturn miał postęp (audyt5siatek); bieżący też ma nowy dowód fizyczny, nie jest stanem blokady. Bez dalszej zgody nie wykonywać zależnej aktualizacji lub nowego worker.
+
+### Checkpoint — 12.11.2026: bilans mocy i niezależna reszta zapisanego potencjału
+
+Bez nowego Solve, pól, buildu lub restartu wykonano pełny postprocessing 40 728 Tet4 istniejącego GSG. Całka mocy RT0 i moc dostarczona przez źródło wynoszą 17,5493156677 nW; różnica względna −5,91358e−17. Obie strony źródła mają przeciwnie podpisane prądy, a ich suma jest zerowa w użytej arytmetyce. Różnica H1/RT0 równa około 0,058760738% (mianownik H1) jest zgodna z tożsamością ortogonalnej projekcji. Nie jest dodatkową stratą ciepła ani dowodem błędnego znaku źródła.
+
+Niezależnie odtworzono działanie operatora H1 z geometrii, sigma i istniejącego V: względna norma reszty 2,065360170410137e−14, maksymalna reszta węzłowa 2,2869566836491114e−17 A, skok napięcia zachowany dokładnie, gauge −3,6820028699568085e−18 V. Odtworzone reakcje zgadzają się z ledgerem do 2,343747053050873e−13 względnie. Norma obejmuje pełny układ ilorazowy, nie dokładnie natywną normę po usunięciu wiersza kotwicy. Nie jest to niezależny solve B, rekonstrukcja C ani granica błędu kontinuum.
+
+Oba audyty przeszły niezależny przegląd bez P1/P2; skontrolowano hashe, parsery i link. Raport: [bilans i reszta GSG](../../../examples/sushruth_2020_closed_gsg/edge_field_20261111/verification/retained-power-balance-report.md), SHA256 cbe65863a478b44a2d67171cac6a9d1e6041c097a33c19903ca7e27116aa8483. Wcześniejsze kryteria GSG i FAIL zbieżności pozostają; nie przeniesiono automatycznie progu reakcji ze starego fixture mikrostripu. Publiczny H92 nadal Failed, E3–E5 i publikacja pozostają nieukończone. Plan corner12,5 SHA c43eb7b0c56b9673590781cebb355ee8a7f579174b98f810c6f993594c6c5198 jest niezmieniony i nadal czeka na decyzję; kandydatów nie zastosowano. Ta tura ma rzeczywisty postęp: dwa nowe dowody fizyczne zawężają dalszą diagnostykę do projekcji/siatki, nie jest turą bez postępu.
+
+
+
+## Etap 2/5 — bieżąca kontynuacja GSG 86k, 12.11.2026
+
+Ten checkpoint zastępuje wcześniejsze zapisy oczekiwania na decyzję i blokady
+dla bieżącej kontynuacji; historyczne Failed oraz globalny FAIL pozostają.
+Użytkownik zatwierdził profil86k, a następnie polecił wykonać niezbędne kroki
+kontynuacji. Naprawiono preflight wejść i domknięto własną odmowę przed startem;
+169/169 kontroli przeszło. Standardowy Docker DEV tej samej grupy3203 z
+zachowanym grantem examples zakończył build/start. Development
+0ea68970ac544a90bddbb1fdf80b5614; snapshot
+71088fe782bec1cc8322a43727b3f4869b141dda74dd70dbe69014eb18fa55f4.
+
+Jedno nowe cache-only Prepare d52db147754c460ba5f4da875c8df25a przeszło:
+85 980Tet4, cała geometria zgodna bitowo z zachowanym NPZ, bez Gmsh.
+Jedno publiczne zgłoszenie przyjęto, co potwierdził GET po timeout klienta;
+nie ponawiano Submit. Po jednej materializacji działa dokładnie run
+run-e9aff0de16d09f8de87b473179e239b28b8b4bbb4fea0c91a2e542f07d150438.
+Stan Running potwierdzają publiczny katalog, aktualny proces i przypięta
+obserwacja workera: FEM CPU/double/strict, reconstructing_current,
+85 980komórek, pole0/20. Wynik powstaje w sąsiednim WSL Zarr.
+Nie jest to jeszcze dowód ukończonego V/J/H ani nowej kwalifikacji fizycznej.
+
+Następne odbiory: terminalSucceeded → pełny odczyt V/J/H → lokalna seria
+junction50/corner25/corner12,5 i trzy referencje0/8/16. Referencje0/3;
+bez nowych tolerancji, dodatkowego Solve, FFT lub LLG. Model i zakres
+kwalifikacji pozostają w nocie0950; sam build nie kwalifikuje pola.
+
+[Plan, kryteria i piny86k](2026-11-12-gsg-retained-corner12p5-86k-continuation-proposal.md).
+[Raport wykonania i zachowane dowody](../../../examples/sushruth_2020_closed_gsg/corner12p5_20261112/verification/raport-kontynuacji-86k.md).
+Dodatkowy odczyt topologii wykazał32 487 714 960 kandydackich sprawdzeń ścian
+w dwóch wywołaniach budowy rangi. To rachunek z kodu/IR, nie pomiar hotspotu
+bieżącego procesu; nie zmieniano algorytmu podczas tej próby.
+
+
+### Checkpoint — GSG86k Succeeded, lokalna zbieżność PASS, trzy referencje aktywne
+
+Ten zapis zastępuje Running z poprzedniego checkpointu. Jeden nowy V/J/H
+run-e9aff0de16d09f8de87b473179e239b28b8b4bbb4fea0c91a2e542f07d150438
+ma Succeeded/publiczną rewizję2. Bundlebf0aef6a71242351e6a9ac996f17ce7f87eea0b51c4d6f381cfd272339367c04
+jest na ext4WSL;23 263V,343 920lokalnychJ i20H odczytano przez API
+bajtowo. Native47min36,479s, I17,5515084696µA.
+Lokalna seria34243/40728/85980Tet4 przechodzi wszystkie stałe bramki
+I/H/(H/I)/η i kontrakcję; η3,4646%→2,4241%→1,7628%.
+Fine–medium:maxΔH0,0146531%,maxΔ(H/I)0,00217159%.
+To lokalny PASS numeryczny; globalny FAIL i unqualified pozostają.
+
+Jeden preflight3referencji przeszedł, po wskazaniu wspieranegoPython3.12
+w środowisku procesu zamiast systemowego3.8. Jedna seria3punktów już działa,
+requestf777f5176bc468507a2a6b34d470085ff391e9943a7c8088878cb8b71de618e3.
+Bez dalszego Solve, zmiany metody/tolerancji, LLG lub UI.
+[Raport i wykres](../../../examples/sushruth_2020_closed_gsg/corner12p5_20261112/verification/raport-kontynuacji-86k.md).
+
+### Kontrola analityczna zapisanego GSG86k — 13.11.2026
+
+Nowe H/I porównano bez ponownego pola z zachowaną niezależną referencją
+trzech jednorodnych pasków w tych samych20 bitowo zgodnych XYZ. Maksymalna
+różnica wektorów wynosi0,108476139%; w12 środkowych próbkach0,000187189%.
+Iloczyny skalarne20/20 są dodatnie, min cos0,999999986629. Nie obserwujemy
+globalnego odwrócenia znaku względem tego modelu. To porównanie różnych
+modeli źródła: referencja pomija poprzeczki i niejednorodność prądu, więc
+różnica nie jest samym błędem solvera. Nie rozstrzyga fazy transmisji Fig.3.
+Bez nowej bramki, fitu lub promocji bazy.3 niezależne kontrole RT0 nadal działają.
+
+[Raport i wykres porównania](../../../examples/sushruth_2020_closed_gsg/corner12p5_20261112/verification/porownanie-modelu-paskow-86k.md).
+Artefakt90377b296b03389f09a821fd53c29dd0a57557ce1a47fabf637859e8a84d10ed;
+niezależne przeliczenie NumPy20/20 i kontrola wizualna przechodzą.
+
+### Bilans całego nowego źródła — 13.11.2026
+
+Przeliczenie85 980Tet4/36powierzchni source-cut wDecimal120 bezSolve/pola:
+P_RT0≈ΔV·I z resztą względną4,1097465e-17, suma obu prądów0,
+H1weakpower reszta1,9410537e-12. RóżnicaH1reaction/RT0current0,0310746391%
+(mianownikH1), wobec poprzednich0,0587607380%. Nie zmieniono I ani gate.
+Przeliczenie trwało15,94s, peakRSS356511744B,1CPU. Piny/pełne dane:
+[fine86k-power-balance.json](../../../examples/sushruth_2020_closed_gsg/corner12p5_20261112/verification/fine86k-power-balance.json);
+[raport](../../../examples/sushruth_2020_closed_gsg/corner12p5_20261112/verification/bilans-mocy-86k.md).
+Nie jest to kwalifikacja kontinuum, całego filmu lub publikacji.
+
+### Niezależne działanie H1 i dokładne bilanse ścian — 13.11.2026
+
+Całe85980Tet4/23263węzły/188926ścian: niezależne podstawienie V doH1
+daje resztę8,69448622308e-13 (native8,69657608337e-13).
+Reakcje zgodne do3,4044e-13 względnie; skok16par0V.
+Izolacja33896 i18parcut dokładnie0. W65397komórkach residual niezerowy,
+max4,2352e-22A=2,4130e-17I — bez ukrywania i bez strictadmissibility.
+29,11s/363008000B/1CPU. Lokalny czytnik poprawiono po KeyError faces,
+bez poprawki produkcji, profilu lub ponownego native/field.
+[Raport i dowody](../../../examples/sushruth_2020_closed_gsg/corner12p5_20261112/verification/kontrola-rownania-i-strumienia-86k.md);
+JSON20cf79c880be2cb0afa47b6bf3a69492cf59b5f4eb59a144c100c80ff4b4f1a5.
+Pełna kwalifikacja źródła, filmu i publikacji pozostaje otwarta.
+
+### Zachowany dowód kwadratury H — 13.11.2026
+
+BitoweXYZ/H20/20,443adaptacyjnychpodziałów,0unconverged,
+65 602 912kernelevals z500mln. Estymator+roundoff mieści się w każdej
+dotychczasowejtolerancji; maxratio0,9969187942. Nie jest to ścisły errorbound.
+Dowód2216B zawiera tylko sumy pertarget, bez części/komórek. Wkładu końców
+nie można odtworzyć samym odczytem tego dowodu; nie wykonano nowych całek.
+[Raport](../../../examples/sushruth_2020_closed_gsg/corner12p5_20261112/verification/kontrola-kwadratury-86k.md),
+JSON93c5aec23939d5dbb0e3fcd3f640112d110c88bd5c4a9f768f83116acef103f8.
+
+### Pierwsza niezależna referencja H — 13.11.2026
+
+Zakończono punkt0 dla85980Tet4: native–oracle2,68141068864e-15A/m,
+przy||H||0,0744834656028A/m; stała bramka0,00107448346560A/m spełniona.
+Kontrole80/120cyfr iwhole-face/fan przeszły. Czas7100,3329s.
+Punkt8 już pracuje, punkt16 bez wyniku. To1/3, nie pełna kwalifikacja.
+[Odbiór](../../../examples/sushruth_2020_closed_gsg/corner12p5_20261112/verification/fine86k-first-reference-assessment.json);
+rawSHAebd83e03f5b7346853d741ae2b1c135de01c253bdcd3161f08c8a29bf41d6f87.
+Nie uruchomiono ponownie transportu, serii referencji lub LLG.
+
+### Konwencja kwadratu widma GS — diagnostyka bez nowego R/T
+
+Opublikowane Eq9–10 iEq7 sprawdzono bezpośrednio wAPS/arXiv. Dla
+centrowanych S/GSG kwadrat iabs² są równe; dla GS różnią się stałym−1,
+który skraca się z normalizatorem z tej samej pracy. Zweryfikowano2404k
+i12 istniejących normalizatorów, bez nowych całek/FFT/VJH i bez fitu.
+[Raport](../../../examples/sushruth_2020_closed_gsg/corner12p5_20261112/verification/konwencja-kwadratu-widma.md);
+JSON732da176daa11869e05017aa57e2fea1ab11961697c880a0e9c53a8ff68e9c51.
+To eliminuje tę konkretną hipotezę globalnego minusa dla aktualnego
+znormalizowanego modelu, nie wyjaśnia Fig.3 ani nie kwalifikuje solverów.
+
+
+### Dowód niezależny od odległości anten — Fig. 2, 13.11.2026
+
+Nowy wewnętrzny odbiór naukowy: [raport koniecznej granicy ImR](../../../examples/sushruth_2020_closed_gsg/corner12p5_20261112/verification/figure2-absorption-bound/raport-granicy-odbicia.md). Dokładna nierówność Eq1–3/9 przy TableI wymaga minimum ImR powyżej7,49GHz; wszystkie cztery krzywe obu oryginalnych wersji Fig.2 mają je poniżej. Zakres jest jawny: dodatni, skończony normalizator i nieujemny, niezależny od f ciężar; nie dowolny sygnał portu lub pełny licznikA8. Dowód i jednostki przeszły niezależny przegląd;16dokładnych kontroli i8odczytów. Nie identyfikuje to parametrów faktycznie użytych przez autorów, nie oznacza ich błędu numerycznego ani reprodukcji. NoweSolve/H/responseintegrals0; referencje86kwciąż ta sama seria.
+
+
+### Kontrola podziału prądów GSG — 13.11.2026
+
+Pięć przekrojów i sześć terminali potwierdza znaki i niemal równy podział powrotów w zachowanym wyniku 85 980 Tet4.
+Dokładne momenty i oddzielne porównanie rezystancji nie wymagają nowego Solve/pola.
+[Raport, jednostki i zakres](../../../examples/sushruth_2020_closed_gsg/corner12p5_20261112/verification/diagnostyka-pradow-i-rezystancji-86k.md).
+To dalszy postęp E3/E5, nie pełny odbiór źródła, LLG ani odtworzenie Fig. 3.
+Trwająca pojedyncza seria trzech referencji H pozostaje na tym samym przypiętym kontrolerze.
+
+
+Dodatkowy odbiór tylko do odczytu:
+[globalne momenty zachowanego J](../../../examples/sushruth_2020_closed_gsg/corner12p5_20261112/verification/globalne-momenty-pradu-86k.md).
+Mała całka J nie zastępuje lokalnej konserwacji, referencji H lub kwalifikacji źródła.
+
+
+### Druga referencja H z tej samej serii — 13.11.2026
+
+Punkt8 z85980Tet4 przeszedł bez zmiany progów: różnica3,911844014e-6A/m,
+względnie1,822881456e-7. XYZ/nativeHbitwise, gate i80/120/whole-face-fanPASS.
+[Odbiór](../../../examples/sushruth_2020_closed_gsg/corner12p5_20261112/verification/fine86k-second-reference-assessment.json),
+raw4c6e06cd67e9407b2c51ad963c3ef51884064a4b86e79cada2bc4f82059d6b84.
+Teraz2/3; ostatni punkt16 pracuje w tym samym86115. Pełny odbiór eksperymentu nadal otwarty.
+
+
+### Wykonane porównanie analityczne prostych pasków
+
+[Raport20zachowanych próbek](../../../examples/sushruth_2020_closed_gsg/corner12p5_20261112/verification/infinite-strip-reference/raport-porownania.md):
+maxróżnica H/I0,0273131%, centralne12max0,000149913%, dodatni dot20/20.
+Skończony przekrój200×90nm, nieskończona długość, powroty−½, bez fitu; Gauss48/96potwierdza wzór.
+Nie jest to kwalifikacja końców pełnej pętli, modelRF lub odtworzenie transmisji.
+Nie zmieniono eksperymentu3referencji pełnego RT0, który nadal pracuje.
+
+
+### Postęp 13.11.2026 — pole 86k i odbiór wydajności
+
+V/J/H85980Tet4 zakończone i zapisane; lokalna zbieżność I/H/H-I/eta oraz kontrakcja przeszły. Dwie z trzech niezależnych referencji H przeszły, trzecia trwa bez restartu. Dla20zapisanych próbek różnica względem osobnego modelu nieskończonych prostokątnych pasków ma maksimum0,0273131%; to różnica modeli i nie odtworzenie transmisji publikacji. Zmienność H przez nominalne17,4nm w centrum wynosi około14,035%; dwie płaszczyzny nie są średnią objętościową. Szczegóły i ograniczenia: examples/sushruth_2020_closed_gsg/corner12p5_20261112/verification/raport-kontynuacji-86k.md.
+
+Kandydat liniowej enumeracji ścian nadal niezastosowany. HelperPR425 uruchamia istniejący natywny test: pierwszy C0 odmówił przed kompilacją przez brak GMP/MPFR w obrazie CPU. Dwa brakujące pakiety dodano wyłącznie na helperbranch1736a5900223774b85f462dc8e74596e46eb17f0; ten C0 przeszedł konfigurację, lecz odmówił kompilacji na dwóch błędach testu. Bieżący helper7878d466d791739e3300690318ac5cd0b4b48736 obejmuje pięć aktualnych zależności i dwie poprawki testu; C0run43368917979trwa. Pierwotne porównanie commitów nie obejmowało dirtyworktree; pełny poprawiony manifest31plików i dowód7blobów są w raporcie. PierwszyRustCI47+1PASS; nie ma jeszcze nativePASS, benchmarku lub bajtowego porównania buildów. Lokalnego runtime nie przebudowano; brak nowychSolve/meshingu/H-only/LLG/FFT. PełnyE0–E12 pozostaje aktywny i nieukończony.
+
+
+### 13.11.2026 — odbiór rzeczywistego C0 i dalsza referencja
+
+Aktualne domknięcie źródeł skompilowane w CI43368917979; CTest odmówił na błędnym wymiarze dwóch wektorów testowego oracle (Vector{3} zamiast Vector(3)). Referencję poprawiono wyłącznie w pomocniczym PR425, commit76e4996efaeeba541e39b035dd8a87698747c5c6, nowy C0run43371296822 w toku. Bez zmian solvera, progów lub runtime. Rust47+1PASS. Optymalizacja i pomiar przyspieszenia nadal NOT VERIFIED. Raport i dowody: examples/sushruth_2020_closed_gsg/corner12p5_20261112/verification/raport-kontynuacji-86k.md. Ta sama seria H2/3 żyje; pełny cel E0–E12 pozostaje aktywny.
+
+
+### 13.11.2026 — ukończone trzy kontrole pola RT0 86k
+
+Seria3/3PASS, kontroler succeeded/exit0. Max względna różnica native–oracle1,822881456e-7; wszystkie piny, payloady i bity H/XYZ sprawdzone ponownie. Wynik i receipty zachowane obok skryptu na WSL. Raport: examples/sushruth_2020_closed_gsg/corner12p5_20261112/verification/odbior-3-kontroli-pola-86k.md. Tylko zakresowa weryfikacja całkowania trzech punktów, osobno od lokalnej zbieżności. Pełna baza, gęsta domena próbki i reprodukcja publikacji nadal NOT VERIFIED; E0–E12 aktywne. Bez nowej symulacji lub odblokowania LLG. Kolejny kierunek: odbiór kandydata optymalizacji CPU w CI i osobno gęste próbkowanie pola przy zachowanym J.
+
+
+## Stan 13.11.2026 — trzy kontrole H odebrane, przyczyna odmowy testu Piola zmierzona
+
+Trzy niezależne kontrole pola zachowanego prądu zakończyły się PASS, a kontroler i worker zwróciły EXIT 0. Odbiór i niezmienione wejścia opisuje `odbior-3-kontroli-pola-86k.md`; nie uruchomiono nowego Solve. Nie kwalifikuje to jeszcze pełnej objętości próbki, bazy do LLG ani publikacji.
+
+Run CI 43373856787 dla 6ad136ee843f70a9ff3c26ff56ff90084334814c skompilował kontrakt natywny, po czym pokazał trzy rozbieżności przy 34 zgodnych kluczach ścian: dwie około 2,22e-16 A przy zerze i jedną 4,44e-16 A (1 ULP przy 2 A). SHA logu: `0981f7b607648f2af7ccd9808bda2fd69f42900ac2f16a9b1e931c685bffeaf4`. Test wymagał dokładnej równości niezależnej, zaokrąglonej ewaluacji Piola z dokładnym momentem wymiernym; nota 0950 jawnie takiej równości nie obiecuje. Nie znaleziono odwrócenia znaku ani obcej tożsamości w tym fixture.
+
+Rozważono: (1) wymuszenie wyniku MFEM w produkcyjnym certyfikacie — naruszałoby kontrakt; (2) zaokrąglanie lub zerowanie danych — ukrywałoby różnice; (3) drugi dokładny oracle wymierny — większy zakres i mniejsza niezależność; (4) poprawę mapowania/kwadratury MFEM — nie daje gwarancji identycznych bitów; (5) oddzielenie dokładnej tożsamości od fizycznego porównania z istniejącym progiem wierszy bilansu. Wybrano (5), bez zmiany produkcyjnych równań i tolerancji.
+
+Kandydat `234df567b217f60902af027128bc7d88e4ae47f83e6fbe109e0944965b9b12d4` przeszedł kontrolę zakresu i niezależny review bez uwag Required. Dokładne `same_records`, jego trzy kontrole tożsamości, kodowanie i digests pozostały; dwa porównania z fizycznym oracle korzystają z istniejącego 1e-13 A. Nowe kontrole odrzucają brak ściany, inny klucz, odwrócony znak, różnicę ponad próg i NaN/±Inf. To świadoma poprawka kontraktu testu, a nie dowód ogólnego bound dla MFEM.
+
+Poprawka wyłącznie testu została opublikowana na pomocniczym branchu CI: `29b3e630c84bc07b0e59c6066e3278041ea6649d`, tree `ec1617ad19f06d32dd7000f8cbdf63ba5f242adb`, blob `8a1db5ef5dd91a617bfe4ae169c30300285bb312`. Istniejący draft PR425 pozostaje niescalony. CI: https://github.com/MateuszZelent/fullmag/actions/runs/43376334776 . Wynik natywny tego commita w chwili zapisu nie jest znany; nie deklarujemy PASS. Główne źródło produkcyjne c571adaa…65476, HEAD worktree 7d3d8f52748a5fc22b3a867bc8a6b42dd6c2769f, 61 staged i ich lista pozostają bez zmian. Optymalizacja enumeracji ścian pozostaje kandydatem, bez pomiaru przyspieszenia i bez zastosowania w runtime 3203.
+
+
+## Stan 13.11.2026 06:24 UTC — porównanie Piola przeszło, ujawnione przestarzałe oczekiwanie v1
+
+CI `43376334776` dla `29b3e630c84bc07b0e59c6066e3278041ea6649d`: Rust PASS, natywny build PASS, pełny CTest FAIL po 5,92 s. Poprzednia odmowa Piola nie wystąpiła; wykonanie dotarło do `accepted_external_lead_finalizer_preserves_owned_series_and_rejects_foreign_descriptors`. Nie oznaczamy całego kontraktu jako PASS. Natywny log SHA: `784114211d350a81c2651533e2096ee1c29d53ab8f166ad1568f9bfce7311821`.
+
+Nowa odmowa była łącznym sprawdzeniem wersji i SHA. Test oczekiwał literalnie `fem_accepted_external_lead_field.v1`; obecny, niezmieniany producent `evaluate_accepted_external_lead_field` zapisuje `fem_accepted_external_lead_field.v2` i `accepted_external_lead_field.ordered.v2`. To wystarcza do odmowy; nie dowodzi błędu SHA. Kandydat `10f82a9e60fc8d0a83fc5bc05f87166e939be96d8e9c6e17e5e538fd80e8e32a` zmienia tylko oczekiwanie i wydziela komunikat wersji; dokładne kontrole SHA i ownera pozostają.
+
+Pomocniczy commit testu: `ff1a478f8ec995e9f02f856eb3237bd8a7693dd4`, tree `cae7b7e0a8941702c1a276fa9b319b68ba6ad3c0`, blob `b82eded5094c5055b036ec31a0ed7e750e5583d5`, SHA256 źródła `2835ba3ede5f573e2f1029a7f091b0d4dadb80d9a31c94586536abddfebacff4`. Aktualny CI: https://github.com/MateuszZelent/fullmag/actions/runs/43378326354 . Przy zapisie wynik pozostaje oczekujący. Draft PR425 nie jest scalony; optymalizacja C1 i lokalny produkcyjny plik pozostają niezastosowane.
+
+Niezależny odczyt przypiętego IR potwierdził brak obiektowego assetu pełnej próbki. Jest asset anteny 23 263 węzłów / 85 980 Tet4 i globalny nośnik diagnostyczny 20 węzłów / 24 Tet4; zero aktywnych magnetyków. Zapisano `next-sample-carrier-readonly-inventory.json`. Sam generic Object selector nie dowodzi gotowej ścieżki H-only na aktywnym magnetyku: walidator zachowanego przygotowania wymaga `magnets.is_empty()`. Istniejący projekt wspólnego rdzenia pozostaje punktem odniesienia; nie utworzono nowej siatki lub nowych typów domen.
+
+Cel E0–E12 pozostaje aktywny. Trzy kontrole H są odebrane i zachowane; pełna kwalifikacja próbki, źródła do LLG, odtworzenie publikacji i odbiór UI nadal są otwarte. Nie uruchomiono nowego transportu, H-only lub LLG, nie zmieniono runtime 3203, limitów, tolerancji ani indeksu 61 ścieżek.
+
+
+## Stan 13.11.2026 — C0 C++ PASS i rozpoczęty pomiar konstrukcji RT0
+
+Run 43378326354 dla helpera `ff1a478f8ec995e9f02f856eb3237bd8a7693dd4` skompilował i zaliczył cały `fem_conservative_current_view_contract`: CTest exit0, marker PASS, 9,45s. Rzeczywisty snapshot CI to merge commit `dab9d9ba7aee50b4d01b5dd3369fdd3c5808510e`; Git potwierdził identyczne całe tree `cae7b7e0a8941702c1a276fa9b319b68ba6ad3c0` z helperem. Log SHA `b2bf8d4a5a26325783e1686531de038ad835bce7ee75f719a448cd085ee34a5c`, receipt SHA `af99dc8e1f6c46bb7387ba8486212a3031ef3475b38bd6e8d11a7d462cd91fd0`.
+
+Cały job pozostaje FAILED: już po zaliczonym teście `run_with_storage` odmówił automatycznego zakończenia/sprzątania głównego checkoutu runnera (`Automatic worktree completion cannot retire the main checkout`). Zapisano oddzielny odbiór `c0-native-pass-postcleanup-failure-assessment.json`. Nie deklarujemy zielonej bramki managed CI i nie omijamy retencji. Nie rozwijano recovery instancji3203.
+
+Przygotowano testowy benchmark rzeczywistego `ConservativeCurrentView::Build`: regularna siatka1m×1m×1m, σ=4S/m, okresowy skok−1V, 10 368Tet4/21 600ścian, trzy powtórzenia. Timer obejmuje Build wraz z KKT i certyfikacją; pomija tworzenie siatki, przygotowanie H1, kodowanie i destrukcję widoku. Zapisuje trzy osobne SHA: surowe bity potencjału/RT0 DOF (w tym znak zera), kanoniczne strumienie i pełny certyfikat bilansu. Powtarzalność wewnątrz procesu jest sprawdzana; odbiór wymaga dodatkowo zgodności każdego SHA między C0 i C1.
+
+Niezależny review pierwotnej wersji benchmarku nie wskazał błędu kodu. Potwierdził statyczne limity10 656wierszy/20 448kolumn/40 896wpisów oraz koszt około1,344mld odwiedzin starego skanu w trzech powtórzeniach. To umiarkowany benchmark integracyjny; nie mierzy całej GSG85 980 ani skalowania MPI. Wersja v2 doprecyzowała kodowanie surowych bitów zamiast normalizowania znaku zera. Nie zmieniono progu czasu, limitów solvera lub produkcyjnego algorytmu.
+
+Benchmark baseline opublikowano w pomocniczym commicie `1e05f64e7e97d7e8ce312af3110e56390e99087e`, tree `4a554d59f6b55d91973cb5ed71bf74b80649be9e`, blob `23cda226a09fb4c5efd37eb08f813ba9f02d32f6`, SHA256 testu `f51cc5c27030ea3d419b84d2c2c7fdef4463dbca007d46a6cdc40de8174fa145`. CI: https://github.com/MateuszZelent/fullmag/actions/runs/43380919470 . W chwili zapisu wynik pomiaru jest nieznany. Dopiero po jego odebraniu C1 ma użyć identycznego testu i wejść. Kandydat optymalizacji `8ff760350d101055c32dd4069c2f8114dbe24ceaf4f4474635d580e0bf05f49a` pozostaje niezastosowany.
+
+Ponowna kontrola źródła pierwotnego potwierdziła szerokość eksperymentalnej próbki20µm (sekcja IV.A). Zamrożony obwód ma odcinek roboczy20µm i całkowity zasięgYokoło24µm wraz z połączeniami; obecne próbkowanie obejmuje środkowe100nm. Długość próbki wzdłuż propagacji i pełny target pozostają do jawnego ustalenia. To nie jest reprodukcja całej próbki. [Publikacja APS](https://journals.aps.org/prresearch/pdf/10.1103/PhysRevResearch.2.043203).
+
+Źródła nie pozwalają na prostą zmianę tej zamkniętej pętli na potencjał wektorowy: `crates/fullmag-plan/src/antenna_current_source.rs::materialize_antenna_closed_loop_current_input` odrzuca prepared loop vector potential, a retained H-only wymaga AnalyticRt0Surface. Nie zmieniano tych odmów ani nie obiecano alternatywnego solvera na podstawie samego enum.
+
+
+## Stan 13.11.2026 — odebrany benchmark C0, C1 działa w CI
+
+C0 benchmark na `1e05f64e7e97d7e8ce312af3110e56390e99087e` zakończył się poprawnym CTest exit0/PASS (17,96s całego testu). Trzy rzeczywiste czasy Build:3,90703 /3,91876 /3,91958s; mediana3,91876s. We wszystkich powtórzeniach identyczne SHA surowego stanu, kanonicznych strumieni i certyfikatu. Odbiór `native-build-benchmark-c0-assessment.json` SHA `eeec4f2587be9961bf552c19baeadf55675c79e7e25001255f6aa796aa757967`.
+
+Rzeczywisty snapshot CI: `d6415ee54cdb009ae0414565b1243a12194a87f7`, całe tree `4a554d59f6b55d91973cb5ed71bf74b80649be9e` identyczne z helperem. Log SHA `52ddde5751bbc244a713c7c72d5ba6f80ce27a9bdfc2256c838969291430508f`, receipt SHA `6d1a736ced6e5c2a7ba9f2574d767c3ea8dde1cf3a2b47d055cd26d8e59800d5`. Cały job nadal FAILED wyłącznie na ujawnionym później kończeniu/sprzątaniu głównego checkoutu runnera; nie uznajemy tej trasy za w pełni zakwalifikowaną.
+
+Surowy stan SHA `ee87ab790ad7eed426504ca12830170c3f1da3ea8a9f29838bad08f86f88e6fd`; strumienie `7bd52a679b44e77c1fe2d65b44d4210967ac10eb9d2907f8710737feada2c24a`; certyfikat `3a626dff96b446a4d332637bf0476d55587ab820d1fa64c19b73ce0f24f64d3d`. Te trzy wartości muszą przejść dokładne porównanie z C1; sama powtarzalność pojedynczego procesu nie wystarczy.
+
+C1 opublikowano tylko do CI: commit `6162c8ce79f4b10ff8f9bd5962b63a09bca1043a`, tree `bf03c74aa5ba8e9b8eb3d0abe4ca6614e62f7634`, blob źródła `2382b6074d0cdc6f1a8125db89c94a7ec4d37220`, source SHA `726b0053be916ce834d77356441ec7b27ea10573bb79779c4f596d3f46d38bf1`. CI: https://github.com/MateuszZelent/fullmag/actions/runs/43382927079 . Wynik C1 nie jest jeszcze znany; nie deklarujemy przyspieszenia.
+
+`git diff` potwierdził dokładnie jeden zmieniony plik względem C0: `backends/fem/cpu/mfem/transport/conservative_current_view.cpp`. Wszystkie31plików domknięcia zweryfikowano; benchmark i niezależny oracle mają identyczny test SHA `f51cc5c27030ea3d419b84d2c2c7fdef4463dbca007d46a6cdc40de8174fa145`. Lokalny produkcyjny plik nadal ma SHA `c571adaa9e07322361a48f89f3ddd5ed07b201878d5a26e6fdfc90367fb46576`; nie wdrożono C1 do worktree/runtime.
+
+Analizator `compare_native_build_benchmarks.py` SHA `bedfc7ca1be0c660b27647dc2e3e78a72f32c48d627973739dce6c75db2ccaf0` przeszedł8lekkich kontroli (1pozytywna i7odmów) na syntetycznych liniach wyłącznie w pamięci. Nie są to dodatkowe natywne pomiary. Po pobraniu C1 należy potwierdzić jego faktyczne merge-tree, następnie wykonać analizator z argumentami `43380919470 43382927079 6162c8ce79f4b10ff8f9bd5962b63a09bca1043a`. Brak lokalnego obiektu merge wymaga odczytu/fetch, nie ponowienia joba.
+
+Nadal: 3/3kontrole H odebrane; pełna siatka próbki, kwalifikacja bazy, publikacja i końcowy UI nie są ukończone. Bez nowego naukowego V/J/H, H-only, LLG, local native build, zmian polityki lub tolerancji. Staged61 i HEAD worktree pozostają. Klasyfikacja tej kontynuacji: postęp — nativeC0PASS, rzeczywisty baseline i C1opublikowane; bieżący C1job jest przedmiotem konkretnego oczekiwania, nie blokadą uniemożliwiającą dalszą pracę.
+
+
+2026-11-13T07:59:29.720691+00:00: postęp — C1odebrany: CPP PASS, wszystkie3fingerprintyC0/C1dokładnieidentyczne, rzeczywiste merge/tree675d701f328f8b0a4a943df28d87bc90287bb6e6/bf03c74aa5ba8e9b8eb3d0abe4ca6614e62f7634. Median3.91876→4.06112s, brakdowoduprzyspieszenia; produkcjac571niezmieniona. PorównanieSHA04c4aaacf56036a12b4facd73575976d9ed8da85725304ef0b45ec868ce99979. JobwrapperFAILretencjigłównegocheckoutu poCPPpass, bezrecovery. Nowafizykaodczytowa: normJzH1 .6215346→.5209770%, RT0 .4631284→.3270438%; 2poziomy, nienowagate. JSONbffe5c2e7c308a5db0cca149f1fb55b6285c9c9b8327977beb3acf4c055b49a6, PNG60c4acd006ccf50bb539ec00c1e743027e4293436a08233137f4398ec4aab8f9obejrzany. 96fixturesi41testówdocPASS. SamodzielnareferencjaFV2Dnominalnegopełnegookwoduwprzygotowaniu,beznowychFullmag/NativeSolvedependants. PełnyE0–E12active, publikacjanieodtworzona.
+
+## 13.11.2026 — niezależna referencja prądu, bez nowego Fullmag V/J/H
+
+Klasyfikacja: postęp fizyki. Cel E0–E12 nadal aktywny; nie ukończono odtworzenia publikacji.
+
+Zrealizowano samodzielny matematyczny test nominalnego pełnego obwodu, zgodnie z pierwotnym E3/E12 i prośbami o niezależne sprawdzenie. To nie nowy kontrakt, profil lub metoda wykonania Fullmaga. Wszystkie dotychczasowe ograniczenia jednej natywnej próby i trzech kontroli RT0 pozostają. Nie uruchomiono nowego Fullmag V/J/H, H-only, FFT lub LLG. Nie budowano aplikacji i nie zmieniano runtime.
+
+Przed danymi zapisano założenia, wszystkie parametry i kryteria w0950, zweryfikowano source-map,4analityczne przypadki i3liczności geometrii. Niezależny review potwierdził znakiEMF/RHS/F, footprint, pełny cut, gauge, moc i brak używania nativeI do rozwiązania.
+
+Samodzielny skrypt independent_gsg_sheet_current.py SHA2074d27ff4074b952ba1fa43592d54082a7c5466bb4605c3a08a498a83f36135 wykonał jedną serię FV50/25/12.5nm:5840/23360/93440komórek. Prądy17.537768575/17.547613918/17.551358648µA. Native17.551508470µA; względna różnica8.536170856e-6=0.000853617%. Własny przyrost FVfine–medium0.0213358432%, ilorazprzyrostów.380355503. Wszystkie prerejestrowane kryteria diagnostycznePASS; nie oznacza continuumerrorbound/basis/publicationPASS.
+
+Wynik49c6f92bc67aeca200d2a555d70823ca91f2c087c1e0d0ac7278a20fc3480b55. Wszystkie3NPZ odczytane i ponownie sprawdzone: strumienie, moc, źródło, pełne reszty i3bramki; validatione6c2571fba9094219d9f6c5f7e2c328638b957fbb5dcb601b2d60d5dcf444ff2. Seria2.04s/1CPU/155582464B; jest to tylko niezależny transport sieciowy, nie benchmark pełnego V/J/H. Kod i wymagane dane są na WSL obok skryptu.
+
+Źródła produkcji c571, HEAD7d3d8f52748a5fc22b3a867bc8a6b42dd6c2769f oraz staged61/NUL8ad1941353bc0af5ec11cee6c7ac615a7793274c4b68e3356e95c1969d56241a pozostały. Końcowa mapa naukowa i diff-checkPASS,4skryptyparsują się, wcześniejsze41testówkontraktudocPASS. Commit-range review nowego WIP i pełny end-to-end pozostają do wykonania przy integracji; nie zastępuj ich pustym HEAD→HEAD.
+
+Następny krok fizyki: niezależne H z prądu FV na tych samych20XYZ, z własną prerejestracją całkowania. Nie ma jeszcze kodu ani wyniku tej kontroli H. Użyć kanonicznego prawa Biota–Savarta i stałościJpoZ; Jz=0 w nominalnym continuum. Nie zaczynać od kolejnej przebudowy lub ponowienia starego solvera. W dalszej kolejności pełny target próbki i kwalifikacja; LLG nadal zamknięte.
+
+Raport bieżący: examples/sushruth_2020_closed_gsg/corner12p5_20261112/verification/raport-weryfikacji-pradu-20261113.md.
+
+### Kontynuacja13.11.2026 — niezależne H z zachowanego FV (2026-11-13T08:48:08.241566+00:00)
+
+CelE0–E12 pozostaje aktywny; publikacja/reusable basis/LLG NIE ukończone.
+Samodzielny test matematyczny korzysta z3zachowanych prądów FV; nie zmienia
+Fullmaga, jego kontraktów lub budżetów. Nowe native transport/H-only/meshing/build/LLG:0.
+Wykonano jedną serię180wektorów H (3siatki×3rzędy×20tych samych XYZ),
+206035200ocen par;5,998s/1CPU/374099968BpeakRSS.
+Result0eb0f7d92f6e8cb900c6b88b6a208e3f90e67c5ba786575b7632a2ffd6cd4da3.
+Native–FVfine maksymalnie0,000885279% wektorowo; H/I0,000149889%.
+Bez dopasowania skali/znaku/geometrii; to nie granica błędu continuum.
+Przyrost fine–medium0,0213358% i kontrakcjaokoło0,3803.
+
+Niepełny odbiór serii: quadrature_all_grids=false przez50nm w6punktach;
+25nm i12,5nm przechodzą, fine H8−H4≤9,44347e-11A/m.
+Pozostałe4bramki porównań przechodzą. Nie zmieniono progów, nie ponowiono
+serii. Wszystkie180wektorów odtworzono bitowo; bramki przeliczono z zapisu.
+Małe niezależne testy znaku, rekonstrukcji, całki3D i normy H8 przeszły.
+Review wykrył normę H4 zamiast H8 oraz nagłówek tabeli; oba poprawiono
+przed pierwszym GSG H, z regresją i walidacją mapy źródeł.
+
+Dowody na ext4WSL w examples/sushruth_2020_closed_gsg/corner12p5_20261112/verification:
+raport-weryfikacji-pola-20261113.md, porownanie-pola-gsg-fv-20261113.png,
+sheet-field-reference-20261113/, sheet-field-readback-validation.json,
+sheet-field-review-resolution.json. Kanoniczna nota0950 ma równania/SI/parametry/
+mapę źródeł i osobno zarejestrowany wynik.
+Indeks61plików pozostaje niezmieniony (NULsha8ad1941353bc0af5ec11cee6c7ac615a7793274c4b68e3356e95c1969d56241a).
+Globalny diff-check wykrył obcy trailing whitespace0951:1448; nie edytowano tego pliku.
+Zakres0950+mapa przechodzi diff-check; nie zgłaszamy globalnej czystości.
+
+Następny krok fizyczny: gęsty profil/nośnik całej wymaganej próbki i rozdzielenie
+źródła3D od cienkiego modelu publikacji. Dawny wzorzec Eq1–10 NIE używał
+nativeH, więc bieżąca dobra zgodność nie wyjaśnia samodzielnie Fig3.
+Odczytano istniejące dowody Fig2/okresówFig3/filtru90nm, bez nowych całek
+odpowiedzi, FFT lub LLG. Nie wracać do napraw infrastruktury zamiast fizyki.
+
+### Kontynuacja13.11.2026 — gęsty carrier i rzeczywista bramka planera (2026-11-13T09:28:56.443386+00:00)
+
+Poprzedni turn: PROGRESS (niezależne H). Bieżący turn: PROGRESS
+(nowy kanoniczny carrier, rzeczywista walidacja Rust oraz potwierdzona odmowa pracy).
+CelE0–E12 aktywny, publikacja i fullsampleH nadal NIEPOTWIERDZONE.
+
+W tym samym WT przygotowano examples/sushruth_2020_closed_gsg/dense_field_20261113:
+11109węzłów i42240Tet4,15536facetów granicy. OknoX±2µm,Y±10µm,
+Z−22,4…−5nm jest pasywną obserwacją; pełna długość próbki nieznana.
+To NIE pełna próbka ani meshLLG. W20starych XYZ zachowano dokładne bity.
+P1/Tet4,kanoniczny save/load,positivevolumes,manifold i objętość1,392e-18m³ PASS.
+Targetmesh0a4529adf58e5db0b6631b9fbaf1e8e997291207a8865ead878553269403bb0d.
+Generator w istniejącym backendzie Docker7,806s/143175680BpeakRSS; bezGmsh/build/H.
+
+Opcjonalny nativebridgePythona był None, dlatego NIE użyto go jako dowodu.
+Oddzielny rzeczywisty CLIvalidate-json:PASS(0,924s).
+Plan-json --execution-plan kopii oryginalnego IR ze zmienionym tylko carrierem:
+oczekiwany REJECT(1,899s), prepared source direct field pair budget exceeded or empty.
+Ten validation-only fixture NIE jest authored H-only requestem i nie został zgłoszony.
+Receipt27166ab977d6a9a701bfde2c1b2f5736cff765db6d15cefefa30b0f53f62653a.
+
+Skalowanie:85980×11109=955151820par>4000000.
+Globalny limit dopuszcza teoretycznie46punktów; obecny surfaceprofile dodatkowo
+per-target40728nie przyjmie źródła86k. Nie podniesiono limitów i nie batchowano.
+Źródłowe86kH używaDTQ; istniejące retainedH-only używaAnalyticRt0Surface.
+Surface JUŻ ma zamknięte log/atan trójkątów i affineRT0redukcję, a sourcegeometry
+cache raz/invocation; koszt to m.in.exactGMP i zawsze obaMPFR128/160.
+Brak85kphasebenchmarku, nie zgadywać czasu.
+Stary last-scale cache był wolniejszy i cofnięty; nie przywracać go jako wykazanego usprawnienia.
+
+Odczytowy eksport źródła: jedna rzeczywista próba fullmag-bin
+export-antenna-source-preparation przekroczyła45s. Poprzednie2 błędy wrappera
+wystąpiły PRZED uruchomieniem CLI (cytowanie i zła nazwa programu).
+Sprawdzono brak procesu i pliku; nie ponowiono/recoverowano/budowano.
+Wrappernie utrwalił beforehashes przed TimeoutExpired, więc nie ma dowodu before/aftercatalogs.
+Nie twierdzić, że źródłowy inputasset został wyeksportowany lub że H-only jest przygotowane.
+Szczegóły: verification/source-export-timeout-observation.json.
+
+Następny jakościowo zachowujący kandydat wymaga konkretnego projektu:
+import uwierzytelnionego FrozenInput do istniejącego DTQ przez frozenCABI,
+ponowne użycie istniejącego evaluatora i decoderEvidence, bez drugiego solvera.
+Samo zniesienie strażników surface jest niedopuszczalne; DTQ też ma limit4M,
+więc adapter sam nie rozwiąże gęstej mapy. Optymalizacja/admission muszą
+zachować tolerancje/tożsamość/przypadki odmowy i mieć osobne dowody.
+Bez nowych LLG/FFT i bez rozwijania recovery. Zmiana wersjonowanego kontraktu:
+przygotować konkretny patch/projekt i review przed wykonaniem chronionego zakresu.
+
+Źródła/currentH/frozenIR i indeks61plików zachowane. Nowe nativeSolve/H/build0.
+Raport: dense_field_20261113/raport-przygotowania-gestego-pola.md.
+Scalingaudit5d11a116025346e694e71150d7cb4edcafaae2e2458636d4a59209911c0abb14.
+Nie oznaczać E4/E5/qualbasis/UI lub publikacji jako ukończonych.
+
+Końcowy odbiór przygotowania: final-checks.json SHA256d9349b5f42f828f32e08200e6df04be249b829794a6ee87a07995e2fc135c0f6. Hostowy odczyt siatki naprawiono wyłącznie przez chmod0644 jej rzeczywistego właściciela65532; bajty i właściciel bez zmian. Generator po wykonaniu dostał tylko tę linię publikacji uprawnień. Nie powtarzano przygotowania ani pola. Cały cel nadal aktywny.
+
+
+### Kontynuacja 13.11.2026 — audyt DTQ i prywatny kandydat CI
+
+Poprzednia odpowiedź statusowa: no progress; obecny krok: progress. Odczyt starego pakietu potwierdził bitowo20XYZ/H/H-per-A i domknięcie liczników;65 602 912ocen jądra. Gęsta mapa nadal nie jest policzona, limit par blokuje47i więcej punktów dla85980komórek. Nie przypisujemy47min samemu H.
+
+Prywatny patch06737f313af5f08e051a469448debda2f2357f70bc77a7c4c8ddf245f9d0d690 po przeglądzie, git apply --check PASS, produkcyjnie NIE ZASTOSOWANY. Nowa delta testów jest na poprawionym C0/C1; nie cofnięto starych napraw MFEM. Pomocniczy PR425 pozostaje draft/do not merge. Commit84bdb1a5a1f8cd882d2155750dbd1875904bad94/treec2a024d24d170e33693ebc5edc36441259485ba9 zweryfikowane przez fetch/rev-parse i odczyt czterech plików oraz identycznej delty testu. CI43438016460 potwierdzone in_progress, job native131928036462; wynik jeszcze nieznany. Nie ma nowego Solve, H-only, FFT, LLG, restartu lub zmiany runtime. Pełny cel pozostaje aktywny.
+
+Raport: examples/sushruth_2020_closed_gsg/dense_field_20261113/raport-ponownego-uzycia-dtq-20261113.md. Następne działanie: odczytać dokładnie ten runCI i nowy marker PASS, nie używać dawnych wyników jako dowodu.
+
+
+### Kontynuacja 13.11.2026 — wynik CI i pełny prąd GSG
+
+Obecny krok: progress. Własny CI43438016460 jest terminalny: C++ skompilowane,
+nowy marker frozen RT0 import and direct field parity PASS, cały CTest exit0
+w24,56s; Rustsuccess. Pełny job Failed dopiero w retirement po teście.
+Actual commitb3d7e24b0d8443509a145338664c96de8db961ae/tree
+c2a024d24d170e33693ebc5edc36441259485ba9 potwierdzone lokalnym fetch/rev-parse.
+Nie uruchamiać tego samego joba jako retry; wynik nowej delty jest zachowany.
+Nie rozwijać recovery/cleanup.
+
+Pełna niezależna kontrola momenty→RT0 na rzeczywistym bundle:
+85980komórek,188926ścian,429900wektorów/1289700składowych J,
+0różnic bitowych.22,1623s,1CPU,361603072BpeakRSS. Wynik
+examples/sushruth_2020_closed_gsg/dense_field_20261113/verification/frozen-source-readback.json
+SHA25600d88533d20d42cbedfd8098a66271a42e47c403f8c699530f52d7fecc3e3a39.
+Kandydat produkcyjnie nadal niezastosowany; indeks i źródła zachowane.
+Nie wykonano nowego V/J/H, H-only, FFT lub LLG.
+Cel E0–E12 oraz publikacja nadal aktywne.
+
+Następna praca: przygotować konkretny publiczny adapter zachowanego DTQ
+z współdzielonym freeze_verified_source, poprawnym dowodem i admission;
+osobno rozwiązać skalowanie gęstej mapy. Samo4Mpar nie mieści nowego
+nośnika; bez cichego podnoszenia limitów. Source export45s zakończył się
+wcześniej bez pliku; nie ponowiono go w tym kroku.
+
+
+### Kontynuacja 13.11.2026 — kalibracja rysunku i minimalny projekt publicznego DTQ
+
+Poprzedni turn był odpowiedzią statusową, klasyfikacja **no progress**.
+Obecny krok to **progress**: wykonano i zapisano nowy audyt rastra, poprawkę
+brakującej adnotacji oraz 18/18 lekkich regresji. Nie jest to nowa symulacja.
+
+Źródła przypięte: oryginał APS92aeb043aa5329cd73fc77fecc6eb110af760fe8b86a0f9b072cca2c83a7bf27
+i arXivdc7a08ec34e42eeefc854437b64d9a3c071a2d59c68d3a012a23d470011329ba.
+Dwadzieścia ręcznie odczytanych ticków mieści się w tolerancji jednego piksela.
+Pełne pasma adnotacji z ramkami i półpikselem: panel(a)7,187783–7,228507GHz,
+panel(e)7,127711–7,171084GHz. To rozłączne **adnotacje, nie pomiar FMR**.
+Historyczna liczba7,208GHz nie może zastępować parametru materiałowego.
+Różnice odstępów krzywych GSG pozostają i nie zależą od szarej kreski.
+
+Naprawiono `measure_gray_annotation_pixels` i jej użycie w obu panelach:
+brak lub rozdzielona kreska odmawia, zamiast zwracać argmax pustej maski.
+Każde stare pole/wartość rzeczywistego odczytu(a)/(e) zachowane; dodano jawny
+zakres i `annotation_is_measured_fmr=false`. Wynik audytu:
+`examples/sushruth_2020_closed_gsg/figure3_raster_calibration_20261113/result.json`,
+SHA25617f9644da3273e7ea8d9f3af89cff060682674e06ceba19fd1ed7f3a09b4881a.
+Końcowe sprawdzenie6c7b35551ea0cf4a6ba1f75d26996b02f31a931408c92798dd039fb5b70bf1a8:
+nota0951/source-map PASS, scoped diff PASS, indeks61 nazw bez zmian,
+native conservative_current_view SHA nadalc571adaa9e07322361a48f89f3ddd5ed07b201878d5a26e6fdfc90367fb46576.
+Niezależny przegląd poprawki bez wymaganych uwag.
+Przyczyna różnic publikacji nadal nierozstrzygnięta; E3–E5 i pełny cel nieukończone.
+
+Gotowy minimalny projekt:
+`docs/superpowers/plans/2026-11-13-retained-dtq-public-field-proposal.md`,
+SHA2566115b393aea8b6e5d426910a6f0936bb80dd41cd3150b4ba9347515ca8093cd9.
+Przegląd odrzucił zbędne envelopev8 i trzy nowe formaty preparation:
+asset-backed DTQ może zachować obecne v7 oraz preparationv1 przez jawny
+nowy typed backend plan i output contract. Osobno potrzebne są codec/manifestv2
+i numeryczne C ABI; stare surfacev1 i limity pozostają.
+Wysłano jedno pytanie o zatwierdzenie projektu, implementacji i CI.
+**Decyzja oczekuje**; nie zastosowano nowego publicznego kontraktu.
+
+Nie uruchomiono buildu/restartu3203, Prepare, V/J/H, H-only, FFT, LLG,
+ponowienia eksportu45s, recovery lub usuwania danych. Publiczne DTQ oraz
+gęsta mapa są nadal niezaimplementowane/niewykonane. Nie oznaczać zgodności
+z publikacją ani ukończenia pełnego E0–E12. Po decyzji realizować ten
+przejrzany plan; zakres nowego runtime requestu sprawdzić osobno.

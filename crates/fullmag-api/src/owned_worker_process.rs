@@ -13,8 +13,49 @@ pub(super) struct LinuxWorkerCgroup;
 #[path = "worker_startup_gate.rs"]
 mod startup_gate;
 
+#[cfg(target_os = "linux")]
+#[derive(Clone, Debug)]
+pub(super) struct LinuxPreReapIdentity {
+    pub(super) process_id: u32,
+    pub(super) start_token: String,
+    pub(super) cgroup_path: Option<std::path::PathBuf>,
+    pub(super) cgroup_identity: Option<(u64, u64)>,
+}
+
+#[cfg(target_os = "linux")]
+fn capture_linux_pre_reap_identity(pid: u32, owned_cgroup: bool) -> io::Result<LinuxPreReapIdentity> {
+    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat"))?;
+    let end = stat.rfind(')').ok_or_else(|| io::Error::other("worker stat command terminator missing"))?;
+    let start = stat[end + 1..].split_whitespace().nth(19)
+        .ok_or_else(|| io::Error::other("worker pre-reap start time missing"))?;
+    let cgroup_path = if owned_cgroup {
+        let membership = std::fs::read_to_string(format!("/proc/{pid}/cgroup"))?;
+        let unified = membership.lines().find_map(|line| line.strip_prefix("0::"))
+            .ok_or_else(|| io::Error::other("worker unified cgroup identity missing"))?;
+        let name = std::path::Path::new(unified).file_name()
+            .and_then(|name| name.to_str()).ok_or_else(|| io::Error::other("worker cgroup leaf missing"))?;
+        let uuid = name.strip_prefix("fullmag-worker-")
+            .ok_or_else(|| io::Error::other("worker cgroup is not a private owned child"))?;
+        if uuid::Uuid::parse_str(uuid).is_err() { return Err(io::Error::other("worker cgroup leaf identity invalid")); }
+        let root = std::env::var_os("FULLMAG_WORKER_CGROUP_ROOT")
+            .ok_or_else(|| io::Error::other("worker cgroup delegation root missing"))?;
+        let path = std::path::Path::new(&root).join(name);
+        let metadata = std::fs::symlink_metadata(&path)?;
+        if !metadata.is_dir() || metadata.file_type().is_symlink() {
+            return Err(io::Error::other("worker cgroup identity is not a real directory"));
+        }
+        Some(path)
+    } else { None };
+    use std::os::unix::fs::MetadataExt;
+    let cgroup_identity = cgroup_path.as_ref().map(std::fs::symlink_metadata).transpose()?
+        .map(|metadata| (metadata.dev(), metadata.ino()));
+    Ok(LinuxPreReapIdentity { process_id: pid, start_token: format!("linux-starttime-{start}"), cgroup_path, cgroup_identity })
+}
+
 pub(super) struct OwnedWorkerProcess {
     child: Child,
+    #[cfg(target_os = "linux")]
+    pre_reap_identity: LinuxPreReapIdentity,
     startup_failure: Option<String>,
     #[cfg(target_os = "linux")]
     linux_cgroup: Option<LinuxWorkerCgroup>,
@@ -28,6 +69,17 @@ impl OwnedWorkerProcess {
         cpu_ids: &BTreeSet<u32>,
         cpu_rate_limit: Option<u32>,
         linux_cgroup: Option<LinuxWorkerCgroup>,
+    ) -> io::Result<Self> {
+        Self::spawn_with_reap_observer(command, cpu_ids, cpu_rate_limit, linux_cgroup,
+            #[cfg(target_os = "linux")] None)
+    }
+
+    pub(super) fn spawn_with_reap_observer(
+        command: &mut Command,
+        cpu_ids: &BTreeSet<u32>,
+        cpu_rate_limit: Option<u32>,
+        linux_cgroup: Option<LinuxWorkerCgroup>,
+        #[cfg(target_os = "linux")] failed_reap: Option<&dyn Fn(ExitStatus, &LinuxPreReapIdentity, bool, &str)>,
     ) -> io::Result<Self> {
         #[cfg(windows)]
         {
@@ -58,36 +110,60 @@ impl OwnedWorkerProcess {
             let _ = linux_cgroup;
             let mut child = command.spawn()?;
             #[cfg(target_os = "linux")]
+            let (pre_reap_identity, startup_failure) = {
+                let mut failure = None;
+                let mut retries = 0u64;
+                loop {
+                    match capture_linux_pre_reap_identity(child.id(), linux_cgroup.is_some()) {
+                        Ok(identity) => break (identity, failure),
+                        Err(error) => {
+                            if failure.is_none() {
+                                let mut reason = format!("capture worker pre-reap identity: {error}");
+                                while reason.len() > 4096 { reason.pop(); }
+                                failure = Some(reason);
+                                // Keep the unreaped Child and its /proc start
+                                // identity available. Never consume a wait
+                                // status that cannot be bound to exact evidence.
+                                let _ = child.kill();
+                            }
+                            if retries % 20 == 0 {
+                                tracing::error!(process_id = child.id(), error = %error,
+                                    "unreaped child retained; retrying only pre-reap identity capture");
+                            }
+                            retries = retries.saturating_add(1);
+                            std::thread::sleep(std::time::Duration::from_millis(250));
+                        }
+                    }
+                }
+            };
+            #[cfg(target_os = "linux")]
             if let Some(cgroup) = &linux_cgroup {
                 match cgroup.contains_pid(child.id()) {
                     Ok(true) => {}
-                    Ok(false) => match child.try_wait() {
-                        Ok(Some(_)) => {
-                            // A short-lived worker may leave cgroup.procs before
-                            // the parent reads it. The pre-exec migration itself
-                            // succeeded or Command::spawn would have failed.
+                    Ok(false) => {
+                        // A zombie has left cgroup.procs but still retains its
+                        // authoritative wait status. Do not reap it in a probe.
+                        let zombie = std::fs::read_to_string(format!("/proc/{}/stat", child.id()))
+                            .ok().and_then(|stat| stat.rfind(')').map(|end| stat[end + 1..].split_whitespace().next() == Some("Z")))
+                            .unwrap_or(false);
+                        if !zombie {
+                            return Err(cleanup_failed_linux_worker_spawn(child, cgroup, &pre_reap_identity, failed_reap,
+                                io::Error::new(io::ErrorKind::PermissionDenied,
+                                    "worker is not present in its assigned CPU quota cgroup")));
                         }
-                        Ok(None) => {
-                            return Err(cleanup_failed_linux_worker_spawn(
-                                child,
-                                cgroup,
-                                io::Error::new(
-                                    io::ErrorKind::PermissionDenied,
-                                    "worker is not present in its assigned CPU quota cgroup",
-                                ),
-                            ));
-                        }
-                        Err(error) => {
-                            return Err(cleanup_failed_linux_worker_spawn(child, cgroup, error));
-                        }
-                    },
+                    }
                     Err(error) => {
-                        return Err(cleanup_failed_linux_worker_spawn(child, cgroup, error));
+                        return Err(cleanup_failed_linux_worker_spawn(child, cgroup, &pre_reap_identity, failed_reap, error));
                     }
                 }
             }
             Ok(Self {
                 child,
+                #[cfg(target_os = "linux")]
+                pre_reap_identity,
+                #[cfg(target_os = "linux")]
+                startup_failure,
+                #[cfg(not(target_os = "linux"))]
                 startup_failure: None,
                 #[cfg(target_os = "linux")]
                 linux_cgroup,
@@ -167,6 +243,9 @@ impl OwnedWorkerProcess {
         Ok(owned)
     }
 
+    #[cfg(target_os = "linux")]
+    pub(super) fn pre_reap_identity(&self) -> &LinuxPreReapIdentity { &self.pre_reap_identity }
+
     pub(super) fn take_startup_failure(&mut self) -> Option<String> {
         self.startup_failure.take()
     }
@@ -184,27 +263,36 @@ impl OwnedWorkerProcess {
     }
 
     pub(super) fn try_wait(&mut self) -> io::Result<Option<ExitStatus>> {
+        self.try_wait_with_reap_observer(|_| {})
+    }
+
+    pub(super) fn try_wait_with_reap_observer(
+        &mut self, observed: impl FnOnce(ExitStatus),
+    ) -> io::Result<Option<ExitStatus>> {
         let status = self.child.try_wait()?;
-        if status.is_some() {
+        if let Some(status) = status {
+            // Publish actual wait evidence before descendant cleanup can fail.
+            observed(status);
             self.finish_tree().map_err(|error| {
-                io::Error::new(
-                    error.kind(),
-                    format!(
-                        "worker root exit {status:?}; process-tree cleanup is unconfirmed: {error}"
-                    ),
-                )
+                io::Error::new(error.kind(), format!(
+                    "worker root exit {status:?}; process-tree cleanup is unconfirmed: {error}"))
             })?;
         }
         Ok(status)
     }
 
     pub(super) fn wait(&mut self) -> io::Result<ExitStatus> {
+        self.wait_with_reap_observer(|_| {})
+    }
+
+    pub(super) fn wait_with_reap_observer(
+        &mut self, observed: impl FnOnce(ExitStatus),
+    ) -> io::Result<ExitStatus> {
         let status = self.child.wait()?;
+        observed(status);
         self.finish_tree().map_err(|error| {
-            io::Error::new(
-                error.kind(),
-                format!("worker root exit {status}; process-tree cleanup is unconfirmed: {error}"),
-            )
+            io::Error::new(error.kind(), format!(
+                "worker root exit {status}; process-tree cleanup is unconfirmed: {error}"))
         })?;
         Ok(status)
     }
@@ -228,6 +316,8 @@ impl OwnedWorkerProcess {
     #[cfg(test)]
     pub(super) fn unowned_test_fixture(child: Child) -> Self {
         Self {
+            #[cfg(target_os = "linux")]
+            pre_reap_identity: capture_linux_pre_reap_identity(child.id(), false).expect("test child pre-reap identity"),
             child,
             startup_failure: None,
             #[cfg(target_os = "linux")]
@@ -242,6 +332,8 @@ impl OwnedWorkerProcess {
 fn cleanup_failed_linux_worker_spawn(
     mut child: Child,
     cgroup: &LinuxWorkerCgroup,
+    identity: &LinuxPreReapIdentity,
+    observed: Option<&dyn Fn(ExitStatus, &LinuxPreReapIdentity, bool, &str)>,
     error: io::Error,
 ) -> io::Error {
     let first_cgroup_cleanup = cgroup.terminate_and_remove();
@@ -249,7 +341,16 @@ fn cleanup_failed_linux_worker_spawn(
         let _ = child.kill();
     }
     let child_reap = child.wait();
+    let reason = format!("verify Linux worker quota cgroup membership: {error}");
+    if let (Ok(status), Some(observed)) = (&child_reap, observed) {
+        observed(*status, identity, false, &reason);
+    }
     let final_cgroup_cleanup = cgroup.terminate_and_remove();
+    if final_cgroup_cleanup.is_ok() {
+        if let (Ok(status), Some(observed)) = (&child_reap, observed) {
+            observed(*status, identity, true, &reason);
+        }
+    }
     let mut message = format!("verify Linux worker quota cgroup membership: {error}");
     if let Err(cleanup) = first_cgroup_cleanup {
         message.push_str(&format!("; initial cgroup cleanup failed: {cleanup}"));

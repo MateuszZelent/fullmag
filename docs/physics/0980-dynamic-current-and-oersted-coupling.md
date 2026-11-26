@@ -1135,9 +1135,147 @@ closed-component omissions use `ClosedComponentDivergenceDependency` and the
 lexicographically smallest stable tetrahedron key as both component anchor and
 the omitted candidate's row element key. Physical B-row construction must
 populate both fields for every divergence row before calling `Analyze`.
-The coefficient rank is deterministic fraction-free Bareiss elimination over
-`boost::multiprecision::cpp_int`; no fixed-width overflow or floating pivot
-tolerance can change it. The public `ValidateResourceCounts` seam is mandatory
+#### Dokładne pominięcie kroku tożsamościowego (FEM CPU)
+
+Redukcja zachowuje dokładne liczby całkowite i wymierne. Dla jednego
+wiersza bazy aktualizacja współczynników oraz prawej strony ma postać:
+
+```{math}
+:label: rank-bareiss-identity-step
+ a'_j = \frac{p a_j - f b_j}{d},\qquad
+ r' = \frac{p r - f s}{d},\qquad
+ (f=0\ \land\ p=d\ne0)\ \Longrightarrow\ (a'_j=a_j,\ r'=r).
+```
+
+| Symbol | Znaczenie w redukcji rzędu | Jednostka SI |
+|---|---|---|
+| $j$ | indeks kolumny więzu | $1$ |
+| $a_j, a'_j$ | współczynnik bieżącego wiersza przed i po aktualizacji | $1$ |
+| $b_j$ | współczynnik wiersza bazy | $1$ |
+| $p$ | niezerowy pivot wiersza bazy | $1$ |
+| $d$ | poprzedni niezerowy pivot (początkowo jeden) | $1$ |
+| $f$ | współczynnik eliminacji z bieżącego wiersza | $1$ |
+| $r, r'$ | dokładna prawa strona przed i po aktualizacji | $\mathrm{A}$ |
+| $s$ | dokładna prawa strona wiersza bazy | $\mathrm{A}$ |
+
+Warunek wymaga obu równości; samo $f=0$ nie pozwala pominąć skalowania.
+Działa także dla ujemnych pivotów. Przy spełnionym warunku kolumna pivotu
+jest już nieobecna w rzadkim wierszu, a aktualizacja poprzedniego pivotu
+byłaby przypisaniem tej samej wartości. Nie zmieniają się współczynniki,
+RHS, końcowy pivot, kolejność eliminacji ani certyfikat rzędu.
+
+Właściciel: `backends/fem/cpu/mfem/transport/conservative_constraint_rank.cpp`
++ `reduce_bareiss_row`. Zachowane są naliczanie odwiedzenia wiersza bazy,
+wszystkie limity i pozostałe kontrole. Nie nalicza się pominiętych skanów,
+mnożeń ani pamięci nieutworzonych obiektów tymczasowych. Dzięki mniejszej
+rzeczywistej pracy więcej macierzy może zmieścić się w tym samym budżecie;
+nie oznacza to zwiększenia limitu ani przybliżenia rangi.
+
+Zakres to istniejący analizator FEM CPU. Nie zmienia to publicznego Python,
+`ProblemIR`, jednostek V/J/H ani kwalifikacji pozostałych backendów.
+Regresje w `backends/fem/tests/conservative_constraint_rank_contract.cpp`
++ `main` obejmują RHS, pivoty obu znaków, kroki nietożsamościowe oraz
+odmowę po wyczerpaniu faktycznego budżetu. Status: implementacja wymaga
+weryfikacji zarządzanym runtime; testów natywnych w tym etapie nie
+kompilowano. Nie jest to jeszcze dowód przyspieszenia GSG ani uzyskania pola.
+
+#### Proponowana dokładna ścieżka zbilansowanej incydencji (FEM CPU)
+
+Status: kandydat do przeglądu, bez zastosowania do działającego solvera i bez
+natywnej kwalifikacji. Właścicielem pozostaje
+`backends/fem/cpu/mfem/transport/conservative_constraint_rank.cpp`
++ `try_zero_rhs_signed_incidence`; wejściem jest ten sam zwalidowany zbiór
+wierszy, bez odtwarzania topologii z nazwy obiektu albo identyfikatora więzu.
+Zmiana nie rozszerza fizycznych capabilities, publicznego Python ani `ProblemIR`.
+
+Warunki wejścia są sprawdzane dokładnie: co najmniej dwa wiersze, niepusty
+zbiór kolumn, zerowa prawa strona każdego wiersza, współczynniki wyłącznie
+$-1$ albo $+1$, dokładnie dwa różne wiersze w każdej kolumnie oraz istnienie
+spójnych znaków spełniających poniższy warunek na wszystkich kolumnach:
+
+```{math}
+:label: rank-balanced-incidence-signs
+ z_i b_{ik}+z_j b_{jk}=0,\qquad
+ z_j=-b_{ik}b_{jk}z_i,\qquad z_i,z_j\in\{-1,+1\}.
+```
+
+```{math}
+:label: rank-balanced-incidence-exact-rank
+ Z=\operatorname{diag}(z_1,\ldots,z_n),\qquad
+ \operatorname{rank}_{\mathbb Q}(B)
+ =\operatorname{rank}_{\mathbb Q}(ZB)=n-c.
+```
+
+| Symbol | Znaczenie w dokładnym teście incydencji | Jednostka SI |
+|---|---|---|
+| $B$ | macierz współczynników zwalidowanych więzów | $1$ |
+| $b_{ik}, b_{jk}$ | dwa niezerowe współczynniki kolumny | $1$ |
+| $i, j$ | różne indeksy wierszy tej kolumny | $1$ |
+| $k$ | indeks kolumny macierzy więzów | $1$ |
+| $z_i, z_j$ | znaki świadectwa równoważącego wiersze | $1$ |
+| $Z$ | odwracalna diagonalna macierz znaków wierszy | $1$ |
+| $n$ | liczba wierszy, łącznie z wierszami izolowanymi | $1$ |
+| $c$ | liczba spójnych składowych grafu wierszy | $1$ |
+| $\mathbb Q$ | ciało liczb wymiernych użyte w definicji dokładnej rangi | $1$ |
+| $\operatorname{diag}$ | utworzenie macierzy diagonalnej z podanych znaków | $1$ |
+| $\operatorname{rank}_{\mathbb Q}$ | dokładny rząd macierzy nad liczbami wymiernymi | $1$ |
+
+Uzasadnienie: mnożenie wierszy przez niezerowe znaki zachowuje rangę.
+Macierz $ZB$ jest zwykłą zorientowaną macierzą incydencji. W każdej spójnej
+składowej suma wierszy jest zerem, a minor drzewa rozpinającego po usunięciu
+jednego wiersza ma wyznacznik $+1$ albo $-1$. Stąd ranga składowej jest o jeden
+mniejsza od liczby jej wierszy, a jedyna zależność ma niezerowe współczynniki
+przy wszystkich wierszach. Dowolny właściwy podzbiór wierszy jest niezależny.
+Równoległe kolumny nie unieważniają dowodu: zachowujemy jeden minor drzewa,
+a równanie sumy wierszy nadal obowiązuje. Wiersz izolowany ma rangę zero.
+Podstawę stanowi twierdzenie o macierzy incydencji w pracy Zaslavsky'ego
+w bibliografii; powyżej jawnie zawężono je do sprawdzonych składowych
+zbilansowanych i rozszerzono argument drzewa na kolumny równoległe.
+
+W każdej składowej pomijany jest ostatni wiersz według dotychczasowego
+zamrożonego klucza `(is_anchor_candidate, constraint_id)`. Zachowane są
+odmowy dla niezależnego kandydata kotwicy i zależnego wiersza dywergencji,
+który nie jest kandydatem. Typ przyczyny, kotwica i sortowanie pominięć
+pozostają identyczne; residual przy zerowej prawej stronie wynosi dokładnie
+zero amperów. Nie używa się progu zmiennoprzecinkowego do oceny rangi.
+
+Realizacja kandydata to las zbiorów rozłącznych ze znakami i łączeniem według
+wysokości, bez kompresji ścieżek. Indeksy mieszczą się w `uint32_t` na mocy
+wcześniejszego limitu liczby wierszy i kolumn. Znaki są wyłącznie $-1$ albo
+$+1$, a wysokość drzewa jest ograniczona logarytmicznie. Przed alokacją
+sprawdzane są konserwatywne górne oszacowania liczby całkowitych pól i ich
+pamięci; istniejący licznik `bareiss_work_units` obejmuje także faktyczną
+pracę testu grafowego, przejścia po lesie i końcowe sortowanie pominięć.
+Limity oraz typ wyjątku zasobów pozostają bez zmian. Jest to rozszerzenie
+metody naliczania pracy i pamięci, wymagające przeglądu kontraktu, a nie
+obietnica identycznego momentu odmowy wszystkich wejść przy sztucznie małym
+budżecie. Po odmowie zastosowania ścieżki grafowej jej naliczona praca nie
+jest zerowana; dalszą analizę wykonuje istniejący Bareiss. Dotyczy to także
+niezbilansowanego cyklu, który może mieć pełną rangę.
+
+Zakres realizacji: FEM CPU. FEM GPU, FDM CPU i FDM GPU nie otrzymują tej
+ścieżki ani nowej deklaracji zgodności. Brak zmian jednostek, normalizacji,
+certyfikatu binarnego, progów fizycznych, source identity i solvera LLG.
+
+Dowody offline: 15756 małych macierzy znakowanych; 5480 wejść spełniających
+warunki kandydata porównano z niezależną eliminacją `Fraction`, dodatkowo
+600 losowych multigrafów. Sprawdzono pięć przypadków poza zakresem, semantykę
+kotwic i granicę licznika pracy modelu. Dla zamrożonych wejść GSG100/75/50nm
+wynik zgadza się z niezależnym modelem grafowym; dla100nm także z zachowanym
+natywnym certyfikatem. To test modelu algorytmu, nie wykonanie kandydata C++.
+Ścieżka końcowa nadal wymaga zarządzanego buildu, zgodności certyfikatu oraz
+nowej jawnie zatwierdzonej próby75nm. Dwie regresje C++ w
+`backends/fem/tests/conservative_constraint_rank_contract.cpp`
++ `balanced_incidence_chain_fits_bounded_work` oraz
+`unbalanced_signed_cycle_retains_exact_general_rank` są przygotowane,
+ale nie skompilowano ich ani nie wykonano. Wyniki pola, zbieżność i zgodność
+z publikacją Sushruth pozostają niezakwalifikowane.
+
+W proponowanym wariancie ścieżka spełniająca powyższe warunki wyznacza
+rangę przez dokładną incydencję. Pozostałe wejścia zachowują deterministyczną
+eliminację bez ułamków Bareissa nad
+`boost::multiprecision::cpp_int`; przepełnienie typu stałej szerokości ani
+próg zmiennoprzecinkowy nie mogą zmienić rangi. The public `ValidateResourceCounts` seam is mandatory
 inside `Analyze`, uses checked addition/multiplication, and throws only the
 typed fail-closed `ConstraintRankResourceLimitExceeded` for resource excess.
 Pre-allocation caps are `2^20` rows, `2^20` distinct
@@ -2470,6 +2608,11 @@ evidence that the approximation is accurate.
 
 | Path | Symbol | Responsibility |
 |---|---|---|
+| `backends/fem/cpu/mfem/transport/conservative_constraint_rank.cpp` | `try_zero_rhs_signed_incidence` | kandydat dokładnej rangi zbilansowanej incydencji FEM CPU; bez dowodu runtime |
+| `backends/fem/tests/conservative_constraint_rank_contract.cpp` | `void balanced_incidence_chain_fits_bounded_work` | kandydat regresji kosztu i deterministycznego pominięcia; niekompilowany |
+| `backends/fem/tests/conservative_constraint_rank_contract.cpp` | `void unbalanced_signed_cycle_retains_exact_general_rank` | kandydat regresji odmowy skrótu na niezbilansowanym cyklu; niekompilowany |
+| `backends/fem/cpu/mfem/transport/conservative_constraint_rank.cpp` | `reduce_bareiss_row` | dokładna redukcja FEM CPU; tożsamościowy krok opisany powyżej, weryfikacja runtime otwarta |
+| `backends/fem/tests/conservative_constraint_rank_contract.cpp` | `main` | regresje rangi, RHS i budżetu; w tym etapie niekompilowane |
 | `scripts/test_dynamic_current_oersted_contract_docs.py` | `test_fdm_oersted_open_v1_is_fully_frozen_and_semantic_only` | documentation-only regression for the frozen FDM open-boundary operator; not runtime evidence |
 | `backends/fdm/include/fullmag/fdm/cpu/oersted_fft_open_v1.hpp` | `class Solver` | versioned CPU/FP64 numerical owner behind the append-only public adapter |
 | `native/include/fullmag_fdm.h` | `fullmag_fdm_cpu_oersted_solve_v1` | append-only CPU/FP64 request/result ABI carrying exact face current, closed-current certificate and provenance |
@@ -2579,3 +2722,5 @@ evidence that the approximation is accurate.
 8. MFEM, [Tour of examples](https://mfem.org/tutorial/examples/), Examples 3, 4 and 24 for Nedelec, Raviart--Thomas and mixed exact-sequence operators.
 9. R. Hiptmair, [“Finite elements in computational electromagnetism”](https://doi.org/10.1017/S0962492902000041), *Acta Numerica* 11 (2002), 237--339; discrete differential forms, exact sequences and topology.
 10. [“Evaluation of Biot--Savart integrals on tetrahedral meshes”](https://arxiv.org/abs/0712.1695); comparative tetrahedral quadrature strategy, not a Fullmag acceptance oracle.
+
+11. T. Zaslavsky, [Matrices in the Theory of Signed Simple Graphs](https://arxiv.org/abs/1303.3083), rozdział o macierzy incydencji i jej randze; źródło matematyczne, nie dowód wykonania Fullmaga.

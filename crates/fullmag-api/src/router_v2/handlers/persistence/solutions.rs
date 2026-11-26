@@ -1,6 +1,8 @@
 //! Read-only project-owned historical results, independent of active runtime.
 
 pub mod saved_geometry;
+pub mod saved_planar;
+pub use saved_planar::*;
 pub mod scalar;
 pub mod study_state;
 pub use scalar::get_solution_scalar;
@@ -514,39 +516,24 @@ async fn with_verified_run_value<T: Send + 'static>(
         ProjectId::parse(project).map_err(|error| ApiError::bad_request(error.to_string()))?;
     let run = RunId::parse(run).map_err(|error| ApiError::bad_request(error.to_string()))?;
     tokio::task::spawn_blocking(move || {
-        let root = state
-            .submit_store_root
-            .as_ref()
-            .ok_or_else(|| ApiError::internal("managed project run storage is not configured"))?;
-        match std::fs::symlink_metadata(root) {
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                return Err(ApiError::not_found("accepted run storage is missing"))
+        crate::readonly_result_archive::with_run(&state, &project, &run, |store, intent| {
+            let specification: RunSpecification = serde_json::from_value(intent.specification)
+                .map_err(|error| ApiError::internal(format!("invalid durable RunSpec: {error}")))?;
+            if specification.snapshot.project_id != project {
+                return Err(ApiError::conflict("run belongs to another project"));
             }
-            Err(error) => return Err(ApiError::internal(error.to_string())),
-            Ok(_) => {}
-        }
-        let store = fullmag_session::SessionStore::open_existing(root)
-            .map_err(|error| ApiError::internal(error.to_string()))?;
-        let intent = store
-            .read_run_intent(run.as_str())
-            .map_err(|error| ApiError::internal(error.to_string()))?
-            .ok_or_else(|| ApiError::not_found("accepted run intent is missing"))?;
-        let specification: RunSpecification = serde_json::from_value(intent.specification)
-            .map_err(|error| ApiError::internal(format!("invalid durable RunSpec: {error}")))?;
-        if specification.snapshot.project_id != project {
-            return Err(ApiError::conflict("run belongs to another project"));
-        }
-        if specification.run_id != run
-            || specification
-                .fingerprint()
-                .map_err(|error| ApiError::internal(error.to_string()))?
-                != intent.payload_sha256
-        {
-            return Err(ApiError::internal(
-                "durable run identity or fingerprint is inconsistent",
-            ));
-        }
-        build(&store, &intent.payload_sha256)
+            if specification.run_id != run
+                || specification
+                    .fingerprint()
+                    .map_err(|error| ApiError::internal(error.to_string()))?
+                    != intent.payload_sha256
+            {
+                return Err(ApiError::internal(
+                    "durable run identity or fingerprint is inconsistent",
+                ));
+            }
+            build(store, &intent.payload_sha256)
+        })
     })
     .await
     .map_err(|error| ApiError::internal(format!("solution read task failed: {error}")))?

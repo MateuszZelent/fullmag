@@ -343,5 +343,31 @@ class DockerGroupStorageTests(unittest.TestCase):
         self.assertIn(".owner.json", guest)
 
 
+    def test_pinned_python_image_changes_only_the_initializer_image(self):
+        expected_image = "sha256:" + "b" * 64
+        group_storage.prepare(self.control, self.operation, self.source,
+            docker=self.docker_ok, bounded=self.bounded_ok, helper_image=expected_image)
+        command = self.helper_calls[0][0]
+        self.assertEqual(command[command.index("--entrypoint") + 2], expected_image)
+        self.assertIn("none", command)
+        self.assertIn("ALL", command)
+        self.assertIn("0:0", command)
+        self.assertNotIn("--gpus", command)
+        self.assertNotIn("--privileged", command)
+
+    def test_mutable_python_image_is_refused_before_execution(self):
+        with self.assertRaisesRegex(group_storage.GroupStorageError, "digest-pinned"):
+            group_storage.prepare(self.control, self.operation, self.source,
+                docker=self.docker_ok, bounded=self.bounded_ok, helper_image="latest")
+        self.assertEqual(self.helper_calls, [])
+
+    def test_initializer_failure_preserves_the_real_diagnostic(self):
+        def failed(command, **kwargs):
+            return subprocess.CompletedProcess(command, 127, b"", b"python3: command not found")
+        with self.assertRaisesRegex(group_storage.GroupStorageError, "python3: command not found"):
+            group_storage.prepare(self.control, self.operation, self.source,
+                docker=self.docker_ok, bounded=failed, helper_image=BACKEND_IMAGE)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -2811,16 +2811,16 @@ fn validate_charge_transport_definition(
     errors: &mut Vec<String>,
 ) {
     let prefix = format!("current_modules[{index}] current_transport");
-    let prepared_loop = matches!(&definition.conservative_current_source, Some(crate::ConservativeCurrentSourceIR::ClosedGeometryPotentialJump(_)));
+    let prepared_loop = matches!(&definition.conservative_current_source, Some(crate::ConservativeCurrentSourceIR::ClosedGeometryPotentialJump(_) | crate::ConservativeCurrentSourceIR::RetainedPreparationAsset(_)));
     let authored_loop = matches!(&definition.structured_current_closure, Some(crate::StructuredCurrentClosureIR::ClosedGeometry {schema_version, ..}) if schema_version=="structured_current_closure.v2");
     let closed_loop = prepared_loop || authored_loop;
     if closed_loop {
         let whole=definition.materials.len()==1 && definition.materials[0].region.region_id.is_none();
-        let parts=definition.materials.len()==4 && definition.materials.iter().all(|assignment|assignment.region.region_id.is_some())
-            && definition.materials.iter().map(|assignment|assignment.region.region_id.as_ref()).collect::<BTreeSet<_>>().len()==4;
+        let parts=matches!(definition.materials.len(), 4 | 5) && definition.materials.iter().all(|assignment|assignment.region.region_id.is_some())
+            && definition.materials.iter().map(|assignment|assignment.region.region_id.as_ref()).collect::<BTreeSet<_>>().len()==definition.materials.len();
         if definition.domain.len()!=1 || definition.domain[0].region_id.is_some() || !(whole||parts)
             || definition.materials.iter().any(|assignment|assignment.region.object_id!=definition.domain[0].object_id) {
-            errors.push(format!("{prefix} closed loop requires one complete owner and either one whole-object material or four distinct parts"));
+            errors.push(format!("{prefix} closed loop requires one complete owner and either one whole-object material or four microstrip/five GSG distinct parts"));
         }
     }
     if let Some(preparation) = &definition.external_lead_preparation {

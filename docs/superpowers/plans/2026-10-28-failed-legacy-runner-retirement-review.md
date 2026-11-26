@@ -92,3 +92,26 @@ sygnały z domyślną akcją zakończenia, jeśli proces nie ma ich handlera.
 Źródło: https://docs.docker.com/reference/cli/docker/container/run
 Żadnego dodatkowego sygnału nie wysłano. Dalsze czekanie samo nie
 naprawia braku obsługi sygnału. Prośba o zgodę na SIGKILL pozostaje otwarta.
+
+
+## Zakończenie po odrębnej zgodzie na SIGKILL — 28.10.2026
+
+Użytkownik zatwierdził wymuszone zakończenie i usunięcie wyłącznie kontenera
+`40d38a163682598d362b21257a84d3179158762f145e3d10fe08c3abd0db5656`, bez wolumenów.
+Ponowna kontrola potwierdziła tożsamość, nieaktywny worker, wyłączone
+przyjmowanie zadań, brak aktywnych zadań oraz brak pracy retencji.
+Po SIGKILL kontener zakończył się kodem 137 o 17:54:57 UTC. Usunięto tylko
+ten zatrzymany kontener, bez opcji usuwania wolumenów.
+
+Kontrola po operacji potwierdziła brak tego ID, zachowanie wcześniejszych
+obrazów i wolumenów oraz identyczne liczności stanów kolejki: 58 succeeded,
+19 failed, 11 cancelled, 4 blocked i 1 interrupted. Nie uruchomiono Solve.
+Dowody w wolumenie kontrolnym własnej grupy:
+`verification/recovery-v5-20261028/forced-retirement/` — `preflight.json`,
+`inspect-before.json`, `inspect-exited.json`, `tail-final.log`,
+`preserved-inventory.json` i `result.json`.
+
+Ponowny pełny odczyt `prepare_abrupt_stop_proof` przeszedł po usunięciu runnera.
+Dowód `recovery-proof.json` w tym samym katalogu ma schemat
+`fullmag.docker-abrupt-stop-proof.v3`. To pozytywny preflight; nie stanowi
+jeszcze dowodu zbudowania pakietu, natywnego recovery ani startu API.

@@ -138,3 +138,13 @@ mają interpretowane regresje w `packages/fullmag-py/tests/test_auxiliary_geomet
 Bitowa stabilność stałego sampling przy source min=max 0.15/0.10/0.075 um dotyczy
 Gmsh 4.15.2 z `FULLMAG_GMSH_THREADS=1`; domyślne wielowątkowe ordering/coords
 nie są kwalifikowane. To dowód authoring/meshing, bez rozwiązania V/J/H.
+
+## Zachowanie klucza geometrii
+
+geometry_name jest opcjonalnym jawnym kluczem istniejącego zasobu w builderze,
+scenie i Python DSL. Etykieta name i object_id są oddzielne. Brak nowego pola
+zachowuje legacy fallback; nowy eksport utrwala rzeczywisty klucz. Klucze są
+unikalne globalnie, także pomiędzy rolami. Pełne drzewo Translate/CSG wraz z
+nazwami i offsetami pozostaje bezstratne. Kontrakt parametrów i ograniczenia:
+nota 0105, DOC-ANCHOR:fem-geometry-asset-identity. Samo zachowanie kluczy nie
+kwalifikuje solvera, siatki lub reprodukcji publikacji.

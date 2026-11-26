@@ -82,6 +82,9 @@ pub fn scene_document_from_script_builder(builder: &ScriptBuilderState) -> Scene
         solved_antenna_drives: builder.solved_antenna_drives.clone(),
         antenna_spectrum_requests: builder.antenna_spectrum_requests.clone(),
         study: SceneStudyState {
+            shared_domain_mesh_source: builder.shared_domain_mesh_source.clone(),
+            interactive_session_requested: builder.interactive_session_requested,
+            wait_for_solve: builder.wait_for_solve,
             backend: builder.backend.clone(),
             requested_backend: builder
                 .requested_backend
@@ -212,8 +215,10 @@ pub fn scene_document_to_script_builder(
             }
 
             Ok(ScriptBuilderGeometryEntry {
+                geometry_name: object.geometry.geometry_name.clone(),
                 source_asset: object.geometry.source_asset.clone(),
                 name: builder_geometry_name_for_object(object),
+                object_id: Some(object.id.clone()),
                 region_name: object.region_name.clone(),
                 geometry_kind: object.geometry.geometry_kind.clone(),
                 geometry_params,
@@ -240,7 +245,10 @@ pub fn scene_document_to_script_builder(
         .collect::<Result<Vec<_>, SceneDocumentValidationError>>()?;
 
     Ok(ScriptBuilderState {
-        material_assets: Some(material_assets_metadata(scene)),
+        shared_domain_mesh_source: normalized_scene.study.shared_domain_mesh_source.clone(),
+        interactive_session_requested: normalized_scene.study.interactive_session_requested,
+        wait_for_solve: normalized_scene.study.wait_for_solve,
+        material_assets: (!scene.materials.is_empty()).then(|| material_assets_metadata(scene)),
         revision: scene.revision,
         backend: normalized_scene.study.backend.clone(),
         requested_backend: Some(normalized_scene.study.requested_backend.clone()),
@@ -622,7 +630,7 @@ pub fn scene_document_to_script_builder_overrides(
         if !is_zero_vec3(object.transform.translation) {
             insert_translation(&mut geometry_params, object.transform.translation);
         }
-        geometries.push(serde_json::json!({
+        let mut value = serde_json::json!({
             "name": builder_geometry_name_for_object(object),
             "object_id": object.id,
             "role": object.role,
@@ -634,10 +642,14 @@ pub fn scene_document_to_script_builder_overrides(
             "bounds_max": object.geometry.bounds_max,
             "mesh": object.object_mesh.as_ref().or(object.mesh_override.as_ref())
                 .map(geometry_mesh_override_value),
-        }));
+        });
+        if let Some(key) = &object.geometry.geometry_name {
+            value["geometry_name"] = Value::String(key.clone());
+        }
+        geometries.push(value);
     }
     let mut overrides = serde_json::json!({
-        "material_assets": material_assets_metadata(scene),
+        "material_assets": builder.material_assets.as_ref(),
         "runtime_selection": {
             "backend": scene.study.requested_backend,
             "device": scene.study.requested_device,
@@ -783,6 +795,8 @@ pub fn scene_document_to_script_builder_overrides(
                 .as_object_mut()
                 .expect("script builder stage overrides are an object");
             for key in [
+                "interactive_session_requested",
+                "wait_for_solve",
                 "eigen_solver_rtol",
                 "eigen_solver_max_outer_iterations",
                 "eigen_solver_max_linear_iterations",
@@ -877,7 +891,9 @@ pub fn scene_document_to_script_builder_overrides(
                 "phase_rad": module.drive.phase_rad,
                 "waveform": module.drive.waveform,
             },
-        })).collect::<Vec<_>>(),
+        })).chain(builder.current_transports.iter()
+            .map(|transport| serde_json::to_value(transport).expect("validated current transport is serializable")))
+            .collect::<Vec<_>>(),
         "current_transports": builder.current_transports.iter()
             .map(|transport| serde_json::to_value(transport).unwrap_or(Value::Null))
             .collect::<Vec<_>>(),
@@ -913,6 +929,14 @@ pub fn scene_document_to_script_builder_overrides(
             "samples": analysis.samples,
         })).unwrap_or(Value::Null),
     });
+    for (key, value) in [
+        ("interactive_session_requested", builder.interactive_session_requested),
+        ("wait_for_solve", builder.wait_for_solve),
+    ] {
+        if let Some(value) = value {
+            overrides[key] = Value::Bool(value);
+        }
+    }
     if scene.study.thermal_noise.is_none() {
         overrides.as_object_mut().expect("script builder overrides are an object")
             .remove("thermal_noise");
@@ -934,6 +958,15 @@ pub fn scene_document_to_script_builder_overrides(
     if !builder.execution_layers.is_empty() {
         overrides["execution_layers"] = serde_json::to_value(&builder.execution_layers)
             .expect("execution layers are serializable");
+    }
+    if let Some(source) = scene.study.shared_domain_mesh_source.as_ref() {
+        overrides["shared_domain_mesh_source"] = serde_json::to_value(source)
+            .expect("shared domain source is serializable");
+    }
+    for key in ["algorithm_2d", "algorithm_3d", "compute_quality", "per_element_quality"] {
+        if overrides["mesh"][key].is_null() {
+            overrides["mesh"].as_object_mut().expect("mesh override").remove(key);
+        }
     }
     Ok(overrides)
 }
@@ -1112,6 +1145,9 @@ pub fn scene_document_problem_projection(
 fn geometry_override_value(geo: &ScriptBuilderGeometryEntry) -> Value {
     let mut map = Map::new();
     map.insert("name".to_string(), Value::String(geo.name.clone()));
+    if let Some(key) = &geo.geometry_name {
+        map.insert("geometry_name".to_string(), Value::String(key.clone()));
+    }
     map.insert(
         "region_name".to_string(),
         geo.region_name
@@ -1559,10 +1595,11 @@ fn geometry_mesh_override_value(mesh: &ScriptBuilderPerGeometryMeshState) -> Val
 fn scene_object_from_geometry(geometry: &ScriptBuilderGeometryEntry) -> SceneObject {
     let (geometry_params, translation) = split_top_level_translation(&geometry.geometry_params);
     SceneObject {
-        id: geometry.name.clone(),
+        id: geometry.object_id.clone().unwrap_or_else(|| geometry.name.clone()),
         name: geometry.name.clone(),
         role: "magnet".to_string(),
         geometry: SceneGeometry {
+            geometry_name: geometry.geometry_name.clone(),
             source_asset: geometry.source_asset.clone(),
             geometry_kind: geometry.geometry_kind.clone(),
             geometry_params,
@@ -2750,6 +2787,79 @@ mod tests {
     use super::*;
 
     #[test]
+    fn execution_intent_serde_preserves_absent_false_true() {
+        for interactive in [None, Some(false), Some(true)] {
+            for wait in [None, Some(false), Some(true)] {
+                let mut input = serde_json::to_value(sample_builder()).unwrap();
+                for (key, value) in [
+                    ("interactive_session_requested", interactive),
+                    ("wait_for_solve", wait),
+                ] {
+                    input.as_object_mut().unwrap().remove(key);
+                    if let Some(value) = value {
+                        input[key] = serde_json::json!(value);
+                    }
+                }
+                let mut builder: ScriptBuilderState = serde_json::from_value(input).unwrap();
+                // Stage times normalize through numeric SceneStudyStageState.
+                builder.stages[0].until_seconds = "0.000000001".into();
+                builder.stages[0].extra.insert("interactive_session_requested".into(), Value::Bool(false));
+                builder.stages[0].extra.insert("wait_for_solve".into(), Value::Bool(true));
+                builder.stages[0].extra.insert("unrelated_stage_setting".into(), serde_json::json!({"kept": 7}));
+                if let StudyPipelineNode::Primitive(node) = &mut builder.study_pipeline.as_mut().unwrap().nodes[0] {
+                    node.payload.insert("interactive_session_requested".into(), Value::Bool(true));
+                    node.payload.insert("wait_for_solve".into(), Value::Bool(false));
+                } else {
+                    panic!("fixture must start with a primitive stage");
+                }
+                let scene = scene_document_from_script_builder(&builder);
+                let scene: SceneDocument = serde_json::from_value(serde_json::to_value(scene).unwrap()).unwrap();
+                let restored = scene_document_to_script_builder(&scene).unwrap();
+                let overrides = scene_document_to_script_builder_overrides(&scene).unwrap();
+                assert_eq!(overrides["stages"][0]["interactive_session_requested"], Value::Bool(false));
+                assert_eq!(overrides["stages"][0]["wait_for_solve"], Value::Bool(true));
+                assert_eq!(overrides["study_pipeline"], serde_json::to_value(&builder.study_pipeline).unwrap());
+                let encoded_builder = serde_json::to_value(&restored).unwrap();
+                let encoded_scene = serde_json::to_value(&scene.study).unwrap();
+                for (key, value) in [
+                    ("interactive_session_requested", interactive),
+                    ("wait_for_solve", wait),
+                ] {
+                    let expected = value.map(Value::Bool);
+                    assert_eq!(encoded_builder.get(key), expected.as_ref(), "builder {key}");
+                    assert_eq!(encoded_scene.get(key), expected.as_ref(), "scene {key}");
+                    assert_eq!(overrides.get(key), expected.as_ref(), "override {key}");
+                }
+                assert_eq!(restored.stages, builder.stages);
+                assert_eq!(restored.study_pipeline, builder.study_pipeline);
+            }
+        }
+    }
+
+    #[test]
+    fn execution_intent_serde_rejects_present_non_boolean() {
+        for key in ["interactive_session_requested", "wait_for_solve"] {
+            for invalid in [Value::Null, serde_json::json!("false"), serde_json::json!(0),
+                            serde_json::json!([]), serde_json::json!({})] {
+                let mut builder = serde_json::to_value(sample_builder()).unwrap();
+                builder[key] = invalid.clone();
+                assert!(serde_json::from_value::<ScriptBuilderState>(builder).is_err(), "builder {key}={invalid}");
+                let mut study = serde_json::json!({});
+                study[key] = invalid.clone();
+                assert!(serde_json::from_value::<SceneStudyState>(study).is_err(), "scene {key}={invalid}");
+            }
+        }
+        let builder: ScriptBuilderState = serde_json::from_value(serde_json::json!({
+            "revision": 0, "solver": {}, "mesh": {}
+        })).unwrap();
+        let study: SceneStudyState = serde_json::from_value(serde_json::json!({})).unwrap();
+        for encoded in [serde_json::to_value(builder).unwrap(), serde_json::to_value(study).unwrap()] {
+            assert!(encoded.get("interactive_session_requested").is_none());
+            assert!(encoded.get("wait_for_solve").is_none());
+        }
+    }
+
+    #[test]
     fn rotated_dmi_authoring_normalization_preserves_signed_d() {
         let entry = ScriptBuilderMagneticInteractionEntry {
             kind: ScriptBuilderMagneticInteractionKind::RotatedInterfacialDmi,
@@ -2771,10 +2881,10 @@ mod tests {
         .expect("minimal scene should receive typed defaults");
         let builder_mesh = ScriptBuilderMeshState::default();
 
-        assert!(scene.study.mesh_defaults.compute_quality);
-        assert!(scene.study.mesh_defaults.per_element_quality);
-        assert!(builder_mesh.compute_quality);
-        assert!(builder_mesh.per_element_quality);
+        assert_eq!(scene.study.mesh_defaults.compute_quality, None);
+        assert_eq!(scene.study.mesh_defaults.per_element_quality, None);
+        assert_eq!(builder_mesh.compute_quality, None);
+        assert_eq!(builder_mesh.per_element_quality, None);
     }
 
     use crate::{
@@ -3000,6 +3110,9 @@ mod tests {
 
     fn sample_builder() -> ScriptBuilderState {
         ScriptBuilderState {
+            shared_domain_mesh_source: None,
+            interactive_session_requested: None,
+            wait_for_solve: None,
             material_assets: None,
             revision: 7,
             backend: Some("fem".to_string()),
@@ -3032,8 +3145,8 @@ mod tests {
                 ..ScriptBuilderSolverState::default()
             },
             mesh: ScriptBuilderMeshState {
-                algorithm_2d: 6,
-                algorithm_3d: 1,
+                algorithm_2d: Some(6),
+                algorithm_3d: Some(1),
                 size_mode: Some("predefined".to_string()),
                 hmax: "20e-9".to_string(),
                 hmin: String::new(),
@@ -3054,8 +3167,8 @@ mod tests {
                 smoothing_steps: 1,
                 optimize: "Netgen".to_string(),
                 optimize_iterations: 2,
-                compute_quality: true,
-                per_element_quality: false,
+                compute_quality: Some(true),
+                per_element_quality: Some(false),
                 interface_hmax: None,
                 interface_thickness: None,
                 transition_distance: None,
@@ -3157,8 +3270,10 @@ mod tests {
                 sample_index: Some(0),
             }),
             geometries: vec![ScriptBuilderGeometryEntry {
+                geometry_name: None,
                 source_asset: None,
                 name: "flower".to_string(),
+                object_id: Some("flower".to_string()),
                 region_name: Some("core".to_string()),
                 geometry_kind: "ImportedGeometry".to_string(),
                 geometry_params: serde_json::json!({
@@ -5450,6 +5565,8 @@ mod tests {
 
         let overrides = scene_document_to_script_builder_overrides(&scene).expect("overrides");
         assert_eq!(overrides["current_transports"][0]["name"], "transport");
+        assert_eq!(overrides["current_modules"].as_array().unwrap().last(),
+                   Some(&serde_json::to_value(&scene.current_transports[0]).unwrap()));
         assert_eq!(overrides["spin_transports"][0]["id"], "spin");
         assert_eq!(overrides["spin_torques"][0]["kind"], "zhang_li");
         assert!(overrides["spin_torques"][0].get("id").is_none());
@@ -5574,4 +5691,248 @@ mod tests {
             "multilayer_convolution"
         );
     }
+
+    fn magnetic_identity_fixture() -> ScriptBuilderState {
+        let mut builder = sample_builder();
+        builder.fdm = None;
+        builder.initial_state = None;
+        builder.mesh_interfaces.clear();
+        builder.geometries[0].object_regions.clear();
+        builder.geometries[0].allocated_region_ids.clear();
+        builder.geometries[0].material_parameter_fields.clear();
+        builder
+    }
+
+    #[test]
+    fn magnetic_object_id_survives_builder_json_and_both_adapters() {
+        let mut wire = serde_json::to_value(magnetic_identity_fixture()).unwrap();
+        wire["geometries"][0]["object_id"] = serde_json::json!("immutable-A");
+        let builder: ScriptBuilderState = serde_json::from_value(wire).unwrap();
+        let scene = scene_document_from_script_builder(&builder);
+        assert_eq!(scene.objects[0].id, "immutable-A");
+        assert_eq!(scene.objects[0].name, "flower");
+        let round_trip = scene_document_to_script_builder(&scene).unwrap();
+        assert_eq!(serde_json::to_value(&round_trip).unwrap()["geometries"][0]["object_id"], "immutable-A");
+        let overrides = scene_document_to_script_builder_overrides(&scene).unwrap();
+        assert_eq!(overrides["geometries"][0]["object_id"], "immutable-A");
+    }
+
+    #[test]
+    fn magnetic_object_id_survives_scene_rename() {
+        let mut scene = scene_document_from_script_builder(&magnetic_identity_fixture());
+        scene.objects[0].id = "immutable-A".to_string();
+        scene.objects[0].name = "Renamed sample".to_string();
+        let builder = scene_document_to_script_builder(&scene).unwrap();
+        let round_trip = scene_document_from_script_builder(&builder);
+        assert_eq!(round_trip.objects[0].id, "immutable-A");
+        assert_eq!(round_trip.objects[0].name, "Renamed sample");
+        let overrides = scene_document_to_script_builder_overrides(&scene).unwrap();
+        assert_eq!(overrides["geometries"][0]["object_id"], "immutable-A");
+        assert_eq!(overrides["geometries"][0]["name"], "Renamed sample");
+    }
+
+    #[test]
+    fn magnetic_object_id_legacy_absence_and_null_keep_name_fallback() {
+        for explicit_null in [false, true] {
+            let mut wire = serde_json::to_value(magnetic_identity_fixture()).unwrap();
+            if explicit_null {
+                wire["geometries"][0]["object_id"] = Value::Null;
+            } else {
+                wire["geometries"][0].as_object_mut().unwrap().remove("object_id");
+            }
+            let builder: ScriptBuilderState = serde_json::from_value(wire).unwrap();
+            let scene = scene_document_from_script_builder(&builder);
+            assert_eq!(scene.objects[0].id, "flower");
+            assert!(scene_document_to_script_builder(&scene).is_ok());
+        }
+    }
+
+    #[test]
+    fn magnetic_object_id_does_not_fallback_for_explicit_empty_id() {
+        let mut wire = serde_json::to_value(magnetic_identity_fixture()).unwrap();
+        wire["geometries"][0]["object_id"] = serde_json::json!("");
+        let builder: ScriptBuilderState = serde_json::from_value(wire).unwrap();
+        let scene = scene_document_from_script_builder(&builder);
+        let error = scene_document_to_script_builder(&scene).unwrap_err();
+        assert!(error.message.contains("scene object ids must not be empty"));
+    }
+
+    #[test]
+    fn magnetic_object_id_duplicate_is_rejected_despite_different_names() {
+        let mut wire = serde_json::to_value(magnetic_identity_fixture()).unwrap();
+        wire["geometries"][0]["object_id"] = serde_json::json!("immutable-A");
+        let mut second = wire["geometries"][0].clone();
+        second["name"] = serde_json::json!("second");
+        wire["geometries"].as_array_mut().unwrap().push(second);
+        let builder: ScriptBuilderState = serde_json::from_value(wire).unwrap();
+        let scene = scene_document_from_script_builder(&builder);
+        let error = scene_document_to_script_builder(&scene).unwrap_err();
+        assert!(error.message.contains("duplicate scene object id"));
+    }
+
+    #[test]
+    fn magnetic_object_id_preserves_existing_owned_region_identity() {
+        let mut builder = sample_builder();
+        builder.fdm = None;
+        builder.initial_state = None;
+        builder.mesh_interfaces.clear();
+        builder.geometries[0].material_parameter_fields.clear();
+        let region = &mut builder.geometries[0].object_regions[0];
+        region.owner_object = "immutable-A".to_string();
+        region.region_id = "immutable-A:r1".to_string();
+        builder.geometries[0].allocated_region_ids = vec!["immutable-A:r1".to_string()];
+        let mut wire = serde_json::to_value(builder).unwrap();
+        wire["geometries"][0]["object_id"] = serde_json::json!("immutable-A");
+        let builder: ScriptBuilderState = serde_json::from_value(wire).unwrap();
+        let scene = scene_document_from_script_builder(&builder);
+        let round_trip = scene_document_to_script_builder(&scene).unwrap();
+        assert_eq!(round_trip.geometries[0].object_regions, builder.geometries[0].object_regions);
+        assert_eq!(scene.objects[0].id, "immutable-A");
+        assert_eq!(scene.objects[0].regions[0].owner_object, "immutable-A");
+    }
+
+    #[test]
+    fn magnetic_object_id_preserves_fdm_grid_through_rename() {
+        let mut wire = serde_json::to_value(magnetic_identity_fixture()).unwrap();
+        wire["geometries"][0]["object_id"] = serde_json::json!("immutable-A");
+        wire["fdm"] = serde_json::json!({
+            "per_magnet": {"flower": {"cell": [1e-9, 2e-9, 3e-9]}}
+        });
+        let builder: ScriptBuilderState = serde_json::from_value(wire).unwrap();
+        let mut scene = scene_document_from_script_builder(&builder);
+        assert_eq!(scene.study.fdm.as_ref().unwrap().per_object_grid["immutable-A"].cell, [1e-9, 2e-9, 3e-9]);
+        assert!(!scene.study.fdm.as_ref().unwrap().per_object_grid.contains_key("flower"));
+        scene.objects[0].name = "Renamed sample".to_string();
+        let fdm = builder_fdm_from_scene(scene.study.fdm.as_ref(), &scene.objects).unwrap();
+        assert_eq!(fdm.per_magnet["Renamed sample"].cell, [1e-9, 2e-9, 3e-9]);
+        assert!(!fdm.per_magnet.contains_key("flower"));
+        assert!(!fdm.per_magnet.contains_key("immutable-A"));
+        let restored = scene_fdm_from_builder(Some(&fdm), &scene.objects).unwrap();
+        assert_eq!(restored.per_object_grid["immutable-A"].cell, [1e-9, 2e-9, 3e-9]);
+    }
+    #[test]
+    fn geometry_asset_identity_key_survives_scene_rename_and_overrides() {
+        let mut builder = sample_builder();
+        builder.geometries[0].geometry_name = Some("persisted_geom".to_string());
+        let mut scene = scene_document_from_script_builder(&builder);
+        scene.objects[0].name = "Renamed display".to_string();
+        let restored = scene_document_to_script_builder(&scene).unwrap();
+        assert_eq!(restored.geometries[0].geometry_name.as_deref(), Some("persisted_geom"));
+        assert_eq!(restored.geometries[0].object_id, builder.geometries[0].object_id);
+        let overrides = scene_document_to_script_builder_overrides(&scene).unwrap();
+        assert_eq!(overrides["geometries"][0]["geometry_name"], "persisted_geom");
+    }
+
+    #[test]
+    fn geometry_asset_identity_json_preserves_legacy_and_explicit_keys() {
+        let builder = sample_builder();
+        let value = serde_json::to_value(&builder).unwrap();
+        assert!(value["geometries"][0].get("geometry_name").is_none());
+        let mut explicit = value;
+        explicit["geometries"][0]["geometry_name"] = serde_json::json!("stable");
+        let restored: ScriptBuilderState = serde_json::from_value(explicit).unwrap();
+        let scene = scene_document_from_script_builder(&restored);
+        assert_eq!(scene.objects[0].geometry.geometry_name.as_deref(), Some("stable"));
+        assert_eq!(scene_document_to_script_builder(&scene).unwrap().geometries[0].geometry_name,
+                   Some("stable".to_string()));
+    }
+
+    #[test]
+    fn geometry_asset_identity_rejects_empty_whitespace_and_duplicate_keys() {
+        for key in ["", " key", "key "] {
+            let mut builder = sample_builder();
+            builder.geometries[0].geometry_name = Some(key.to_string());
+            let scene = scene_document_from_script_builder(&builder);
+            assert!(scene_document_to_script_builder(&scene).is_err(), "{key:?}");
+        }
+        for roles in [["magnet", "magnet"], ["antenna", "geometry"], ["magnet", "antenna"]] {
+            let mut scene = scene_document_from_script_builder(&sample_builder());
+            let mut other = scene.objects[0].clone();
+            other.id = "different-id".to_string();
+            other.name = "Other display".to_string();
+            scene.objects[0].role = roles[0].to_string();
+            other.role = roles[1].to_string();
+            scene.objects[0].geometry.geometry_name = Some("shared".to_string());
+            other.geometry.geometry_name = Some("shared".to_string());
+            scene.objects.push(other);
+            assert!(scene_document_to_script_builder(&scene).is_err(), "{roles:?}");
+        }
+    }
+
+    #[test]
+    fn geometry_asset_identity_preserves_named_nested_translate() {
+        let mut builder = sample_builder();
+        builder.geometries[0].geometry_kind = "Translate".to_string();
+        let params = serde_json::json!({
+            "name": "outer", "translation": [4.0, 5.0, 6.0],
+            "base": {"geometry_kind": "Translate", "geometry_params": {
+                "name": "middle", "translation": [1.0, 2.0, 3.0],
+                "base": {"geometry_kind": "Box", "geometry_params": {
+                    "name": "inner", "size": [10.0, 20.0, 30.0]
+                }}
+            }}
+        });
+        builder.geometries[0].geometry_params = params.clone();
+        let scene = scene_document_from_script_builder(&builder);
+        let restored = scene_document_to_script_builder(&scene).unwrap();
+        assert_eq!(restored.geometries[0].geometry_params, params);
+    }
+
+    #[test]
+    fn shared_domain_source_survives_both_adapters_and_overrides() {
+        let mut builder = sample_builder();
+        builder.requested_backend = Some("fem".to_string());
+        builder.shared_domain_mesh_source = Some(serde_json::from_value(serde_json::json!({
+            "kind": "explicit", "source": "retained.fullmag-mesh",
+            "region_markers": [{"geometry_name": "flower_geom", "marker": 1}],
+            "marker_owners": [{"table": "region_markers", "geometry_name": "flower_geom",
+                              "marker": 1, "target": {"object_id": "flower"}}]
+        })).unwrap());
+        let scene = scene_document_from_script_builder(&builder);
+        let restored = scene_document_to_script_builder(&scene).unwrap();
+        assert_eq!(restored.shared_domain_mesh_source, builder.shared_domain_mesh_source);
+        let overrides = scene_document_to_script_builder_overrides(&scene).unwrap();
+        assert_eq!(overrides["shared_domain_mesh_source"],
+                   serde_json::to_value(&builder.shared_domain_mesh_source).unwrap());
+    }
+
+    #[test]
+    fn shared_domain_source_missing_generated_and_null_are_distinct() {
+        let mut scene = scene_document_from_script_builder(&sample_builder());
+        let overrides = scene_document_to_script_builder_overrides(&scene).unwrap();
+        assert!(overrides.get("shared_domain_mesh_source").is_none());
+        scene.study.shared_domain_mesh_source = Some(crate::ScriptBuilderSharedDomainMeshSource::Generated {});
+        let value = serde_json::to_value(&scene).unwrap();
+        let restored: SceneDocument = serde_json::from_value(value.clone()).unwrap();
+        assert_eq!(restored.study.shared_domain_mesh_source, scene.study.shared_domain_mesh_source);
+        let mut absent = value.clone();
+        absent["study"].as_object_mut().unwrap().remove("shared_domain_mesh_source");
+        let restored: SceneDocument = serde_json::from_value(absent).unwrap();
+        assert!(restored.study.shared_domain_mesh_source.is_none());
+        let mut null = value;
+        null["study"]["shared_domain_mesh_source"] = Value::Null;
+        assert!(serde_json::from_value::<SceneDocument>(null).is_err());
+    }
+
+    #[test]
+    fn shared_domain_source_mesh_request_presence_is_not_a_resolved_default() {
+        let absent: ScriptBuilderMeshState = serde_json::from_value(serde_json::json!({})).unwrap();
+        let wire = serde_json::to_value(absent).unwrap();
+        for key in ["algorithm_2d", "algorithm_3d", "compute_quality", "per_element_quality"] {
+            assert!(wire.get(key).is_none(), "{key} must stay absent");
+            let mut null = serde_json::json!({});
+            null[key] = Value::Null;
+            assert!(serde_json::from_value::<ScriptBuilderMeshState>(null).is_err());
+        }
+        let explicit = serde_json::json!({
+            "algorithm_2d": 6, "algorithm_3d": 1,
+            "compute_quality": false, "per_element_quality": true
+        });
+        let mesh: ScriptBuilderMeshState = serde_json::from_value(explicit.clone()).unwrap();
+        let wire = serde_json::to_value(mesh).unwrap();
+        for key in ["algorithm_2d", "algorithm_3d", "compute_quality", "per_element_quality"] {
+            assert_eq!(wire[key], explicit[key]);
+        }
+    }
+
 }

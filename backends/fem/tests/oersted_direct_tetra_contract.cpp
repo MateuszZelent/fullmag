@@ -1,10 +1,12 @@
 #include "cpu/mfem/interactions/oersted/direct_tetra_quadrature.hpp"
+#include "cpu/mfem/interactions/oersted/surface_rt0.hpp"
 
 #include <mfem.hpp>
 
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <iomanip>
 #include <initializer_list>
 #include <iostream>
 #include <limits>
@@ -58,6 +60,30 @@ void direct_tetra_signed_current_and_budget_contract()
             [](double value) { return std::isfinite(value); }),
         "direct tetrahedral Oersted result contains a non-finite value");
 
+    struct Progress {
+        std::uint64_t calls = 0, completed = 0;
+        bool valid = true;
+        std::uint64_t expected_total, expected_cells;
+    } progress{0, 0, true, targets.size(), static_cast<std::uint64_t>(mesh.GetNE())};
+    const fullmag::fem::oersted::SurfaceRt0ProgressObserver observer{&progress,
+        [](void *context, fullmag::fem::oersted::AntennaProgressPhase phase,
+            std::uint64_t completed, std::uint64_t total, std::uint64_t cells) noexcept {
+            auto &p = *static_cast<Progress *>(context);
+            p.valid = p.valid && phase == fullmag::fem::oersted::AntennaProgressPhase::evaluating_field &&
+                completed == p.calls && total == p.expected_total && cells == p.expected_cells;
+            ++p.calls;
+            p.completed = completed;
+        }};
+    const auto observed = DirectTetraQuadrature::EvaluateField(
+        mesh, current, targets, options, &observer);
+    require(observed.h_xyz_apm == forward.h_xyz_apm &&
+            observed.diagnostics.kernel_evaluations == forward.diagnostics.kernel_evaluations &&
+            observed.diagnostics.ledger_leaf_visits == forward.diagnostics.ledger_leaf_visits,
+        "observer changed direct quadrature output or work");
+    require(progress.valid && progress.calls == targets.size() + 1 &&
+            progress.completed == targets.size(),
+        "direct progress must report initial zero and each completed target exactly once");
+
     current *= -1.0;
     const auto reversed = DirectTetraQuadrature::EvaluateField(
         mesh, current, targets, options);
@@ -72,14 +98,17 @@ void direct_tetra_signed_current_and_budget_contract()
         "direct tetrahedral Oersted accumulation is not deterministic");
 
     options.maximum_source_target_pairs = 1;
+    const auto calls_before_refusal = progress.calls;
     bool rejected = false;
     try {
-        (void)DirectTetraQuadrature::EvaluateField(mesh, current, targets, options);
+        (void)DirectTetraQuadrature::EvaluateField(mesh, current, targets, options, &observer);
     } catch (const std::invalid_argument &) {
         rejected = true;
     }
     require(rejected,
         "direct tetrahedral Oersted did not reject an exceeded pair budget");
+    require(progress.calls == calls_before_refusal,
+        "admission refusal must not report completed field targets");
 }
 
 void direct_tetra_explicit_volume_profile_contract()
@@ -205,6 +234,7 @@ void direct_tetra_singular_target_contract()
     options.maximum_subdivision_depth = 6;
     options.absolute_tolerance_apm = 1.0e-9;
     options.relative_tolerance = 1.0e-5;
+    std::cerr << "OE-F1 CASE singular_targets q8_depth6\n";
     const auto result = DirectTetraQuadrature::EvaluateField(
         mesh, current, targets, options);
     require(result.diagnostics.unconverged_pair_count == 0,
@@ -219,6 +249,7 @@ void direct_tetra_singular_target_contract()
     bounded.maximum_subdivision_depth = 0;
     bool rejected = false;
     std::string failure;
+    std::cerr << "OE-F1 CASE singular_targets bounded_depth0\n";
     std::ostringstream failure_log;
     auto *previous_stderr = std::cerr.rdbuf(failure_log.rdbuf());
     try {
@@ -273,6 +304,7 @@ void direct_tetra_singular_target_contract()
 
     auto convergence_options = options;
     convergence_options.maximum_subdivision_depth = 4;
+    std::cerr << "OE-F1 CASE singular_targets convergence_depth4\n";
     const auto coarse = DirectTetraQuadrature::EvaluateField(
         mesh, current, targets, convergence_options);
     for (std::size_t index = 0; index < result.h_xyz_apm.size(); ++index) {
@@ -282,6 +314,7 @@ void direct_tetra_singular_target_contract()
     }
 
     DirectTetraQuadratureOptions defaults;
+    std::cerr << "OE-F1 CASE singular_targets default_options\n";
     const auto default_result = DirectTetraQuadrature::EvaluateField(
         mesh, current, targets, defaults);
     require(default_result.diagnostics.unconverged_pair_count == 0,
@@ -518,22 +551,178 @@ void direct_tetra_fdm_midpoint_common_limit_contract()
         "FDM midpoint finest field did not approach the FEM reference oracle");
 }
 
+// Failure-only test diagnostics; the original contract remains fatal.
+void diagnose_singular_targets_after_failure()
+{
+    using Point = std::array<double, 3>;
+    auto mesh = mfem::Mesh::MakeCartesian3D(
+        1, 1, 1, mfem::Element::TETRAHEDRON, 1.0, 1.0, 1.0);
+    mfem::RT_FECollection collection(0, 3);
+    mfem::FiniteElementSpace space(&mesh, &collection);
+    mfem::GridFunction current(&space);
+    mfem::Vector vector(3);
+    vector = 0.0;
+    vector[0] = 4.0;
+    mfem::VectorConstantCoefficient coefficient(vector);
+    current.ProjectCoefficient(coefficient);
+
+    mfem::Array<int> vertices;
+    mesh.GetElementVertices(0, vertices);
+    require(vertices.Size() == 4,
+        "singular-target fixture must start from a tetrahedron");
+    std::array<std::array<double, 3>, 4> points{};
+    for (int local = 0; local < 4; ++local) {
+        const auto *coordinate = mesh.GetVertex(vertices[local]);
+        points[local] = {coordinate[0], coordinate[1], coordinate[2]};
+    }
+    const auto average = [&](std::initializer_list<int> indices) {
+        std::array<double, 3> result{0.0, 0.0, 0.0};
+        for (const int index : indices) {
+            for (int component = 0; component < 3; ++component) {
+                result[component] += points[index][component];
+            }
+        }
+        const double scale = 1.0 / static_cast<double>(indices.size());
+        for (double &component : result) component *= scale;
+        return result;
+    };
+
+    const std::vector<std::array<double, 3>> targets{
+        average({0, 1, 2, 3}), // interior
+        average({0, 1, 2}),    // face
+        average({0, 1}),        // edge
+    };
+    DirectTetraQuadratureOptions options;
+    options.base_quadrature_order = 8;
+    options.maximum_subdivision_depth = 6;
+    options.absolute_tolerance_apm = 1.0e-9;
+    options.relative_tolerance = 1.0e-5;
+    require(mesh.GetNE() == 6, "singular diagnostic requires exactly six source roots");
+    std::cerr << std::setprecision(std::numeric_limits<double>::max_digits10);
+    const auto print_point = [](const Point &point) {
+        std::cerr << '(' << point[0] << ',' << point[1] << ',' << point[2] << ')';
+    };
+    std::array<std::array<Point, 4>, 6> roots{};
+    for (int source = 0; source < mesh.GetNE(); ++source) {
+        mesh.GetElementVertices(source, vertices);
+        std::cerr << "OE-F1 DIAGNOSTIC source=" << source << " vertices_m=";
+        for (int local = 0; local < 4; ++local) {
+            const auto *coordinate = mesh.GetVertex(vertices[local]);
+            roots[source][local] = {coordinate[0], coordinate[1], coordinate[2]};
+            print_point(roots[source][local]);
+        }
+        std::cerr << '\n';
+    }
+    for (const int requested_order : {20, 22}) {
+        const auto &rule = mfem::IntRules.Get(mfem::Geometry::TETRAHEDRON, requested_order);
+        long double sum = 0.0L, sum_abs = 0.0L;
+        double minimum = std::numeric_limits<double>::infinity();
+        for (int sample = 0; sample < rule.GetNPoints(); ++sample) {
+            const double weight = rule.IntPoint(sample).weight;
+            sum += weight;
+            sum_abs += std::abs(weight);
+            minimum = std::min(minimum, weight);
+        }
+        std::cerr << "OE-F1 DIAGNOSTIC tetra_rule requested_order=" << requested_order
+                  << " actual_order=" << rule.GetOrder() << " points=" << rule.GetNPoints()
+                  << " sum_weights=" << sum << " sum_abs_weights=" << sum_abs
+                  << " min_weight=" << minimum << '\n';
+    }
+    const auto subtract = [](const Point &a, const Point &b) {
+        return Point{a[0] - b[0], a[1] - b[1], a[2] - b[2]};
+    };
+    const auto determinant = [](const Point &a, const Point &b, const Point &c) {
+        return a[0] * (b[1] * c[2] - b[2] * c[1]) +
+            a[1] * (b[2] * c[0] - b[0] * c[2]) +
+            a[2] * (b[0] * c[1] - b[1] * c[0]);
+    };
+    const std::array<const char *, 3> names{{"interior", "face", "edge"}};
+    const auto limits = DirectTetraQuadrature::ResolveWorkLimits(options);
+    for (std::size_t target_index = 0; target_index < targets.size(); ++target_index) {
+        const auto &target = targets[target_index];
+        std::cerr << "OE-F1 DIAGNOSTIC BEGIN case=" << names[target_index] << " target_m=";
+        print_point(target);
+        std::cerr << " base_order=" << options.base_quadrature_order
+                  << " maximum_depth=" << options.maximum_subdivision_depth
+                  << " absolute_tolerance_apm=" << options.absolute_tolerance_apm
+                  << " relative_tolerance=" << options.relative_tolerance
+                  << " pair_cap=" << options.maximum_source_target_pairs
+                  << " kernel_cap=" << limits.maximum_kernel_evaluations
+                  << " ledger_cap=" << limits.maximum_ledger_leaf_visits << '\n';
+        for (std::size_t source = 0; source < roots.size(); ++source) {
+            const auto &root = roots[source];
+            const auto a = subtract(root[1], root[0]);
+            const auto b = subtract(root[2], root[0]);
+            const auto c = subtract(root[3], root[0]);
+            const auto offset = subtract(target, root[0]);
+            const double denominator = determinant(a, b, c);
+            require(std::isfinite(denominator) && denominator != 0.0,
+                "singular diagnostic root is degenerate");
+            const double b1 = determinant(offset, b, c) / denominator;
+            const double b2 = determinant(a, offset, c) / denominator;
+            const double b3 = determinant(a, b, offset) / denominator;
+            const std::array<double, 4> barycentric{{1.0 - b1 - b2 - b3, b1, b2, b3}};
+            const bool contained = std::all_of(barycentric.begin(), barycentric.end(),
+                [](double value) { return std::isfinite(value) && value >= -1.0e-12; });
+            std::cerr << "OE-F1 DIAGNOSTIC geometry case=" << names[target_index]
+                      << " source=" << source << " barycentric=(" << barycentric[0] << ','
+                      << b1 << ',' << b2 << ',' << b3 << ") root_classification="
+                      << (contained ? "closed_simplex" : "outside") << '\n';
+        }
+        try {
+            // Each public call owns a fresh, unchanged production-default WorkBudget.
+            const auto result = DirectTetraQuadrature::EvaluateField(mesh, current, {target}, options);
+            const auto &diagnostics = result.diagnostics;
+            const auto &record = result.target_diagnostics.at(0);
+            std::cerr << "OE-F1 DIAGNOSTIC SUCCESS case=" << names[target_index] << " h_apm=("
+                      << result.h_xyz_apm.at(0) << ',' << result.h_xyz_apm.at(1) << ','
+                      << result.h_xyz_apm.at(2) << "); estimated_error_apm=" << record.estimated_error_apm
+                      << " roundoff_indicator_apm=" << record.roundoff_indicator_apm
+                      << " tolerance_apm=" << record.tolerance_apm
+                      << " final_leaves=" << record.final_leaf_count
+                      << " target_kernels=" << record.kernel_evaluations
+                      << " target_visits=" << record.ledger_leaf_visits
+                      << " source_target_pairs=" << diagnostics.source_target_pairs
+                      << " refined_pairs=" << diagnostics.refined_pairs
+                      << " unconverged_pairs=" << diagnostics.unconverged_pair_count
+                      << " maximum_pair_error_apm=" << diagnostics.maximum_pair_error_apm
+                      << " global_kernels=" << diagnostics.kernel_evaluations
+                      << " global_visits=" << diagnostics.ledger_leaf_visits << '\n';
+        } catch (const std::exception &error) {
+            std::cerr << "OE-F1 DIAGNOSTIC REFUSED case=" << names[target_index]
+                      << " exception=" << error.what() << '\n';
+        }
+    }
+}
+
 } // namespace
 
 int main()
 {
     try {
+        std::cerr << "OE-F1 CASE direct_tetra_signed_current_and_budget_contract\n";
         direct_tetra_signed_current_and_budget_contract();
+        std::cerr << "OE-F1 CASE direct_tetra_explicit_volume_profile_contract\n";
         direct_tetra_explicit_volume_profile_contract();
+        std::cerr << "OE-F1 CASE direct_tetra_singular_target_contract\n";
         direct_tetra_singular_target_contract();
+        std::cerr << "OE-F1 CASE direct_tetra_consistent_h1_projection_contract\n";
         direct_tetra_consistent_h1_projection_contract();
+        std::cerr << "OE-F1 CASE direct_tetra_h_refinement_contract\n";
         direct_tetra_h_refinement_contract();
+        std::cerr << "OE-F1 CASE direct_tetra_fdm_midpoint_common_limit_contract\n";
         direct_tetra_fdm_midpoint_common_limit_contract();
         std::cout << "fem direct tetrahedral Oersted contract: PASS\n";
         return 0;
     } catch (const std::exception &error) {
         std::cerr << "fem direct tetrahedral Oersted contract: FAIL: "
                   << error.what() << '\n';
+        try {
+            diagnose_singular_targets_after_failure();
+        } catch (const std::exception &diagnostic_error) {
+            std::cerr << "OE-F1 DIAGNOSTIC SETUP REFUSED exception="
+                      << diagnostic_error.what() << '\n';
+        }
         return 1;
     }
 }

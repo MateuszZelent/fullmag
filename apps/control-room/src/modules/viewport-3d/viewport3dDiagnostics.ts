@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useSyncExternalStore } from "react";
 
 import { useKernel } from "@/kernel/KernelContext";
+import type { RequestDiagnosticsController } from "@/kernel/api/RequestDiagnosticsController";
 import { memoryBudgetRegistry } from "@/kernel/performance/MemoryBudgetRegistry";
 import {
   recordVisualizationDebugPerformanceMetric,
@@ -170,6 +171,33 @@ const EMPTY_COUNTS: Viewport3DResourceCounts = {
   workerRuntimeWorkers: 0,
 };
 
+export interface Viewport3DIdleObservation {
+  frames: number;
+  elapsedMs: number;
+  lastFrameWindow: string | null;
+}
+
+/** Observe committed frames after the render details settle, without requesting a frame. */
+export function observeViewport3DIdle(
+  tracker: Pick<Viewport3DResourceTracker, "getCommittedFrameCount">,
+  diagnostics: Pick<RequestDiagnosticsController, "listNewestFirst">,
+  onComplete: (observation: Viewport3DIdleObservation) => void,
+): () => void {
+  let timer = setTimeout(() => {
+    const initialFrames = tracker.getCommittedFrameCount();
+    const startedAt = performance.now();
+    timer = setTimeout(() => {
+      onComplete({
+        frames: tracker.getCommittedFrameCount() - initialFrames,
+        elapsedMs: performance.now() - startedAt,
+        lastFrameWindow: diagnostics.listNewestFirst()
+          .find((entry) => entry.path === "fullmag.viewport3d.frame-window")?.detail ?? null,
+      });
+    }, 2000);
+  }, 500);
+  return () => clearTimeout(timer);
+}
+
 export class Viewport3DResourceTracker {
   private readonly dirtyReasonCounts = new Map<Viewport3DDirtyReason, number>();
   private readonly disposables = new Map<object, () => void>();
@@ -181,8 +209,13 @@ export class Viewport3DResourceTracker {
   >();
   private counts: Viewport3DResourceCounts = { ...EMPTY_COUNTS };
   private resourceSequence = 0;
+  private committedFrames = 0;
 
   constructor(private readonly options: Viewport3DResourceTrackerOptions = {}) {}
+
+  getCommittedFrameCount(): number {
+    return this.committedFrames;
+  }
 
   getSnapshot(): Viewport3DResourceCounts {
     return this.counts;
@@ -264,6 +297,7 @@ export class Viewport3DResourceTracker {
   }
 
   recordDirtyFrame(reason: Viewport3DDirtyReason): void {
+    if (reason === "frame-commit") this.committedFrames += 1;
     recordVisualizationDebugViewportFrame(reason);
     this.dirtyReasonCounts.set(
       reason,

@@ -125,6 +125,16 @@ std::uint64_t product(std::uint64_t a, std::uint64_t b)
     return a * b;
 }
 
+const char *work_kind_name(Kind kind)
+{
+    static constexpr std::array<const char *, surface_rt0_work_kind_count> names{{
+        "source_target_pairs", "face_precision_passes", "whole_face_formulas", "signed_fan_panels",
+        "exact_fraction_operations", "exact_integer_operations", "exact_comparisons", "real_divisions",
+        "copied_input_bytes", "reserved_output_bytes", "sqrt_calls", "log_calls", "log1p_calls", "atan2_calls"
+    }};
+    return names[static_cast<std::size_t>(kind)];
+}
+
 class Work {
 public:
     Work(const SurfaceRt0WorkLimits &limits, const SurfaceRt0PeakRss &rss,
@@ -160,8 +170,16 @@ public:
         if (active_) add(report_.current_target[i], amount);
         if (precision >= 0) add(report_.by_precision[static_cast<std::size_t>(precision)][i], amount);
         if (report_.total[i] > limits_.total[i] ||
-            (active_ && report_.current_target[i] > limits_.per_target[i]))
-            throw std::runtime_error("surface RT0 named work limit exhausted");
+            (active_ && report_.current_target[i] > limits_.per_target[i])) {
+            const bool total_exhausted = report_.total[i] > limits_.total[i];
+            std::ostringstream message;
+            message << "surface RT0 named work limit exhausted: kind=" << work_kind_name(kind)
+                << " scope=" << (total_exhausted ? "total" : "per_target")
+                << " value=" << (total_exhausted ? report_.total[i] : report_.current_target[i])
+                << " limit=" << (total_exhausted ? limits_.total[i] : limits_.per_target[i]);
+            if (active_) message << " target_index=" << report_.current_target_index;
+            throw std::runtime_error(message.str());
+        }
         if (++events_ == limits_.guard_interval_events) { events_ = 0; guard(); }
     }
     void guard()
@@ -756,19 +774,7 @@ void preflight(const std::vector<transport::AffineRt0Element::FrozenInput> &sour
     require(!source.empty() && !targets.empty(), "surface RT0 requires nonempty source and ordered targets");
     const auto source_count = static_cast<std::uint64_t>(source.size());
     const auto target_count = static_cast<std::uint64_t>(targets.size());
-    const auto pairs = product(source_count,target_count);
-    const auto fits = [&](Kind kind, std::uint64_t per_pair) {
-        const auto i = static_cast<std::size_t>(kind);
-        require(product(pairs,per_pair) <= limits.total[i] &&
-            product(source_count,per_pair) <= limits.per_target[i],
-            "surface RT0 full mandatory precision/formula work cannot fit caller limits");
-    };
-    fits(Kind::source_target_pairs,1);
-    fits(Kind::face_precision_passes,12);
-    fits(Kind::whole_face_formulas,12);
-    fits(Kind::signed_fan_panels,36);
-    // A fully evaluated source-target pair has 12 face/precision passes and
-    // 48 formula branches (12 whole face + 36 signed fans), not 24 kernels.
+    validate_surface_rt0_work_minimums(limits,source_count,target_count);
     work.reserve_output(target_count,sizeof(SurfaceRt0TargetResult));
 }
 
@@ -824,6 +830,34 @@ void scalar_agreement(const FaceGeometry &g, const FacePass<Decimal80> &medium,
 }
 
 } // namespace
+
+void validate_surface_rt0_work_minimums(const SurfaceRt0WorkLimits &limits,
+    std::uint64_t source_count, std::uint64_t target_count)
+{
+    require(source_count > 0 && target_count > 0, "surface RT0 requires nonempty source and ordered targets");
+    // Both high-precision passes must complete: each face needs 2*7 norms,
+    // 2*3 accumulation norms, 3 precision deltas and 2 formula deltas.
+    // Four faces therefore require at least 100 square roots per source cell.
+    // Binary64 work and final reduction can only increase this lower bound.
+    const std::array<std::pair<Kind,std::uint64_t>,5> minimums{{
+        {Kind::source_target_pairs,1}, {Kind::face_precision_passes,12},
+        {Kind::whole_face_formulas,12}, {Kind::signed_fan_panels,36}, {Kind::sqrt_calls,100}
+    }};
+    for (const auto &[kind, per_pair] : minimums) {
+        const auto i = static_cast<std::size_t>(kind);
+        // Division retains a checked admission even when the required product
+        // exceeds uint64; it must not wrap into an apparently fitting budget.
+        if (source_count > limits.per_target[i]/per_pair ||
+            source_count > limits.total[i]/per_pair/target_count) {
+            std::ostringstream message;
+            message << "surface RT0 mandatory work cannot fit caller limits: kind=" << work_kind_name(kind)
+                << " minimum_per_pair=" << per_pair << " source_cells=" << source_count
+                << " targets=" << target_count << " per_target_limit=" << limits.per_target[i]
+                << " total_limit=" << limits.total[i];
+            throw std::invalid_argument(message.str());
+        }
+    }
+}
 
 SurfaceRt0Result evaluate_surface_rt0(
     const std::vector<transport::AffineRt0Element::FrozenInput> &source,

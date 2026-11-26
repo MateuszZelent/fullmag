@@ -2589,6 +2589,8 @@ def _parser() -> argparse.ArgumentParser:
     offline_reconcile.add_argument("--config-sha256", required=True)
     offline_reconcile.add_argument("--operation-attempt", required=True)
     offline_reconcile.add_argument("--port", type=int, required=True)
+    offline_reconcile.add_argument("--stopped-ready-owner", action="store_true",
+                                   help="explicit lease-only recovery of a stopped historical Ready owner")
     offline_reconcile.add_argument("--apply", action="store_true")
     offline_reconcile.add_argument("--expected-plan-sha256")
     reattest = subparsers.add_parser("reattest-host-device-volume", help="explicitly reattest a stopped WSL group's renumbered host device")
@@ -2904,6 +2906,8 @@ def _parser() -> argparse.ArgumentParser:
     recreate_volume.add_argument("--port", type=int, required=True)
     recreate_volume.add_argument('--prepared-quarantine-sha256',
                                  help='exact prepared quarantine digest; permits fresh archival only after native cancellation')
+    recreate_volume.add_argument("--readonly-result-archive-request")
+    recreate_volume.add_argument("--readonly-result-archive-request-sha256")
     recreate_volume.add_argument("--native-contract", action="append", default=None,
                                  choices=("fem-demag-poisson", "fem-cuda-activity-trace",
                                           "fem-cuda-pgbb-reuse", "fem-cuda-rk-guard",
@@ -2947,6 +2951,8 @@ def _parser() -> argparse.ArgumentParser:
     recreate_volume.add_argument("--completed-recreation-sha256", help="SHA-256 of the completed removal terminal receipt")
     recreate_volume.add_argument("--drained-successor-proof", help="Exact control-volume proof of a later successful managed drain")
     recreate_volume.add_argument("--drained-successor-proof-sha256", help="SHA-256 of the exact drained-successor proof")
+    recreate_volume.add_argument("--pending-recovery-successor", help="Exact control-volume published v6 successor binding")
+    recreate_volume.add_argument("--pending-recovery-successor-sha256", help="SHA-256 of the published v6 successor binding")
     recreate_volume.add_argument("--terminal-observation-proof", help="Exact private control-volume proof of one terminal observation")
     recreate_volume.add_argument("--terminal-observation-proof-sha256", help="SHA-256 of the exact terminal observation proof")
     recreate_volume.add_argument("--empty-api-abort-stop", help="Fresh-state only: exact successful ownerless API-abort stop attempt")
@@ -2956,6 +2962,8 @@ def _parser() -> argparse.ArgumentParser:
     recreate_volume.add_argument("--prelaunch-failure-stop", help="Fresh-state only: exact prelaunch-failure stop attempt")
     recreate_volume.add_argument("--prelaunch-failure-stop-sha256", help="SHA-256 of the exact prelaunch-failure stop terminal receipt")
     recreate_volume.add_argument("--terminal-observation-stop", help="Exact stop-only attempt containing the terminal observation capture")
+    recreate_volume.add_argument("--abandoned-diagnostic-proof", help="Exact control-volume proof of a stopped, abandoned diagnostic guest; fresh state only")
+    recreate_volume.add_argument("--abandoned-diagnostic-proof-sha256", help="SHA-256 of the abandoned diagnostic proof")
     recreate_volume.add_argument(
         "--offline-reconciliation", metavar="OPERATION_TOKEN",
         help="consume the exact completed offline control repair without replaying its old operation",
@@ -3075,6 +3083,8 @@ def _parser() -> argparse.ArgumentParser:
         ))
         command.add_argument("--source-root", type=Path,
                              help="registered checkout/worktree mounted live by both services")
+        command.add_argument("--readonly-result-archive-request")
+        command.add_argument("--readonly-result-archive-request-sha256")
         command.add_argument("--native-contract", action="append", default=None,
                              choices=("fem-demag-poisson", "fem-cuda-activity-trace",
                                           "fem-cuda-pgbb-reuse", "fem-cuda-rk-guard",
@@ -3307,10 +3317,24 @@ def main(argv: Sequence[str] | None = None) -> int:
             if args.lost_state_stop and (not args.fresh_state or any((
                     args.retire_only, args.resume_recreation, args.recovery_authorization,
                     args.migrate_host_capacity, args.completed_recreation_attempt,
-                    args.drained_successor_proof, args.terminal_observation_proof,
+                    args.drained_successor_proof, args.pending_recovery_successor,
+                    args.abandoned_diagnostic_proof, args.terminal_observation_proof,
                     args.prepared_quarantine_sha256, args.offline_reconciliation,
                     args.helper_source_root, args.helper_source_commit))):
                 raise _fail("Lost state requires plain fresh recreation with one diagnostic stop pin")
+            if bool(args.abandoned_diagnostic_proof) != bool(args.abandoned_diagnostic_proof_sha256):
+                raise _fail("Abandoned diagnostic requires paired proof and SHA-256")
+            if args.abandoned_diagnostic_proof and (
+                not args.fresh_state or any((args.retire_only, args.recovery_authorization,
+                    args.resume_recreation, args.completed_recreation_attempt,
+                    args.drained_successor_proof, args.pending_recovery_successor,
+                    args.terminal_observation_proof, args.offline_reconciliation,
+                    args.lost_state_stop, args.prepared_quarantine_sha256,
+                    getattr(args, "script", None)))
+            ):
+                raise _fail("Abandoned diagnostic proof permits only a fresh-state recreation")
+            if args.abandoned_diagnostic_proof and args.abandoned_diagnostic_proof.startswith("verification/"):
+                args.abandoned_diagnostic_proof = "/opt/fullmag/control/" + args.abandoned_diagnostic_proof
             if bool(args.terminal_observation_proof) != bool(args.terminal_observation_proof_sha256):
                 raise _fail("Terminal observation requires paired proof and SHA-256")
             if args.terminal_observation_stop and args.terminal_observation_proof:

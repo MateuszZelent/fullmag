@@ -290,6 +290,8 @@ impl SceneImportedGeometryAssetRef {
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub struct SceneGeometry {
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub geometry_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source_asset: Option<SceneImportedGeometryAssetRef>,
     pub geometry_kind: String,
     #[serde(default)]
@@ -1213,6 +1215,13 @@ impl SceneStudyStageState {
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]
 #[serde(deny_unknown_fields)]
 pub struct SceneStudyState {
+    #[serde(default, skip_serializing_if = "Option::is_none",
+            deserialize_with = "crate::domain_mesh_source::deserialize_present_source")]
+    pub shared_domain_mesh_source: Option<crate::ScriptBuilderSharedDomainMeshSource>,
+    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "crate::builder::deserialize_present_execution_bool")]
+    pub interactive_session_requested: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "crate::builder::deserialize_present_execution_bool")]
+    pub wait_for_solve: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub backend: Option<String>,
     #[serde(default = "default_auto")]
@@ -1771,8 +1780,8 @@ fn default_solver() -> ScriptBuilderSolverState {
 
 fn default_mesh() -> ScriptBuilderMeshState {
     ScriptBuilderMeshState {
-        algorithm_2d: 6,
-        algorithm_3d: 1,
+        algorithm_2d: None,
+        algorithm_3d: None,
         size_mode: Some("predefined".to_string()),
         hmax: String::new(),
         hmin: String::new(),
@@ -1793,8 +1802,8 @@ fn default_mesh() -> ScriptBuilderMeshState {
         smoothing_steps: 1,
         optimize: String::new(),
         optimize_iterations: 1,
-        compute_quality: true,
-        per_element_quality: true,
+        compute_quality: None,
+        per_element_quality: None,
         interface_hmax: None,
         interface_thickness: None,
         transition_distance: None,

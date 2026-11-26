@@ -76,7 +76,7 @@ class AntennaFieldOnlyTests(unittest.TestCase):
 
     def test_run_and_relax_still_require_magnets(self):
         source = FIXTURE.read_text(encoding="utf-8")
-        for action, error in (("study.stages.add_run(until=1e-12)", TypeError),
+        for action, error in (("study.stages.add_run(until=1e-12)", ValueError),
                               ("study.stages.add_relax()", ValueError)):
             path = self.root / "invalid.py"
             path.write_text(source + "\n" + action + "\n", encoding="utf-8")

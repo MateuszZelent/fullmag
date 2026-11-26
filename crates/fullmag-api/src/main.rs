@@ -108,6 +108,7 @@ mod quantity_data_plane;
 mod realtime_policy;
 mod router_v2;
 mod run_intent_persistence;
+mod readonly_result_archive;
 mod schemas;
 mod script;
 mod script_check;
@@ -2655,6 +2656,8 @@ async fn run_api_server() {
             &repo_root,
             &runtime_state_root,
         ),
+        readonly_result_archive: readonly_result_archive::ReadonlyResultArchive::from_environment()
+            .expect("read-only result archive configuration must be valid"),
         submit_backlog_limit: run_intent_persistence::configured_submit_backlog_limit()
             .expect("accepted run backlog limit configuration must be valid"),
         current_workspace_root,

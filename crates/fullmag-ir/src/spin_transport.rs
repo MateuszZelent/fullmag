@@ -89,6 +89,7 @@ pub struct CurrentSourceDriveIR {
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum ConservativeCurrentSourceIR {
     ClosedGeometryPotentialJump(crate::PreparedAntennaClosedLoopSourceIR),
+    RetainedPreparationAsset(crate::RetainedPreparationAssetSourceIR),
     ExternalLeadCurrent {
         schema_version: String,
         revision: String,
@@ -179,7 +180,7 @@ fn deserialize_current_source_lead_mesh<'de, D: serde::Deserializer<'de>>(
 impl ConservativeCurrentSourceIR {
     pub fn terminal_observations(&self) -> &[CurrentSourceTerminalObservationIR] {
         match self {
-            Self::ClosedGeometryPotentialJump(_) => &[],
+            Self::ClosedGeometryPotentialJump(_) | Self::RetainedPreparationAsset(_) => &[],
             Self::ExternalLeadCurrent {
                 terminal_observations,
                 ..
@@ -189,6 +190,7 @@ impl ConservativeCurrentSourceIR {
 
     pub fn validation_errors(&self, path: &str) -> Vec<String> {
         if let Self::ClosedGeometryPotentialJump(source) = self { return source.validation_errors(path); }
+        if let Self::RetainedPreparationAsset(source) = self { return source.validation_errors(path); }
         let Self::ExternalLeadCurrent {
             schema_version,
             revision,
@@ -895,8 +897,8 @@ impl StructuredCurrentClosureIR {
             }
             let frame = cut.plane.coordinate_frame.as_deref().unwrap_or("world");
             if schema_version == "structured_current_closure.v2" {
-                if frame != "object" || cut.plane.axis != StructuredCutAxisIR::Z || cut.region.region_id.is_none() {
-                    errors.push(format!("{cut_path}.plane v2 requires object-frame Z and explicit inlet region"));
+                if frame != "object" || !matches!(cut.plane.axis, StructuredCutAxisIR::X | StructuredCutAxisIR::Z) || cut.region.region_id.is_none() {
+                    errors.push(format!("{cut_path}.plane v2 requires object-frame X or Z and explicit inlet region"));
                 }
             } else if frame != "world" {
                 errors.push(format!("{cut_path}.plane v1 requires world coordinate_frame"));

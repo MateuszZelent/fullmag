@@ -1089,6 +1089,10 @@ export type MaterializedDatasetSliceEnvelopeResource =
   components["schemas"]["MaterializedDatasetSliceEnvelopeResource"];
 export type SavedFieldGeometryResource =
   components["schemas"]["SavedFieldGeometryResource"];
+export type SavedFieldGeometryQuery =
+  components["schemas"]["SavedFieldGeometryQuery"];
+export type SavedAntennaGeometrySourceContextResource =
+  components["schemas"]["SavedAntennaGeometrySourceContextResource"];
 export type ObservationFrameListQuery =
   components["schemas"]["ObservationFrameListQuery"];
 export type ObservationFrameListResource =
@@ -1501,3 +1505,6 @@ export type MaterialVersionPublishRequest = components["schemas"]["MaterialVersi
 export type MaterialVersionUpdateRequest = components["schemas"]["MaterialVersionUpdateRequest"];
 export type MaterialVersionMutationResource = components["schemas"]["MaterialVersionMutationResource"];
 export type SceneMaterialResource = components["schemas"]["SceneMaterialResource"];
+
+export type SavedPlanarQuery = components["schemas"]["SavedPlanarQuery"];
+export type SavedPlanarResource = components["schemas"]["SavedPlanarResource"];

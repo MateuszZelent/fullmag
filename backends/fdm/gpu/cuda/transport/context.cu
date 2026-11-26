@@ -22,6 +22,7 @@
 #include <new>
 #include <stdexcept>
 #include <string>
+#include <tuple>
 #include <type_traits>
 #include <vector>
 
@@ -1390,6 +1391,7 @@ uint32_t static_descriptor_upload_impl(
         interface_to_cells.push_back(record->to_cell);
         interface_orientations.push_back(record->orientation);
     }
+    std::vector<fullmag_fdm_gpu_transport_spin_boundary_face_v1> canonical_spin_faces;
     if (spin_enabled) {
         const uint64_t external_faces =
             2 * (descriptor->grid[1] * descriptor->grid[2] +
@@ -1477,6 +1479,7 @@ uint32_t static_descriptor_upload_impl(
                                     cell->material_index))
                 return FULLMAG_FDM_GPU_TRANSPORT_ERROR_INVALID_DESCRIPTOR;
         }
+        canonical_spin_faces.reserve(static_cast<size_t>(views[4].element_count));
         for (uint64_t i = 0; i < views[4].element_count; ++i) {
             const auto *face = reinterpret_cast<
                 const fullmag_fdm_gpu_transport_spin_boundary_face_v1 *>(
@@ -1496,7 +1499,13 @@ uint32_t static_descriptor_upload_impl(
                  (face->potential_xyz[0] != 0.0 || face->potential_xyz[1] != 0.0 ||
                   face->potential_xyz[2] != 0.0)))
                 return FULLMAG_FDM_GPU_TRANSPORT_ERROR_INVALID_DESCRIPTOR;
+            canonical_spin_faces.push_back(*face);
         }
+        std::stable_sort(canonical_spin_faces.begin(), canonical_spin_faces.end(),
+            [](const auto &a, const auto &b) {
+                return std::tie(a.axis, a.side, a.adjacent_cell) <
+                       std::tie(b.axis, b.side, b.adjacent_cell);
+            });
     }
     trace_phase("spin_materials_cells_faces_interfaces");
     std::vector<uint64_t> charge_adjacent_cells;
@@ -1716,6 +1725,8 @@ uint32_t static_descriptor_upload_impl(
             host_payload = canonical_interface_payload.data();
         if (i == 3 && !canonical_charge_face_payload.empty())
             host_payload = canonical_charge_face_payload.data();
+        if (i == 4 && !canonical_spin_faces.empty())
+            host_payload = canonical_spin_faces.data();
         if (views[i].byte_length != 0 && cudaMemcpyAsync(
                 device_payloads[i], host_payload,
                 views[i].byte_length, cudaMemcpyHostToDevice, slot.stream) != cudaSuccess) {

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import hashlib
 import importlib
 import json
@@ -43,6 +44,222 @@ class ContainerRuntimeRecoveryBridgeTests(unittest.TestCase):
         with self.assertRaisesRegex(runtime_service.RuntimeServiceError,'unexpected fields'):
             runtime_service._validate_container_recovery_attestation_document(request,'1'*64,
                 {'schema_version':runtime_service.CONTAINER_RECOVERY_ABSENCE_ATTESTATION_SCHEMA},'2'*64)
+
+    @staticmethod
+    def history_request():
+        return {
+            "schema_version": "runtime_service_container_recovery_request.v5",
+            "retained_terminal_runs": [{"run_id": "terminal-1", "run_intent_sha256": "1" * 64,
+                "run_catalog_sha256": "2" * 64, "artifact_catalog_sha256": None}],
+            "retained_held_manual_runs": [{"run_id": "held-1", "run_intent_sha256": "3" * 64,
+                "run_catalog_sha256": "4" * 64, "start_release": "absent"}],
+            "retained_attempt_histories": [{"run_id": "terminal-1", "run_evidence_sha256": "5" * 64,
+                "attempts": [{"task_id": "task-1", "attempt_id": "attempt-1",
+                    "ownership_epoch": 1, "resource_id": "resource-1"}]}],
+        }
+
+    def test_v5_history_host_parity_bounds_and_legacy_refusals(self):
+        import docker_volume_container_recovery as host
+        request = self.history_request()
+        self.assertEqual(runtime_service._container_recovery_expected_outcome(request),
+                         "retained_attempt_history_recovered")
+        self.assertEqual(host.expected_recovery_outcome(request),
+                         runtime_service._container_recovery_expected_outcome(request))
+        history = request["retained_attempt_histories"][0]
+        claim = history["attempts"][0]
+        invalid = [{**request, "retained_attempt_histories": value}
+                   for value in (None, [], [history] * 129, [history, history])]
+        invalid.append({key: value for key, value in request.items() if key != "retained_attempt_histories"})
+        for changes in ({"run_id": "held-1"}, {"run_id": "foreign"}, {"attempts": []},
+                        {"extra": 1}, {"run_evidence_sha256": "0" * 64},
+                        {"run_evidence_sha256": "F" * 64}, {"run_evidence_sha256": "short"}):
+            invalid.append({**request, "retained_attempt_histories": [{**history, **changes}]})
+        for changes in ({"ownership_epoch": True}, {"ownership_epoch": 0}, {"ownership_epoch": -1},
+                        {"ownership_epoch": 1.5}, {"extra": 1}, {"task_id": "../escape"},
+                        {"attempt_id": "x."}, {"resource_id": "bad/name"}, {"task_id": "x" * 129}):
+            invalid.append({**request, "retained_attempt_histories": [
+                {**history, "attempts": [{**claim, **changes}]}]})
+        for claims in ([claim, claim], [claim, {**claim, "attempt_id": "attempt-2"}],
+                       [claim, {**claim, "ownership_epoch": 2}]):
+            invalid.append({**request, "retained_attempt_histories": [{**history, "attempts": claims}]})
+        for version in range(1, 5):
+            invalid.append({**request, "schema_version": "runtime_service_container_recovery_request.v" + str(version)})
+        invalid.extend([{**request, "retained_held_manual_runs": []},
+                        {**request, "retained_terminal_runs": []},
+                        {**request, "retained_cancelled_runs": []}])
+        for value in invalid:
+            with self.subTest(value=value):
+                with self.assertRaises(host.ContainerRecoveryError):
+                    host.expected_recovery_outcome(value)
+                with self.assertRaises(runtime_service.RuntimeServiceError):
+                    runtime_service._container_recovery_expected_outcome(value)
+        # The global limit counts claims across histories, not per run.
+        second = {**history, "run_id": "terminal-2"}
+        bounded = copy.deepcopy(request)
+        bounded["retained_terminal_runs"].append({**request["retained_terminal_runs"][0], "run_id": "terminal-2"})
+        claims = [{**claim, "attempt_id": "attempt-" + str(i), "ownership_epoch": i} for i in range(1, 129)]
+        bounded["retained_attempt_histories"] = [{**history, "attempts": claims[:64]}, {**second, "attempts": claims[64:]}]
+        self.assertEqual(host.expected_recovery_outcome(bounded), runtime_service._container_recovery_expected_outcome(bounded))
+        bounded["retained_attempt_histories"][1]["attempts"].append({**claim, "attempt_id": "attempt-129", "ownership_epoch": 129})
+        with self.assertRaises(host.ContainerRecoveryError): host.expected_recovery_outcome(bounded)
+        with self.assertRaises(runtime_service.RuntimeServiceError): runtime_service._container_recovery_expected_outcome(bounded)
+
+    def test_v5_enforces_native_store_ids_and_u64_epoch(self):
+        # Native store IDs/u64 are stricter than the host's JSON shape check.
+        for changes in ({"ownership_epoch": 1 << 64}, {"task_id": "CON"},
+                        {"resource_id": "x" * 201}, {"attempt_id": "_leading"}):
+            request = self.history_request()
+            request["retained_attempt_histories"][0]["attempts"][0].update(changes)
+            with self.subTest(changes=changes), self.assertRaises(runtime_service.RuntimeServiceError):
+                runtime_service._container_recovery_expected_outcome(request)
+
+    def test_v5_v6_absence_attestation_binds_inventory_and_exact_container(self):
+        for factory in (self.history_request, self.pending_request):
+            with self.subTest(schema=factory()["schema_version"]), tempfile.TemporaryDirectory() as directory:
+                fixture = self._document_fixture(Path(directory))
+                request = {**fixture["request"], **factory()}
+                digest = _sha(runtime_service._canonical_container_recovery_json(request))
+                attestation = {
+                    "schema_version": runtime_service.CONTAINER_RECOVERY_ABSENCE_ATTESTATION_SCHEMA,
+                    "request_sha256": digest, "docker_engine_id_sha256": request["docker_engine_id_sha256"],
+                    "manifest_sha256": request["docker_manifest_sha256"], "result": "authoritative_namespace_absence",
+                    "device_release": {"resource_id": request["device_release_resource_id"],
+                        "mapping_sha256": request["device_release_mapping_sha256"], "mapping_detached": True},
+                    "containers": [{**{key: pin[key] for key in ("container_id", "image_id", "config_sha256", "service")},
+                        "absence": {"inspect": {"outcome": "no_such_object", "matched_container_id": pin["container_id"],
+                            "output_sha256": "1" * 64}, "ps_all": {"outcome": "empty", "output_sha256": "2" * 64}}}
+                        for pin in request["containers"]],
+                }
+                runtime_service._validate_container_recovery_attestation_document(request, digest, attestation, "a" * 64)
+                changed = copy.deepcopy(request)
+                changed["retained_attempt_histories"][0]["run_evidence_sha256"] = "6" * 64
+                with self.assertRaisesRegex(runtime_service.RuntimeServiceError, "request"):
+                    runtime_service._validate_container_recovery_attestation_document(changed,
+                        _sha(runtime_service._canonical_container_recovery_json(changed)), attestation, "a" * 64)
+                if "retained_pending_inboxes" in request:
+                    changed = copy.deepcopy(request)
+                    changed["retained_pending_inboxes"][0]["inbox_sha256"] = "7" * 64
+                    with self.assertRaisesRegex(runtime_service.RuntimeServiceError, "request"):
+                        runtime_service._validate_container_recovery_attestation_document(changed,
+                            _sha(runtime_service._canonical_container_recovery_json(changed)), attestation, "a" * 64)
+                attestation["containers"][0]["absence"]["inspect"]["matched_container_id"] = "9" * 64
+                with self.assertRaises(runtime_service.RuntimeServiceError):
+                    runtime_service._validate_container_recovery_attestation_document(request, digest, attestation, "a" * 64)
+
+    def test_v5_capability_required_before_mutator_and_receipt_cannot_downgrade(self):
+        from test_runtime_service_terminal_container_recovery import TerminalContainerRecoveryTests
+        fixture = TerminalContainerRecoveryTests()
+        for mode in ("supported", "unsupported", "v4-outcome"):
+            with self.subTest(mode=mode), tempfile.TemporaryDirectory() as directory:
+                paths, context, cap, _ = fixture.fixture(Path(directory))
+                context["request"].update(self.history_request())
+                context["request_sha256"] = _sha(runtime_service._canonical_container_recovery_json(context["request"]))
+                if mode != "unsupported":
+                    cap["supported_recovery_schemas"].append("runtime_service_container_recovery_request.v5")
+                calls = []
+                failed = json.dumps({**context["expected_owner"], "state": "failed"}).encode()
+                receipt = fixture.receipt(context, failed)
+                if mode == "v4-outcome": receipt["outcome"] = "retained_manual_held_runs_recovered"
+                def cli(paths, args, *, timeout, cli, raw_output=None):
+                    calls.append(args[1])
+                    if args[1] == "service-container-recovery-capabilities":
+                        raw_output.append(json.dumps(cap).encode())
+                        return cap
+                    (paths.runtime_services / "OWNER.json").write_bytes(failed)
+                    return receipt
+                if mode == "supported":
+                    self.assertEqual(fixture.run_recovery(paths, context, cli), receipt)
+                else:
+                    with self.assertRaises(runtime_service.RuntimeServiceError):
+                        fixture.run_recovery(paths, context, cli)
+                self.assertEqual(calls, ["service-container-recovery-capabilities"] +
+                                 ([] if mode == "unsupported" else ["service-recover-container"]))
+
+    @staticmethod
+    def pending_request():
+        request = ContainerRuntimeRecoveryBridgeTests.history_request()
+        request["schema_version"] = "runtime_service_container_recovery_request.v6"
+        request["retained_pending_inboxes"] = [{
+            "run_id": "terminal-1", "task_id": "task-current", "attempt_id": "attempt-current",
+            "resource_id": "resource-1", "ownership_epoch": 2, "inbox_sha256": "6" * 64,
+            "kind": "failed_final_heartbeat",
+        }]
+        return request
+
+    def test_v6_pending_pin_shapes_bounds_and_legacy_refusals(self):
+        import docker_volume_container_recovery as host
+        request = self.pending_request()
+        self.assertEqual(runtime_service._container_recovery_expected_outcome(request),
+                         "retained_pending_inboxes_recovered")
+        pin = request["retained_pending_inboxes"][0]
+        no_spawn = {**pin, "kind": "cancelled_before_spawn", "release_proof_sha256": "7" * 64}
+        self.assertEqual(runtime_service._container_recovery_expected_outcome(
+            {**request, "retained_pending_inboxes": [no_spawn]}), "retained_pending_inboxes_recovered")
+        invalid = [{**request, "retained_pending_inboxes": value}
+                   for value in (None, [], [pin, pin], [pin] * 129)]
+        invalid.append({key: value for key, value in request.items() if key != "retained_pending_inboxes"})
+        changes = ({"kind": "unknown"}, {"kind": "cancelled_before_spawn"},
+            {"release_proof_sha256": None}, {"release_proof_sha256": "7" * 64},
+            {"run_id": "held-1"}, {"run_id": "foreign"}, {"task_id": "../escape"},
+            {"task_id": "CON"}, {"attempt_id": "_bad"}, {"resource_id": "bad/name"},
+            {"task_id": "x" * 201}, {"resource_id": "x" * 201},
+            {"ownership_epoch": True}, {"ownership_epoch": 0}, {"ownership_epoch": 1 << 64},
+            {"inbox_sha256": "0" * 64}, {"inbox_sha256": "F" * 64}, {"extra": True})
+        invalid.extend({**request, "retained_pending_inboxes": [{**pin, **change}]} for change in changes)
+        for value in (None, "0" * 64, "F" * 64, "short"):
+            invalid.append({**request, "retained_pending_inboxes": [{**no_spawn, "release_proof_sha256": value}]})
+        for field in pin:
+            invalid.append({**request, "retained_pending_inboxes": [{k:v for k,v in pin.items() if k != field}]})
+        invalid.append({**request, "retained_pending_inboxes": [pin, {**pin, "attempt_id": "different"}]})
+        for version in range(1, 6):
+            for pins in (None, [], [pin]):
+                invalid.append({**request, "schema_version": f"runtime_service_container_recovery_request.v{version}",
+                                "retained_pending_inboxes": pins})
+        for value in invalid:
+            with self.subTest(request=value):
+                with self.assertRaises(runtime_service.RuntimeServiceError):
+                    runtime_service._container_recovery_expected_outcome(value)
+                with self.assertRaises(host.ContainerRecoveryError):
+                    host.expected_recovery_outcome(value)
+        for value in (request, {**request, "retained_pending_inboxes": [no_spawn]}):
+            self.assertEqual(host.expected_recovery_outcome(value),
+                             runtime_service._container_recovery_expected_outcome(value))
+        bounded = {**request, "retained_pending_inboxes": [
+            {**pin, "task_id": f"task-{i}"} for i in range(128)]}
+        self.assertEqual(runtime_service._container_recovery_expected_outcome(bounded),
+                         "retained_pending_inboxes_recovered")
+        bounded["retained_pending_inboxes"].append({**pin, "task_id": "task-128"})
+        with self.assertRaises(runtime_service.RuntimeServiceError):
+            runtime_service._container_recovery_expected_outcome(bounded)
+
+    def test_v6_capability_required_and_receipt_cannot_downgrade(self):
+        from test_runtime_service_terminal_container_recovery import TerminalContainerRecoveryTests
+        fixture = TerminalContainerRecoveryTests()
+        for mode in ("supported", "unsupported", "v5-outcome"):
+            with self.subTest(mode=mode), tempfile.TemporaryDirectory() as directory:
+                paths, context, cap, _ = fixture.fixture(Path(directory))
+                context["request"].update(self.pending_request())
+                context["request_sha256"] = _sha(runtime_service._canonical_container_recovery_json(context["request"]))
+                if mode != "unsupported":
+                    cap["supported_recovery_schemas"].append("runtime_service_container_recovery_request.v6")
+                calls = []
+                failed = json.dumps({**context["expected_owner"], "state": "failed"}).encode()
+                receipt = fixture.receipt(context, failed)
+                if mode == "v5-outcome": receipt["outcome"] = "retained_attempt_history_recovered"
+                def cli(paths, args, *, timeout, cli, raw_output=None):
+                    calls.append(args[1])
+                    if args[1] == "service-container-recovery-capabilities":
+                        raw_output.append(json.dumps(cap).encode())
+                        return cap
+                    (paths.runtime_services / "OWNER.json").write_bytes(failed)
+                    return receipt
+                if mode == "supported":
+                    self.assertEqual(fixture.run_recovery(paths, context, cli), receipt)
+                else:
+                    with self.assertRaises(runtime_service.RuntimeServiceError):
+                        fixture.run_recovery(paths, context, cli)
+                self.assertEqual(calls, ["service-container-recovery-capabilities"] +
+                                 ([] if mode == "unsupported" else ["service-recover-container"]))
 
     def _document_fixture(self, root: Path) -> dict[str, object]:
         control = root / "control"

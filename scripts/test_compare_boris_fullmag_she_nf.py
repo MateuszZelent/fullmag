@@ -7,9 +7,11 @@ import pytest
 
 from compare_boris_fullmag_she_nf import (
     NormalizedTransportArtifact,
+    _normalize_boris_fields,
     compare_transport_artifacts,
     load_fullmag_m2_artifact,
 )
+from verify_boris_tensor_adapter import SPIN_SCALE, fixture
 
 
 def _artifact(
@@ -162,3 +164,54 @@ def test_fullmag_loader_rejects_flattened_spin_tensor(tmp_path: Path) -> None:
     path.write_text(json.dumps(payload), encoding="utf-8")
     with pytest.raises(ValueError, match="nine-component"):
         load_fullmag_m2_artifact(path)
+
+
+def _translate_boris_ovfs(paths: dict[str, Path], shift_m: tuple[float, float, float]) -> None:
+    for path in paths.values():
+        lines = path.read_text(encoding="utf-8").splitlines()
+        translated = []
+        offsets = {
+            f"{axis}{suffix}": shift
+            for axis, shift in zip("xyz", shift_m)
+            for suffix in ("min", "max", "base")
+        }
+        for line in lines:
+            key, separator, value = line.partition(":")
+            offset = offsets.get(key.removeprefix("# "))
+            if separator and offset is not None:
+                line = f"{key}: {float(value) + offset:.17g}"
+            translated.append(line)
+        path.write_text("\n".join(translated) + "\n", encoding="utf-8")
+
+
+@pytest.mark.parametrize("domain", ["normal", "ferromagnet"])
+@pytest.mark.parametrize("axis", [0, 1])
+@pytest.mark.parametrize("offset_m", [-1.25e-9, 1.25e-9])
+def test_boris_normalizer_rejects_lateral_domain_offset(
+    tmp_path: Path, domain: str, axis: int, offset_m: float,
+) -> None:
+    fields, _ = fixture(tmp_path)
+    shift = [0.0, 0.0, 0.0]
+    shift[axis] = offset_m
+    _translate_boris_ovfs(fields[domain], tuple(shift))
+    payload = json.loads((tmp_path / "summary.json").read_text(encoding="utf-8"))
+
+    with pytest.raises(ValueError, match="BORIS N/F meshes must share in-plane origins"):
+        _normalize_boris_fields(tmp_path, payload, source="synthetic_raw_ovf_fixture")
+
+
+def test_boris_normalizer_preserves_common_translation_and_raw_tensor_order(tmp_path: Path) -> None:
+    fields, expected = fixture(tmp_path)
+    shift = (123e-9, -45e-9, 17e-9)
+    for domain in fields.values():
+        _translate_boris_ovfs(domain, shift)
+    payload = json.loads((tmp_path / "summary.json").read_text(encoding="utf-8"))
+
+    artifact = _normalize_boris_fields(tmp_path, payload, source="synthetic_raw_ovf_fixture")
+
+    assert artifact.origin_m == shift
+    assert artifact.shape == (2, 1, 4)
+    assert artifact.step_m == (1e-9, 1e-9, 1e-9)
+    assert artifact.potential_v == (0.0, 1.0, 2.0, 3.0, 1000.0, 1001.0, 1002.0, 1003.0)
+    for actual, raw in zip(artifact.spin_current_qia_apm2, expected, strict=True):
+        assert actual == tuple(value * SPIN_SCALE for value in raw)

@@ -35,6 +35,9 @@ const OWNER_MARKER_NAME: &str = ".fullmag-windows-folder-owner.json";
 pub(crate) const DOCKER_ADMITTED_STORE_IDENTITY_SCHEMA_V2: &str =
     "fullmag.docker-admitted-store-identity.v2";
 const MAX_EVIDENCE_BYTES: u64 = 1024 * 1024;
+// Match the package document bound used by recovery_candidate_storage.
+#[cfg(target_os = "linux")]
+const MAX_DEVELOPMENT_RECEIPT_BYTES: u64 = 8 * 1024 * 1024;
 const SHA256_HEX_LENGTH: usize = 64;
 const SOURCE_COMMIT_HEX_LENGTH: usize = 40;
 const REQUIRED_CHECKS: [&str; 9] = [
@@ -426,7 +429,7 @@ fn reject_link_ancestors(path: &Path) -> Result<()> {
 }
 
 #[cfg(target_os = "linux")]
-fn open_regular_nofollow(path: &Path) -> Result<File> {
+pub(crate) fn open_regular_nofollow(path: &Path) -> Result<File> {
     use std::ffi::CString;
     use std::os::fd::{AsRawFd, FromRawFd};
     use std::os::unix::ffi::OsStrExt;
@@ -516,7 +519,7 @@ fn open_regular_nofollow(path: &Path) -> Result<File> {
 }
 
 #[cfg(not(target_os = "linux"))]
-fn open_regular_nofollow(path: &Path) -> Result<File> {
+pub(crate) fn open_regular_nofollow(path: &Path) -> Result<File> {
     reject_link_ancestors(path)?;
     let metadata = fs::symlink_metadata(path)
         .with_context(|| format!("checking evidence file {}", path.display()))?;
@@ -551,7 +554,7 @@ fn open_regular_nofollow(path: &Path) -> Result<File> {
     Ok(file)
 }
 
-fn read_bounded_regular_file(path: &Path, maximum: u64) -> Result<Vec<u8>> {
+pub(crate) fn read_bounded_regular_file(path: &Path, maximum: u64) -> Result<Vec<u8>> {
     let file = open_regular_nofollow(path)?;
     if file.metadata()?.len() > maximum {
         bail!(
@@ -590,7 +593,7 @@ fn sha256_hex(bytes: &[u8]) -> String {
 }
 
 #[cfg(target_os = "linux")]
-fn stream_sha256(path: &Path) -> Result<String> {
+pub(crate) fn stream_sha256(path: &Path) -> Result<String> {
     let mut file = open_regular_nofollow(path)?;
     let mut hasher = Sha256::new();
     let mut buffer = [0u8; 64 * 1024];
@@ -619,6 +622,11 @@ fn current_executable_sha256() -> Result<String> {
 }
 
 #[cfg(target_os = "linux")]
+fn read_development_receipt(path: &Path) -> Result<Vec<u8>> {
+    read_bounded_regular_file(path, MAX_DEVELOPMENT_RECEIPT_BYTES)
+}
+
+#[cfg(target_os = "linux")]
 fn required_json_string<'a>(
     document: &'a serde_json::Value,
     field: &str,
@@ -634,6 +642,7 @@ fn required_json_string<'a>(
 fn validate_development_runtime_identity(
     delegation: &DevelopmentBuildDelegation,
     expected_commit: &str,
+    candidate: Option<&crate::recovery_candidate_storage::SucceededRecoveryCandidateStorage>,
 ) -> Result<()> {
     let toolchain_image_id = env::var("FULLMAG_TOOLCHAIN_IMAGE_ID")
         .context("FULLMAG_TOOLCHAIN_IMAGE_ID is required for a development delegation")?;
@@ -651,7 +660,14 @@ fn validate_development_runtime_identity(
         bail!("development delegation group identity differs from the Compose project");
     }
 
-    validated_development_runtime_manifest(expected_commit, &toolchain_image_id)?;
+    if let Some(candidate) = candidate {
+        candidate.validate_runtime_identity(
+            &group_identity,
+            &toolchain_image_id,
+            expected_commit,
+        )?;
+    }
+    validated_development_runtime_manifest(expected_commit, &toolchain_image_id, candidate)?;
     Ok(())
 }
 
@@ -659,11 +675,15 @@ fn validate_development_runtime_identity(
 fn validated_development_runtime_manifest(
     expected_commit: &str,
     toolchain_image_id: &str,
+    candidate: Option<&crate::recovery_candidate_storage::SucceededRecoveryCandidateStorage>,
 ) -> Result<([u8; 32], serde_json::Value, serde_json::Value)> {
     let bytes =
         read_bounded_regular_file(Path::new(DEVELOPMENT_PROVENANCE_PATH), MAX_EVIDENCE_BYTES)?;
     let provenance: serde_json::Value =
         serde_json::from_slice(&bytes).context("decoding runtime provenance")?;
+    if !provenance.is_object() {
+        bail!("runtime provenance must contain a JSON object");
+    }
     if required_json_string(&provenance, "schema", "runtime provenance")?
         != "fullmag.docker-all-image.v1"
         || required_json_string(&provenance, "state", "runtime provenance")? != "succeeded"
@@ -672,7 +692,9 @@ fn validated_development_runtime_manifest(
     {
         bail!("runtime provenance is not a succeeded live development build");
     }
-    if required_json_string(&provenance, "commit", "runtime provenance")? != expected_commit {
+    if candidate.is_none()
+        && required_json_string(&provenance, "commit", "runtime provenance")? != expected_commit
+    {
         bail!("compiled source commit differs from runtime provenance");
     }
     if required_json_string(&provenance, "package_root", "runtime provenance")?
@@ -717,8 +739,7 @@ fn validated_development_runtime_manifest(
         validate_hex(value, SHA256_HEX_LENGTH, label)?;
     }
 
-    let receipt_bytes =
-        read_bounded_regular_file(Path::new(DEVELOPMENT_RECEIPT_PATH), MAX_EVIDENCE_BYTES)?;
+    let receipt_bytes = read_development_receipt(Path::new(DEVELOPMENT_RECEIPT_PATH))?;
     let receipt_sha256 = sha256_hex(&receipt_bytes);
     if receipt_sha256
         != required_json_string(&provenance, "build_receipt_sha256", "runtime provenance")?
@@ -785,7 +806,14 @@ fn validated_development_runtime_manifest(
         SHA256_HEX_LENGTH,
         "runtime provenance binary hash",
     )?;
-    if expected_hash != current_executable_sha256()? {
+    let actual_hash = if candidate.is_some() {
+        // The old published identity remains independently verified; the new
+        // tool is authorized only by its explicit request-scoped capability.
+        stream_sha256(&Path::new(DEVELOPMENT_PACKAGE_ROOT).join("bin").join(name))?
+    } else {
+        current_executable_sha256()?
+    };
+    if expected_hash != actual_hash {
         bail!("current executable hash differs from runtime provenance");
     }
     Ok((Sha256::digest(&bytes).into(), provenance, receipt))
@@ -805,7 +833,7 @@ pub fn verified_fem_gpu_runtime_manifest_sha256(
         .context("managed DEV toolchain image identity is unavailable")?;
     validate_image_id(&toolchain_image_id, "managed DEV toolchain image identity")?;
     let (sha256, manifest, receipt) =
-        validated_development_runtime_manifest(expected_commit, &toolchain_image_id)?;
+        validated_development_runtime_manifest(expected_commit, &toolchain_image_id, None)?;
     let runtime_image_id = env::var("FULLMAG_RUNTIME_IMAGE_ID")
         .context("managed DEV runtime image identity is unavailable")?;
     validate_image_id(&runtime_image_id, "managed DEV runtime image identity")?;
@@ -929,7 +957,7 @@ fn validate_runtime_identity(attestation: &HostAttestation) -> Result<()> {
     }
     if let Some(delegation) = &attestation.development_build {
         validate_development_build(delegation)?;
-        return validate_development_runtime_identity(delegation, expected_commit);
+        return validate_development_runtime_identity(delegation, expected_commit, None);
     }
     if attestation.source_commit != expected_commit {
         bail!("Windows-folder source commit differs from the managed binary");
@@ -1374,6 +1402,14 @@ fn initialize_store_under(parent: &Path, relative: &str) -> Result<(PathBuf, boo
 /// Validate the independent Linux bind profile against current host and mount evidence.
 #[cfg(target_os = "linux")]
 pub(crate) fn linux_native_store_identity(root: &Path) -> Result<serde_json::Value> {
+    linux_native_store_identity_with_candidate(root, None)
+}
+
+#[cfg(target_os = "linux")]
+pub(crate) fn linux_native_store_identity_with_candidate(
+    root: &Path,
+    candidate: Option<&crate::recovery_candidate_storage::SucceededRecoveryCandidateStorage>,
+) -> Result<serde_json::Value> {
     use std::os::fd::AsRawFd;
     use std::os::unix::fs::MetadataExt;
     if env::var("FULLMAG_SESSION_STORAGE_PROFILE").ok().as_deref() != Some("linux-native-v1") {
@@ -1439,7 +1475,7 @@ pub(crate) fn linux_native_store_identity(root: &Path) -> Result<serde_json::Val
     validate_development_build(&delegation)?;
     let expected_commit = option_env!("FULLMAG_SOURCE_GIT_COMMIT")
         .context("managed source commit identity is missing at compile time")?;
-    validate_development_runtime_identity(&delegation, expected_commit)?;
+    validate_development_runtime_identity(&delegation, expected_commit, candidate)?;
     let payload = format!("{token}:{image}");
     if host["restart_expected_sha256"] != sha256_hex(payload.as_bytes())
         || read_bounded_regular_file(&state.join(".linux-native-sentinel"), MAX_EVIDENCE_BYTES)?
@@ -1560,6 +1596,20 @@ pub(crate) fn reject_docker_owned_windows_root(root: &Path) -> Result<()> {
 mod tests {
     use super::*;
     use std::collections::BTreeMap;
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn development_receipt_allows_large_packages_but_still_bounds_reads() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("backend-build-receipt.json");
+        let file = std::fs::File::create(&path).unwrap();
+        let size = MAX_EVIDENCE_BYTES + 1;
+        file.set_len(size).unwrap();
+        assert_eq!(read_development_receipt(&path).unwrap().len() as u64, size);
+        assert!(read_bounded_regular_file(&path, MAX_EVIDENCE_BYTES).is_err());
+        file.set_len(MAX_DEVELOPMENT_RECEIPT_BYTES + 1).unwrap();
+        assert!(read_development_receipt(&path).is_err());
+    }
 
     fn host() -> HostAttestation {
         HostAttestation {

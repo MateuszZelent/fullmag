@@ -1,0 +1,1309 @@
+{
+  "document": {
+    "path": "docs/physics/0952-harmonic-rf-antenna-cpw.md",
+    "status": "draft_design",
+    "date": "2026-11-22",
+    "inspected_fullmag_head": "2aa08033d00e3585b5233ecb35e4cac8e6508114"
+  },
+  "backend_matrix": [
+    {
+      "solver": "FEM",
+      "device": "CPU",
+      "status": "planned",
+      "reason": "First native candidate is FEM CPU complex FP64. RF remains unqualified."
+    },
+    {
+      "solver": "FEM",
+      "device": "GPU",
+      "status": "unsupported",
+      "reason": "No complex RF solver and no device parity."
+    },
+    {
+      "solver": "FDM",
+      "device": "CPU",
+      "status": "unsupported",
+      "reason": "No FDM field solve for RF. Future two-quadrature input projection."
+    },
+    {
+      "solver": "FDM",
+      "device": "GPU",
+      "status": "unsupported",
+      "reason": "No FDM field solve for RF. Projection and device phase parity require verification."
+    }
+  ],
+  "equations": [
+    {
+      "id": "rf-phase-law",
+      "symbols": [
+        "omega",
+        "f",
+        "i",
+        "t",
+        "t0",
+        "Q",
+        "Qt",
+        "Re"
+      ],
+      "sources": [
+        "phase-law"
+      ]
+    },
+    {
+      "id": "rf-full-wave-maxwell",
+      "symbols": [
+        "curl",
+        "E",
+        "i",
+        "omega",
+        "B",
+        "H",
+        "Jtot",
+        "Jc",
+        "sigma",
+        "D",
+        "mu",
+        "eps",
+        "div",
+        "rho"
+      ],
+      "sources": [
+        "maxwell"
+      ]
+    },
+    {
+      "id": "rf-electric-curl-curl",
+      "symbols": [
+        "curl",
+        "mu",
+        "E",
+        "i",
+        "omega",
+        "sigma",
+        "eps",
+        "H"
+      ],
+      "sources": [
+        "maxwell",
+        "standalone-maxwell"
+      ]
+    },
+    {
+      "id": "rf-ece-terminal-current",
+      "symbols": [
+        "Ik",
+        "S_k",
+        "n",
+        "Jtot",
+        "surface",
+        "kidx",
+        "Vk",
+        "ZL"
+      ],
+      "sources": [
+        "ece",
+        "standalone-maxwell",
+        "standalone-darwin"
+      ]
+    },
+    {
+      "id": "rf-maxwell-ece-weak",
+      "symbols": [
+        "mu",
+        "curl",
+        "E",
+        "Etest",
+        "inner",
+        "Omega",
+        "i",
+        "omega",
+        "sigma",
+        "eps",
+        "Ik",
+        "qk",
+        "kidx",
+        "conj"
+      ],
+      "sources": [
+        "maxwell",
+        "ece",
+        "standalone-maxwell"
+      ]
+    },
+    {
+      "id": "rf-darwin-operator",
+      "symbols": [
+        "Darwin",
+        "FW",
+        "FD",
+        "curl",
+        "div",
+        "mu",
+        "A",
+        "i",
+        "omega",
+        "sigma",
+        "eps",
+        "grad",
+        "phi",
+        "DD",
+        "Jtot"
+      ],
+      "sources": [
+        "darwin"
+      ]
+    },
+    {
+      "id": "rf-darwin-mixed-weak",
+      "symbols": [
+        "mu",
+        "curl",
+        "A",
+        "Btest",
+        "FD",
+        "grad",
+        "lg",
+        "phitest",
+        "gtest",
+        "inner",
+        "Omega",
+        "Ik",
+        "qk",
+        "kidx",
+        "conj"
+      ],
+      "sources": [
+        "darwin",
+        "ece",
+        "standalone-darwin"
+      ]
+    },
+    {
+      "id": "rf-active-power",
+      "symbols": [
+        "Pin",
+        "PJ",
+        "PD",
+        "E",
+        "A",
+        "phi",
+        "grad",
+        "omega",
+        "eps",
+        "sigma",
+        "Vk",
+        "Ik",
+        "conj",
+        "Re",
+        "kidx",
+        "Omega",
+        "volume"
+      ],
+      "sources": [
+        "darwin",
+        "maxwell",
+        "ece"
+      ]
+    },
+    {
+      "id": "rf-material-scales",
+      "symbols": [
+        "dskin",
+        "Rsheet",
+        "lambdal",
+        "omega",
+        "mu0",
+        "mu",
+        "sigma",
+        "tcu",
+        "c0",
+        "f",
+        "epsr"
+      ],
+      "sources": [
+        "scales"
+      ]
+    },
+    {
+      "id": "rf-phasor-field-basis",
+      "symbols": [
+        "Ic",
+        "Jc",
+        "ex",
+        "x",
+        "Sb",
+        "b",
+        "surface",
+        "h1vec",
+        "H",
+        "Iref",
+        "Hdrive",
+        "Idrive",
+        "Re",
+        "omega",
+        "i",
+        "t",
+        "t0"
+      ],
+      "sources": [
+        "observable"
+      ]
+    },
+    {
+      "id": "rf-gap-current-fraction",
+      "symbols": [
+        "pgap",
+        "G",
+        "Bband",
+        "Sb",
+        "b",
+        "x",
+        "Jc",
+        "ex",
+        "surface"
+      ],
+      "sources": [
+        "observable"
+      ]
+    },
+    {
+      "id": "rf-spectrum",
+      "symbols": [
+        "FT",
+        "K",
+        "h1",
+        "xs",
+        "y",
+        "Zref",
+        "ya",
+        "i",
+        "dy",
+        "dnotch"
+      ],
+      "sources": [
+        "observable"
+      ]
+    },
+    {
+      "id": "rf-validation-l2",
+      "symbols": [
+        "L2",
+        "j",
+        "nq",
+        "u"
+      ],
+      "sources": [
+        "validation",
+        "paired-rf-comparison"
+      ]
+    },
+    {
+      "id": "rf-analytical-terminal-checks",
+      "symbols": [
+        "R",
+        "C",
+        "Ltest",
+        "sigma",
+        "Stest",
+        "eps",
+        "i",
+        "omega",
+        "Ik",
+        "Vk"
+      ],
+      "sources": [
+        "validation"
+      ]
+    },
+    {
+      "id": "rf-capacitor-and-skin-oracles",
+      "symbols": [
+        "C",
+        "Stest",
+        "d12",
+        "eps12",
+        "gamma",
+        "i",
+        "omega",
+        "mu",
+        "sigma",
+        "eps",
+        "Ex",
+        "Es",
+        "zp",
+        "tcu",
+        "Kx"
+      ],
+      "sources": [
+        "validation",
+        "scales"
+      ]
+    }
+  ],
+  "symbols": [
+    {
+      "id": "f",
+      "latex": "$f$",
+      "meaning": "Częstotliwość wzbudzenia",
+      "si_unit": "$\\mathrm{Hz}$"
+    },
+    {
+      "id": "omega",
+      "latex": "$\\omega$",
+      "meaning": "Częstość kołowa",
+      "si_unit": "$\\mathrm{rad\\,s^{-1}}$"
+    },
+    {
+      "id": "i",
+      "latex": "$\\mathrm i$",
+      "meaning": "Jednostka urojona",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "t",
+      "latex": "$t$",
+      "meaning": "Czas",
+      "si_unit": "$\\mathrm{s}$"
+    },
+    {
+      "id": "t0",
+      "latex": "$t_0$",
+      "meaning": "Chwila odniesienia fazy",
+      "si_unit": "$\\mathrm{s}$"
+    },
+    {
+      "id": "x",
+      "latex": "$x$",
+      "meaning": "Współrzędna wzdłuż CPW",
+      "si_unit": "$\\mathrm{m}$"
+    },
+    {
+      "id": "y",
+      "latex": "$y$",
+      "meaning": "Współrzędna w poprzek CPW",
+      "si_unit": "$\\mathrm{m}$"
+    },
+    {
+      "id": "z",
+      "latex": "$z$",
+      "meaning": "Współrzędna normalna do płaszczyzny CPW",
+      "si_unit": "$\\mathrm{m}$"
+    },
+    {
+      "id": "Q",
+      "latex": "$\\hat Q$",
+      "meaning": "Fazor szczytowy wielkości fizycznej",
+      "si_unit": "$[Q]$"
+    },
+    {
+      "id": "Qt",
+      "latex": "$Q(t)$",
+      "meaning": "Odtworzona rzeczywista wielkość fizyczna",
+      "si_unit": "$[Q]$"
+    },
+    {
+      "id": "Re",
+      "latex": "$\\operatorname{Re}$",
+      "meaning": "Część rzeczywista",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "conj",
+      "latex": "$\\overline{(\\cdot)}$",
+      "meaning": "Sprzężenie zespolone argumentu",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "rho",
+      "latex": "$\\hat\\rho_f$",
+      "meaning": "Objętościowy ładunek swobodny w pełnym modelu",
+      "si_unit": "$\\mathrm{C\\,m^{-3}}$"
+    },
+    {
+      "id": "E",
+      "latex": "$\\hat{\\mathbf E}$",
+      "meaning": "Pole elektryczne",
+      "si_unit": "$\\mathrm{V\\,m^{-1}}$"
+    },
+    {
+      "id": "B",
+      "latex": "$\\hat{\\mathbf B}$",
+      "meaning": "Indukcja magnetyczna",
+      "si_unit": "$\\mathrm{T}$"
+    },
+    {
+      "id": "H",
+      "latex": "$\\hat{\\mathbf H}$",
+      "meaning": "Natężenie pola magnetycznego",
+      "si_unit": "$\\mathrm{A\\,m^{-1}}$"
+    },
+    {
+      "id": "D",
+      "latex": "$\\hat{\\mathbf D}$",
+      "meaning": "Indukcja elektryczna w pełnym modelu",
+      "si_unit": "$\\mathrm{C\\,m^{-2}}$"
+    },
+    {
+      "id": "DD",
+      "latex": "$\\hat{\\mathbf D}_{\\rm D}$",
+      "meaning": "Indukcja elektryczna zachowana przez model Darwina",
+      "si_unit": "$\\mathrm{C\\,m^{-2}}$"
+    },
+    {
+      "id": "Jc",
+      "latex": "$\\hat{\\mathbf J}_{\\rm c}$",
+      "meaning": "Gęstość prądu przewodzenia",
+      "si_unit": "$\\mathrm{A\\,m^{-2}}$"
+    },
+    {
+      "id": "Jtot",
+      "latex": "$\\hat{\\mathbf J}_{\\rm tot}$",
+      "meaning": "Całkowita gęstość prądu zgodna z wybranym modelem",
+      "si_unit": "$\\mathrm{A\\,m^{-2}}$"
+    },
+    {
+      "id": "sigma",
+      "latex": "$\\sigma$",
+      "meaning": "Przewodność objętościowa",
+      "si_unit": "$\\mathrm{S\\,m^{-1}}$"
+    },
+    {
+      "id": "eps",
+      "latex": "$\\varepsilon$",
+      "meaning": "Przenikalność elektryczna",
+      "si_unit": "$\\mathrm{F\\,m^{-1}}$"
+    },
+    {
+      "id": "eps0",
+      "latex": "$\\varepsilon_0$",
+      "meaning": "Przenikalność elektryczna próżni",
+      "si_unit": "$\\mathrm{F\\,m^{-1}}$"
+    },
+    {
+      "id": "epsr",
+      "latex": "$\\varepsilon_r$",
+      "meaning": "Względna przenikalność elektryczna",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "mu",
+      "latex": "$\\mu$",
+      "meaning": "Przenikalność magnetyczna",
+      "si_unit": "$\\mathrm{H\\,m^{-1}}$"
+    },
+    {
+      "id": "mu0",
+      "latex": "$\\mu_0$",
+      "meaning": "Przenikalność magnetyczna próżni",
+      "si_unit": "$\\mathrm{H\\,m^{-1}}$"
+    },
+    {
+      "id": "c0",
+      "latex": "$c_0$",
+      "meaning": "Prędkość światła w próżni",
+      "si_unit": "$\\mathrm{m\\,s^{-1}}$"
+    },
+    {
+      "id": "curl",
+      "latex": "$\\nabla\\times$",
+      "meaning": "Rotacja pola przestrzennego",
+      "si_unit": "$\\mathrm{m^{-1}}$"
+    },
+    {
+      "id": "div",
+      "latex": "$\\nabla\\cdot$",
+      "meaning": "Dywergencja pola przestrzennego",
+      "si_unit": "$\\mathrm{m^{-1}}$"
+    },
+    {
+      "id": "grad",
+      "latex": "$\\nabla$",
+      "meaning": "Gradient objętościowy",
+      "si_unit": "$\\mathrm{m^{-1}}$"
+    },
+    {
+      "id": "gradG",
+      "latex": "$\\nabla_\\Gamma$",
+      "meaning": "Gradient styczny do brzegu",
+      "si_unit": "$\\mathrm{m^{-1}}$"
+    },
+    {
+      "id": "Omega",
+      "latex": "$\\Omega$",
+      "meaning": "Domena elektromagnetyczna w fizycznych współrzędnych",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "Gamma",
+      "latex": "$\\Gamma$",
+      "meaning": "Brzeg domeny elektromagnetycznej",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "S_k",
+      "latex": "$S_k$",
+      "meaning": "Oznaczona powierzchnia terminala o indeksie k",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "n",
+      "latex": "$\\mathbf n$",
+      "meaning": "Normalna jednostkowa skierowana na zewnątrz domeny",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "ex",
+      "latex": "$\\mathbf e_x$",
+      "meaning": "Wektor jednostkowy osi podłużnej",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "tangent",
+      "latex": "$(\\cdot)_{\\rm tan}$",
+      "meaning": "Rzut styczny pola na brzeg",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "volume",
+      "latex": "$\\mathrm d\\mathcal V$",
+      "meaning": "Miara całkowania po objętości",
+      "si_unit": "$\\mathrm{m^3}$"
+    },
+    {
+      "id": "surface",
+      "latex": "$\\mathrm dS$",
+      "meaning": "Miara całkowania po powierzchni",
+      "si_unit": "$\\mathrm{m^2}$"
+    },
+    {
+      "id": "dy",
+      "latex": "$\\mathrm dy$",
+      "meaning": "Miara całkowania po linii poprzecznej",
+      "si_unit": "$\\mathrm{m}$"
+    },
+    {
+      "id": "kidx",
+      "latex": "$k$",
+      "meaning": "Indeks terminala",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "Vb",
+      "latex": "$\\hat V$",
+      "meaning": "Potencjał ECE na powierzchni brzegu w pełnej formulacji E–V",
+      "si_unit": "$\\mathrm{V}$"
+    },
+    {
+      "id": "Vk",
+      "latex": "$\\hat V_k$",
+      "meaning": "Napięcie terminala względem ustalonej masy",
+      "si_unit": "$\\mathrm{V}$"
+    },
+    {
+      "id": "Ik",
+      "latex": "$\\hat I_k$",
+      "meaning": "Całkowity prąd terminala dodatni do wnętrza domeny",
+      "si_unit": "$\\mathrm{A}$"
+    },
+    {
+      "id": "ZL",
+      "latex": "$Z_{\\rm L}$",
+      "meaning": "Impedancja pasywnej terminacji względem masy",
+      "si_unit": "$\\Omega$"
+    },
+    {
+      "id": "A",
+      "latex": "$\\hat{\\mathbf A}$",
+      "meaning": "Magnetyczny potencjał wektorowy",
+      "si_unit": "$\\mathrm{Wb\\,m^{-1}}$"
+    },
+    {
+      "id": "phi",
+      "latex": "$\\hat\\varphi$",
+      "meaning": "Elektryczny potencjał skalarny",
+      "si_unit": "$\\mathrm{V}$"
+    },
+    {
+      "id": "FD",
+      "latex": "$\\mathbf F$",
+      "meaning": "Ujemna całkowita gęstość prądu w zapisie potencjałowym",
+      "si_unit": "$\\mathrm{A\\,m^{-2}}$"
+    },
+    {
+      "id": "FW",
+      "latex": "$\\mathbf F_{\\rm FW}$",
+      "meaning": "Całkowity człon potencjałowy pełnego Maxwella",
+      "si_unit": "$\\mathrm{A\\,m^{-2}}$"
+    },
+    {
+      "id": "Darwin",
+      "latex": "$\\mathbf F_{\\rm D}$",
+      "meaning": "Całkowity człon potencjałowy modelu Darwina",
+      "si_unit": "$\\mathrm{A\\,m^{-2}}$"
+    },
+    {
+      "id": "Btest",
+      "latex": "$\\mathbf a$",
+      "meaning": "Pole testowe potencjału magnetycznego",
+      "si_unit": "$\\mathrm{Wb\\,m^{-1}}$"
+    },
+    {
+      "id": "Etest",
+      "latex": "$\\mathbf w$",
+      "meaning": "Pole testowe pola elektrycznego",
+      "si_unit": "$\\mathrm{V\\,m^{-1}}$"
+    },
+    {
+      "id": "phitest",
+      "latex": "$q$",
+      "meaning": "Skalarny potencjał testowy lub testowy ślad ECE",
+      "si_unit": "$\\mathrm{V}$"
+    },
+    {
+      "id": "qk",
+      "latex": "$q_k$",
+      "meaning": "Stała wartość potencjału testowego na terminalu",
+      "si_unit": "$\\mathrm{V}$"
+    },
+    {
+      "id": "gtest",
+      "latex": "$\\chi$",
+      "meaning": "Skalarna funkcja testowa warunku Coulomba",
+      "si_unit": "$\\mathrm{Wb}$"
+    },
+    {
+      "id": "lg",
+      "latex": "$\\lambda_g$",
+      "meaning": "Mnożnik Lagrange'a usuwający gradientowe jądro operatora w równaniu Ampère'a",
+      "si_unit": "$\\mathrm{A\\,m^{-1}}$"
+    },
+    {
+      "id": "inner",
+      "latex": "$(\\,\\cdot\\,,\\,\\cdot\\,)_\\Omega$",
+      "meaning": "Iloczyn hermitowski liniowy w pierwszym argumencie o jednostkach argumentów u i v",
+      "si_unit": "$[u][v]\\,m^3$"
+    },
+    {
+      "id": "Pin",
+      "latex": "$P_{\\rm in}$",
+      "meaning": "Suma mocy czynnej wpływającej przez terminale ECE",
+      "si_unit": "$\\mathrm{W}$"
+    },
+    {
+      "id": "PJ",
+      "latex": "$P_{\\rm J}$",
+      "meaning": "Moc strat omowych w objętości",
+      "si_unit": "$\\mathrm{W}$"
+    },
+    {
+      "id": "PD",
+      "latex": "$P_{\\rm mix}$",
+      "meaning": "Człon mieszany pola elektrycznego i wektorowego potencjału modelu Darwina",
+      "si_unit": "$\\mathrm{W}$"
+    },
+    {
+      "id": "dskin",
+      "latex": "$\\delta_{\\rm Cu}$",
+      "meaning": "Głębokość naskórkowa w jednorodnej miedzi",
+      "si_unit": "$\\mathrm{m}$"
+    },
+    {
+      "id": "tcu",
+      "latex": "$t_{\\rm Cu}$",
+      "meaning": "Grubość miedzi",
+      "si_unit": "$\\mathrm{m}$"
+    },
+    {
+      "id": "Rsheet",
+      "latex": "$R_\\square$",
+      "meaning": "Rezystancja arkuszowa w granicy prądu jednorodnego po grubości",
+      "si_unit": "$\\Omega$"
+    },
+    {
+      "id": "lambdal",
+      "latex": "$\\lambda_{\\rm d}$",
+      "meaning": "Długość fali w jednorodnym bezstratnym dielektryku",
+      "si_unit": "$\\mathrm{m}$"
+    },
+    {
+      "id": "Zref",
+      "latex": "$z_{\\rm obs}$",
+      "meaning": "Wysokość sondy względem spodniej powierzchni Cu",
+      "si_unit": "$\\mathrm{m}$"
+    },
+    {
+      "id": "xs",
+      "latex": "$x_{\\rm obs}$",
+      "meaning": "Położenie podłużne sondy",
+      "si_unit": "$\\mathrm{m}$"
+    },
+    {
+      "id": "Iref",
+      "latex": "$\\hat I_{\\rm ref}$",
+      "meaning": "Zespolony prąd odniesienia wejściowego zacisku sygnałowego",
+      "si_unit": "$\\mathrm{A}$"
+    },
+    {
+      "id": "Ic",
+      "latex": "$\\hat I_{{\\rm c},b}(x)$",
+      "meaning": "Podłużny prąd przewodzenia w przekroju paska b",
+      "si_unit": "$\\mathrm{A}$"
+    },
+    {
+      "id": "b",
+      "latex": "$b$",
+      "meaning": "Indeks paska miedzianego",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "Sb",
+      "latex": "$\\Sigma_b(x)$",
+      "meaning": "Przekrój poprzeczny paska miedzianego o oznaczeniu b",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "h1",
+      "latex": "$h_{1\\rm A,y}$",
+      "meaning": "Składowa poprzeczna zespolonej bazy pola przeliczonej na amper",
+      "si_unit": "$\\mathrm{m^{-1}}$"
+    },
+    {
+      "id": "h1vec",
+      "latex": "$\\mathbf h_{1\\rm A}$",
+      "meaning": "Zespolona baza przestrzenna pola anteny przeliczona na amper",
+      "si_unit": "$\\mathrm{m^{-1}}$"
+    },
+    {
+      "id": "Hdrive",
+      "latex": "$\\mathbf H_{\\rm ant}(t)$",
+      "meaning": "Pole rzeczywiste przygotowane dla konsumenta magnetycznego",
+      "si_unit": "$\\mathrm{A\\,m^{-1}}$"
+    },
+    {
+      "id": "Idrive",
+      "latex": "$\\hat I_{\\rm drive}$",
+      "meaning": "Autorski fazor szczytowy prądu napędu w tej samej konwencji odniesienia",
+      "si_unit": "$\\mathrm{A}$"
+    },
+    {
+      "id": "K",
+      "latex": "$\\kappa$",
+      "meaning": "Poprzeczna liczba falowa w widmie przestrzennym",
+      "si_unit": "$\\mathrm{rad\\,m^{-1}}$"
+    },
+    {
+      "id": "ya",
+      "latex": "$y_a,\\ y_b$",
+      "meaning": "Końce okna próbkowania poprzecznego",
+      "si_unit": "$\\mathrm{m}$"
+    },
+    {
+      "id": "FT",
+      "latex": "$\\mathcal F_y$",
+      "meaning": "Poprzeczna transformata bazy pola na ograniczonym oknie",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "dnotch",
+      "latex": "$d_{\\rm min}$",
+      "meaning": "Stosunek amplitudy w minimum do szczytowej amplitudy widma tej samej anteny",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "nq",
+      "latex": "$N$",
+      "meaning": "Liczba porównywanych wartości",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "u",
+      "latex": "$u_j,\\ v_j$",
+      "meaning": "Zgodne jednostkowo zespolone próbki kandydata i referencji w punkcie j",
+      "si_unit": "$[u]$"
+    },
+    {
+      "id": "j",
+      "latex": "$j$",
+      "meaning": "Indeks próbki",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "L2",
+      "latex": "$e_2$",
+      "meaning": "Względny błąd dyskretny L2",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "C",
+      "latex": "$C$",
+      "meaning": "Pojemność testowego kondensatora",
+      "si_unit": "$\\mathrm{F}$"
+    },
+    {
+      "id": "R",
+      "latex": "$R$",
+      "meaning": "Rezystancja testowego przewodnika",
+      "si_unit": "$\\Omega$"
+    },
+    {
+      "id": "Stest",
+      "latex": "$S$",
+      "meaning": "Pole przekroju testowego przewodnika lub okładki",
+      "si_unit": "$\\mathrm{m^2}$"
+    },
+    {
+      "id": "Ltest",
+      "latex": "$L$",
+      "meaning": "Długość testowego przewodnika lub odległość między okładkami",
+      "si_unit": "$\\mathrm{m}$"
+    },
+    {
+      "id": "Vground",
+      "latex": "$\\hat V_{\\rm ground}$",
+      "meaning": "Potencjał referencyjny połączonych elektrycznie mas",
+      "si_unit": "$\\mathrm{V}$"
+    },
+    {
+      "id": "G",
+      "latex": "$G$",
+      "meaning": "Zbiór dwóch pasków powrotnych CPW",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "Bband",
+      "latex": "$B_b(x)$",
+      "meaning": "Ustalona część przekroju paska b przy szczelinie",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "pgap",
+      "latex": "$p_{\\rm gap}(x)$",
+      "meaning": "Udział modułu podłużnego prądu powrotnego w pasach przy szczelinach",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "d12",
+      "latex": "$d_1,\\ d_2$",
+      "meaning": "Grubości warstw testowego kondensatora",
+      "si_unit": "$\\mathrm{m}$"
+    },
+    {
+      "id": "eps12",
+      "latex": "$\\varepsilon_1,\\ \\varepsilon_2$",
+      "meaning": "Przenikalności warstw testowego kondensatora",
+      "si_unit": "$\\mathrm{F\\,m^{-1}}$"
+    },
+    {
+      "id": "gamma",
+      "latex": "$\\gamma,\\ \\gamma_{\\rm D},\\ \\gamma_{\\rm FW}$",
+      "meaning": "Zespolona stała przestrzenna w przewodzącej płycie",
+      "si_unit": "$\\mathrm{m^{-1}}$"
+    },
+    {
+      "id": "zp",
+      "latex": "$z'$",
+      "meaning": "Współrzędna normalna od płaszczyzny środkowej płyty",
+      "si_unit": "$\\mathrm{m}$"
+    },
+    {
+      "id": "Ex",
+      "latex": "$\\hat E_x(z')$",
+      "meaning": "Pole osiowe w testowej płycie",
+      "si_unit": "$\\mathrm{V\\,m^{-1}}$"
+    },
+    {
+      "id": "Es",
+      "latex": "$\\hat E_s$",
+      "meaning": "Zadana amplituda stycznego pola na obu powierzchniach płyty",
+      "si_unit": "$\\mathrm{V\\,m^{-1}}$"
+    },
+    {
+      "id": "Kx",
+      "latex": "$\\hat K_x$",
+      "meaning": "Prąd osiowy zintegrowany po grubości płyty",
+      "si_unit": "$\\mathrm{A\\,m^{-1}}$"
+    },
+    {
+      "id": "H1",
+      "latex": "$H^1,\\ H^1_0$",
+      "meaning": "Przestrzeń węzłowa i jej podprzestrzeń o zerowym śladzie",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "Hcurl",
+      "latex": "$H(\\mathrm{curl})$",
+      "meaning": "Przestrzeń wektorowa ze słabą całkowalną kwadratowo rotacją",
+      "si_unit": "$1$"
+    }
+  ],
+  "public_api": {
+    "parameters": [
+      {
+        "python": "AntennaFieldSolveStage.id",
+        "type": "str",
+        "default": "wymagany",
+        "si_unit": "$1$",
+        "validation": "niepusty, unikatowy w potoku",
+        "meaning": "tożsamość etapu",
+        "backend_support": "DC / FEM CPU",
+        "problem_ir": "antenna_field_solve_stages[].id"
+      },
+      {
+        "python": "AntennaFieldSolveStage.source_object_id",
+        "type": "str",
+        "default": "wymagany",
+        "si_unit": "$1$",
+        "validation": "niepuste ID obiektu źródła",
+        "meaning": "właściciel geometrii CPW",
+        "backend_support": "DC / FEM CPU",
+        "problem_ir": "antenna_field_solve_stages[].source_object_id"
+      },
+      {
+        "python": "AntennaFieldSolveStage.current_transport_id",
+        "type": "str",
+        "default": "wymagany",
+        "si_unit": "$1$",
+        "validation": "niepuste ID kompletnego transportu w plannerze",
+        "meaning": "powiązanie z transportem DC",
+        "backend_support": "DC / FEM CPU",
+        "problem_ir": "antenna_field_solve_stages[].current_transport_id"
+      },
+      {
+        "python": "AntennaFieldSolveStage.port_mode_ids",
+        "type": "Sequence[str]",
+        "default": "wymagany",
+        "si_unit": "$1$",
+        "validation": "dokładnie jedno niepuste ID zgodne ze źródłem",
+        "meaning": "wybrany port etapu",
+        "backend_support": "DC / FEM CPU",
+        "problem_ir": "antenna_field_solve_stages[].port_mode_ids"
+      },
+      {
+        "python": "AntennaFieldSolveStage.field_sampling_domain",
+        "type": "FieldTarget",
+        "default": "wymagany",
+        "si_unit": "$1$",
+        "validation": "instancja FieldTarget, zgodny nośnik w plannerze",
+        "meaning": "nośnik próbek pola",
+        "backend_support": "DC / FEM CPU",
+        "problem_ir": "antenna_field_solve_stages[].field_sampling_domain"
+      },
+      {
+        "python": "AntennaFieldSolveStage.target_refs",
+        "type": "Sequence[FieldTarget]",
+        "default": "wymagany",
+        "si_unit": "$1$",
+        "validation": "co najmniej jeden typowany cel",
+        "meaning": "cele pola",
+        "backend_support": "DC / FEM CPU",
+        "problem_ir": "antenna_field_solve_stages[].target_refs"
+      },
+      {
+        "python": "AntennaFieldSolveStage.outputs",
+        "type": "Sequence[AntennaNamedOutput]",
+        "default": "wymagany",
+        "si_unit": "$1$",
+        "validation": "dokładnie jedno wyjście H_ant_basis",
+        "meaning": "nazwane wyjście bazy",
+        "backend_support": "DC / FEM CPU",
+        "problem_ir": "antenna_field_solve_stages[].outputs"
+      },
+      {
+        "python": "AntennaFieldSolveStage.model",
+        "type": "str",
+        "default": "quasistatic_conduction_biot_savart3d",
+        "si_unit": "$1$",
+        "validation": "konstruktor dopuszcza wyłącznie model DC, RF kończy się ValueError",
+        "meaning": "wybór fizyki źródła",
+        "backend_support": "DC / FEM CPU",
+        "problem_ir": "antenna_field_solve_stages[].model"
+      },
+      {
+        "python": "AntennaFieldSolveStage.oersted_realization",
+        "type": "str",
+        "default": "direct_tetra_quadrature",
+        "si_unit": "$1$",
+        "validation": "słownik dopuszczalnych realizacji, surface wymaga oddzielnej polityki",
+        "meaning": "metoda złożenia pola DC",
+        "backend_support": "DC / FEM CPU",
+        "problem_ir": "antenna_field_solve_stages[].oersted_realization"
+      },
+      {
+        "python": "AntennaFieldSolveStage.conductor_mesh_policy",
+        "type": "str",
+        "default": "authored_shared_domain",
+        "si_unit": "$1$",
+        "validation": "niepusta nazwa polityki, wykonanie rozstrzyga planner",
+        "meaning": "intencja siatkowania przewodnika",
+        "backend_support": "DC / FEM CPU",
+        "problem_ir": "antenna_field_solve_stages[].conductor_mesh_policy"
+      },
+      {
+        "python": "AntennaFieldSolveStage.solver_policy",
+        "type": "str",
+        "default": "production_default",
+        "si_unit": "$1$",
+        "validation": "niepusta nazwa polityki, wykonanie rozstrzyga planner",
+        "meaning": "intencja numeryczna",
+        "backend_support": "DC / FEM CPU",
+        "problem_ir": "antenna_field_solve_stages[].solver_policy"
+      },
+      {
+        "python": "FieldTarget.object(object_id)",
+        "type": "str",
+        "default": "wymagany",
+        "si_unit": "$1$",
+        "validation": "niepuste ID istniejącego celu dla wykonywalnego etapu",
+        "meaning": "obiekt nośnika",
+        "backend_support": "DC / FEM CPU",
+        "problem_ir": "field_sampling_domain lub target_refs[].object_id"
+      },
+      {
+        "python": "AntennaNamedOutput.id",
+        "type": "str",
+        "default": "wymagany",
+        "si_unit": "$1$",
+        "validation": "niepuste ID, unikatowe w opisie etapu",
+        "meaning": "identyfikator rezultatu",
+        "backend_support": "DC / FEM CPU",
+        "problem_ir": "outputs[].id"
+      },
+      {
+        "python": "AntennaNamedOutput.quantity",
+        "type": "str",
+        "default": "wymagany",
+        "si_unit": "$1$",
+        "validation": "dla użytego wyjścia H_ant_basis",
+        "meaning": "fizyczna wielkość rezultatu",
+        "backend_support": "DC / FEM CPU",
+        "problem_ir": "outputs[].quantity"
+      }
+    ]
+  },
+  "sources": [
+    {
+      "id": "phase-law",
+      "path": "docs/physics/0952-harmonic-rf-antenna-cpw.md",
+      "symbol": "DOC-ANCHOR:rf-governing-equations",
+      "responsibility": "Wspólna konwencja fazorów.",
+      "evidence_status": "planned_contract"
+    },
+    {
+      "id": "maxwell",
+      "path": "docs/physics/0952-harmonic-rf-antenna-cpw.md",
+      "symbol": "DOC-ANCHOR:rf-maxwell-contract",
+      "responsibility": "Pełny Maxwell i odczyt pola. Ciuprina i in. (2022) oraz MFEM.",
+      "evidence_status": "planned_contract"
+    },
+    {
+      "id": "ece",
+      "path": "docs/physics/0952-harmonic-rf-antenna-cpw.md",
+      "symbol": "DOC-ANCHOR:rf-ece-contract",
+      "responsibility": "Orientacja, obciążenie i planowany test ONELAB E–V.",
+      "evidence_status": "planned_contract"
+    },
+    {
+      "id": "darwin",
+      "path": "docs/physics/0952-harmonic-rf-antenna-cpw.md",
+      "symbol": "DOC-ANCHOR:rf-darwin-contract",
+      "responsibility": "Ampère, ciągłość, gauge i bilans mocy. Planowany test ECE.",
+      "evidence_status": "planned_contract"
+    },
+    {
+      "id": "scales",
+      "path": "docs/physics/0952-harmonic-rf-antenna-cpw.md",
+      "symbol": "DOC-ANCHOR:rf-assumptions-and-validity",
+      "responsibility": "Założenia RF i skale z publikacji.",
+      "evidence_status": "planned_contract"
+    },
+    {
+      "id": "observable",
+      "path": "docs/physics/0952-harmonic-rf-antenna-cpw.md",
+      "symbol": "DOC-ANCHOR:rf-observables-contract",
+      "responsibility": "Prądy, baza zespolona, widmo i udział przy szczelinach.",
+      "evidence_status": "planned_contract"
+    },
+    {
+      "id": "validation",
+      "path": "docs/physics/0952-harmonic-rf-antenna-cpw.md",
+      "symbol": "DOC-ANCHOR:rf-validation",
+      "responsibility": "Kontrole analityczne i porównanie ECE oraz CPW.",
+      "evidence_status": "planned_contract"
+    },
+    {
+      "id": "harmonic-ir",
+      "path": "docs/physics/0952-harmonic-rf-antenna-cpw.md",
+      "symbol": "DOC-ANCHOR:rf-problem-ir",
+      "responsibility": "Przyszły wariant RF i port.",
+      "evidence_status": "planned_contract"
+    },
+    {
+      "id": "python-stage",
+      "path": "packages/fullmag-py/src/fullmag/model/antenna.py",
+      "symbol": "class AntennaFieldSolveStage",
+      "responsibility": "Obniżenie DC i odrzucenie RF, sprawdzone w przykładzie.",
+      "evidence_status": "executed_object_lowering"
+    },
+    {
+      "id": "python-target",
+      "path": "packages/fullmag-py/src/fullmag/model/antenna.py",
+      "symbol": "class FieldTarget",
+      "responsibility": "Nośnik celu, sprawdzony w przykładzie.",
+      "evidence_status": "executed_object_lowering"
+    },
+    {
+      "id": "python-output",
+      "path": "packages/fullmag-py/src/fullmag/model/antenna.py",
+      "symbol": "class AntennaNamedOutput",
+      "responsibility": "Opis wyniku, sprawdzony w przykładzie.",
+      "evidence_status": "executed_object_lowering"
+    },
+    {
+      "id": "python-pipeline",
+      "path": "packages/fullmag-py/src/fullmag/world.py",
+      "symbol": "add_antenna_field_solve",
+      "responsibility": "Rejestracja etapu i referencja autorska.",
+      "evidence_status": "current_code"
+    },
+    {
+      "id": "dc-ir-model",
+      "path": "crates/fullmag-ir/src/antenna.rs",
+      "symbol": "AntennaFieldModelIR",
+      "responsibility": "Istniejący enum fizyki źródła DC.",
+      "evidence_status": "current_code"
+    },
+    {
+      "id": "dc-ir-stage",
+      "path": "crates/fullmag-ir/src/antenna.rs",
+      "symbol": "AntennaFieldSolveStageIR",
+      "responsibility": "Kształt IR etapu i powiązania DC.",
+      "evidence_status": "current_code"
+    },
+    {
+      "id": "dc-plan",
+      "path": "crates/fullmag-plan/src/antenna_field_solve.rs",
+      "symbol": "plan_antenna_field_solve_execution",
+      "responsibility": "Uzgodnienie żądania wykonania i zależności DC.",
+      "evidence_status": "current_code"
+    },
+    {
+      "id": "dc-runner",
+      "path": "crates/fullmag-runner/src/antenna_field_solution/closed_loop_execution.rs",
+      "symbol": "execute_antenna_closed_loop_inspection",
+      "responsibility": "Punkt wejściowy inspekcji pętli DC. Historyczne wyniki mają własne manifesty.",
+      "evidence_status": "current_code"
+    },
+    {
+      "id": "api",
+      "path": "crates/fullmag-api/src/router_v2/handlers/data/antenna.rs",
+      "symbol": "get_antenna_field_solution",
+      "responsibility": "Istniejący zasób v2, punkt przyszłej obsługi manifestu fazorowego.",
+      "evidence_status": "current_code"
+    },
+    {
+      "id": "web",
+      "path": "apps/control-room/src/kernel/resources/antennaResources.ts",
+      "symbol": "useAntennaFieldSolutionResource",
+      "responsibility": "Istniejąca warstwa zasobów UI dla gabarytów i wyników pola.",
+      "evidence_status": "current_code"
+    },
+    {
+      "id": "dc-test",
+      "path": "packages/fullmag-py/tests/test_antenna_composition_contract.py",
+      "symbol": "test_field_solve_projection_and_spectrum_are_typed_thin_references",
+      "responsibility": "Kontrola typowanej kompozycji obecnego etapu, projekcji i widma.",
+      "evidence_status": "current_test"
+    },
+    {
+      "id": "standalone-maxwell",
+      "path": "scripts/rf_fullwave_reference.py",
+      "symbol": "class MaxwellSystem",
+      "responsibility": "Referencyjny operator ECE, testy fali, zakładek terminalowych i skali elektrycznej.",
+      "evidence_status": "reference_fixture_tested"
+    },
+    {
+      "id": "standalone-darwin",
+      "path": "scripts/rf_darwin_reference.py",
+      "symbol": "solve_darwin_ece",
+      "responsibility": "Referencyjny operator Darwina, testy kondensatora, energii i obciążenia.",
+      "evidence_status": "reference_fixture_tested"
+    },
+    {
+      "id": "standalone-cpw",
+      "path": "scripts/rf_cpw_reference.py",
+      "symbol": "make_case",
+      "responsibility": "Geometria przewodnika, materiały i terminale CPW z kontrolą orientacji.",
+      "evidence_status": "reference_fixture_tested"
+    },
+    {
+      "id": "palace-export",
+      "path": "scripts/rf_palace_preflight.py",
+      "symbol": "write_case",
+      "responsibility": "Wejścia Palace i test Gmsh meshio round-trip, przed wykonaniem referencji.",
+      "evidence_status": "reference_fixture_tested"
+    },
+    {
+      "id": "paired-rf-comparison",
+      "path": "scripts/compare_rf_cpw_reference.py",
+      "symbol": "compare",
+      "responsibility": "Zespolone porównanie wspólnego portu ECE i odrzucanie niespójnych wejść.",
+      "evidence_status": "reference_fixture_tested"
+    }
+  ],
+  "external_references": [
+    {
+      "id": "gruszecki-2016",
+      "url": "https://doi.org/10.1038/srep22367",
+      "role": "CST reference figures and CPW geometry"
+    },
+    {
+      "id": "ciuprina-2024",
+      "url": "https://doi.org/10.1186/s13362-024-00165-6",
+      "role": "A–phi formulation and Darwin versus full-wave ECE"
+    },
+    {
+      "id": "ciuprina-2022",
+      "url": "https://doi.org/10.1186/s13362-022-00122-1",
+      "role": "Full-wave E–V terminal formulation"
+    },
+    {
+      "id": "clemens-darwin",
+      "url": "https://arxiv.org/abs/2404.18767",
+      "role": "Darwin variants, continuity and gauge"
+    },
+    {
+      "id": "haus-melcher",
+      "url": "https://ocw.mit.edu/courses/res-6-001-electromagnetic-fields-and-energy-spring-2008/c2c9f1b3799709c8dcc448356b30a382_10.pdf",
+      "role": "Analytical skin effect and magnetic diffusion"
+    },
+    {
+      "id": "palace-cpw",
+      "url": "https://github.com/awslabs/palace/tree/be4b5d36ffe77933d4dbf86209d2bf21a2059fe3/examples/cpw",
+      "role": "Full-wave reference configuration, wave and lumped ports",
+      "revision": "be4b5d36ffe77933d4dbf86209d2bf21a2059fe3"
+    },
+    {
+      "id": "mfem-complex",
+      "url": "https://github.com/mfem/mfem/blob/92021c45ce70eba81388a7543528bcec91c5355f/examples/ex22p.cpp",
+      "role": "Complex curl-curl example",
+      "revision": "92021c45ce70eba81388a7543528bcec91c5355f"
+    },
+    {
+      "id": "onelab-ece",
+      "url": "https://onelab.info/files/ECE_full_wave.zip",
+      "role": "Verified archive listing, full-wave ECE examples",
+      "sha256": "5421035b5e56cc1195a288796070aff14237d615d84d5226c182da2cde0d862f"
+    },
+    {
+      "id": "onelab-ece-coax",
+      "url": "https://onelab.info/files/ECE_full_wave_E-H_Academic.zip",
+      "role": "Verified archive listing, ECE coaxial example",
+      "sha256": "7c8546993eb018b4018e04ad9976be7a36c3eae7ea4f9cc60470143526e7757a"
+    },
+    {
+      "id": "boris-dc",
+      "url": "https://github.com/SerbanL/BORIS/tree/048503d2ca6475e91b073eb1762ecf9d3634c3e1",
+      "role": "Conductive DC and Oersted control with observed sign discrepancy",
+      "revision": "048503d2ca6475e91b073eb1762ecf9d3634c3e1"
+    }
+  ]
+}

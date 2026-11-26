@@ -368,6 +368,16 @@
         "problem_ir": "backend_policy.pbc"
       },
       {
+        "python": "Problem.auxiliary_geometry_names",
+        "type": "Mapping[str, str]",
+        "default": "{}",
+        "si_unit": "1",
+        "validation": "Keys must identify existing auxiliary geometry and labels must be nonempty",
+        "meaning": "Editable auxiliary-object display labels",
+        "backend_support": "Shared FDM/FEM CPU/GPU authoring",
+        "problem_ir": "physics_objects[].name and physics_graph.objects[].name"
+      },
+      {
         "python": "Problem.auxiliary_geometry_object_ids",
         "type": "Mapping[str, str]",
         "default": "{}",

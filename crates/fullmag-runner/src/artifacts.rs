@@ -534,11 +534,33 @@ fn authored_execution_request(problem: &fullmag_ir::ProblemIR) -> ExecutionReque
     }
 }
 
+fn retained_field_execution_request(execution: &fullmag_ir::RequestedTransportExecutionIR) -> ExecutionRequestProvenance {
+    ExecutionRequestProvenance {
+        backend: execution.discretization.as_str().to_string(),
+        device: match execution.device {
+            fullmag_ir::ExecutionDevice::Auto => "auto",
+            fullmag_ir::ExecutionDevice::Cpu => "cpu",
+            fullmag_ir::ExecutionDevice::Gpu => "gpu",
+        }.to_string(),
+        precision: execution_precision_name(execution.precision).to_string(),
+        mode: execution_mode_name(execution.execution_mode).to_string(),
+    }
+}
+
 fn effective_execution_request(
     problem: &fullmag_ir::ProblemIR,
     plan: &fullmag_ir::ExecutionPlanIR,
 ) -> ExecutionRequestProvenance {
     let device = match &plan.backend_plan {
+        BackendPlanIR::AntennaRetainedCurrentFieldInspection(inspection) => {
+            return retained_field_execution_request(&inspection.requested_execution);
+        }
+        BackendPlanIR::AntennaRetainedDirectFieldInspection(inspection) => {
+            return retained_field_execution_request(&inspection.requested_execution);
+        }
+        BackendPlanIR::AntennaRetainedPreparationFieldInspection(inspection) => {
+            return retained_field_execution_request(&inspection.requested_execution);
+        }
         BackendPlanIR::AntennaFieldOnly(_) => {
             normalize_execution_device(runtime_device(problem).unwrap_or("auto"))
         }
@@ -667,7 +689,7 @@ fn validate_direct_minimizer_realization(
             ))
         }
         BackendPlanIR::Fdm(_) if resolved_device == "gpu" => {
-            Some(crate::relaxation::CUDA_FDM_HOST_DIRECT_MINIMIZER_REALIZATION)
+            crate::relaxation::cuda_fdm_direct_minimizer_realization(control.algorithm)
         }
         BackendPlanIR::Fem(_) => {
             crate::relaxation::native_direct_minimizer_realization(
@@ -852,6 +874,15 @@ fn count_periodic_pairs_by_id<T>(
 
 fn mesh_runtime_metadata(plan: &fullmag_ir::ExecutionPlanIR) -> serde_json::Value {
     match &plan.backend_plan {
+        BackendPlanIR::AntennaRetainedCurrentFieldInspection(inspection) => {
+            retained_current_field_layout(inspection)
+        }
+        BackendPlanIR::AntennaRetainedDirectFieldInspection(inspection) => {
+            retained_direct_field_layout(inspection)
+        }
+        BackendPlanIR::AntennaRetainedPreparationFieldInspection(inspection) => {
+            retained_preparation_field_layout(inspection)
+        }
         BackendPlanIR::AntennaFieldOnly(antenna) => serde_json::json!({
             "backend": "antenna_field_only",
             "stage_id": antenna.stage_id,
@@ -4697,7 +4728,9 @@ fn static_pbc_demag_pair_diagnostics(
 
 fn periodic_mesh(plan: &fullmag_ir::ExecutionPlanIR) -> Option<&fullmag_ir::MeshIR> {
     match &plan.backend_plan {
-        BackendPlanIR::AntennaFieldOnly(_) => None,
+        BackendPlanIR::AntennaFieldOnly(_)
+        | BackendPlanIR::AntennaRetainedCurrentFieldInspection(_)
+        | BackendPlanIR::AntennaRetainedDirectFieldInspection(_) | BackendPlanIR::AntennaRetainedPreparationFieldInspection(_) => None,
         BackendPlanIR::Fem(fem) => Some(&fem.mesh),
         BackendPlanIR::FemEigen(fem) => Some(&fem.mesh),
         BackendPlanIR::FemFrequencyResponse(fem) => Some(&fem.mesh),
@@ -4716,7 +4749,9 @@ fn periodic_material_fields(
     Option<&[f64]>,
 ) {
     match &plan.backend_plan {
-        BackendPlanIR::AntennaFieldOnly(_) => (None, None, None, None),
+        BackendPlanIR::AntennaFieldOnly(_)
+        | BackendPlanIR::AntennaRetainedCurrentFieldInspection(_)
+        | BackendPlanIR::AntennaRetainedDirectFieldInspection(_) | BackendPlanIR::AntennaRetainedPreparationFieldInspection(_) => (None, None, None, None),
         BackendPlanIR::Fem(fem) => (
             fem.ms_element_field.as_deref(),
             fem.a_element_field.as_deref(),
@@ -6055,8 +6090,71 @@ fn sanitize_layer_id(id: &str) -> String {
     }
 }
 
+fn retained_current_field_layout(
+    inspection: &fullmag_ir::AntennaRetainedCurrentFieldPlanIR,
+) -> serde_json::Value {
+    retained_field_layout(&inspection.stage, &inspection.field_sampling,
+        "antenna_retained_current_field_inspection")
+}
+
+fn retained_direct_field_layout(
+    inspection: &fullmag_ir::AntennaRetainedDirectFieldPlanV2,
+) -> serde_json::Value {
+    let mut layout = retained_field_layout(&inspection.stage, &inspection.field_sampling,
+        "antenna_retained_direct_field_inspection");
+    layout["retained_source_preparation"] = serde_json::json!(inspection.preparation_asset);
+    layout
+}
+
+fn retained_preparation_field_layout(
+    inspection: &fullmag_ir::AntennaRetainedPreparationFieldPlanIR,
+) -> serde_json::Value {
+    let mut layout = retained_field_layout(&inspection.stage, &inspection.field_sampling,
+        "antenna_retained_preparation_field_inspection");
+    layout["retained_source_preparation"] = serde_json::json!(inspection.preparation_asset);
+    layout
+}
+
+fn retained_field_layout(
+    stage: &fullmag_ir::AntennaFieldSolveStageIR, sampling: &fullmag_ir::AntennaFieldSamplingPlanIR,
+    backend: &str,
+) -> serde_json::Value {
+    serde_json::json!({
+        "backend": backend,
+        "stage_id": stage.id,
+        "port_mode_ids": stage.port_mode_ids,
+        "source_object_id": stage.source_object_id,
+        "retained_current_source": stage.retained_current_source,
+        "source_authorization": "unresolved",
+        "source_mesh_name": null,
+        "source_topology_fingerprint": null,
+        "source_node_count": null,
+        "source_element_count": null,
+        "sampling_node_count": sampling.positions_xyz_m.len(),
+        "sampling_element_count": sampling.cells.len(),
+        "sampling_topology_digest": sampling.topology_digest,
+        "field_sampling": {
+            "domain": sampling.domain,
+            "carrier_kind": sampling.carrier_kind,
+            "location": sampling.location,
+            "topology_digest": sampling.topology_digest,
+        },
+        "magnetic_state_present": false,
+        "magnetization_state": "not_applicable",
+    })
+}
+
 pub(crate) fn field_layout(plan: &fullmag_ir::ExecutionPlanIR) -> serde_json::Value {
     match &plan.backend_plan {
+        BackendPlanIR::AntennaRetainedCurrentFieldInspection(inspection) => {
+            retained_current_field_layout(inspection)
+        }
+        BackendPlanIR::AntennaRetainedDirectFieldInspection(inspection) => {
+            retained_direct_field_layout(inspection)
+        }
+        BackendPlanIR::AntennaRetainedPreparationFieldInspection(inspection) => {
+            retained_preparation_field_layout(inspection)
+        }
         BackendPlanIR::AntennaFieldOnly(antenna) => serde_json::json!({
             "backend": "antenna_field_only",
             "stage_id": antenna.stage_id,
@@ -6610,6 +6708,127 @@ mod tests {
                 assert_eq!(payload["step"], 0);
             }
             fs::remove_dir_all(output_dir).unwrap();
+        }
+    }
+
+    fn retained_current_inspection_plan() -> ExecutionPlanIR {
+        let mut wire: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../tests/fixtures/runtime/antenna-standalone-pipeline.json"
+        )).unwrap();
+        let ir = &mut wire["ir"];
+        ir["study"]["selection"] = serde_json::json!({"stage_id":"inspect_antenna", "port_mode_id":"port"});
+        ir["geometry_assets"]["fem_mesh_assets"].as_array_mut().unwrap()
+            .retain(|asset| asset["geometry_name"] == "probe");
+        let stage = &mut ir["antenna_field_solve_stages"][0];
+        stage["retained_current_source"] = serde_json::json!({
+            "kind":"published_inspection", "project_id":"project-source", "run_id":"run-source",
+            "task_id":"task-source", "attempt_id":"attempt-source", "ownership_epoch":"1",
+            "artifact_id":"artifact-source", "object_ref":"a".repeat(64)
+        });
+        stage["oersted_realization"] = "analytic_rt0_surface".into();
+        stage["surface_field_policy"] = serde_json::json!({
+            "policy_version":fullmag_ir::ANTENNA_SURFACE_FIELD_POLICY_VERSION,
+            "limits":{"total":vec![1_000_000_u64;14], "per_target":vec![100_000_u64;14],
+                "maximum_raw_integer_bits":8192, "maximum_reduced_fraction_bits":8192,
+                "maximum_lifetime_peak_rss_bytes":268435456, "guard_interval_events":128,
+                "maximum_total_seconds":600.0, "maximum_target_seconds":120.0},
+            "tolerances":{"absolute_field_apm":1e-9,"relative_field":1e-5,"cancellation_floor_apm":1e-6,
+                "scalar_relative_80":1e-45,"scalar_relative_120":1e-55,"angle_relative_80":1e-45,"angle_relative_120":1e-55,
+                "binary_scalar_epsilon_factor":16.0,"binary_roundoff_epsilon_factor":64.0,
+                "binary_cancellation_limit":1e8,"highprecision_cancellation_limit":1e40}
+        });
+        let problem = serde_json::from_value(ir.take()).unwrap();
+        let inspection = fullmag_plan::plan_retained_current_field_inspection(&problem, "inspect_antenna", "port").unwrap();
+        let mut plan = test_fem_execution_plan();
+        plan.backend_plan = BackendPlanIR::AntennaRetainedCurrentFieldInspection(inspection);
+        plan
+    }
+
+    fn retained_preparation_inspection_plan() -> ExecutionPlanIR {
+        let mut plan = retained_current_inspection_plan();
+        let BackendPlanIR::AntennaRetainedCurrentFieldInspection(current) = &plan.backend_plan else { unreachable!() };
+        let asset = fullmag_ir::AntennaSourcePreparationAssetRefIR {
+            asset_id: "script-file-preparation".into(), content_sha256: "b".repeat(64),
+        };
+        let mut stage = current.stage.clone();
+        stage.retained_source_preparation = Some(asset.clone());
+        plan.backend_plan = BackendPlanIR::AntennaRetainedPreparationFieldInspection(
+            fullmag_ir::AntennaRetainedPreparationFieldPlanIR {
+                schema_version: fullmag_ir::ANTENNA_RETAINED_PREPARATION_FIELD_PLAN_SCHEMA.into(),
+                stage, field_sampling: current.field_sampling.clone(),
+                requested_execution: current.requested_execution.clone(), preparation_asset: asset,
+            });
+        plan
+    }
+
+    #[test]
+    fn retained_preparation_metadata_is_thin_nonmagnetic_and_preserves_execution() {
+        let plan = retained_preparation_inspection_plan();
+        let layout = field_layout(&plan);
+        assert_eq!(mesh_runtime_metadata(&plan), layout);
+        assert_eq!(layout["backend"], "antenna_retained_preparation_field_inspection");
+        assert_eq!(layout["retained_source_preparation"]["asset_id"], "script-file-preparation");
+        assert_eq!(layout["source_authorization"], "unresolved");
+        assert_eq!(layout["magnetic_state_present"], false);
+        for key in ["source_mesh_name", "source_topology_fingerprint", "source_node_count", "source_element_count"] {
+            assert!(layout[key].is_null(), "{key}");
+        }
+        assert_eq!(layout["sampling_node_count"], 4);
+        assert_eq!(layout["sampling_element_count"], 1);
+        assert!(layout["field_sampling"].get("positions_xyz_m").is_none());
+        assert!(layout["field_sampling"].get("cells").is_none());
+        let mut unrelated_problem = fullmag_ir::ProblemIR::bootstrap_example();
+        unrelated_problem.backend_policy.execution_precision = fullmag_ir::ExecutionPrecision::Single;
+        unrelated_problem.validation_profile.execution_mode = ExecutionMode::Extended;
+        let request = effective_execution_request(&unrelated_problem, &plan);
+        assert_eq!((request.backend.as_str(), request.device.as_str(), request.precision.as_str(), request.mode.as_str()),
+            ("fem", "cpu", "double", "strict"));
+    }
+
+    #[test]
+    fn retained_inspection_metadata_never_substitutes_target_for_source() {
+        let plan = retained_current_inspection_plan();
+        let layout = field_layout(&plan);
+        assert_eq!(mesh_runtime_metadata(&plan), layout);
+        for key in ["source_mesh_name", "source_topology_fingerprint", "source_node_count", "source_element_count"] {
+            assert!(layout[key].is_null(), "{key}");
+        }
+        assert_eq!(layout["source_authorization"], "unresolved");
+        assert_eq!(layout["sampling_node_count"], 4);
+        assert_eq!(layout["sampling_element_count"], 1);
+        assert!(layout["field_sampling"].get("positions_xyz_m").is_none());
+        assert!(layout["field_sampling"].get("cells").is_none());
+        assert_eq!(layout["magnetic_state_present"], false);
+        let mut unrelated_problem = fullmag_ir::ProblemIR::bootstrap_example();
+        unrelated_problem.backend_policy.execution_precision = fullmag_ir::ExecutionPrecision::Single;
+        unrelated_problem.validation_profile.execution_mode = ExecutionMode::Extended;
+        let request = effective_execution_request(&unrelated_problem, &plan);
+        assert_eq!(request.backend, "fem");
+        assert_eq!(request.device, "cpu");
+        assert_eq!(request.precision, "double");
+        assert_eq!(request.mode, "strict");
+    }
+
+    #[test]
+    fn retained_inspection_cannot_create_magnetic_runtime_state() {
+        for plan in [retained_current_inspection_plan(), retained_preparation_inspection_plan()] {
+            let problem = fullmag_ir::ProblemIR::bootstrap_example();
+            for result in [
+                crate::require_resolved_runtime_sampling(&problem, &plan),
+                crate::study_magnetization_layout_for_plan(&plan).map(|_| ()),
+                crate::resolve_planned_runtime_engine(&problem, &plan).map(|_| ()),
+                crate::resolve_planned_runtime_capabilities(&problem, &plan).map(|_| ()),
+                crate::dispatch::stage_step_time_frame(&problem, &plan).map(|_| ()),
+            ] {
+                assert!(result.unwrap_err().message.contains("field_only_plan_not_executable_as_llg"));
+            }
+            assert!(crate::types::StageFemMeshAsset::build_from_backend_plan(&plan.backend_plan).is_none());
+            assert!(crate::types::FemStageExecutionContext::from_backend_plan(&plan.backend_plan).is_none());
+            assert!(crate::frozen_spins_runtime_status_for_backend_plan(&plan.backend_plan).unwrap().is_none());
+            let resolver = crate::observation::ObservationProviderResolver::from_backend_plan(&plan.backend_plan);
+            assert!(!resolver.retains_idle_runtime());
+            assert!(resolver.terminal_snapshot_quantity_ids().is_empty());
+            assert_eq!(resolver.policy("m"), crate::observation::ObservationProviderPolicy::UnavailableAfterStage);
         }
     }
 
@@ -9946,6 +10165,52 @@ mod tests {
             provenance("native_cuda_nonlinear_cg"),
         )
         .expect_err("CUDA FDM metadata must reject the FEM GPU native realization ID");
+        assert!(error.to_string().contains("realization mismatch"));
+    }
+
+    #[test]
+    fn final_metadata_requires_native_cuda_pgbb_realization_for_single_layer_fdm() {
+        let problem = fdm_execution_problem("gpu", ExecutionMode::Strict);
+        let mut plan = test_execution_plan(None);
+        if let BackendPlanIR::Fdm(fdm) = &mut plan.backend_plan {
+            fdm.relaxation = Some(fullmag_ir::RelaxationControlIR {
+                algorithm: fullmag_ir::RelaxationAlgorithmIR::ProjectedGradientBb,
+                stop: fullmag_ir::RelaxStopIR {
+                    torque_tolerance_apm: Some(1.0e-3),
+                    energy_tolerance_j: None,
+                    max_steps: Some(1),
+                    max_relaxation_time_s: None,
+                },
+            });
+        }
+        let provenance = |realization: &str| ExecutionProvenance {
+            execution_engine: "cuda_fdm".to_string(),
+            precision: "double".to_string(),
+            requested_energy_minimizer: Some("projected_gradient_bb".to_string()),
+            resolved_energy_minimizer: Some("projected_gradient_bb".to_string()),
+            energy_minimizer_realization: Some(realization.to_string()),
+            ..ExecutionProvenance::default()
+        };
+
+        let metadata = write_final_execution_test_metadata_without_fem_policy(
+            "cuda-fdm-pgbb-realization",
+            &problem,
+            &plan,
+            provenance("native_cuda_pgbb"),
+        )
+        .expect("CUDA FDM PG-BB metadata should accept the device-resident realization");
+        assert_eq!(
+            metadata["execution_provenance"]["energy_minimizer_realization"],
+            "native_cuda_pgbb"
+        );
+
+        let error = write_final_execution_test_metadata_without_fem_policy(
+            "cuda-fdm-pgbb-host-realization",
+            &problem,
+            &plan,
+            provenance(crate::relaxation::CUDA_FDM_HOST_DIRECT_MINIMIZER_REALIZATION),
+        )
+        .expect_err("CUDA FDM PG-BB metadata must reject the host-orchestrated realization ID");
         assert!(error.to_string().contains("realization mismatch"));
     }
 

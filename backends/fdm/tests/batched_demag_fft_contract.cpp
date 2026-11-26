@@ -95,6 +95,12 @@ void demag_fft_resources_are_batched() {
         context.find("cufftPlanMany(") == std::string::npos,
         "demag FFT plan must not use auto-allocating cufftPlanMany");
     check(
+        context.find("CUFFT_D2Z") != std::string::npos &&
+            context.find("CUFFT_Z2D") != std::string::npos &&
+            context.find("CUFFT_R2C") != std::string::npos &&
+            context.find("CUFFT_C2R") != std::string::npos,
+        "single-layer demag FFT plans must use real-to-complex D2Z/Z2D and R2C/C2R transforms");
+    check(
         context.find("cudaMalloc(&ctx.fft_y") == std::string::npos,
         "demag FFT y component must not use a separate allocation");
     check(
@@ -115,14 +121,20 @@ void demag_fft_work_area_is_owned_by_context() {
         context_header.find("fft_work_area_bytes") != std::string::npos,
         "Context must record demag cuFFT work area size");
     check(
-        context.find("cufftSetAutoAllocation(ctx.fft_plan, 0)") != std::string::npos,
-        "demag cuFFT plan must disable automatic work-area allocation");
+        context_header.find("fft_plan_inv") != std::string::npos,
+        "Context must own the inverse real-to-complex demag cuFFT plan");
+    check(
+        context.find("cufftSetAutoAllocation(ctx.fft_plan, 0)") != std::string::npos &&
+            context.find("cufftSetAutoAllocation(ctx.fft_plan_inv, 0)") != std::string::npos,
+        "demag cuFFT forward and inverse plans must disable automatic work-area allocation");
     check(
         context.find("cufftMakePlanMany") != std::string::npos,
         "demag cuFFT plan must use cufftMakePlanMany to query work size");
     check(
-        context.find("cufftSetWorkArea(ctx.fft_plan, ctx.fft_work_area)") != std::string::npos,
-        "demag cuFFT plan must use the Context-owned work area");
+        context.find("cufftSetWorkArea(ctx.fft_plan, ctx.fft_work_area)") != std::string::npos &&
+            context.find("cufftSetWorkArea(ctx.fft_plan_inv, ctx.fft_work_area)") !=
+                std::string::npos,
+        "demag cuFFT forward and inverse plans must share the Context-owned work area");
 }
 
 void demag_fft_runs_on_context_compute_stream() {
@@ -155,8 +167,10 @@ void demag_fft_runs_on_context_compute_stream() {
         "Context allocation must request stream lifecycle through the runtime stream owner");
     check(
         context.find("cufftSetStream(ctx.fft_plan, context_compute_stream(ctx))") !=
-            std::string::npos,
-        "demag cuFFT plan must be bound to the Context compute stream");
+                std::string::npos &&
+            context.find("cufftSetStream(ctx.fft_plan_inv, context_compute_stream(ctx))") !=
+                std::string::npos,
+        "demag cuFFT forward and inverse plans must be bound to the Context compute stream");
     check(
         fp64.find("context_begin_compute_stream_work(ctx, \"launch_demag_field_fp64\")") !=
                 std::string::npos &&
@@ -171,11 +185,15 @@ void demag_fft_runs_on_context_compute_stream() {
         "fp32 demag must hand off default-stream dependencies to the compute stream");
     check(
         fp64.find("<<<grid_padded, BLOCK_SIZE>>>") == std::string::npos &&
+            fp64.find("<<<grid_real, BLOCK_SIZE>>>") == std::string::npos &&
+            fp64.find("<<<grid_half, BLOCK_SIZE>>>") == std::string::npos &&
             fp64.find("<<<grid_physical, BLOCK_SIZE>>>") == std::string::npos &&
             fp64.find("<<<corr_grid, BLOCK_SIZE>>>") == std::string::npos,
         "fp64 demag kernels must launch on the Context compute stream");
     check(
         fp32.find("<<<grid_padded, BLOCK_SIZE>>>") == std::string::npos &&
+            fp32.find("<<<grid_real, BLOCK_SIZE>>>") == std::string::npos &&
+            fp32.find("<<<grid_half, BLOCK_SIZE>>>") == std::string::npos &&
             fp32.find("<<<grid_physical, BLOCK_SIZE>>>") == std::string::npos,
         "fp32 demag kernels must launch on the Context compute stream");
 }
@@ -190,19 +208,19 @@ void demag_launches_use_one_forward_and_inverse_batch() {
         "void launch_demag_field_fp32(Context &ctx)");
 
     check(
-        fp64.find("cufftExecZ2Z(") != std::string::npos,
-        "fp64 demag field launch must call cufftExecZ2Z");
+        count_occurrences(fp64, "= cufftExecD2Z(") == 1 &&
+            count_occurrences(fp64, "= cufftExecZ2D(") == 1,
+        "fp64 demag field launch must use one batched D2Z forward and one batched Z2D inverse FFT");
     check(
-        count_occurrences(fp64, "CUFFT_FORWARD") == 1 &&
-            count_occurrences(fp64, "CUFFT_INVERSE") == 1,
-        "fp64 demag field launch must use one forward and one inverse batch");
+        fp64.find("cufftExecZ2Z(") == std::string::npos,
+        "fp64 single-layer demag field launch must not use complex-to-complex Z2Z");
     check(
-        fp32.find("cufftExecC2C(") != std::string::npos,
-        "fp32 demag field launch must call cufftExecC2C");
+        count_occurrences(fp32, "= cufftExecR2C(") == 1 &&
+            count_occurrences(fp32, "= cufftExecC2R(") == 1,
+        "fp32 demag field launch must use one batched R2C forward and one batched C2R inverse FFT");
     check(
-        count_occurrences(fp32, "CUFFT_FORWARD") == 1 &&
-            count_occurrences(fp32, "CUFFT_INVERSE") == 1,
-        "fp32 demag field launch must use one forward and one inverse batch");
+        fp32.find("cufftExecC2C(") == std::string::npos,
+        "fp32 single-layer demag field launch must not use complex-to-complex C2C");
 }
 
 void multilayer_demag_launches_use_one_forward_and_inverse_batch_per_refresh() {

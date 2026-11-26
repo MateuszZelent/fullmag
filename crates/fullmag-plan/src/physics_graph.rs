@@ -738,6 +738,9 @@ pub fn physics_graph_realization_provenance(
     }
     let executed = executed_module_ids.iter().collect::<BTreeSet<_>>();
     let (topology_fingerprint, realizations) = match backend_plan {
+        BackendPlanIR::AntennaRetainedDirectFieldInspection(_)
+        | BackendPlanIR::AntennaRetainedPreparationFieldInspection(_)
+        | BackendPlanIR::AntennaRetainedCurrentFieldInspection(_) => return Err(vec!["retained-current field inspection does not execute charge or magnetic graph realizations".into()]),
         BackendPlanIR::AntennaFieldOnly(_) => return Err(vec!["field_only numerical execution is owned by the selected antenna action, not magnetic graph realization".into()]),
         BackendPlanIR::AntennaExternalLeadInspection(_) => {
             return Err(vec!["antenna inspection does not execute the magnetic physics-graph realization pipeline".into()]);
@@ -1389,7 +1392,10 @@ fn canonical_graph_sha256(graph: &Value) -> Result<String, String> {
 fn backend_lane(backend_plan: &BackendPlanIR) -> BackendTarget {
     match backend_plan {
         BackendPlanIR::Fdm(_) | BackendPlanIR::FdmMultilayer(_) => BackendTarget::Fdm,
-        BackendPlanIR::AntennaFieldOnly(_)
+        BackendPlanIR::AntennaRetainedDirectFieldInspection(_)
+        | BackendPlanIR::AntennaRetainedPreparationFieldInspection(_)
+        | BackendPlanIR::AntennaRetainedCurrentFieldInspection(_)
+        | BackendPlanIR::AntennaFieldOnly(_)
         | BackendPlanIR::Fem(_)
         | BackendPlanIR::FemEigen(_)
         | BackendPlanIR::AntennaExternalLeadInspection(_)
@@ -1409,6 +1415,14 @@ fn parse_backend_lane(value: &str) -> Result<BackendTarget, String> {
 
 fn mesh_revision(backend_plan: &BackendPlanIR) -> Result<u64, Vec<String>> {
     let value = match backend_plan {
+        BackendPlanIR::AntennaRetainedDirectFieldInspection(plan) => serde_json::json!({
+            "backend":"antenna_retained_direct_field_inspection", "sampling":plan.field_sampling,
+            "preparation_asset":plan.preparation_asset}),
+        BackendPlanIR::AntennaRetainedPreparationFieldInspection(plan) => serde_json::json!({
+            "backend":"antenna_retained_preparation_field_inspection", "sampling":plan.field_sampling,
+            "preparation_asset":plan.preparation_asset}),
+        BackendPlanIR::AntennaRetainedCurrentFieldInspection(plan) => serde_json::json!({
+            "backend":"antenna_retained_current_field_inspection", "sampling":plan.field_sampling}),
         BackendPlanIR::AntennaFieldOnly(plan) => serde_json::json!({"backend": "fem_field_only", "source_mesh": plan.source_mesh, "sampling": plan.field_sampling}),
         BackendPlanIR::AntennaExternalLeadInspection(plan) => serde_json::json!({
             "backend": "antenna_external_lead_inspection",

@@ -1,0 +1,218 @@
+{
+  "document": {
+    "path": "docs/physics/0601-single-layer-dipolar-images.md"
+  },
+  "backend_matrix": [
+    {
+      "solver": "FDM",
+      "device": "CPU",
+      "status": "documented"
+    },
+    {
+      "solver": "FDM",
+      "device": "GPU",
+      "status": "documented"
+    },
+    {
+      "solver": "FEM",
+      "device": "CPU",
+      "status": "not-applicable",
+      "reason": "The finite-difference Cartesian convolution applies to FDM."
+    },
+    {
+      "solver": "FEM",
+      "device": "GPU",
+      "status": "not-applicable",
+      "reason": "The finite-difference Cartesian convolution applies to FDM."
+    }
+  ],
+  "equations": [
+    {
+      "id": "eq-single-layer-images",
+      "symbols": [
+        "NP",
+        "N",
+        "r",
+        "n",
+        "I",
+        "p",
+        "Lp",
+        "ep",
+        "Hd",
+        "M",
+        "ij"
+      ],
+      "sources": [
+        "image-sum",
+        "kernel-test"
+      ]
+    },
+    {
+      "id": "eq-single-layer-distant-tensor",
+      "symbols": [
+        "N",
+        "V",
+        "delta",
+        "ij",
+        "r",
+        "rirj"
+      ],
+      "sources": [
+        "dipole-pair",
+        "kernel-test"
+      ]
+    }
+  ],
+  "symbols": [
+    {
+      "id": "NP",
+      "latex": "N^{P}_{ij}",
+      "meaning": "Periodically folded demagnetizing tensor component",
+      "si_unit": "1"
+    },
+    {
+      "id": "N",
+      "latex": "N_{ij}",
+      "meaning": "Open equal-cell demagnetizing tensor component",
+      "si_unit": "1"
+    },
+    {
+      "id": "r",
+      "latex": "\\mathbf{r}",
+      "meaning": "Displacement between cell centers",
+      "si_unit": "\\mathrm{m}"
+    },
+    {
+      "id": "n",
+      "latex": "n",
+      "meaning": "Signed image index",
+      "si_unit": "1"
+    },
+    {
+      "id": "I",
+      "latex": "I",
+      "meaning": "Number of replicas per side",
+      "si_unit": "1"
+    },
+    {
+      "id": "p",
+      "latex": "p",
+      "meaning": "Periodic Cartesian axis index",
+      "si_unit": "1"
+    },
+    {
+      "id": "Lp",
+      "latex": "L_p",
+      "meaning": "Physical period along the periodic axis",
+      "si_unit": "\\mathrm{m}"
+    },
+    {
+      "id": "ep",
+      "latex": "\\hat{\\mathbf{e}}_p",
+      "meaning": "Unit vector along the periodic axis",
+      "si_unit": "1"
+    },
+    {
+      "id": "Hd",
+      "latex": "\\mathbf{H}_d",
+      "meaning": "Demagnetizing field",
+      "si_unit": "\\mathrm{A\\,m^{-1}}"
+    },
+    {
+      "id": "M",
+      "latex": "\\mathbf{M}",
+      "meaning": "Cell magnetization",
+      "si_unit": "\\mathrm{A\\,m^{-1}}"
+    },
+    {
+      "id": "V",
+      "latex": "V",
+      "meaning": "Volume of one cell",
+      "si_unit": "\\mathrm{m^3}"
+    },
+    {
+      "id": "delta",
+      "latex": "\\delta_{ij}",
+      "meaning": "Kronecker delta",
+      "si_unit": "1"
+    },
+    {
+      "id": "ij",
+      "latex": "i,j",
+      "meaning": "Cartesian tensor component indices",
+      "si_unit": "1"
+    },
+    {
+      "id": "rirj",
+      "latex": "r_i,r_j",
+      "meaning": "Cartesian displacement components",
+      "si_unit": "\\mathrm{m}"
+    }
+  ],
+  "sources": [
+    {
+      "id": "image-sum",
+      "path": "crates/fullmag-fdm-demag/src/newell/mixed_single_layer.rs",
+      "symbol": "compute_single_layer_mixed_newell_kernels",
+      "responsibility": "Fold the requested finite replica range into the mixed-boundary tensor."
+    },
+    {
+      "id": "dipole-pair",
+      "path": "crates/fullmag-fdm-demag/src/newell.rs",
+      "symbol": "point_dipole_pair_tensor",
+      "responsibility": "Evaluate the distant equal-cell tensor with its point-dipole limit."
+    },
+    {
+      "id": "kernel-test",
+      "path": "crates/fullmag-engine/src/fdm/cpu/fft.rs",
+      "symbol": "one_layer_periodic_images_preserve_demag_tensor_at_long_lags",
+      "responsibility": "Check the distant diagonal and off-diagonal tensor terms."
+    },
+    {
+      "id": "python-pbc",
+      "path": "packages/fullmag-py/src/fullmag/model/problem.py",
+      "symbol": "class FdmPbc",
+      "responsibility": "Normalize axes and author the finite truncated image count."
+    },
+    {
+      "id": "resolve-images",
+      "path": "crates/fullmag-ir/src/execution.rs",
+      "symbol": "resolve_periodic_images",
+      "responsibility": "Resolve explicit/default replica counts for the solver."
+    }
+  ],
+  "public_api": {
+    "parameters": [
+      {
+        "python": "FdmPbc.axes",
+        "type": "tuple[bool, bool, bool]",
+        "default": "required",
+        "si_unit": "1",
+        "validation": "Three Cartesian flags with one lateral periodic axis for this kernel",
+        "meaning": "Periodic axes",
+        "backend_support": "FDM CPU/GPU",
+        "problem_ir": "backend_policy.pbc.axes"
+      },
+      {
+        "python": "FdmPbc.demag",
+        "type": "str",
+        "default": "open",
+        "si_unit": "1",
+        "validation": "truncated_images selects this kernel for a supported mesh",
+        "meaning": "Dipolar boundary policy",
+        "backend_support": "FDM CPU/GPU",
+        "problem_ir": "backend_policy.pbc.demag"
+      },
+      {
+        "python": "FdmPbc.image_counts",
+        "type": "tuple[int, int, int] or None",
+        "default": "None",
+        "si_unit": "1",
+        "validation": "Three nonnegative counts for truncated_images or None",
+        "meaning": "Replicas per side by axis",
+        "backend_support": "FDM CPU/GPU",
+        "problem_ir": "backend_policy.pbc.image_counts"
+      }
+    ]
+  }
+}
