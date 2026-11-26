@@ -23,7 +23,10 @@ import {
   viewport3DTargetFieldBufferCanServeSurface,
   type Viewport3DTargetFieldBuffer,
 } from "../model/viewport3DTargetFieldBuffer";
-import type { Viewport3DTargetRenderPlan } from "../model/viewport3DFieldDataPlan";
+import {
+  resolveViewport3DTargetScalarRange,
+  type Viewport3DTargetRenderPlan,
+} from "../model/viewport3DFieldDataPlan";
 import { resolveViewport3DFieldDomainCompatibility } from "../model/viewport3DFieldDomainCompatibility";
 import { summarizeViewport3DTargetDiagnostics } from "../model/viewport3DTargetDiagnostics";
 import type {
@@ -531,6 +534,7 @@ export function shouldBuildViewport3DPartChunkedScalarColor({
   mode,
   palette,
   partFieldVector,
+  rangeSource,
   scalarRange,
 }: {
   explicitPartFieldVector: boolean;
@@ -541,9 +545,11 @@ export function shouldBuildViewport3DPartChunkedScalarColor({
   mode: string;
   palette: string;
   partFieldVector: Viewport3DFieldVector;
+  rangeSource?: NonNullable<ScalarColorBuffer["rangeSource"]>;
   scalarRange: ScalarRange | null | undefined;
 }): boolean {
   const globalChunkedColorAvailable =
+    rangeSource !== "manual" &&
     !explicitPartFieldVector &&
     partFieldVector === globalFieldVector &&
     globalColorModes.includes(mode) &&
@@ -656,6 +662,7 @@ export function useViewport3DChunkedScalarColors({
       mode: string;
       partId: string;
       palette: string;
+      rangeSource: NonNullable<ScalarColorBuffer["rangeSource"]>;
       scalarRange: ScalarRange | null | undefined;
       resourceKey: string | null;
       target: Viewport3DFieldColorBuildTarget;
@@ -687,11 +694,33 @@ export function useViewport3DChunkedScalarColors({
         continue;
       }
       const palette = partScalarColorPalettes?.get(partId) ?? colorPalette;
-      const scalarRange =
-        partScalarRangesByMode?.get(partId)?.get(mode) ??
-        (partFieldVector === fieldVector
-          ? fieldScalarRangesByMode?.get(mode)
-          : undefined);
+      const targetRenderPlan = targetRenderPlans?.get(partId);
+      const targetProjectionMode =
+        targetRenderPlan?.shader.projectionMode ?? "raw_nodal";
+      const manualScalarRange = resolveViewport3DTargetScalarRange({
+        colorMode: mode,
+        fallbackRange: null,
+        fieldQuantityId: partFieldVector.quantityId,
+        targetPlan: targetRenderPlan,
+      });
+      const scalarRange = manualScalarRange ?? resolveViewport3DTargetScalarRange({
+        colorMode: mode,
+        fallbackRange:
+          partScalarRangesByMode?.get(partId)?.get(mode) ??
+          (partFieldVector === fieldVector
+            ? fieldScalarRangesByMode?.get(mode)
+            : undefined),
+        fieldQuantityId: partFieldVector.quantityId,
+        targetPlan: targetRenderPlan,
+      });
+      const rangeSource: NonNullable<ScalarColorBuffer["rangeSource"]> =
+        manualScalarRange
+          ? "manual"
+          : targetProjectionMode === "surface_faces"
+            ? "face_values"
+            : targetProjectionMode === "thickness_average_z"
+              ? "projected_values"
+              : "raw_nodal";
       const globalRange = fieldScalarRangesByMode?.get(mode);
       if (
         !shouldBuildViewport3DPartChunkedScalarColor({
@@ -703,6 +732,7 @@ export function useViewport3DChunkedScalarColors({
           mode,
           palette,
           partFieldVector,
+          rangeSource,
           scalarRange,
         })
       ) {
@@ -715,8 +745,6 @@ export function useViewport3DChunkedScalarColors({
       ) {
         continue;
       }
-      const targetProjectionMode =
-        targetRenderPlans?.get(partId)?.shader.projectionMode ?? "raw_nodal";
       const target =
         targetProjectionMode === "raw_nodal"
           ? explicitPartFieldVector
@@ -741,6 +769,7 @@ export function useViewport3DChunkedScalarColors({
         mode,
         partId,
         palette,
+        rangeSource,
         scalarRange,
         resourceKey: explicitPartFieldBuffer?.resourceKey ?? null,
         target,
@@ -770,11 +799,12 @@ export function useViewport3DChunkedScalarColors({
             mode,
             palette,
             partId,
+            rangeSource,
             scalarRange,
             target,
             targetProjectionMode,
           }) =>
-            `${partId}:${fieldVector.quantityId ?? "unknown"}:${chunkedFieldVectorObjectId(fieldVector)}:${fieldVector.pointCount}:${mode}:${palette}:${scalarRangeRevisionKey(scalarRange)}:${target.kind}:${targetProjectionMode}`,
+            `${partId}:${fieldVector.quantityId ?? "unknown"}:${chunkedFieldVectorObjectId(fieldVector)}:${fieldVector.pointCount}:${mode}:${palette}:${rangeSource}:${scalarRangeRevisionKey(scalarRange)}:${target.kind}:${targetProjectionMode}`,
         )
         .join("|"),
     [partBuildSpecs],
@@ -1082,6 +1112,7 @@ export function useViewport3DChunkedScalarColors({
           mode,
           palette,
           partId,
+          rangeSource,
           scalarRange,
           resourceKey,
           target,
@@ -1124,7 +1155,7 @@ export function useViewport3DChunkedScalarColors({
             "positions" in target ? chunkedFieldVectorObjectId(target.positions) : 0]);
           const previousTensor = partEntries.get(partId)?.get(mode);
           const reusedTensor = previousTensor?.tensorRows && previousTensor.tensorCarrierKey === tensorCarrierKey
-            ? { ...previousTensor, colorPalette: palette, range: scalarRange ?? previousTensor.range } : null;
+            ? { ...previousTensor, colorPalette: palette, range: scalarRange ?? previousTensor.range, rangeSource } : null;
           const colors = reusedTensor ?? await buildVertexScalarColorsOffMainThread(
             fieldVector,
             {
@@ -1142,8 +1173,9 @@ export function useViewport3DChunkedScalarColors({
             },
           );
           if (colors.tensorRows) colors.tensorCarrierKey = tensorCarrierKey;
+          const colorsWithRangeSource = { ...colors, rangeSource };
           const entry = attachViewport3DFieldColorBuildReference(
-            colors,
+            colorsWithRangeSource,
             fieldColorBuildReference,
             { fieldBufferId, resourceKey },
           );

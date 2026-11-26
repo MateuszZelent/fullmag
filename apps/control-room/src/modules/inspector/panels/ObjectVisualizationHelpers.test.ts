@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   selectObjectVisualizationManifestStatus,
   selectObjectVisualizationPanelSnapshot,
+  viewportRenderingPreferencesPatch,
 } from "./ObjectVisualizationHelpers";
 import { resolveSessionDiscretization } from "@/kernel/resources/sessionDiscretization";
 
@@ -83,5 +84,35 @@ describe("selectObjectVisualizationPanelSnapshot", () => {
     );
 
     expect(projected.pendingOverrides).toEqual({ "object:film": pending });
+  });
+});
+
+describe("viewportRenderingPreferencesPatch", () => {
+  it("routes target scalar-range edits to the client-owned quantity/component preference map", () => {
+    expect(
+      viewportRenderingPreferencesPatch({
+        scalarRangePreference: {
+          component: "x",
+          policy: {
+            max: 2,
+            min: -2,
+            mode: "manual",
+            scale: "linear",
+            symmetric: false,
+          },
+          quantityId: "m",
+        },
+      }),
+    ).toEqual({
+      scalarRangePolicies: {
+        "m|x": {
+          max: 2,
+          min: -2,
+          mode: "manual",
+          scale: "linear",
+          symmetric: false,
+        },
+      },
+    });
   });
 });

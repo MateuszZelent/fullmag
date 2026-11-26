@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
+import { buildViewport3DPersistedPreferences } from "./viewport3dAppearancePreferences";
 import {
   DEFAULT_VIEWPORT_3D_CAMERA_STATE,
   buildViewport3DRenderedScalarRangeAliases,
@@ -200,6 +201,7 @@ describe("viewport3dStore", () => {
       effectAmbientOcclusion: false,
       effectAntialias: true,
       effectBloom: false,
+      fdmCellBudget: null,
       fdmTopographyAmplitudeCells: 0,
       fdmTopographyComponent: "z",
       fdmTopographyEnabled: false,
@@ -231,6 +233,7 @@ describe("viewport3dStore", () => {
       effectAmbientOcclusion: false,
       effectAntialias: true,
       effectBloom: false,
+      fdmCellBudget: null,
       fdmTopographyAmplitudeCells: 0,
       fdmTopographyComponent: "z",
       fdmTopographyEnabled: false,
@@ -288,6 +291,29 @@ describe("viewport3dStore", () => {
       fdmTopographyComponent: "magnitude",
       fdmTopographyEnabled: true,
     });
+  });
+
+  it("persists and hydrates the local FDM cell budget preference", () => {
+    viewport3dStore.resetForTest();
+
+    expect(viewport3dStore.getSnapshot().widgets.fdmCellBudget).toBeNull();
+
+    const initial = viewport3dStore.getSnapshot();
+    const preferences = buildViewport3DPersistedPreferences({
+      appearance: initial.appearance,
+      captureReturnProfileId: null,
+      visualProfileId: initial.visualProfileId,
+      widgets: { ...initial.widgets, fdmCellBudget: 300000 },
+    });
+    expect(preferences?.widgets.fdmCellBudget).toBe(300000);
+    expect(viewport3dStore.hydratePersistedPreferences(preferences)).toBe("applied");
+    expect(viewport3dStore.getSnapshot().widgets.fdmCellBudget).toBe(300000);
+
+    viewport3dStore.setFdmCellBudget(75000);
+    expect(viewport3dStore.getSnapshot().widgets.fdmCellBudget).toBe(75000);
+
+    viewport3dStore.setFdmCellBudget(null);
+    expect(viewport3dStore.getSnapshot().widgets.fdmCellBudget).toBeNull();
   });
 
   it("toggles the inspect tool as a viewport-local mode", () => {

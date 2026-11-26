@@ -289,6 +289,7 @@ export function buildFdmSampledScalarColors(
   colorPalette = "viridis",
   scalarRange?: ScalarRange | null,
   domainGridShape?: readonly [number, number, number] | null,
+  rangeSource?: NonNullable<ScalarColorBuffer["rangeSource"]> | null,
 ): ScalarColorBuffer | null {
   const resolvedColorMode = normalizeViewport3DVectorColorMode(
     colorMode,
@@ -346,6 +347,10 @@ export function buildFdmSampledScalarColors(
     colorPalette,
     quantityId: fieldVector.quantityId,
     range,
+    rangeSource:
+      rangeSource === null
+        ? undefined
+        : rangeSource ?? (scalarRange ? "manual" : undefined),
     rangeDiagnostics: resolveScalarRangeDiagnostics(
       fieldVector,
       resolvedColorMode,

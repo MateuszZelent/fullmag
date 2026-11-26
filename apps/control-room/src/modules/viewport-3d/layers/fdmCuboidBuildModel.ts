@@ -38,6 +38,8 @@ export interface FdmCuboidInstanceModel {
   membershipRevision: string;
   /** Realized numeric region IDs, or null for geometry-only previews. */
   regionIds: Uint32Array | null;
+  /** Coverage of the authoritative region boundaries in the displayed voxel set. */
+  boundaryCoverage?: "complete" | "sampled";
 }
 
 function writeFdmCuboidMatrix(
@@ -849,17 +851,33 @@ export function buildFdmCuboidInstanceModel(
   const fieldIndexing = options.fieldVector
     ? buildFdmFieldIndexResolver(options.fieldVector, totalCells)
     : null;
+  const reserveBoundary = options.cellSelection === "active" &&
+    realizedRegionIds !== null &&
+    domain.surfaceCellBudget !== undefined &&
+    fillRatio === 1 &&
+    threshold === 0 &&
+    !topography.enabled;
+  const boundaryCells = reserveBoundary
+    ? selectFdmActiveBoundaryCells(
+        realizedRegionIds,
+        [nx, ny, nz],
+        Math.min(totalCells, domain.surfaceCellBudget ?? 0),
+      )
+    : null;
   const displayCellIndices = unclassifiedPreview
     ? sampleFdmDisplayCellIndices(totalCells, domain.displayCellCount)
-    : sampleFdmDisplayCellIndicesWithMinimumMembership({
-        cellSelection: options.cellSelection,
-        displayCellCount: domain.displayCellCount,
-        fieldIndexing,
-        fieldVector: options.fieldVector,
-        realizedRegionIds: realizedRegionIds!,
-        threshold,
-        totalCells,
-      });
+    : boundaryCells && boundaryCells.length >= domain.displayCellCount
+      ? boundaryCells
+      : sampleFdmDisplayCellIndicesWithMinimumMembership({
+          boundaryCells,
+          cellSelection: options.cellSelection,
+          displayCellCount: domain.displayCellCount,
+          fieldIndexing,
+          fieldVector: options.fieldVector,
+          realizedRegionIds: realizedRegionIds!,
+          threshold,
+          totalCells,
+        });
   if (displayCellIndices.length <= 0) return null;
   const sampledCellIndices = new Uint32Array(displayCellIndices.length);
   let sampledCellCount = 0;
@@ -943,6 +961,7 @@ export function buildFdmCuboidInstanceModel(
     matrixContentRevision: resolveFdmCuboidMatrixContentRevision(matrices),
     membershipRevision: resolveFdmCuboidMembershipRevision(cellIndices),
     regionIds: sampledRegionIds,
+    ...(reserveBoundary ? { boundaryCoverage: boundaryCells ? "complete" : "sampled" } : {}),
   };
 }
 
@@ -1077,7 +1096,38 @@ function sampleNativeLayerCellIndices(
   return sampled;
 }
 
+/**
+ * Reserve the complete shell before sampling the remaining volume. A region
+ * interface counts on both sides so selecting a region still has a surface.
+ */
+function selectFdmActiveBoundaryCells(
+  regionIds: Uint32Array,
+  [nx, ny, nz]: readonly [number, number, number],
+  budget: number,
+): Uint32Array | null {
+  const surface = new Uint32Array(budget);
+  const plane = nx * ny;
+  let count = 0;
+  for (let cell = 0; cell < regionIds.length; cell += 1) {
+    const region = regionIds[cell];
+    if (region === FMRM_INACTIVE_REGION_ID) continue;
+    const x = cell % nx;
+    const y = Math.floor(cell / nx) % ny;
+    const z = Math.floor(cell / plane);
+    const interior = x > 0 && x < nx - 1 &&
+      y > 0 && y < ny - 1 && z > 0 && z < nz - 1 &&
+      regionIds[cell - 1] === region && regionIds[cell + 1] === region &&
+      regionIds[cell - nx] === region && regionIds[cell + nx] === region &&
+      regionIds[cell - plane] === region && regionIds[cell + plane] === region;
+    if (interior) continue;
+    if (count === budget) return null;
+    surface[count++] = cell;
+  }
+  return surface.subarray(0, count);
+}
+
 function sampleFdmDisplayCellIndicesWithMinimumMembership({
+  boundaryCells,
   cellSelection,
   displayCellCount,
   fieldIndexing,
@@ -1086,6 +1136,7 @@ function sampleFdmDisplayCellIndicesWithMinimumMembership({
   threshold,
   totalCells,
 }: {
+  boundaryCells: Uint32Array | null;
   cellSelection: FdmCuboidCellSelection;
   displayCellCount: number;
   fieldIndexing: FdmFieldIndexingResult | null;
@@ -1118,9 +1169,16 @@ function sampleFdmDisplayCellIndicesWithMinimumMembership({
   }
   if (firstCellByRegion.size === 0) return new Uint32Array();
 
-  const selected = new Set<number>();
+  const selected = new Set<number>(boundaryCells ?? undefined);
   const selectedCountByRegion = new Map<number, number>();
+  for (const cellIndex of selected) {
+    const regionId = realizedRegionIds[cellIndex];
+    selectedCountByRegion.set(regionId, (selectedCountByRegion.get(regionId) ?? 0) + 1);
+  }
   for (const cellIndex of baseSample) {
+    if (selected.size === budget) break;
+    if (selected.has(cellIndex)) continue;
+
     const regionId = realizedRegionIds[cellIndex] ?? FMRM_INACTIVE_REGION_ID;
     if (!cellMatchesSelection(regionId, cellSelection)) continue;
     if (
@@ -1139,7 +1197,8 @@ function sampleFdmDisplayCellIndicesWithMinimumMembership({
       (selectedCountByRegion.get(regionId) ?? 0) + 1,
     );
   }
-  for (const [regionId, cellIndex] of [...firstCellByRegion].toSorted(
+  // A complete boundary already contains at least one cell from every region.
+  for (const [regionId, cellIndex] of (boundaryCells ? [] : [...firstCellByRegion]).toSorted(
     ([left], [right]) => left - right,
   )) {
     if ((selectedCountByRegion.get(regionId) ?? 0) > 0) continue;
@@ -1166,11 +1225,8 @@ function sampleFdmDisplayCellIndicesWithMinimumMembership({
     selected.add(cellIndex);
     selectedCountByRegion.set(regionId, 1);
   }
-  // Second pass: inject all matching cells that the stride-based sampling
-  // missed.  Active cells are typically a small fraction of the grid, so
-  // injecting them all keeps the budget nearly unchanged while eliminating
-  // visible gaps in the ferromagnet.
-  for (let cellIndex = 0; cellIndex < totalCells; cellIndex += 1) {
+  // Fill any remaining slots with eligible voxels outside the global stride.
+  for (let cellIndex = 0; cellIndex < totalCells && selected.size < budget; cellIndex += 1) {
     if (selected.has(cellIndex)) continue;
     const regionId = realizedRegionIds[cellIndex] ?? FMRM_INACTIVE_REGION_ID;
     if (!cellMatchesSelection(regionId, cellSelection)) continue;
@@ -1184,7 +1240,7 @@ function sampleFdmDisplayCellIndicesWithMinimumMembership({
     ) {
       continue;
     }
-    if (selected.size < budget) selected.add(cellIndex);
+    selected.add(cellIndex);
   }
   return Uint32Array.from([...selected].toSorted((left, right) => left - right));
 }
@@ -1800,7 +1856,10 @@ export function estimateFdmCuboidBuildOutputBytes(
 ): number {
   const modelCount = request.vectorOnly
     ? 0
-    : Math.max(0, request.domain?.displayCellCount ?? 0);
+    : Math.max(
+        request.domain?.displayCellCount ?? 0,
+        request.cellSelection === "active" ? request.domain?.surfaceCellBudget ?? 0 : 0,
+      );
   const vectorCount = Math.min(
     modelCount,
     Math.max(0, request.vectorField?.pointCount ?? 0),

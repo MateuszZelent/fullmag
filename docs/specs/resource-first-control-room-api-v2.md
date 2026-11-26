@@ -2403,3 +2403,22 @@ blokować ten przypadek; pełna naprawa wymaga spójnego nowego API i frontendu.
 Generowany OpenAPI, typy i klienci powstają przez `just docker-dev-codegen`
 z rzeczywiście zbudowanego API; nie wolno dopisywać pola ręcznie wyłącznie
 w wygenerowanym schemacie.
+
+
+### Historia błędów aktywnej sesji
+
+`GET /v2/sessions/current/diagnostics/session-errors` odczytuje historię
+z bazy workspace backendu. Identyfikator sesji pochodzi z aktywnej sesji oraz
+wymaganego nagłówka `X-Fullmag-Session-Scope`. Zmiana sesji nie przenosi jej
+historii do nowej. W obrębie tej samej sesji historia jest dostępna po odświeżeniu
+strony i z innej karty.
+
+`POST` przyjmuje do 20 zdarzeń diagnostycznych z identyfikatorami ponowień.
+Backend scala powtarzające się problemy i przechowuje 150 najnowszych wpisów
+oraz identyfikatory 4096 ostatnich zdarzeń do rozpoznawania ponowień.
+`DELETE` aktualizuje generację czyszczenia. Opóźniony zapis oparty na
+poprzedniej generacji zwraca `409 session_error_history_cleared`.
+Odczyt zwraca czas ostatniego czyszczenia według backendu, więc druga karta
+może ponowić zapis zdarzeń zarejestrowanych po tym czasie.
+Zapiski z przeglądarki sprzed migracji są przesyłane jako zdarzenia importu.
+Przeglądarka zachowuje lokalnie oczekujące zdarzenia do potwierdzenia zapisu.

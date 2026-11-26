@@ -50,6 +50,8 @@ const FILTER_OPTIONS: ReadonlyArray<{ id: CategoryFilter; label: string }> = [
   { id: "model", label: "Model" },
 ];
 
+const EMPTY_RECORDED_ERRORS: readonly SessionErrorEntry[] = [];
+
 export function ExplorerErrorsPanel() {
   const recorded = useSessionErrors();
   const [categoryFilter, setCategoryFilter] = useState<CategoryFilter>("all");
@@ -78,6 +80,10 @@ export function ExplorerErrorsPanel() {
         previous?.meshRevision === next?.meshRevision,
     },
   );
+  const activeSessionId = sessionMeta?.sessionId ?? null;
+  const recordedMatchesSession = recorded.sessionId === activeSessionId;
+  const currentRecordedEntries = recordedMatchesSession ? recorded.entries : EMPTY_RECORDED_ERRORS;
+  const currentRecordedSessionId = recordedMatchesSession ? recorded.sessionId : activeSessionId;
   const currentRun = useCurrentRunResource({ enabled: true });
 
   // Pull live backend/model Problems so pre-existing server failures (e.g. failed
@@ -133,7 +139,7 @@ export function ExplorerErrorsPanel() {
           message,
           path: row.id,
           requestId: null,
-          sessionId: sessionMeta?.sessionId ?? recorded.sessionId,
+          sessionId: sessionMeta?.sessionId ?? currentRecordedSessionId,
           severity: row.severity === "warning" ? "warning" : "error",
           source: `backend:${row.source}`,
           title,
@@ -145,13 +151,13 @@ export function ExplorerErrorsPanel() {
     latestSuccessfulMesh.data,
     meshBuild.data,
     preparation.data,
-    recorded.sessionId,
+    currentRecordedSessionId,
     sessionMeta?.sessionId,
   ]);
 
   const allEntries = useMemo(
-    () => mergeErrorLists(recorded.entries, liveBackendEntries),
-    [recorded.entries, liveBackendEntries],
+    () => mergeErrorLists(currentRecordedEntries, liveBackendEntries),
+    [currentRecordedEntries, liveBackendEntries],
   );
 
   const categoryCounts = useMemo(() => {
@@ -192,7 +198,7 @@ export function ExplorerErrorsPanel() {
       meshRevision: sessionMeta?.meshRevision ?? null,
       runId: currentRun.data?.run_id ?? null,
       sceneRevision: sessionMeta?.sceneRevision ?? null,
-      sessionId: sessionMeta?.sessionId ?? recorded.sessionId,
+      sessionId: sessionMeta?.sessionId ?? currentRecordedSessionId,
       sessionName: sessionMeta?.sessionName ?? null,
       url: typeof window !== "undefined" ? window.location.href : null,
       userAgent: typeof navigator !== "undefined" ? navigator.userAgent : null,
@@ -201,7 +207,7 @@ export function ExplorerErrorsPanel() {
           ? `${window.innerWidth}×${window.innerHeight}`
           : null,
     }),
-    [currentRun.data?.run_id, recorded.sessionId, sessionMeta],
+    [currentRun.data?.run_id, currentRecordedSessionId, sessionMeta],
   );
 
   const flashCopied = useCallback((id: string) => {
@@ -250,6 +256,17 @@ export function ExplorerErrorsPanel() {
 
   const errorTotal = allEntries.filter((e) => e.severity === "error").length;
   const warningTotal = allEntries.filter((e) => e.severity === "warning").length;
+  const syncMessage = !recordedMatchesSession || !recorded.sessionId
+    ? null
+    : recorded.syncStatus === "offline"
+      ? `Offline. ${recorded.pendingClear ? "The clear is queued. " : ""}${recorded.pendingCount > 0 ? `${recorded.pendingCount} pending diagnostic${recorded.pendingCount === 1 ? " is" : "s are"} saved for retry.` : "History will refresh when the connection returns."}`
+      : recorded.pendingClear
+        ? "Clearing saved session error history…"
+        : recorded.pendingCount > 0
+          ? `Saving ${recorded.pendingCount} pending diagnostic${recorded.pendingCount === 1 ? "" : "s"}…`
+          : recorded.syncStatus === "loading"
+            ? "Loading saved session error history…"
+            : null;
 
   return (
     <div
@@ -285,7 +302,7 @@ export function ExplorerErrorsPanel() {
             </Button>
             <Button
               aria-label="Clear recorded session errors"
-              disabled={recorded.entries.length === 0}
+              disabled={currentRecordedEntries.length === 0}
               size="icon"
               title="Clear recorded session errors"
               type="button"
@@ -319,6 +336,8 @@ export function ExplorerErrorsPanel() {
           )}
         </Button>
       </section>
+
+      {syncMessage ? <p role="status">{syncMessage}</p> : null}
 
       <div className="fm-explorer-errors__filters">
         <div

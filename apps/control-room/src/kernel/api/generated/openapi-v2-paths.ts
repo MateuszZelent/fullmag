@@ -187,6 +187,7 @@ export const openApiV2PathLiterals = [
   "/v2/sessions/current/diagnostics/engine-log",
   "/v2/sessions/current/diagnostics/gpu",
   "/v2/sessions/current/diagnostics/performance",
+  "/v2/sessions/current/diagnostics/session-errors",
   "/v2/sessions/current/diagnostics/solver-profile",
   "/v2/sessions/current/events/communication-policy",
   "/v2/sessions/current/events/ws",

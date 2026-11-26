@@ -246,6 +246,7 @@ export interface Viewport3DColorbarLegend {
   minLabel: string;
   paletteGradient: string;
   quantityId?: string;
+  rangeSource?: NonNullable<ScalarColorBuffer["rangeSource"]>;
   range?: MeshQualityRange | null;
   rangeState?: Viewport3DColorbarPlan["rangeState"];
   scopeId?: string | null;
@@ -445,6 +446,7 @@ function resolveViewport3DColorbarLegendFromPlan({
         : "pending",
       paletteGradient: viewport3DColorPaletteGradientCss(plan.palette),
       quantityId: plan.quantityId,
+      rangeSource: plan.rangeSource,
       range: plan.range,
       rangeState: plan.rangeState,
       scopeId: plan.scopeId,

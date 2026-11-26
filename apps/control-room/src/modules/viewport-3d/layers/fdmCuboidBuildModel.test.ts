@@ -775,6 +775,71 @@ describe("FDM cuboid realized membership", () => {
     );
   });
 
+  it("preserves both film surfaces on the 917,504-cell grid in Auto", () => {
+    const plane = 512 * 256;
+    const totalCells = plane * 7;
+    const realizedRegionIds = new Uint32Array(totalCells).fill(FMRM_INACTIVE_REGION_ID);
+    realizedRegionIds.fill(1, 5 * plane);
+    const domain = {
+      bounds: null,
+      displayCellBudget: 150_000,
+      displayCellCount: 150_000,
+      surfaceCellBudget: 300_000,
+      kind: "fdm-grid" as const,
+      origin: [0, 0, 0] as [number, number, number],
+      shape: [512, 256, 7] as [number, number, number],
+      spacing: [1, 1, 1] as [number, number, number],
+      stride: 7,
+      totalCells,
+    };
+
+    const exact = buildFdmCuboidInstanceModel(domain, {
+      cellSelection: "active",
+      realizedRegionIds,
+      voxelFillRatio: 1,
+    });
+
+    expect(exact?.boundaryCoverage).toBe("complete");
+    expect(exact?.count).toBe(2 * plane);
+    expect(exact?.cellIndices.every((cellIndex, index) => cellIndex === 5 * plane + index)).toBe(true);
+    expect(exact?.cellSize).toEqual([1, 1, 1]);
+
+    const sampled = buildFdmCuboidInstanceModel({ ...domain, surfaceCellBudget: 150_000 }, {
+      cellSelection: "active",
+      realizedRegionIds,
+      voxelFillRatio: 1,
+    });
+
+    expect(sampled?.boundaryCoverage).toBe("sampled");
+    expect(sampled?.count).toBe(150_000);
+  });
+
+  it("reserves both sides of region interfaces before adding interior samples", () => {
+    const realizedRegionIds = Uint32Array.from({ length: 64 }, (_, cell) => cell % 4 < 2 ? 1 : 2);
+    const domain = {
+      bounds: null,
+      displayCellBudget: 20,
+      displayCellCount: 20,
+      surfaceCellBudget: 64,
+      kind: "fdm-grid" as const,
+      origin: [0, 0, 0] as [number, number, number],
+      shape: [4, 4, 4] as [number, number, number],
+      spacing: [1, 1, 1] as [number, number, number],
+      stride: 4,
+      totalCells: 64,
+    };
+
+    const exact = buildFdmCuboidInstanceModel(domain, {
+      cellSelection: "active",
+      realizedRegionIds,
+      voxelFillRatio: 1,
+    });
+
+    expect(exact?.boundaryCoverage).toBe("complete");
+    // Every cell is on the outer boundary or the internal x=1/x=2 interface.
+    expect(exact?.count).toBe(64);
+  });
+
   it("fails closed instead of building authored cell cuboids for an unmaterialized selection", () => {
     const domain = {
       bounds: null,

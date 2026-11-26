@@ -16,10 +16,12 @@ import {
   applyViewport3DAppearancePatch,
   DEFAULT_VIEWPORT_3D_APPEARANCE_PREFERENCES,
   DEFAULT_VIEWPORT_3D_PERSISTED_WIDGET_PREFERENCES,
+  normalizeViewport3DFdmCellBudget,
   resolveViewport3DAppearanceDiagnostics,
   type Viewport3DAppearanceDiagnostics,
   type Viewport3DAppearancePreferences,
   type Viewport3DAppearanceSection,
+  type Viewport3DFdmCellBudget,
   type Viewport3DPersistedPreferences,
 } from "./viewport3dAppearancePreferences";
 import {
@@ -172,6 +174,7 @@ interface Viewport3DWidgetState {
   effectAmbientOcclusion: boolean;
   effectAntialias: boolean;
   effectBloom: boolean;
+  fdmCellBudget: Viewport3DFdmCellBudget;
   fdmTopographyAmplitudeCells: number;
   fdmTopographyComponent: Viewport3DFdmTopographyComponent;
   fdmTopographyEnabled: boolean;
@@ -226,6 +229,7 @@ const DEFAULT_VIEWPORT_3D_STATE: Viewport3DCommandState = {
     effectAmbientOcclusion: false,
     effectAntialias: true,
     effectBloom: false,
+    fdmCellBudget: null,
     fdmTopographyAmplitudeCells: 0,
     fdmTopographyComponent: "z",
     fdmTopographyEnabled: false,
@@ -443,6 +447,7 @@ class Viewport3DStore {
     if (resetAll) {
       widgets = {
         ...widgets,
+        fdmCellBudget: DEFAULT_VIEWPORT_3D_PERSISTED_WIDGET_PREFERENCES.fdmCellBudget,
         viewCubeVisible: DEFAULT_VIEWPORT_3D_PERSISTED_WIDGET_PREFERENCES.viewCubeVisible,
         hslReferenceMode: DEFAULT_VIEWPORT_3D_PERSISTED_WIDGET_PREFERENCES.hslReferenceMode,
       };
@@ -1006,6 +1011,17 @@ class Viewport3DStore {
     this.notify();
   }
 
+  setFdmCellBudget(budget: Viewport3DFdmCellBudget): void {
+    const nextBudget = normalizeViewport3DFdmCellBudget(budget);
+    if (this.snapshot.widgets.fdmCellBudget === nextBudget) return;
+    this.markPersistedPreferenceChange();
+    this.snapshot = {
+      ...this.snapshot,
+      widgets: { ...this.snapshot.widgets, fdmCellBudget: nextBudget },
+    };
+    this.notify();
+  }
+
   setFdmTopographyAmplitudeCells(amplitudeCells: number): void {
     const nextAmplitude = normalizeFdmTopographyAmplitudeCells(amplitudeCells);
     if (this.snapshot.widgets.fdmTopographyAmplitudeCells === nextAmplitude) {
@@ -1309,6 +1325,7 @@ function samePersistedViewport3DPreferences(
     a.dimensionFrameMode === b.dimensionFrameMode &&
     a.dimensionFrameDensity === b.dimensionFrameDensity &&
     a.dimensionFrameAnnotation === b.dimensionFrameAnnotation &&
+    a.fdmCellBudget === b.fdmCellBudget &&
     a.scaleUnitMode === b.scaleUnitMode &&
     a.scaleLabelsVisible === b.scaleLabelsVisible &&
     a.viewCubeVisible === b.viewCubeVisible &&

@@ -1,6 +1,6 @@
 import { diagnosticsSummaryIntervalMs } from "../realtime/communicationPolicy";
 
-type RequestOutcome = "ok" | "error" | "network-error" | "aborted";
+type RequestOutcome = "ok" | "deferred" | "error" | "network-error" | "aborted";
 export type TransportChannel = "http" | "performance" | "websocket";
 export type TransportDirection = "rx" | "tx";
 type TransportOutcome = RequestOutcome | "sent";
@@ -22,8 +22,15 @@ export interface RequestDiagnosticEntry {
   path: string;
   requestId: string;
   resourceKey?: string | null;
+  sessionScopeKey?: string | null;
   status: number | null;
   timestampMs: number;
+}
+
+export function isRequestDiagnosticFailure(entry: RequestDiagnosticEntry): boolean {
+  if (entry.outcome === "deferred") return false;
+  return entry.outcome === "error" || entry.outcome === "network-error" ||
+    (entry.status !== null && entry.status >= 400);
 }
 
 export interface RequestDiagnosticRecord {
@@ -40,6 +47,7 @@ export interface RequestDiagnosticRecord {
   path: string;
   requestId: string;
   resourceKey?: string | null;
+  sessionScopeKey?: string | null;
   status?: number | null;
   timestampMs?: number;
 }
@@ -105,6 +113,7 @@ export class RequestDiagnosticsController {
       path: entry.path,
       requestId: entry.requestId,
       resourceKey: entry.resourceKey ?? null,
+      sessionScopeKey: entry.sessionScopeKey ?? null,
       status: entry.status ?? null,
       timestampMs,
     };
@@ -285,6 +294,7 @@ function aggregatedTransportSignature(entry: RequestDiagnosticEntry): string | n
 
   return [
     entry.channel,
+    entry.sessionScopeKey,
     entry.direction,
     entry.method,
     entry.outcome,

@@ -1,3 +1,5 @@
+import type { RequestDiagnosticEntry } from "../../api/RequestDiagnosticsController";
+
 export const DIAGNOSTIC_ARTIFACT_VERSION = 1;
 
 export const DIAGNOSTIC_EVENT_NAMES = {
@@ -63,18 +65,11 @@ export interface DiagnosticRecord {
   timestampMs: number;
 }
 
-type DiagnosticRequestOutcome =
-  | "aborted"
-  | "error"
-  | "network-error"
-  | "ok"
-  | "sent";
-
 export interface DiagnosticRequestRecord extends DiagnosticRecord {
   contentType: string | null;
   etag: string | null;
   method: string;
-  outcome: DiagnosticRequestOutcome;
+  outcome: RequestDiagnosticEntry["outcome"];
   path: string;
   query: string | null;
   requestId: string | null;

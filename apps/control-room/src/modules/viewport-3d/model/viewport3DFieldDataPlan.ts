@@ -15,6 +15,7 @@ import {
   surfaceColorSourceToColorMode,
   type SurfaceFieldProjectionMode,
   type SurfaceColorSource,
+  type ViewportScalarRangePolicy,
   type VisualizationGeometryScope,
   type VisualizationTargetKind,
   type VisualizationTargetSettings,
@@ -70,13 +71,7 @@ export type Viewport3DFieldScopeKind =
   | "region"
   | "selection";
 
-export interface Viewport3DScalarRangePolicy {
-  max: number | null;
-  min: number | null;
-  mode: "auto" | "manual" | "shared";
-  scale: "diverging" | "linear" | "log";
-  symmetric: boolean;
-}
+export type Viewport3DScalarRangePolicy = ViewportScalarRangePolicy;
 
 export interface Viewport3DTargetRenderPlan {
   tensorProjection: TensorProjectionToken | null;
@@ -286,6 +281,42 @@ export const DEFAULT_VIEWPORT_3D_SCALAR_RANGE_POLICY: Viewport3DScalarRangePolic
   symmetric: false,
 };
 
+/**
+ * Applies a valid manual range only when target identity, quantity, and scalar
+ * color component still match. Otherwise, retain the data-derived range.
+ */
+export function resolveViewport3DTargetScalarRange({
+  colorMode,
+  fallbackRange,
+  fieldQuantityId,
+  targetPlan,
+}: {
+  colorMode: string;
+  fallbackRange: { max: number; min: number } | null | undefined;
+  fieldQuantityId: string | null | undefined;
+  targetPlan: Viewport3DTargetRenderPlan | null | undefined;
+}): { max: number; min: number } | null {
+  if (
+    targetPlan &&
+    fieldQuantityId &&
+    sameViewport3DQuantityIdForPlanning(targetPlan.quantityId, fieldQuantityId) &&
+    targetPlan.shader.scalarColorMode === colorMode
+  ) {
+    const policy = targetPlan.shader.scalarRangePolicy;
+    if (
+      policy.mode === "manual" &&
+      typeof policy.min === "number" &&
+      typeof policy.max === "number" &&
+      Number.isFinite(policy.min) &&
+      Number.isFinite(policy.max) &&
+      policy.min < policy.max
+    ) {
+      return { max: policy.max, min: policy.min };
+    }
+  }
+  return fallbackRange ?? null;
+}
+
 export function buildViewport3DTargetRenderPlan({
   label,
   quantityId,
@@ -299,6 +330,7 @@ export function buildViewport3DTargetRenderPlan({
     tensorProjection?: string | null;
     geometryScope: VisualizationGeometryScope;
     scalarColorPalette: string;
+    scalarRangePolicy?: Viewport3DScalarRangePolicy;
     shaderMonoColor: string;
     shaderVisible: boolean;
     surfaceColorSource: SurfaceColorSource;
@@ -348,7 +380,8 @@ export function buildViewport3DTargetRenderPlan({
       monoColor: settings.shaderMonoColor,
       palette: settings.scalarColorPalette,
       scalarColorMode,
-      scalarRangePolicy: DEFAULT_VIEWPORT_3D_SCALAR_RANGE_POLICY,
+      scalarRangePolicy:
+        settings.scalarRangePolicy ?? DEFAULT_VIEWPORT_3D_SCALAR_RANGE_POLICY,
       surfaceColorSource: settings.surfaceColorSource,
       projectionMode: settings.surfaceProjectionMode,
       visible: visible && settings.shaderVisible,
