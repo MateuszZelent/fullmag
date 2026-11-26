@@ -22,6 +22,7 @@ export interface RequestDiagnosticEntry {
   path: string;
   requestId: string;
   resourceKey?: string | null;
+  sessionScopeKey?: string | null;
   status: number | null;
   timestampMs: number;
 }
@@ -46,6 +47,7 @@ export interface RequestDiagnosticRecord {
   path: string;
   requestId: string;
   resourceKey?: string | null;
+  sessionScopeKey?: string | null;
   status?: number | null;
   timestampMs?: number;
 }
@@ -111,6 +113,7 @@ export class RequestDiagnosticsController {
       path: entry.path,
       requestId: entry.requestId,
       resourceKey: entry.resourceKey ?? null,
+      sessionScopeKey: entry.sessionScopeKey ?? null,
       status: entry.status ?? null,
       timestampMs,
     };
@@ -291,6 +294,7 @@ function aggregatedTransportSignature(entry: RequestDiagnosticEntry): string | n
 
   return [
     entry.channel,
+    entry.sessionScopeKey,
     entry.direction,
     entry.method,
     entry.outcome,

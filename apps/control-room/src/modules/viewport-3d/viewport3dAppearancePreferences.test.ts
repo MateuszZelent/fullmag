@@ -80,7 +80,7 @@ describe("viewport3dAppearancePreferences", () => {
     }));
     expect(parsed).toMatchObject({
       appearance: { backgroundMode: "gradient", backgroundStrength: 0.65 },
-      widgets: { viewCubeVisible: false },
+      widgets: { fdmCellBudget: null, viewCubeVisible: false },
       visualProfileId: "figure",
     });
     expect(parsed?.appearance).not.toHaveProperty("fieldShading");
@@ -97,7 +97,7 @@ describe("viewport3dAppearancePreferences", () => {
       appearance: { backgroundMode: "gradient" },
       captureReturnProfileId: null,
       visualProfileId: "figure",
-      widgets: { dimensionFrameDensity: "fine", effectBloom: true },
+      widgets: { dimensionFrameDensity: "fine", effectBloom: true, fdmCellBudget: 75000 },
       camera: { position: [1, 2, 3] },
     };
     const preferences = buildViewport3DPersistedPreferences(source);
@@ -105,6 +105,7 @@ describe("viewport3dAppearancePreferences", () => {
     expect(preferences?.widgets).toMatchObject({
       dimensionFrameDensity: "fine",
       effectBloom: true,
+      fdmCellBudget: 75000,
     });
     expect(preferences && "camera" in preferences).toBe(false);
     expect(preferences && JSON.parse(serializeViewport3DPersistedPreferences(preferences)).camera)
@@ -114,6 +115,22 @@ describe("viewport3dAppearancePreferences", () => {
       visualProfileId: "capture",
       captureReturnProfileId: null,
     })).toBeNull();
+  });
+
+  it("migrates earlier v1 preferences to Auto and rejects unsupported FDM budgets", () => {
+    const parseBudget = (fdmCellBudget: unknown) => parseViewport3DPersistedPreferences(JSON.stringify({
+      schemaVersion: 1,
+      appearance: {},
+      widgets: { fdmCellBudget },
+      visualProfileId: "interactive",
+    }))?.widgets.fdmCellBudget;
+
+    expect(parseBudget(undefined)).toBeNull();
+    expect(parseBudget(75000)).toBe(75000);
+    expect(parseBudget(150000)).toBe(150000);
+    expect(parseBudget(300000)).toBe(300000);
+    expect(parseBudget(100000)).toBeNull();
+    expect(parseBudget("300000")).toBeNull();
   });
 
   it("reports a reason when a profile suppresses requested antialiasing", () => {

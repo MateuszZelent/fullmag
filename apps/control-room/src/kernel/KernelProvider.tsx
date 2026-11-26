@@ -9,7 +9,11 @@ import { sessionPreviewSelection } from "./layout/sessionPreviewSelection";
 
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 
-import { SESSION_EVENTS_WS_PATH, VISUALIZATION_STATE_PATH } from "./api/apiPaths";
+import {
+  DIAGNOSTICS_SESSION_ERRORS_PATH,
+  SESSION_EVENTS_WS_PATH,
+  VISUALIZATION_STATE_PATH,
+} from "./api/apiPaths";
 import { planarMonitorFramePreviewStore } from "./workspace/planarMonitorFramePreview";
 import type {
   ResourceRevision,
@@ -67,7 +71,7 @@ import { RealtimeConnectionController } from "./realtime/RealtimeConnectionContr
 import { RealtimeInvalidationBridge } from "./realtime/RealtimeInvalidationBridge";
 import { useSimulationStartupOverlayVisibility } from "./layout/SimulationStartupOverlay";
 import { ResourceInvalidationController } from "./resources/ResourceInvalidationController";
-import { sharedResourceRuntimeStore } from "./resources/ResourceRuntimeStore";
+import { sessionScopeKeyFromResourceKey, sharedResourceRuntimeStore } from "./resources/ResourceRuntimeStore";
 import { resourceRuntimeKeyForClientScope } from "./resources/resourceClientScope";
 import {
   acquireViewport3DWorkerRuntime,
@@ -139,15 +143,16 @@ function createKernel(): KernelApi {
       recordBinaryDecodeDiagnostic(diagnosticRecorder, event);
     },
   });
+  const commands = new CommandRegistry();
   const api = new ControlRoomApi({
     baseUrl: resolveControlRoomApiBase(),
     binaryDecodeScheduler,
     diagnostics,
+    getDiagnosticSessionScope: () => commands.getSessionScopeKey() ?? null,
   });
   const savedResultsPlayback = new SavedResultsPlaybackController();
   const savedRun = new SavedRunController();
   const projectDocument = new ProjectDocumentController(api);
-  const commands = new CommandRegistry();
   commands.attachSessionScopeSource(
     createCommandSessionScopeSource(
       sharedResourceRuntimeStore,
@@ -476,6 +481,7 @@ function RealtimeConnector({ kernel, sessionIdentity }: { kernel: KernelApi; ses
       diagnostics: kernel.diagnostics,
       expectedRequestScopeEpoch,
       expectedSessionId,
+      sessionScopeKey,
       expectedApiInstance: kernel.api.getExpectedApiInstance(),
       onReconnected: () => {
         kernel.realtime.handleReconnect();
@@ -952,18 +958,158 @@ function InstanceTabVisibilityConnector() {
 
 function SessionErrorConnector({ kernel }: { kernel: KernelApi }) {
   const sessionIdentity = useSessionResourceIdentity();
+  const sessionScopeKey = sessionRequestScopeKey(sessionIdentity);
   const seenCommandIdsRef = useRef<Set<string>>(new Set());
 
   useEffect(() => {
-    sessionErrorStore.setSessionId(sessionIdentity?.sessionId ?? null);
-  }, [sessionIdentity?.sessionId]);
+    sessionErrorStore.setSessionScope(sessionIdentity?.sessionId ?? null, sessionScopeKey);
+  }, [sessionIdentity?.sessionId, sessionScopeKey]);
+
+  useEffect(() => {
+    const sessionId = sessionIdentity?.sessionId;
+    if (!sessionId || !sessionScopeKey) return;
+    const abortController = new AbortController();
+    const requestOptions = { sessionScopeKey, signal: abortController.signal };
+    let active = true;
+    let running = false;
+    let rerun = false;
+    let refreshRequested = true;
+    let appendTimer: number | null = null;
+
+    const synchronize = async (): Promise<void> => {
+      if (!active) return;
+      if (running) {
+        rerun = true;
+        return;
+      }
+      const refresh = refreshRequested;
+      refreshRequested = false;
+      if (!refresh && !sessionErrorStore.hasPendingClear() && !sessionErrorStore.getAppendBatch()) return;
+      running = true;
+      try {
+        if (navigator.onLine === false) throw new Error("Browser is offline");
+        sessionErrorStore.markSyncing(sessionScopeKey);
+        if (refresh) {
+          const history = await kernel.api.diagnostics.sessionErrors(requestOptions);
+          if (!active) return;
+          sessionErrorStore.applyResource(sessionScopeKey, history);
+        }
+
+        if (sessionErrorStore.hasPendingClear()) {
+          try {
+            const cleared = await kernel.api.diagnostics.clearSessionErrors(requestOptions);
+            if (!active) return;
+            sessionErrorStore.acknowledgeClear(sessionScopeKey, cleared);
+          } catch {
+            if (!active) return;
+            // A clear may have committed even if its response was lost. Read the
+            // authoritative generation before deciding whether to retry it.
+            const history = await kernel.api.diagnostics.sessionErrors(requestOptions);
+            if (!active) return;
+            sessionErrorStore.applyResource(sessionScopeKey, history);
+            if (sessionErrorStore.hasPendingClear()) {
+              sessionErrorStore.markSyncFailed(sessionScopeKey);
+              return;
+            }
+          }
+        }
+
+        let recoveredClearGenerationConflict = false;
+        while (active && !sessionErrorStore.hasPendingClear()) {
+          const batch = sessionErrorStore.getAppendBatch();
+          if (!batch) break;
+          try {
+            const resource = await kernel.api.diagnostics.appendSessionErrors(batch, requestOptions);
+            if (!active) return;
+            sessionErrorStore.acknowledgeAppend(
+              sessionScopeKey,
+              batch.events.map((event) => event.eventId),
+              resource,
+            );
+          } catch (error) {
+            if (active && error instanceof ControlRoomApiError &&
+              error.code === "session_error_history_cleared" && !recoveredClearGenerationConflict) {
+              recoveredClearGenerationConflict = true;
+              sessionErrorStore.markGenerationUnknown(sessionScopeKey);
+              const history = await kernel.api.diagnostics.sessionErrors(requestOptions);
+              if (!active) return;
+              sessionErrorStore.applyResource(sessionScopeKey, history);
+              const nextBatch = sessionErrorStore.getAppendBatch();
+              const stillSameBatch = nextBatch?.clearGeneration === batch.clearGeneration &&
+                batch.events.some((event) => nextBatch.events.some((next) => next.eventId === event.eventId));
+              if (stillSameBatch) {
+                sessionErrorStore.markSyncFailed(sessionScopeKey);
+                return;
+              }
+              continue;
+            }
+            throw error;
+          }
+        }
+        if (active) sessionErrorStore.markSyncReady(sessionScopeKey);
+      } catch {
+        if (active) sessionErrorStore.markSyncFailed(sessionScopeKey);
+      } finally {
+        running = false;
+        if (active && rerun) {
+          rerun = false;
+          void synchronize();
+        }
+      }
+    };
+
+    const schedule = (refresh: boolean) => {
+      if (refresh && appendTimer !== null) {
+        window.clearTimeout(appendTimer);
+        appendTimer = null;
+      }
+      refreshRequested = refreshRequested || refresh;
+      void synchronize();
+    };
+    const scheduleAppend = () => {
+      if (appendTimer !== null) return;
+      appendTimer = window.setTimeout(() => {
+        appendTimer = null;
+        schedule(false);
+      }, 200);
+    };
+    const onOnline = () => schedule(true);
+    const onFocus = () => {
+      if (document.visibilityState !== "hidden") schedule(true);
+    };
+    const onVisibilityChange = () => {
+      if (document.visibilityState === "visible") schedule(true);
+    };
+    const unsubscribeOutbox = sessionErrorStore.subscribeOutbox(scheduleAppend);
+    const unsubscribeConnection = kernel.bus.on("session:status-changed", ({ status }) => {
+      if (status === "connected") schedule(true);
+    });
+    window.addEventListener("online", onOnline);
+    window.addEventListener("focus", onFocus);
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    schedule(true);
+
+    return () => {
+      active = false;
+      abortController.abort();
+      if (appendTimer !== null) window.clearTimeout(appendTimer);
+      unsubscribeOutbox();
+      unsubscribeConnection();
+      window.removeEventListener("online", onOnline);
+      window.removeEventListener("focus", onFocus);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+    };
+  }, [kernel, sessionIdentity?.sessionId, sessionScopeKey]);
 
   useEffect(() => {
     const unsubscribeRequests = kernel.diagnostics.subscribeRecords((entry) => {
+      const diagnosticPath = entry.path.split("?", 1)[0];
+      if (diagnosticPath === DIAGNOSTICS_SESSION_ERRORS_PATH) return;
       if (!isRequestDiagnosticFailure(entry)) return;
+      if ((entry.sessionScopeKey ?? null) !== (kernel.commands.getSessionScopeKey() ?? null)) return;
       const statusLabel =
         entry.status !== null ? `HTTP ${entry.status}` : entry.outcome;
-      sessionErrorStore.record({
+      sessionErrorStore.recordForScope(entry.sessionScopeKey ?? null, {
         category: "api",
         code:
           entry.status !== null
@@ -996,7 +1142,10 @@ function SessionErrorConnector({ kernel }: { kernel: KernelApi }) {
     const unsubscribeResourceFailures = kernel.bus.on(
       "resource:load-failed",
       (payload) => {
-        sessionErrorStore.record({
+        const activeScopeKey = kernel.commands.getSessionScopeKey() ?? null;
+        const originScopeKey = sessionScopeKeyFromResourceKey(payload.resourceKey) ?? activeScopeKey;
+        if (originScopeKey !== activeScopeKey) return;
+        sessionErrorStore.recordForScope(originScopeKey, {
           category: "api",
           code:
             payload.status !== null && payload.status !== undefined
@@ -1026,10 +1175,11 @@ function SessionErrorConnector({ kernel }: { kernel: KernelApi }) {
     const recordFailedCommands = () => {
       const seen = seenCommandIdsRef.current;
       for (const entry of kernel.commandDiagnostics.listNewestFirst()) {
-        if (entry.status !== "failed") continue;
+        const originScopeKey = entry.sessionScopeKey ?? null;
+        if (entry.status !== "failed" || originScopeKey !== (kernel.commands.getSessionScopeKey() ?? null)) continue;
         if (seen.has(entry.id)) continue;
         seen.add(entry.id);
-        sessionErrorStore.record({
+        sessionErrorStore.recordForScope(originScopeKey, {
           category: "backend",
           code: "COMMAND_FAILED",
           detail: [

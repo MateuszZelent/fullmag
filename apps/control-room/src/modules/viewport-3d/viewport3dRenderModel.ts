@@ -39,7 +39,10 @@ import {
   planViewport3DDerivedWorkItems,
   type Viewport3DDerivedWorkItem,
 } from "./model/viewport3DDerivedWorkPlan";
-import type { Viewport3DTargetRenderPlan } from "./model/viewport3DFieldDataPlan";
+import {
+  resolveViewport3DTargetScalarRange,
+  type Viewport3DTargetRenderPlan,
+} from "./model/viewport3DFieldDataPlan";
 import {
   summarizeViewport3DTargetDiagnostics,
   type Viewport3DTargetDiagnosticSummary,
@@ -1066,6 +1069,22 @@ export function buildViewport3DFieldRenderModel(
       partScalarColorsByMode = new Map<string, ScalarColorBuffer | null>();
       for (const colorMode of partScalarColorModes) {
         if (!colorMode) continue;
+        const manualScalarRange = options.analysisFieldIntentActive
+          ? null
+          : resolveViewport3DTargetScalarRange({
+              colorMode,
+              fallbackRange: null,
+              fieldQuantityId: partQuantityId ?? partFieldVector.quantityId,
+              targetPlan: targetRenderPlan,
+            });
+        const scalarRange = manualScalarRange ?? resolveViewport3DTargetScalarRange({
+          colorMode,
+          fallbackRange: partScalarRangesByMode?.get(colorMode),
+          fieldQuantityId: partQuantityId ?? partFieldVector.quantityId,
+          targetPlan: options.analysisFieldIntentActive
+            ? null
+            : targetRenderPlan,
+        });
         const builtScalarColors =
           !partFieldMatchesTopology
             ? null
@@ -1084,7 +1103,7 @@ export function buildViewport3DFieldRenderModel(
                 partFieldVector,
                 colorMode,
                 partScalarColorPalette,
-                partScalarRangesByMode?.get(colorMode),
+                scalarRange,
                 partProjectionFieldNodeIndices,
               )
             : targetProjectionMode === "thickness_average_z"
@@ -1094,7 +1113,7 @@ export function buildViewport3DFieldRenderModel(
                 partFieldVector,
                 colorMode,
                 partScalarColorPalette,
-                partScalarRangesByMode?.get(colorMode),
+                scalarRange,
                 partProjectionFieldNodeIndices,
                 thicknessProjectionNodeMembership,
               )
@@ -1105,7 +1124,7 @@ export function buildViewport3DFieldRenderModel(
                 partFieldNodeIndices,
                 colorMode,
                 partScalarColorPalette,
-                partScalarRangesByMode?.get(colorMode),
+                scalarRange,
               );
         const scalarColorsWithIdentity = attachScalarColorSourceIdentity(
           builtScalarColors,
@@ -1117,19 +1136,33 @@ export function buildViewport3DFieldRenderModel(
                 partFieldVector,
               ),
         );
+        const scalarColorRangeSource: NonNullable<ScalarColorBuffer["rangeSource"]> =
+          manualScalarRange
+            ? "manual"
+            : targetProjectionMode === "surface_faces"
+              ? "face_values"
+              : targetProjectionMode === "thickness_average_z"
+                ? "projected_values"
+                : "raw_nodal";
+        const scalarColorsWithRangeSource = scalarColorsWithIdentity
+          ? {
+              ...scalarColorsWithIdentity,
+              rangeSource: scalarColorRangeSource,
+            }
+          : null;
         if (
           options.analysisFieldIntentActive &&
           options.complexFieldVector &&
           complexPhaseBinding &&
-          scalarColorsWithIdentity
+          scalarColorsWithRangeSource
         ) {
           const complexNodeIndices = fullFieldVector
             ? null
             : renderFieldVector
               ? resolveFieldVectorNodeIndices(renderFieldVector, topology)
               : null;
-          const projectionMode = scalarColorsWithIdentity.projectionMode;
-          const explicitRange = partScalarRangesByMode?.get(colorMode) ?? null;
+          const projectionMode = scalarColorsWithRangeSource.projectionMode;
+          const explicitRange = scalarRange;
           if (
             projectionMode === "surface_faces" ||
             projectionMode === "thickness_average_z"
@@ -1152,16 +1185,16 @@ export function buildViewport3DFieldRenderModel(
             if (
               projectedComplexValues &&
               projectedComplexValues.complexRealValues.length ===
-                scalarColorsWithIdentity.colors.length &&
+                scalarColorsWithRangeSource.colors.length &&
               projectedComplexValues.complexImagValues.length ===
-                scalarColorsWithIdentity.colors.length
+                scalarColorsWithRangeSource.colors.length
             ) {
-              scalarColorsWithIdentity.complexRealValues =
+              scalarColorsWithRangeSource.complexRealValues =
                 projectedComplexValues.complexRealValues;
-              scalarColorsWithIdentity.complexImagValues =
+              scalarColorsWithRangeSource.complexImagValues =
                 projectedComplexValues.complexImagValues;
               applyComplexPhaseBinding(
-                scalarColorsWithIdentity,
+                scalarColorsWithRangeSource,
                 complexPhaseBinding,
                 colorMode,
                 explicitRange,
@@ -1169,7 +1202,7 @@ export function buildViewport3DFieldRenderModel(
             }
           } else {
             attachComplexShaderValues(
-              scalarColorsWithIdentity,
+              scalarColorsWithRangeSource,
               options.complexFieldVector,
               complexNodeIndices,
               topology.nodeCount,
@@ -1179,7 +1212,7 @@ export function buildViewport3DFieldRenderModel(
             );
           }
         }
-        partScalarColorsByMode.set(colorMode, scalarColorsWithIdentity);
+        partScalarColorsByMode.set(colorMode, scalarColorsWithRangeSource);
       }
       scalarColorsByPartAndMode.set(partId, partScalarColorsByMode);
     }

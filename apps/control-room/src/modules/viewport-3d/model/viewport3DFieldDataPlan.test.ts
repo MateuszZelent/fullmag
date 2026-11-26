@@ -24,6 +24,7 @@ import {
   resolveViewport3DVectorCarrierSampleLimit,
   resolveViewport3DTargetQuantityFieldDemandPlan,
   resolveViewport3DTargetFieldQuery,
+  resolveViewport3DTargetScalarRange,
   summarizeViewport3DFieldDemandDiagnostics,
   validateViewport3DFieldResourceRequestEquivalence,
   validateViewport3DFieldResourceRequestIdentities,
@@ -67,6 +68,89 @@ describe("viewport3DFieldDataPlan", () => {
     });
 
     expect(plan.shader.projectionMode).toBe("surface_faces");
+  });
+
+  it("propagates an explicit target scalar-range policy into the render plan", () => {
+    const policy = {
+      max: 0.25,
+      min: -0.5,
+      mode: "manual" as const,
+      scale: "linear" as const,
+      symmetric: false,
+    };
+    const plan = objectPlan("object:film", {
+      activeQuantityId: "m",
+      scalarRangePolicy: policy,
+      surfaceColorSource: "component_x",
+    });
+
+    expect(plan.shader.scalarRangePolicy).toEqual(policy);
+  });
+
+  it("uses a signed manual component range only for its matching target plan and quantity", () => {
+    const plan = objectPlan("part:film", {
+      activeQuantityId: "m",
+      scalarRangePolicy: {
+        max: 1.5,
+        min: -0.75,
+        mode: "manual",
+        scale: "linear",
+        symmetric: false,
+      },
+      surfaceColorSource: "component_x",
+    });
+
+    expect(
+      resolveViewport3DTargetScalarRange({
+        colorMode: "x",
+        fieldQuantityId: "m",
+        fallbackRange: { max: 0.4, min: -0.2 },
+        targetPlan: plan,
+      }),
+    ).toEqual({ max: 1.5, min: -0.75 });
+    expect(
+      resolveViewport3DTargetScalarRange({
+        colorMode: "x",
+        fieldQuantityId: "H_eff",
+        fallbackRange: { max: 0.4, min: -0.2 },
+        targetPlan: plan,
+      }),
+    ).toEqual({ max: 0.4, min: -0.2 });
+    expect(
+      resolveViewport3DTargetScalarRange({
+        colorMode: "y",
+        fieldQuantityId: "m",
+        fallbackRange: null,
+        targetPlan: plan,
+      }),
+    ).toBeNull();
+  });
+
+  it.each([
+    { max: 1, min: 1 },
+    { max: Number.POSITIVE_INFINITY, min: -1 },
+    { max: 1, min: Number.NaN },
+  ])("fails closed to the available range for an unknown or invalid manual range: %o", ({ max, min }) => {
+    const plan = objectPlan("part:film", {
+      activeQuantityId: "m",
+      scalarRangePolicy: {
+        max,
+        min,
+        mode: "manual",
+        scale: "linear",
+        symmetric: false,
+      },
+      surfaceColorSource: "component_x",
+    });
+
+    expect(
+      resolveViewport3DTargetScalarRange({
+        colorMode: "x",
+        fieldQuantityId: "m",
+        fallbackRange: null,
+        targetPlan: plan,
+      }),
+    ).toBeNull();
   });
 
   it("reports request id mismatches for scoped data-plane diagnostics", () => {

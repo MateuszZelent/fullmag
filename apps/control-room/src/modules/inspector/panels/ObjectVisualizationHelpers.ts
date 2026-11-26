@@ -10,6 +10,8 @@ import {
   type VisualizationStoredTargetPatch,
   type VisualizationTargetPatch,
   type SurfaceColorSource,
+  type ViewportTargetRenderingPreferences,
+  viewportRenderingPreferencesFromTargetPatch,
   visualizationTargetKey,
 } from "@/kernel/visualization/ObjectVisualizationController";
 
@@ -296,25 +298,6 @@ export function surfaceFieldStatus(
 
 export function viewportRenderingPreferencesPatch(
   patch: VisualizationTargetPatch,
-): Partial<VisualizationTargetPatch> {
-  return {
-    ...(patch.primitiveVisible === undefined
-      ? {}
-      : { primitiveVisible: patch.primitiveVisible }),
-    ...(patch.primitiveMonoColor === undefined
-      ? {}
-      : { primitiveMonoColor: patch.primitiveMonoColor }),
-    ...(patch.primitiveOpacityPercent === undefined
-      ? {}
-      : { primitiveOpacityPercent: patch.primitiveOpacityPercent }),
-    ...(patch.vectorCenteringEnabled === undefined
-      ? {}
-      : { vectorCenteringEnabled: patch.vectorCenteringEnabled }),
-    ...(patch.vectorSurfaceOffsetEnabled === undefined
-      ? {}
-      : { vectorSurfaceOffsetEnabled: patch.vectorSurfaceOffsetEnabled }),
-    ...(patch.vectorSurfaceOffsetScale === undefined
-      ? {}
-      : { vectorSurfaceOffsetScale: patch.vectorSurfaceOffsetScale }),
-  };
+): ViewportTargetRenderingPreferences {
+  return viewportRenderingPreferencesFromTargetPatch(patch);
 }

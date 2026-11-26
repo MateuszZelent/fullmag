@@ -120,6 +120,7 @@ import {
   DIAGNOSTICS_CPU_PATH,
   DIAGNOSTICS_ENGINE_LOG_PATH,
   DIAGNOSTICS_GPU_PATH,
+  DIAGNOSTICS_SESSION_ERRORS_PATH,
   DIAGNOSTICS_RUN_PERFORMANCE_PATH,
   DIAGNOSTICS_SOLVER_PROFILE_PATH,
   MESHING_CAPABILITIES_PATH,
@@ -411,6 +412,8 @@ import type {
   GeometryRealizationResource,
   GeometryValidationResource,
   GpuTelemetryResource,
+  SessionErrorAppendRequest,
+  SessionErrorHistoryResource,
   RunPerformanceResource,
   HealthResource,
   RuntimeServiceStatusResource,
@@ -1213,6 +1216,7 @@ interface ControlRoomApiOptions {
   binaryDecodeScheduler?: BinaryDecodeScheduler;
   diagnostics?: RequestDiagnosticsController;
   fetchImpl?: FetchLike;
+  getDiagnosticSessionScope?: () => string | null;
   maxGetRetries?: number;
   retryDelayMs?: number;
   requestIdFactory?: () => string;
@@ -1245,6 +1249,7 @@ export class ControlRoomApi {
   private readonly binaryDecodeScheduler: BinaryDecodeScheduler;
   private readonly requestDiagnostics: RequestDiagnosticsController | null;
   private readonly fetchImpl: FetchLike;
+  private readonly getDiagnosticSessionScope: () => string | null;
   private readonly maxGetRetries: number;
   private readonly retryDelayMs: number;
   private readonly requestIdFactory: () => string;
@@ -2464,6 +2469,22 @@ export class ControlRoomApi {
     solverProfile: (options?: RequestOptions) =>
       this.requestJson<SolverProfileResource>(
         DIAGNOSTICS_SOLVER_PROFILE_PATH,
+        options,
+      ),
+    sessionErrors: (options?: RequestOptions) =>
+      this.requestJson<SessionErrorHistoryResource>(
+        DIAGNOSTICS_SESSION_ERRORS_PATH,
+        options,
+      ),
+    appendSessionErrors: (body: SessionErrorAppendRequest, options?: RequestOptions) =>
+      this.postJson<SessionErrorHistoryResource, SessionErrorAppendRequest>(
+        DIAGNOSTICS_SESSION_ERRORS_PATH,
+        body,
+        options,
+      ),
+    clearSessionErrors: (options?: RequestOptions) =>
+      this.deleteJson<SessionErrorHistoryResource>(
+        DIAGNOSTICS_SESSION_ERRORS_PATH,
         options,
       ),
     runPerformance: (options?: RequestOptions) =>
@@ -4241,6 +4262,7 @@ export class ControlRoomApi {
     binaryDecodeScheduler = createBinaryDecodeScheduler(),
     diagnostics,
     fetchImpl,
+    getDiagnosticSessionScope = () => null,
     maxGetRetries = 2,
     retryDelayMs = 100,
     requestIdFactory = createRequestId,
@@ -4253,6 +4275,7 @@ export class ControlRoomApi {
     this.binaryDecodeScheduler = binaryDecodeScheduler;
     this.requestDiagnostics = diagnostics ?? null;
     this.fetchImpl = fetchImpl ?? resolveDefaultFetch();
+    this.getDiagnosticSessionScope = getDiagnosticSessionScope;
     this.maxGetRetries = maxGetRetries;
     this.retryDelayMs = retryDelayMs;
     this.requestIdFactory = requestIdFactory;
@@ -5051,6 +5074,7 @@ export class ControlRoomApi {
       measureBase,
       async () => {
         const headers = { ...sessionScopeHeaders(options), ...additionalHeaders };
+        const sessionScopeKey = options.sessionScopeKey ?? this.getDiagnosticSessionScope();
         if (options.etag) {
           headers["if-none-match"] = options.etag;
         }
@@ -5175,6 +5199,7 @@ export class ControlRoomApi {
             requestId:
               response.headers.get("x-request-id") ?? "binary-payload",
             resourceKey: requestState.lastRequestPath,
+            sessionScopeKey,
             status: response.status,
           });
           throw error;
@@ -5197,6 +5222,7 @@ export class ControlRoomApi {
           path: requestState.lastRequestPath,
           requestId: response.headers.get("x-request-id") ?? "binary-payload",
           resourceKey: requestState.lastRequestPath,
+          sessionScopeKey,
           status: response.status,
         });
 
@@ -5257,6 +5283,7 @@ export class ControlRoomApi {
       headers.set(API_INSTANCE_HEADER, this.expectedApiInstance);
     }
     const requestId = this.requestIdFactory();
+    const sessionScopeKey = headers.get("x-fullmag-session-scope") ?? this.getDiagnosticSessionScope();
     headers.set("x-request-id", requestId);
 
     const started = Date.now();
@@ -5282,6 +5309,7 @@ export class ControlRoomApi {
           path,
           requestId,
           resourceKey: path,
+          sessionScopeKey,
           status: null,
         });
 
@@ -5338,6 +5366,7 @@ export class ControlRoomApi {
           path,
           requestId,
           resourceKey: path,
+          sessionScopeKey,
           status: response.status,
         });
 
@@ -5387,6 +5416,7 @@ export class ControlRoomApi {
       path,
       requestId,
       resourceKey: path,
+      sessionScopeKey,
       status: null,
     });
 

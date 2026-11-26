@@ -24,6 +24,8 @@ import {
   resolveVisualizationSettings,
   resolveVisualizationTargetFromSelection,
   visualizationStatePatchFromDefaultTargetPatch,
+  viewportRenderingPreferencesFromTargetPatch,
+  viewportScalarRangePreferenceKey,
   visualizationTargetCapabilities,
   visualizationTargetKey,
   type VisualizationTargetPatch,
@@ -2121,6 +2123,98 @@ describe("ObjectVisualizationController", () => {
       vectorCenteringEnabled: false,
     });
     expect(controller.getSnapshot().pendingOverrides).toEqual({});
+  });
+
+  it("keeps manual scalar ranges local and scoped by target, quantity, and component", () => {
+    const controller = new ObjectVisualizationController();
+    const film = { id: "object:film", kind: "object" as const };
+    const otherFilm = { id: "object:other-film", kind: "object" as const };
+    const manual = {
+      max: 3,
+      min: -2,
+      mode: "manual" as const,
+      scale: "linear" as const,
+      symmetric: false,
+    };
+
+    controller.patchTarget(film, {
+      activeQuantityId: "H_ex",
+      surfaceColorSource: "colormap",
+    });
+    controller.patchViewportPreferences(
+      film,
+      viewportRenderingPreferencesFromTargetPatch({
+        scalarRangePreference: {
+          component: "magnitude",
+          policy: manual,
+          quantityId: "h_ex",
+        },
+      }),
+    );
+
+    expect(viewportScalarRangePreferenceKey("h_ex", "scalar")).toBe(
+      viewportScalarRangePreferenceKey("H_ex", "scalar"),
+    );
+    expect(
+      resolveTargetVisualization({ snapshot: controller.getSnapshot(), target: film })
+        .settings.scalarRangePolicy,
+    ).toEqual(manual);
+    expect(
+      resolveTargetVisualization({ snapshot: controller.getSnapshot(), target: otherFilm })
+        .settings.scalarRangePolicy,
+    ).toBeUndefined();
+
+    controller.patchTarget(film, { activeQuantityId: "m" });
+    expect(
+      resolveTargetVisualization({ snapshot: controller.getSnapshot(), target: film })
+        .settings.scalarRangePolicy,
+    ).toBeUndefined();
+    controller.patchTarget(film, {
+      activeQuantityId: "H_ex",
+      surfaceColorSource: "component_x",
+    });
+    expect(
+      resolveTargetVisualization({ snapshot: controller.getSnapshot(), target: film })
+        .settings.scalarRangePolicy,
+    ).toBeUndefined();
+
+    expect(controller.getSnapshot().overrides["object:film"]).not.toHaveProperty(
+      "scalarRangePreference",
+    );
+  });
+
+  it.each([
+    { max: 1, min: 1 },
+    { max: Number.POSITIVE_INFINITY, min: -1 },
+    { max: 1, min: Number.NaN },
+  ])("ignores invalid manual scalar range limits: %o", ({ max, min }) => {
+    const controller = new ObjectVisualizationController();
+    const target = { id: "object:film", kind: "object" as const };
+    controller.patchTarget(target, {
+      activeQuantityId: "H_ex",
+      surfaceColorSource: "colormap",
+    });
+    controller.patchViewportPreferences(
+      target,
+      viewportRenderingPreferencesFromTargetPatch({
+        scalarRangePreference: {
+          component: "scalar",
+          policy: {
+            max,
+            min,
+            mode: "manual",
+            scale: "linear",
+            symmetric: false,
+          },
+          quantityId: "H_ex",
+        },
+      }),
+    );
+
+    expect(
+      resolveTargetVisualization({ snapshot: controller.getSnapshot(), target })
+        .settings.scalarRangePolicy,
+    ).toBeUndefined();
   });
 
   it("keeps primitive fallback disabled by default even when visualization state has a primitive layer", () => {

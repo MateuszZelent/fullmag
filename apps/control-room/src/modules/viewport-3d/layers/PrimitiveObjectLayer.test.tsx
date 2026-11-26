@@ -22,6 +22,7 @@ import { resolvePrimitiveObjectSurfaceMaterialPlan } from "./viewport3DSurfaceMa
 import { createAntennaPrimitiveTextures } from "./antennaPrimitiveTextures";
 import { primitiveMonoColorForRole } from "@/kernel/visualization/primitiveSurfaceColor";
 import { resolveViewport3DMaterialProfile } from "./viewport3DMaterialProfile";
+import { materialPolicyProps } from "./viewport3DRenderPolicy";
 
 import {
   buildPrimitiveTransformGizmoSegments,
@@ -34,6 +35,7 @@ import {
   trackPrimitiveObjectGeometry,
   primitiveDraftOverlayObject,
   primitiveObjectSurfaceColor,
+  primitiveObjectWireframeRenderSemantic,
 } from "./PrimitiveObjectLayerModel";
 
 function primitiveObject(
@@ -619,6 +621,51 @@ describe("PrimitiveObjectLayer geometry resources", () => {
         },
       ),
     ).toBe(false);
+  });
+
+  it("keeps conductor scene geometry visible until a target field builds replacement geometry", () => {
+    const conductor = {
+      ...primitiveObject("box"),
+      objectId: "beta_w",
+      role: "conductor",
+      meshState: "mesh-ready" as const,
+    };
+    const shaded = {
+      ...DEFAULT_OBJECT_VISUALIZATION,
+      visible: true,
+      primitiveVisible: false,
+      shaderVisible: true,
+      wireframeVisible: false,
+    };
+    const wireframe = {
+      ...shaded,
+      shaderVisible: false,
+      wireframeVisible: true,
+    };
+
+    expect(shouldRenderPrimitiveObject(conductor, shaded)).toBe(true);
+    expect(shouldRenderPrimitiveObject(conductor, wireframe)).toBe(true);
+    expect(shouldRenderPrimitiveObject(conductor, wireframe, true)).toBe(false);
+    expect(
+      shouldRenderPrimitiveObject(conductor, {
+        ...wireframe,
+        wireframeVisible: false,
+      }),
+    ).toBe(false);
+  });
+
+  it("shows explicit conductor wireframe through overlapping solids and keeps other edges depth-tested", () => {
+    const conductorPolicy = primitiveObjectWireframeRenderSemantic({
+      role: "conductor",
+    });
+    const ordinaryPolicy = primitiveObjectWireframeRenderSemantic({
+      role: "magnet",
+    });
+
+    expect(conductorPolicy).toBe("hiddenEdges");
+    expect(materialPolicyProps(conductorPolicy).depthTest).toBe(false);
+    expect(ordinaryPolicy).toBe("featureEdges");
+    expect(materialPolicyProps(ordinaryPolicy).depthTest).toBe(true);
   });
 
   it("uses a field-free primitive fill for a requested shaded pre-mesh pass", () => {

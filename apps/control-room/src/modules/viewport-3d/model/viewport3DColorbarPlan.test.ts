@@ -199,6 +199,7 @@ describe("viewport3DColorbarPlan", () => {
           palette: "viridis",
           projectionMode: "raw_nodal",
           quantityId: "m",
+          manualRange: null,
           range: { max: 1, min: -1 },
           rangeSource: "raw_nodal",
           rangeState: "current",
@@ -498,6 +499,66 @@ describe("viewport3DColorbarPlan", () => {
       ["fdm-auto"],
       ["fdm-manual"],
     ]);
+  });
+
+  it("does not label an old automatic buffer as a manual range", () => {
+    const planTarget = objectPlan("fdm-manual");
+    const manualTarget = {
+      ...planTarget,
+      shader: {
+        ...planTarget.shader,
+        scalarRangePolicy: {
+          ...DEFAULT_VIEWPORT_3D_SCALAR_RANGE_POLICY,
+          max: 2,
+          min: -1,
+          mode: "manual" as const,
+        },
+      },
+      targetKind: "fdm-domain" as const,
+    };
+    const [manualPlan] = planViewport3DColorbars({ targets: [manualTarget] });
+    const automaticBuffer = {
+      colors: new Float32Array(3),
+      colorMode: "x",
+      colorPalette: "viridis",
+      quantityId: "m",
+      range: { max: 5, min: -5 },
+    };
+    const staleManualBuffer = {
+      ...automaticBuffer,
+      range: { max: 4, min: -2 },
+      rangeSource: "manual" as const,
+    };
+    const manualBuffer = {
+      ...automaticBuffer,
+      range: { max: 2, min: -1 },
+      rangeSource: "manual" as const,
+    };
+    const resolve = (fdmSurfaceColors: typeof automaticBuffer | typeof manualBuffer) =>
+      resolveViewport3DColorbarRangeStates({
+        fdmSurfaceColors,
+        fieldModel: {
+          scalarColorsByMode: new Map(),
+          scalarColorsByPartAndMode: new Map(),
+          targetPasses: new Map(),
+        },
+        plans: manualPlan ? [manualPlan] : [],
+      }).get(manualPlan!.groupKey);
+
+    expect(resolve(automaticBuffer)).toEqual({ range: null, state: "pending" });
+    expect(resolve(staleManualBuffer)).toEqual({ range: null, state: "pending" });
+    expect(resolve(manualBuffer)).toEqual({
+      range: { max: 2, min: -1 },
+      state: "current",
+    });
+    expect(
+      scalarColorBufferMatchesColorbarRequest({
+        buffer: manualBuffer,
+        colorMode: "x",
+        colorPalette: "viridis",
+        quantityId: "m",
+      }),
+    ).toBe(true);
   });
 
   it("does not plan viewport colorbars for orientation or disabled viewport legends", () => {

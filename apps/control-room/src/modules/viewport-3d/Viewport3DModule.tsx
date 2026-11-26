@@ -17,7 +17,7 @@ import { createPortal } from "react-dom";
 import { registerViewport3DProjectionOwner } from "./viewport3dCameraCommands";
 import { useThree } from "@react-three/fiber";
 import { useSavedFieldPresentation } from "@/kernel/visualization/useObjectVisualization";
-import { useCallback, useEffect, useEffectEvent, useLayoutEffect, useReducer, useRef, useState, useSyncExternalStore, useMemo, memo, type ComponentProps, type CSSProperties, type FocusEvent as ReactFocusEvent, type PointerEvent as ReactPointerEvent } from "react";
+import { useCallback, useEffect, useEffectEvent, useId, useLayoutEffect, useReducer, useRef, useState, useSyncExternalStore, useMemo, memo, type ComponentProps, type FocusEvent as ReactFocusEvent, type PointerEvent as ReactPointerEvent } from "react";
 
 import type { VisualizationStatePatch, VisualizationStateResource } from "@/kernel/api/apiTypes";
 import { isScalarSpatialQuantityId, quantityDisplayName } from "@/kernel/api/quantityIds";
@@ -260,6 +260,9 @@ function resolveStableViewport3DCanvasGlOptions(
     ? VIEWPORT_3D_CANVAS_GL_ANTIALIAS
     : VIEWPORT_3D_CANVAS_GL_NO_ANTIALIAS;
 }
+
+const MANUAL_VIEWPORT_COLORBAR_RANGE_NOTE =
+  "Manual range: values outside the shown range are clipped to the nearest endpoint color.";
 
 function resolveViewport3DColorbarRangeLabel({
   hasBufferRange,
@@ -2491,14 +2494,17 @@ export const Viewport3DColorbar = memo(function Viewport3DColorbar({
 }: {
   legend: Viewport3DColorbarLegend;
 }) {
+  const rangeDescriptionId = useId();
+  const manualRange = legend.rangeSource === "manual";
   const fieldMeta = useFieldMetaResource({
     component: legend.colorMode ?? null,
-    enabled: Boolean(!legend.range && legend.colorMode && legend.quantityId),
+    enabled: Boolean(!manualRange && !legend.range && legend.colorMode && legend.quantityId),
     quantityId: legend.quantityId ?? "m",
     scope_id: legend.scopeKind === "airbox" ? null : legend.scopeId ?? null,
     scope_kind: legend.scopeKind ?? null,
   });
   const metadataRange =
+    !manualRange &&
     typeof fieldMeta.data?.stats?.min === "number" &&
     typeof fieldMeta.data.stats.max === "number"
       ? {
@@ -2555,8 +2561,13 @@ export const Viewport3DColorbar = memo(function Viewport3DColorbar({
     hasMetadataRange: Boolean(metadataRange),
     rangeState: legend.rangeState,
   });
+  const rangeDescription =
+    manualRange && range
+      ? MANUAL_VIEWPORT_COLORBAR_RANGE_NOTE
+      : undefined;
   return (
     <aside
+      aria-describedby={rangeDescription ? rangeDescriptionId : undefined}
       aria-label={`Color range: ${label}, ${minLabel} to ${maxLabel}`}
       className="fm-viewport-3d__colorbar"
     >
@@ -2595,6 +2606,15 @@ export const Viewport3DColorbar = memo(function Viewport3DColorbar({
       </div>
       <div className="fm-viewport-3d__colorbar-range">
         <span className="fm-viewport-3d__colorbar-range-label">{rangeLabel}</span>
+        {rangeDescription ? (
+          <span
+            className="fm-viewport-3d__colorbar-range-label"
+            id={rangeDescriptionId}
+            style={{ overflowWrap: "anywhere", whiteSpace: "normal" }}
+          >
+            {rangeDescription}
+          </span>
+        ) : null}
         <div className="fm-viewport-3d__colorbar-row">
           <span className="fm-viewport-3d__colorbar-limit">{minLabel}</span>
           <span
@@ -2718,8 +2738,6 @@ const Viewport3DFieldRefreshCountdown = memo(
     const display = resolveViewport3DRefreshCountdownDisplay({
       enabled: refresh.enabled,
       nowMs: countdown.nowMs,
-      payloadRevision: refresh.payloadRevision,
-      requestedRevision: refresh.requestedRevision,
       sample: countdown.sample,
       status: refresh.status,
     });
@@ -2751,37 +2769,22 @@ const Viewport3DFieldRefreshCountdown = memo(
 
     if (!display) return null;
 
-    const progressDegrees = `${Math.round(display.progress * 360)}deg`;
-    const style = {
-      "--fm-refresh-progress": progressDegrees,
-    } as CSSProperties;
-
     return (
       <span
+        aria-atomic="true"
         aria-label={`${display.ariaLabel} for ${refresh.quantityId}`}
-        role="group"
+        aria-live={display.state === "updated" ? "off" : "polite"}
         className="fm-viewport-3d__refresh-countdown"
-        data-pulse-id={countdown.sample.pulseId}
         data-refresh-state={display.state}
-        data-resource-key={refresh.resourceKey}
-        data-payload-revision={refresh.payloadRevision ?? "none"}
-        data-revision={refresh.revision ?? "none"}
-        data-requested-revision={refresh.requestedRevision ?? "none"}
-        style={style}
+        role="status"
+        title={display.title}
       >
         <span
           aria-hidden="true"
           className="fm-viewport-3d__refresh-countdown-ring"
-        >
-          <span className="fm-viewport-3d__refresh-countdown-core" />
-        </span>
-        <span className="fm-viewport-3d__refresh-countdown-copy">
-          <span className="fm-viewport-3d__refresh-countdown-title">
-            {display.title}
-          </span>
-          <span className="fm-viewport-3d__refresh-countdown-detail">
-            {display.detail}
-          </span>
+        />
+        <span className="fm-viewport-3d__refresh-countdown-detail">
+          {display.detail}
         </span>
       </span>
     );

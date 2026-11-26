@@ -35,6 +35,7 @@ interface RealtimeClientOptions {
   onReconnected?: () => void;
   onScopeMismatch?: () => void;
   onStatusChange?: (status: RealtimeConnectionStatus) => void;
+  sessionScopeKey?: string | null;
   scheduleReconnect?: (callback: () => void, delayMs: number) => () => void;
   url: string;
 }
@@ -134,6 +135,7 @@ export class RealtimeClient {
         messageType: "invalid-json",
         method: "WS",
         outcome: "error",
+        sessionScopeKey: this.options.sessionScopeKey,
         path: pathFromUrl(this.options.url),
         requestId: "websocket",
         status: null,
