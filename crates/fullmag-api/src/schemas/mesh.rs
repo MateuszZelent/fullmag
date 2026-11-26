@@ -1515,66 +1515,69 @@ mod mixed_v2_summary_tests {
             "../../../fullmag-ir/tests/fixtures/mixed_layer_topology_certificate_v1_python_golden.json"
         ))
         .unwrap();
-        let pure_prism_certificate = json!({
-            "schema_version": "pure_prism_topology_certificate.v1",
-            "certificate_status": "accepted",
-            "requested_sweep_direction": "z",
-            "resolved_sweep_direction": "z",
-            "requested_layer_count": 4,
-            "realized_layer_count": 4,
-            "lower_air_layer_count": 5,
-            "upper_air_layer_count": 5,
-            "magnetic_plane_coordinates_m": [-2.5e-9, -1.25e-9, 0.0, 1.25e-9, 2.5e-9],
-            "plane_tolerance_m": 1.0e-15,
-            "interface_marker": 10,
-            "outer_boundary_marker": 99,
-            "magnetic_bounds_min_m": [-150.0e-9, -150.0e-9, -2.5e-9],
-            "magnetic_bounds_max_m": [150.0e-9, 150.0e-9, 2.5e-9],
-            "airbox_bounds_min_m": [-450.0e-9, -450.0e-9, -300.0e-9],
-            "airbox_bounds_max_m": [450.0e-9, 450.0e-9, 300.0e-9],
-            "magnetic_bounds_relative_error": 0.0,
-            "airbox_bounds_relative_error": 0.0,
-            "cell_family_counts_by_marker": {
-                "0": {"prism6": 120},
-                "1": {"prism6": 32}
-            },
-            "cell_family_counts_by_part": {
-                "far_air": {"prism6": 120},
-                "magnetic": {"prism6": 32}
-            },
-            "facet_family_counts_by_role_marker": {
-                "exterior:99": {"quad4": 56, "tri3": 40},
-                "material_interface:10": {"quad4": 16, "tri3": 16}
-            },
-            "jacobian_minima_m3_by_family": {"prism6": 1.0e-26},
-            "quality_metric": "mixed_topology_scaled_jacobian.v1",
-            "scaled_jacobian_minima_by_family": {"prism6": 0.5},
-            "scaled_jacobian_p05_by_family": {"prism6": 0.6},
-            "magnetic_volume_m3": 4.5e-22,
-            "expected_magnetic_volume_m3": 4.5e-22,
-            "magnetic_relative_volume_error": 0.0,
-            "air_volume_m3": 4.8599955e-19,
-            "shared_domain_volume_m3": 4.86e-19,
-            "expected_shared_domain_volume_m3": 4.86e-19,
-            "shared_domain_relative_volume_error": 0.0,
-            "marker_coverage_complete": true,
-            "nonconforming_face_count": 0,
-            "orphan_face_count": 0,
-            "nonmanifold_face_count": 0,
-            "coincident_interface_face_count": 0,
-            "topology_fingerprint_version": "v3",
-            "topology_fingerprint": format!("sha256:{}", "a".repeat(64)),
-            "gmsh_version": "4.15.2",
-            "strategy": "pure_prism_extruded_shared_domain",
-            "effective_gmsh_thread_count": 1,
-            "deterministic_inputs": {
-                "algorithm_2d": 6,
-                "element_order": 1,
-                "random_factor": 0.0,
-                "thread_count": 1
-            },
-            "fallbacks_triggered": []
-        });
+        let pure_prism_certificate: Value = serde_json::from_str(
+            r#"{
+                "schema_version": "pure_prism_topology_certificate.v1",
+                "certificate_status": "accepted",
+                "requested_sweep_direction": "z",
+                "resolved_sweep_direction": "z",
+                "requested_layer_count": 4,
+                "realized_layer_count": 4,
+                "lower_air_layer_count": 5,
+                "upper_air_layer_count": 5,
+                "magnetic_plane_coordinates_m": [-2.5e-9, -1.25e-9, 0.0, 1.25e-9, 2.5e-9],
+                "plane_tolerance_m": 1.0e-15,
+                "interface_marker": 10,
+                "outer_boundary_marker": 99,
+                "magnetic_bounds_min_m": [-150.0e-9, -150.0e-9, -2.5e-9],
+                "magnetic_bounds_max_m": [150.0e-9, 150.0e-9, 2.5e-9],
+                "airbox_bounds_min_m": [-450.0e-9, -450.0e-9, -300.0e-9],
+                "airbox_bounds_max_m": [450.0e-9, 450.0e-9, 300.0e-9],
+                "magnetic_bounds_relative_error": 0.0,
+                "airbox_bounds_relative_error": 0.0,
+                "cell_family_counts_by_marker": {
+                    "0": {"prism6": 120},
+                    "1": {"prism6": 32}
+                },
+                "cell_family_counts_by_part": {
+                    "far_air": {"prism6": 120},
+                    "magnetic": {"prism6": 32}
+                },
+                "facet_family_counts_by_role_marker": {
+                    "exterior:99": {"quad4": 56, "tri3": 40},
+                    "material_interface:10": {"quad4": 16, "tri3": 16}
+                },
+                "jacobian_minima_m3_by_family": {"prism6": 1.0e-26},
+                "quality_metric": "mixed_topology_scaled_jacobian.v1",
+                "scaled_jacobian_minima_by_family": {"prism6": 0.5},
+                "scaled_jacobian_p05_by_family": {"prism6": 0.6},
+                "magnetic_volume_m3": 4.5e-22,
+                "expected_magnetic_volume_m3": 4.5e-22,
+                "magnetic_relative_volume_error": 0.0,
+                "air_volume_m3": 4.8599955e-19,
+                "shared_domain_volume_m3": 4.86e-19,
+                "expected_shared_domain_volume_m3": 4.86e-19,
+                "shared_domain_relative_volume_error": 0.0,
+                "marker_coverage_complete": true,
+                "nonconforming_face_count": 0,
+                "orphan_face_count": 0,
+                "nonmanifold_face_count": 0,
+                "coincident_interface_face_count": 0,
+                "topology_fingerprint_version": "v3",
+                "topology_fingerprint": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "gmsh_version": "4.15.2",
+                "strategy": "pure_prism_extruded_shared_domain",
+                "effective_gmsh_thread_count": 1,
+                "deterministic_inputs": {
+                    "algorithm_2d": 6,
+                    "element_order": 1,
+                    "random_factor": 0.0,
+                    "thread_count": 1
+                },
+                "fallbacks_triggered": []
+            }"#,
+        )
+        .unwrap();
         let mut report: fullmag_ir::FemSharedDomainBuildReportIR = serde_json::from_value(json!({
             "build_mode": "pure_prism_extruded_shared_domain",
             "pure_prism_topology_certificate": pure_prism_certificate,
