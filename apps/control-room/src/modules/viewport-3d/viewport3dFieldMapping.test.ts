@@ -253,6 +253,24 @@ describe("viewport3dFieldMapping", () => {
     expect(Array.from(result?.scalarValues ?? [])).toEqual([1, 0]);
   });
 
+  it("marks an explicitly ranged FDM scalar buffer as manual", () => {
+    const result = buildFdmSampledScalarColors(
+      vectorField([0, 0, 0, 1, 0, 0]),
+      Uint32Array.from([0, 1]),
+      2,
+      "x",
+      "viridis",
+      { max: 0.5, min: -0.5 },
+      null,
+      "manual",
+    );
+
+    expect(result).toMatchObject({
+      range: { max: 0.5, min: -0.5 },
+      rangeSource: "manual",
+    });
+  });
+
   it("rejects sampled FDM scalar colors when legacy payload count is not the domain count", () => {
     expect(
       buildFdmSampledScalarColors(

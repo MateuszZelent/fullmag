@@ -201,6 +201,7 @@ import {
   resolveViewport3DVectorCarrierSampleLimit,
   resolveViewport3DScopedPartVectorFieldDemandPlan,
   resolveViewport3DTargetQuantityFieldDemandPlan,
+  resolveViewport3DTargetScalarRange,
   resolveViewport3DTargetFieldQuery as resolveViewport3DTargetFieldQueryFromPlan,
   summarizeViewport3DFieldDemandDiagnostics,
   validateViewport3DFieldResourceRequestEquivalence,
@@ -2486,6 +2487,7 @@ export function resolveViewport3DPrimaryFieldRenderOptions({
     tensorProjection?: VisualizationTargetSettings["tensorProjection"];
     geometryScope?: "surface" | "full";
     scalarColorPalette?: string;
+    scalarRangePolicy?: VisualizationTargetSettings["scalarRangePolicy"];
     shaderMonoColor?: string;
     shaderVisible: boolean;
     surfaceColorSource: SurfaceColorSource;
@@ -2541,6 +2543,9 @@ export function resolveViewport3DPrimaryFieldRenderOptions({
             fieldRenderOptions.partScalarColorPalettes?.get(partId) ??
             fieldRenderOptions.scalarColorPalette ??
             "viridis",
+          scalarRangePolicy: analysisOverlayActive
+            ? undefined
+            : settings.scalarRangePolicy,
           shaderMonoColor:
             settings.shaderMonoColor ?? DEFAULT_VIEWPORT3D_SHADER_MONO_COLOR,
           shaderVisible:
@@ -6616,6 +6621,19 @@ export function useViewport3DSceneModel({
           const surfaceMode = fieldCompatible
             ? surfaceColorSourceToColorMode(settings.surfaceColorSource)
             : null;
+          const targetRenderPlan = buildViewport3DTargetRenderPlan({
+            label: view.target.label ?? view.target.id,
+            quantityId: settings.activeQuantityId,
+            settings,
+            targetId: view.target.id,
+            targetKind: view.target.kind,
+          });
+          const surfaceRange = resolveViewport3DTargetScalarRange({
+            colorMode: surfaceMode ?? "",
+            fallbackRange: null,
+            fieldQuantityId: targetFieldVector?.quantityId,
+            targetPlan: targetRenderPlan,
+          });
           const surfaceColorKey = [
             targetSourceFieldBufferId,
             targetFieldRevision ?? "none",
@@ -6624,6 +6642,7 @@ export function useViewport3DSceneModel({
             settings.surfaceColorSource,
             surfaceMode ?? "none",
             settings.scalarColorPalette,
+            JSON.stringify(settings.scalarRangePolicy ?? null),
             view.target.id,
             view.instanceOrdinals.length,
             view.surfaceInstanceOrdinals.length,
@@ -6639,13 +6658,14 @@ export function useViewport3DSceneModel({
                 fdmDomain.totalCells,
                 surfaceMode,
                 settings.scalarColorPalette,
-                undefined,
+                surfaceRange,
                 fdmDomain.shape,
               );
               return colors
                 ? {
                     ...colors,
                     buildKey: surfaceColorKey,
+                    rangeSource: surfaceRange ? "manual" : "raw_nodal",
                     sourceFieldBufferId: targetSourceFieldBufferId,
                     sourceResourceKey: targetFieldResourceKey,
                   }
@@ -6692,6 +6712,12 @@ export function useViewport3DSceneModel({
                 }
                 const vectorsVisible =
                   settings.visible && settings.vectorsVisible && fieldCompatible;
+                const vectorRange = resolveViewport3DTargetScalarRange({
+                  colorMode: settings.vectorColorMode,
+                  fallbackRange: null,
+                  fieldQuantityId: targetFieldVector.quantityId,
+                  targetPlan: targetRenderPlan,
+                });
                 const vectorColors = vectorsVisible
                   ? buildFdmSampledScalarColors(
                       targetFieldVector,
@@ -6699,10 +6725,15 @@ export function useViewport3DSceneModel({
                       fdmDomain.totalCells,
                       settings.vectorColorMode,
                       settings.scalarColorPalette,
-                      undefined,
+                      vectorRange,
                       fdmDomain.shape,
                     )
                   : null;
+                if (vectorColors) {
+                  vectorColors.rangeSource = vectorRange
+                    ? "manual"
+                    : "raw_nodal";
+                }
                 const vectorCellIndices = vectorsVisible
                   ? buildFdmVectorSampledCellIndices(
                       view.sourceModel,
@@ -6714,15 +6745,20 @@ export function useViewport3DSceneModel({
                   : null;
                 const vectorGlyphColors =
                   vectorColors && vectorCellIndices
-                    ? buildFdmSampledScalarColors(
-                        targetFieldVector,
-                        vectorCellIndices,
-                        fdmDomain.totalCells,
-                        vectorColors.colorMode,
-                        vectorColors.colorPalette,
-                        vectorColors.range,
-                        fdmDomain.shape,
-                      )
+                    ? (() => {
+                        const colors = buildFdmSampledScalarColors(
+                          targetFieldVector,
+                          vectorCellIndices,
+                          fdmDomain.totalCells,
+                          vectorColors.colorMode,
+                          vectorColors.colorPalette,
+                          vectorColors.range,
+                          fdmDomain.shape,
+                        );
+                        return colors
+                          ? { ...colors, rangeSource: vectorColors.rangeSource }
+                          : null;
+                      })()
                     : null;
                 const withSource = (colors: typeof surfaceColors) =>
                   colors

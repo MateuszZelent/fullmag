@@ -17,7 +17,7 @@ import {
   type QuantityCatalogResource,
 } from "@/kernel/api/apiTypes";
 import { isFlowMajorTensorDescriptor, normalizeTensorProjection } from "@/kernel/api/tensorFieldProjection";
-import { resolveCanonicalQuantityId, quantityUnitForColorbar, quantityCatalogEntrySpatialProjections } from "@/kernel/api/quantityIds";
+import { isScalarSpatialQuantityId, resolveCanonicalQuantityId, quantityUnitForColorbar, quantityCatalogEntrySpatialProjections } from "@/kernel/api/quantityIds";
 import { primitiveMonoColorForRole } from "@/kernel/visualization/primitiveSurfaceColor";
 import { Button } from "@/shared/ui/Button";
 import { Input } from "@/shared/ui/Input";
@@ -36,6 +36,8 @@ import {
   type VisualizationTargetPatch,
   type VisualizationTargetRef,
   type VisualizationTargetSettings,
+  type ViewportScalarRangeComponent,
+  type ViewportScalarRangePolicy,
   visualizationTargetCapabilities,
 } from "@/kernel/visualization/ObjectVisualizationController";
 import type { Viewport3DRenderedScalarRangeQuery } from "@/modules/viewport-3d/public";
@@ -392,6 +394,14 @@ export function VisualizationSurfaceColoringSection({
     settings.surfaceColorSource,
     settings.activeQuantityId,
   );
+  const scalarRangeComponent: ViewportScalarRangeComponent =
+    isScalarSpatialQuantityId(settings.activeQuantityId)
+      ? "scalar"
+      : colorbarComponent === "x" ||
+          colorbarComponent === "y" ||
+          colorbarComponent === "z"
+        ? colorbarComponent
+        : "magnitude";
   const showColorbar = shouldShowSurfaceFieldColorbar(
     settings.surfaceColorSource,
     settings.activeQuantityId,
@@ -439,9 +449,19 @@ export function VisualizationSurfaceColoringSection({
   const surfaceColoringDisabled =
     sectionDisabled("surface-coloring") &&
     !(authoredMagnetizationAvailable && settings.visible && settings.shaderVisible);
+  const manualRangeSummaryActive =
+    !historicalSurface &&
+    !artifactFieldBinding &&
+    !fieldMetaOverride &&
+    settings.scalarRangePolicy?.mode === "manual" &&
+    typeof settings.scalarRangePolicy.min === "number" &&
+    typeof settings.scalarRangePolicy.max === "number" &&
+    Number.isFinite(settings.scalarRangePolicy.min) &&
+    Number.isFinite(settings.scalarRangePolicy.max) &&
+    settings.scalarRangePolicy.min < settings.scalarRangePolicy.max;
   const surfaceSummary = settings.surfaceColorSource === "solid"
     ? "Solid color"
-    : `By Quantity • ${settings.activeQuantityId ?? "H_eff"} (Auto)`;
+    : `By Quantity • ${settings.activeQuantityId ?? "H_eff"} (${manualRangeSummaryActive ? "Manual" : "Auto"})`;
   return (
     <InspectorGroup
       collapsible
@@ -486,12 +506,21 @@ export function VisualizationSurfaceColoringSection({
       {showFieldMeta ? (
         <ScalarColorbarControl
           disabled={isFieldPending("scalarColorPalette") || surfaceColoringDisabled}
+          allowManualRange={
+            !historicalSurface && !artifactFieldBinding && !fieldMetaOverride
+          }
           fieldMeta={fieldMeta}
           palette={settings.scalarColorPalette}
           patch={patch}
           quantityId={settings.activeQuantityId}
+          rangePreferenceComponent={scalarRangeComponent}
           rangeIdentity={colorbarRangeIdentity}
           renderedRange={renderedRange}
+          scalarRangePolicy={
+            !historicalSurface && !artifactFieldBinding && !fieldMetaOverride
+              ? settings.scalarRangePolicy
+              : undefined
+          }
           requireRenderedRange={historicalSurface}
           allowCachedRange={!artifactFieldBinding?.historical}
         />
@@ -543,8 +572,227 @@ export function VisualizationSurfaceColoringSection({
   );
 }
 
+export function validateManualScalarRangeInput(
+  minText: string,
+  maxText: string,
+): { error: string | null; max: number | null; min: number | null } {
+  const min = minText.trim() === "" ? null : Number(minText);
+  const max = maxText.trim() === "" ? null : Number(maxText);
+  if (
+    min === null ||
+    max === null ||
+    !Number.isFinite(min) ||
+    !Number.isFinite(max)
+  ) {
+    return {
+      error: "Enter finite numeric minimum and maximum values.",
+      max,
+      min,
+    };
+  }
+  if (min >= max) {
+    return {
+      error: "Minimum must be less than maximum.",
+      max,
+      min,
+    };
+  }
+  return { error: null, max, min };
+}
+
+function ScalarRangeControls({
+  disabled,
+  metadataRange,
+  patch,
+  quantityId,
+  rangePreferenceComponent,
+  renderedRange,
+  scalarRangePolicy,
+}: {
+  disabled: boolean;
+  metadataRange: { max: number; min: number } | null;
+  patch: PatchVisualizationTarget;
+  quantityId: string;
+  rangePreferenceComponent: ViewportScalarRangeComponent;
+  renderedRange: { max: number; min: number } | null;
+  scalarRangePolicy?: ViewportScalarRangePolicy;
+}) {
+  const manualRange = scalarRangePolicy?.mode === "manual"
+    ? validateManualScalarRangeInput(
+        String(scalarRangePolicy.min ?? ""),
+        String(scalarRangePolicy.max ?? ""),
+      )
+    : null;
+  const manualRangeActive = Boolean(manualRange && !manualRange.error);
+  const [rangeModeDraft, setRangeModeDraft] = useState<"auto" | "manual" | null>(null);
+  const [minDraft, setMinDraft] = useState(
+    manualRangeActive ? String(scalarRangePolicy?.min) : "",
+  );
+  const [maxDraft, setMaxDraft] = useState(
+    manualRangeActive ? String(scalarRangePolicy?.max) : "",
+  );
+  const [rangeInputError, setRangeInputError] = useState<string | null>(null);
+  const minInputRef = useRef<HTMLInputElement | null>(null);
+  const maxInputRef = useRef<HTMLInputElement | null>(null);
+  const rangeInputErrorId = useId();
+  const selectedRangeMode =
+    rangeModeDraft ?? (manualRangeActive ? "manual" : "auto");
+
+  const commitManualRange = (min: number, max: number) => {
+    if (min >= max || !Number.isFinite(min) || !Number.isFinite(max)) return;
+    void patch({
+      scalarRangePreference: {
+        component: rangePreferenceComponent,
+        policy: {
+          max,
+          min,
+          mode: "manual",
+          scale: "linear",
+          symmetric: false,
+        },
+        quantityId,
+      },
+    });
+  };
+
+  const updateManualRangeDraft = () => {
+    const result = validateManualScalarRangeInput(
+      minInputRef.current?.value ?? "",
+      maxInputRef.current?.value ?? "",
+    );
+    setRangeInputError(result.error);
+  };
+
+  const applyManualRange = () => {
+    const result = validateManualScalarRangeInput(
+      minInputRef.current?.value ?? minDraft,
+      maxInputRef.current?.value ?? maxDraft,
+    );
+    setRangeInputError(result.error);
+    if (!result.error && result.min !== null && result.max !== null) {
+      commitManualRange(result.min, result.max);
+    }
+  };
+
+  const changeRangeMode = (nextMode: string) => {
+    if (nextMode === "auto") {
+      setRangeModeDraft("auto");
+      setRangeInputError(null);
+      void patch({
+        scalarRangePreference: {
+          component: rangePreferenceComponent,
+          policy: {
+            max: null,
+            min: null,
+            mode: "auto",
+            scale: "linear",
+            symmetric: false,
+          },
+          quantityId,
+        },
+      });
+      return;
+    }
+    if (nextMode !== "manual") return;
+    setRangeModeDraft("manual");
+    const seedRange = manualRangeActive &&
+        scalarRangePolicy?.min != null &&
+        scalarRangePolicy.max != null
+      ? { max: scalarRangePolicy.max, min: scalarRangePolicy.min }
+      : renderedRange ?? metadataRange;
+    const nextMinText = seedRange ? String(seedRange.min) : "";
+    const nextMaxText = seedRange ? String(seedRange.max) : "";
+    setMinDraft(nextMinText);
+    setMaxDraft(nextMaxText);
+    const result = validateManualScalarRangeInput(nextMinText, nextMaxText);
+    setRangeInputError(result.error);
+  };
+
+  const applyRangeOnEnter = (event: React.KeyboardEvent<HTMLInputElement>) => {
+    if (event.key !== "Enter") return;
+    event.preventDefault();
+    applyManualRange();
+  };
+
+  return (
+    <>
+      <VisualizationSelectRow
+        disabled={disabled}
+        items={[
+          { label: "Auto", value: "auto" },
+          { label: "Manual", value: "manual" },
+        ]}
+        label="Color range"
+        value={selectedRangeMode}
+        onValueChange={changeRangeMode}
+      />
+      {selectedRangeMode === "manual" ? (
+        <InspectorPropertyRow label="Manual color limits" layout="stacked">
+          <div className="grid min-w-0 grid-cols-2 gap-2">
+            <label className="grid min-w-0 gap-1 text-fm-control text-fm-secondary">
+              <span>Minimum</span>
+              <Input
+                aria-describedby={rangeInputError ? rangeInputErrorId : undefined}
+                aria-invalid={Boolean(rangeInputError)}
+                aria-label="Manual color range minimum"
+                className={cn("min-w-0 font-fm-mono", controlVariants({ density: "compact" }))}
+                disabled={disabled}
+                defaultValue={minDraft}
+                ref={minInputRef}
+                step="any"
+                type="number"
+                onKeyDown={applyRangeOnEnter}
+                onChange={updateManualRangeDraft}
+              />
+            </label>
+            <label className="grid min-w-0 gap-1 text-fm-control text-fm-secondary">
+              <span>Maximum</span>
+              <Input
+                aria-describedby={rangeInputError ? rangeInputErrorId : undefined}
+                aria-invalid={Boolean(rangeInputError)}
+                aria-label="Manual color range maximum"
+                className={cn("min-w-0 font-fm-mono", controlVariants({ density: "compact" }))}
+                disabled={disabled}
+                defaultValue={maxDraft}
+                ref={maxInputRef}
+                step="any"
+                type="number"
+                onKeyDown={applyRangeOnEnter}
+                onChange={updateManualRangeDraft}
+              />
+            </label>
+          </div>
+          <Button
+            disabled={disabled || Boolean(rangeInputError)}
+            onClick={applyManualRange}
+            size="sm"
+            type="button"
+            variant="secondary"
+          >
+            Apply range
+          </Button>
+          {rangeInputError ? (
+            <div id={rangeInputErrorId}>
+              <FeedbackBanner kind="warning" message={rangeInputError} />
+            </div>
+          ) : manualRangeActive ? (
+            <p role="note" className="text-fm-control text-fm-secondary">
+              Values outside this range are clipped to the nearest color.
+            </p>
+          ) : (
+            <p role="note" className="text-fm-control text-fm-secondary">
+              Enter finite limits with minimum below maximum, then apply them. The current data range stays active until then.
+            </p>
+          )}
+        </InspectorPropertyRow>
+      ) : null}
+    </>
+  );
+}
+
 export function ScalarColorbarControl({
   allowCachedRange = true,
+  allowManualRange = true,
   requireRenderedRange = false,
   disabled,
   fieldMeta,
@@ -552,9 +800,12 @@ export function ScalarColorbarControl({
   patch,
   quantityId,
   rangeIdentity,
+  rangePreferenceComponent = "magnitude",
   renderedRange,
+  scalarRangePolicy,
 }: {
   allowCachedRange?: boolean;
+  allowManualRange?: boolean;
   requireRenderedRange?: boolean;
   disabled: boolean;
   fieldMeta: ReturnType<typeof useFieldMetaResource>;
@@ -562,7 +813,9 @@ export function ScalarColorbarControl({
   patch: PatchVisualizationTarget;
   quantityId: string;
   rangeIdentity: string;
+  rangePreferenceComponent?: ViewportScalarRangeComponent;
   renderedRange: { max: number; min: number } | null;
+  scalarRangePolicy?: ViewportScalarRangePolicy;
 }) {
   const [displayUnit, setDisplayUnit] =
     useState<ScalarColorbarDisplayUnit>("");
@@ -577,9 +830,36 @@ export function ScalarColorbarControl({
     }
   }, [fieldMeta.data, rangeIdentity]);
   const visibleMeta = fieldMeta.data ?? (allowCachedRange ? cachedRange : null);
-  const stats = requireRenderedRange
-    ? fieldMeta.status === "ready" && visibleMeta && !fieldMeta.error && !fieldMeta.refreshError ? renderedRange : null
-    : renderedRange ?? visibleMeta?.stats;
+  const manualRange = scalarRangePolicy?.mode === "manual"
+    ? validateManualScalarRangeInput(
+        String(scalarRangePolicy.min ?? ""),
+        String(scalarRangePolicy.max ?? ""),
+      )
+    : null;
+  const manualRangeActive =
+    allowManualRange && Boolean(manualRange && !manualRange.error);
+  const metadataRange =
+    typeof visibleMeta?.stats?.min === "number" &&
+    Number.isFinite(visibleMeta.stats.min) &&
+    typeof visibleMeta.stats.max === "number" &&
+    Number.isFinite(visibleMeta.stats.max)
+      ? { max: visibleMeta.stats.max, min: visibleMeta.stats.min }
+      : null;
+  const rangeControlsKey = JSON.stringify([
+    rangeIdentity,
+    quantityId,
+    rangePreferenceComponent,
+    scalarRangePolicy?.mode ?? "auto",
+    scalarRangePolicy?.min ?? "",
+    scalarRangePolicy?.max ?? "",
+  ]);
+  const stats = manualRangeActive
+    ? renderedRange
+    : requireRenderedRange
+      ? fieldMeta.status === "ready" && visibleMeta && !fieldMeta.error && !fieldMeta.refreshError
+        ? renderedRange
+        : null
+      : renderedRange ?? visibleMeta?.stats;
   const unit =
     visibleMeta?.unit?.trim() ||
     quantityUnitForColorbar(visibleMeta?.quantity_id ?? quantityId);
@@ -609,6 +889,8 @@ export function ScalarColorbarControl({
   const dataRange =
     minLabel && maxLabel
       ? `${minLabel} to ${maxLabel}`
+      : manualRangeActive
+        ? "waiting for the manual range to render"
       : fieldMeta.error || fieldMeta.refreshError
         ? "field range unavailable"
       : fieldMeta.status === "ready"
@@ -634,6 +916,18 @@ export function ScalarColorbarControl({
           }
         />
       ) : null}
+      {allowManualRange ? (
+        <ScalarRangeControls
+          key={rangeControlsKey}
+          disabled={disabled}
+          metadataRange={metadataRange}
+          patch={patch}
+          quantityId={quantityId}
+          rangePreferenceComponent={rangePreferenceComponent}
+          renderedRange={renderedRange}
+          scalarRangePolicy={scalarRangePolicy}
+        />
+      ) : null}
       <div role="img"
         className="fm-inspector-colorbar"
         aria-label={
@@ -656,7 +950,16 @@ export function ScalarColorbarControl({
           {maxLabel ?? ""}
         </span>
       </div>
-      <FieldRow label={requireRenderedRange ? "Rendered range" : "Data range"} value={dataRange} />
+      <FieldRow
+        label={manualRangeActive || requireRenderedRange ? "Rendered range" : "Data range"}
+        value={dataRange}
+      />
+      {manualRangeActive && metadataRange ? (
+        <FieldRow
+          label="Data range"
+          value={`${formatScalarColorbarValueWithDisplayUnit(metadataRange.min, unit, effectiveDisplayUnit)} to ${formatScalarColorbarValueWithDisplayUnit(metadataRange.max, unit, effectiveDisplayUnit)}`}
+        />
+      ) : null}
       {fieldMeta.error || fieldMeta.refreshError ? <FeedbackBanner kind="error" message={(fieldMeta.error ?? fieldMeta.refreshError)?.message ?? "Field range unavailable"} /> : null}
     </div>
   );
