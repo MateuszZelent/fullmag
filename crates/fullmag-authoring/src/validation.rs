@@ -891,9 +891,9 @@ fn validate_requested_layered_mesh(
         }
     }
     if let Some(transition) = mesh.transition_policy.as_deref() {
-        if !matches!(transition, "pyramid_to_tetrahedra" | "reject") {
+        if !matches!(transition, "pyramid_to_tetrahedra" | "pure_prism" | "reject") {
             return Err(SceneDocumentValidationError::new(format!(
-                "{path}.transition_policy must be 'pyramid_to_tetrahedra' or 'reject'"
+                "{path}.transition_policy must be 'pyramid_to_tetrahedra', 'pure_prism', or 'reject'"
             )));
         }
     }
@@ -983,10 +983,13 @@ fn validate_requested_layered_mesh(
     }
 
     if mesh.topology.as_deref() == Some("prismatic")
-        && mesh.transition_policy.as_deref() != Some("pyramid_to_tetrahedra")
+        && !matches!(
+            mesh.transition_policy.as_deref(),
+            Some("pyramid_to_tetrahedra" | "pure_prism")
+        )
     {
         return Err(SceneDocumentValidationError::new(format!(
-            "{path} explicit prismatic topology requires pyramid_to_tetrahedra transition"
+            "{path} explicit prismatic topology requires pyramid_to_tetrahedra or pure_prism transition"
         )));
     }
 
@@ -1001,9 +1004,11 @@ fn validate_requested_layered_mesh(
                 "{path} hex element family requires quadrilateral source faces"
             )));
         }
-        if mesh.transition_policy.as_deref() == Some("pyramid_to_tetrahedra") {
+        if let Some(transition @ ("pyramid_to_tetrahedra" | "pure_prism")) =
+            mesh.transition_policy.as_deref()
+        {
             return Err(SceneDocumentValidationError::new(format!(
-                "{path} hex element family contradicts pyramid_to_tetrahedra transition"
+                "{path} hex element family contradicts {transition} transition"
             )));
         }
     }
@@ -4220,6 +4225,29 @@ mod tests {
     fn generic_swept_prism_allows_reject_transition_policy() {
         validate_requested_layered_mesh("mesh", &valid_generic_swept_prism(), true)
             .expect("generic swept prism must preserve transition='reject'");
+    }
+
+    #[test]
+    fn prismatic_topology_allows_pure_prism_and_hex_rejects_it() {
+        let mut pure_prism = valid_generic_swept_prism();
+        pure_prism.topology = Some("prismatic".to_string());
+        pure_prism.transition_policy = Some("pure_prism".to_string());
+        pure_prism.through_thickness_elements = Some(4);
+        validate_requested_layered_mesh("mesh", &pure_prism, true)
+            .expect("prismatic topology must accept transition_policy='pure_prism'");
+
+        let mut hex_pure_prism = valid_generic_swept_prism();
+        hex_pure_prism.mesh_strategy = Some("swept_hex".to_string());
+        hex_pure_prism.element_family = Some("hex".to_string());
+        hex_pure_prism.sweep_face_meshing = Some("quadrilateral".to_string());
+        hex_pure_prism.transition_policy = Some("pure_prism".to_string());
+        let error = validate_requested_layered_mesh("mesh", &hex_pure_prism, true)
+            .expect_err("hex element family must reject transition_policy='pure_prism'");
+        assert!(
+            error.message.contains("contradicts pure_prism transition"),
+            "{}",
+            error.message
+        );
     }
 
     #[test]

@@ -1579,13 +1579,16 @@ void gpu_rk_dmi_fields_are_owned_by_cuda_rk_module() {
                 std::string::npos,
         "GPU CUDA RK DMI field source must document and include its module header");
     check(
-        dmi_source.find("fullmag_cuda_dmi_field_energy(") != std::string::npos &&
+        dmi_source.find("fullmag_cuda_dmi_csr_field_energy(") != std::string::npos &&
+            dmi_source.find("fullmag_cuda_dmi_csr_periodic_field_energy(") !=
+                std::string::npos &&
             dmi_source.find("launch GPU RK interfacial DMI field") !=
                 std::string::npos &&
             dmi_source.find("launch GPU RK bulk DMI field") != std::string::npos &&
-            dmi_source.find("requires device-resident mesh geometry") !=
-                std::string::npos,
-        "GPU CUDA RK DMI field source must own interfacial and bulk DMI field generation");
+            dmi_source.find("requires device-resident CSR operator") !=
+                std::string::npos &&
+            dmi_source.find("gpu.mesh_geometry") == std::string::npos,
+        "GPU CUDA RK DMI field source must own interfacial and bulk CSR DMI field generation");
     check(
         dmi_source.find("gpu_rk_compute_rhs_for_magnetization(") == std::string::npos &&
             dmi_source.find("gpu_rk_accumulate_effective_field(") ==

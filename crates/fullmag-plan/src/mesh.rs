@@ -1752,19 +1752,6 @@ fn mixed_p1_scope_failed_predicates(
         "cuda" => "gpu",
         device => device,
     };
-    let has_dmi = problem.energy_terms.iter().any(|term| {
-        matches!(
-            term,
-            fullmag_ir::EnergyTermIR::InterfacialDmi { .. }
-                | fullmag_ir::EnergyTermIR::BulkDmi { .. }
-                | fullmag_ir::EnergyTermIR::RotatedInterfacialDmi { .. }
-        )
-    }) || problem.materials.iter().any(|material| {
-        material.interfacial_dmi.is_some()
-            || material.bulk_dmi.is_some()
-            || material.dind_field.is_some()
-            || material.dbulk_field.is_some()
-    });
     let mut exchange_count = 0usize;
     let mut demag_count = 0usize;
     let mut unsupported_energy = false;
@@ -1884,9 +1871,6 @@ fn mixed_p1_scope_failed_predicates(
     if unsupported_energy {
         failed.push("unsupported_energy_term");
     }
-    if has_dmi && device == "gpu" {
-        failed.push("gpu_dmi_kernel_not_mixed_p1");
-    }
     if !(1..=3).contains(&certificate.requested_layer_count) {
         failed.push("requested_layer_count_outside_1_to_3");
     }
@@ -1913,7 +1897,180 @@ fn validate_mixed_p1_execution_scope(
         return Ok(());
     }
     Err(format!(
-        "fem_mixed_p1_scope_rejected: failed_predicates=[{}]; required=explicit_fem+explicit_cpu_or_gpu+strict+double+P1+one_axis_aligned_box+exact_1_to_3_layers+uniform_material+exchange+uniform_or_nodal_uniaxial_or_cubic_anisotropy+cpu_dmi_only+auto_or_poisson_open_boundary_order_one+relaxation_PG_BB_NCG_LLG_overdamped_or_time_evolution_heun_rk4_rk23_rk45+regional_field_drive_supported_by_time_evolution; requested_backend={:?}; requested_device={}; requested_precision={:?}; execution_mode={:?}; study={:?}; energy_terms={:?}; fallback=none",
+        "fem_mixed_p1_scope_rejected: failed_predicates=[{}]; required=explicit_fem+explicit_cpu_or_gpu+strict+double+P1+one_axis_aligned_box+exact_1_to_3_layers+uniform_material+exchange+uniform_or_nodal_uniaxial_or_cubic_anisotropy+dmi_cpu_or_gpu+auto_or_poisson_open_boundary_order_one+relaxation_PG_BB_NCG_LLG_overdamped_or_time_evolution_heun_rk4_rk23_rk45+regional_field_drive_supported_by_time_evolution; requested_backend={:?}; requested_device={}; requested_precision={:?}; execution_mode={:?}; study={:?}; energy_terms={:?}; fallback=none",
+        failed.join(","),
+        problem.backend_policy.requested_backend,
+        effective_runtime_device(problem),
+        problem.backend_policy.execution_precision,
+        problem.validation_profile.execution_mode,
+        problem.study,
+        problem.energy_terms,
+    ))
+}
+
+fn pure_prism_p2_scope_failed_predicates(
+    problem: &ProblemIR,
+    certificate: &fullmag_ir::PurePrismTopologyCertificateV1IR,
+) -> Vec<&'static str> {
+    let fem_order = problem
+        .backend_policy
+        .discretization_hints
+        .as_ref()
+        .and_then(|hints| hints.fem.as_ref())
+        .map(|hints| hints.order);
+    let device = match effective_runtime_device(problem) {
+        "cuda" => "gpu",
+        device => device,
+    };
+    let mut exchange_count = 0usize;
+    let mut demag_count = 0usize;
+    let mut unsupported_energy = false;
+    for term in &problem.energy_terms {
+        match term {
+            fullmag_ir::EnergyTermIR::Exchange => exchange_count += 1,
+            fullmag_ir::EnergyTermIR::Demag { realization }
+                if matches!(
+                    realization,
+                    fullmag_ir::RequestedFemDemagIR::Auto
+                        | fullmag_ir::RequestedFemDemagIR::PoissonRobin
+                        | fullmag_ir::RequestedFemDemagIR::PoissonDirichlet
+                ) =>
+            {
+                demag_count += 1;
+            }
+            fullmag_ir::EnergyTermIR::InterfacialDmi { .. }
+            | fullmag_ir::EnergyTermIR::BulkDmi { .. }
+            | fullmag_ir::EnergyTermIR::RotatedInterfacialDmi { .. } => {}
+            fullmag_ir::EnergyTermIR::Zeeman { .. } => {}
+            _ => unsupported_energy = true,
+        }
+    }
+
+    let active_field_drive = problem
+        .field_drives
+        .iter()
+        .any(|drive| crate::util::field_drive_is_active(drive, problem));
+    let supports_time_evolution = mixed_p1_supports_time_evolution(problem);
+    let supports_relaxation = matches!(
+        &problem.study,
+        fullmag_ir::StudyIR::Relaxation {
+            algorithm: fullmag_ir::RelaxationAlgorithmIR::ProjectedGradientBb
+                | fullmag_ir::RelaxationAlgorithmIR::NonlinearCg
+                | fullmag_ir::RelaxationAlgorithmIR::LlgOverdamped,
+            ..
+        }
+    );
+
+    let mut failed = Vec::new();
+    if problem.backend_policy.requested_backend != fullmag_ir::BackendTarget::Fem {
+        failed.push("backend_not_explicit_fem");
+    }
+    if problem.validation_profile.execution_mode != fullmag_ir::ExecutionMode::Strict {
+        failed.push("execution_mode_not_strict");
+    }
+    if problem.backend_policy.execution_precision != fullmag_ir::ExecutionPrecision::Double {
+        failed.push("precision_not_double");
+    }
+    if !matches!(device, "cpu" | "gpu") {
+        failed.push("device_not_explicit_cpu_or_gpu");
+    }
+    if fem_order != Some(1) {
+        failed.push("fem_order_not_p1");
+    }
+    if problem.geometry.entries.len() != 1
+        || !matches!(
+            problem.geometry.entries.first(),
+            Some(fullmag_ir::GeometryEntryIR::Box { .. })
+        )
+    {
+        failed.push("geometry_not_exactly_one_axis_aligned_box");
+    }
+    if problem.regions.len() != 1 {
+        failed.push("region_count_not_one");
+    }
+    if problem.magnets.len() != 1 {
+        failed.push("magnet_count_not_one");
+    }
+    if problem.materials.len() != 1 {
+        failed.push("material_count_not_one");
+    }
+    if problem.materials.iter().any(|material| {
+        material.ms_field.is_some() || material.a_field.is_some() || material.alpha_field.is_some()
+    }) {
+        failed.push("unsupported_material_field_or_dmi");
+    }
+    if !problem.object_regions.is_empty()
+        || !problem.material_parameter_fields.is_empty()
+        || !problem.couplings.is_empty()
+        || !problem.current_modules.is_empty()
+        || !problem.spin_torque_modules.is_empty()
+        || problem.current_density.is_some()
+        || problem.stt_degree.is_some()
+        || problem.stt_beta.is_some()
+        || problem.stt_spin_polarization.is_some()
+        || problem.stt_lambda.is_some()
+        || problem.stt_epsilon_prime.is_some()
+        || problem.stt_thickness.is_some()
+        || problem.stt_fixed_layer_position.is_some()
+        || problem.temperature.is_some()
+        || !problem.elastic_materials.is_empty()
+        || !problem.elastic_bodies.is_empty()
+        || !problem.magnetostriction_laws.is_empty()
+        || !problem.mechanical_bcs.is_empty()
+        || !problem.mechanical_loads.is_empty()
+        || problem.pbc.is_some()
+    {
+        failed.push("unsupported_extended_module");
+    }
+    if !supports_relaxation && !supports_time_evolution {
+        failed.push("unsupported_study");
+    }
+    if active_field_drive && !supports_time_evolution {
+        failed.push("unsupported_regional_field_drive");
+    }
+    if exchange_count == 0 {
+        failed.push("missing_exchange");
+    } else if exchange_count != 1 {
+        failed.push("exchange_term_count_not_one");
+    }
+    if demag_count == 0 {
+        failed.push("missing_qualified_demag");
+    } else if demag_count != 1 {
+        failed.push("demag_term_count_not_one");
+    }
+    if unsupported_energy {
+        failed.push("unsupported_energy_term");
+    }
+    if certificate.requested_layer_count == 0 {
+        failed.push("requested_layer_count_zero");
+    }
+    if certificate.realized_layer_count != certificate.requested_layer_count {
+        failed.push("realized_layer_count_mismatch");
+    }
+    if certificate.lower_air_layer_count == 0 || certificate.upper_air_layer_count == 0 {
+        failed.push("air_layer_count_zero");
+    }
+    if certificate.magnetic_plane_coordinates_m.len()
+        != certificate.requested_layer_count as usize + 1
+    {
+        failed.push("magnetic_plane_count_mismatch");
+    }
+    if !certificate.fallbacks_triggered.is_empty() {
+        failed.push("mesh_fallback_triggered");
+    }
+    failed
+}
+
+fn validate_pure_prism_p2_execution_scope(
+    problem: &ProblemIR,
+    certificate: &fullmag_ir::PurePrismTopologyCertificateV1IR,
+) -> Result<(), String> {
+    let failed = pure_prism_p2_scope_failed_predicates(problem, certificate);
+    if failed.is_empty() {
+        return Ok(());
+    }
+    Err(format!(
+        "fem_pure_prism_p2_scope_rejected: failed_predicates=[{}]; required=explicit_fem+explicit_cpu_or_gpu+strict+double+P1+one_axis_aligned_box+exact_layers_ge_1+uniform_material+exchange+uniform_or_nodal_uniaxial_or_cubic_anisotropy+dmi_cpu_or_gpu+auto_or_poisson_open_boundary+relaxation_PG_BB_NCG_LLG_overdamped_or_time_evolution_heun_rk4_rk23_rk45+regional_field_drive_supported_by_time_evolution; requested_backend={:?}; requested_device={}; requested_precision={:?}; execution_mode={:?}; study={:?}; energy_terms={:?}; fallback=none",
         failed.join(","),
         problem.backend_policy.requested_backend,
         effective_runtime_device(problem),
@@ -2213,11 +2370,48 @@ pub(crate) fn reject_unsupported_mixed_topology(
             .iter()
             .all(|family| matches!(*family, "tri3" | "quad4"))
         && facet_families.contains(&"quad4");
-    if !qualified_mixed_p1 {
+    let qualified_pure_prism_p2 = cell_families == ["prism6"]
+        && facet_families
+            .iter()
+            .all(|family| matches!(*family, "tri3" | "quad4"))
+        && facet_families.contains(&"quad4");
+    if !qualified_mixed_p1 && !qualified_pure_prism_p2 {
         return Err(format!(
             "fem_typed_topology_unsupported_before_backend: actual_topology={topology}; \
              supported_topology=tet4/tri3; fallback=none"
         ));
+    }
+    if qualified_pure_prism_p2 {
+        let Some(report) = build_report else {
+            return Err(format!(
+                "fem_pure_prism_p2_certificate_required: actual_topology={topology}; \
+                 required_capabilities=[mesh.topology.pure_prism_p2,mesh.swept.prism,\
+                 mesh.transition.pure_prism,mesh.exact_layer_count]; fallback=none"
+            ));
+        };
+        if report.mixed_layer_topology_certificate.is_some()
+            || report.mixed_layer_topology_certificate_v2.is_some()
+        {
+            return Err(
+                "fem_pure_prism_p2_certificate_rejected: pure_prism certificate cannot be combined with v1 or v2 mixed certificates; fallback=none"
+                    .to_string(),
+            );
+        }
+        validate_mixed_p1_build_report(report, "source")?;
+        let Some(certificate) = report.pure_prism_topology_certificate.as_ref() else {
+            return Err(format!(
+                "fem_pure_prism_p2_certificate_required: actual_topology={topology}; \
+                 accepted pure prism topology certificate is missing; fallback=none"
+            ));
+        };
+        fullmag_ir::validate_pure_prism_topology_certificate_against_mesh(mesh, certificate)
+            .map_err(|reasons| {
+                format!(
+                    "fem_pure_prism_p2_certificate_rejected: {}; fallback=none",
+                    reasons.join("; ")
+                )
+            })?;
+        return validate_pure_prism_p2_execution_scope(problem, certificate);
     }
     let Some(report) = build_report else {
         return Err(format!(
@@ -2227,6 +2421,20 @@ pub(crate) fn reject_unsupported_mixed_topology(
              select topology='free_tetrahedral' explicitly to use the qualified tetrahedral lane"
         ));
     };
+    if report.pure_prism_topology_certificate.is_some() {
+        return Err(
+            "fem_mixed_p1_certificate_rejected: pure_prism certificate cannot be attached to a mixed prism/pyramid/tet mesh; fallback=none"
+                .to_string(),
+        );
+    }
+    if report.mixed_layer_topology_certificate.is_some()
+        && report.mixed_layer_topology_certificate_v2.is_some()
+    {
+        return Err(
+            "fem_mixed_p1_certificate_rejected: v1 and v2 certificates cannot be present together; fallback=none"
+                .to_string(),
+        );
+    }
     validate_mixed_p1_build_report(report, "source")?;
     if let Some(certificate) = report.mixed_layer_topology_certificate_v2.as_ref() {
         fullmag_ir::validate_mixed_layer_topology_certificate_v2_against_mesh(mesh, certificate)
@@ -2303,11 +2511,23 @@ pub(crate) fn resolve_fem_domain_mesh_asset(
         .build_report
         .as_ref()
         .and_then(|report| report.mixed_layer_topology_certificate_v2.as_ref());
-    if source_certificate.is_some() && source_certificate_v2.is_some() {
-        return Err(
+    let source_pure_prism_certificate = asset
+        .build_report
+        .as_ref()
+        .and_then(|report| report.pure_prism_topology_certificate.as_ref());
+    let certificate_count = usize::from(source_certificate.is_some())
+        + usize::from(source_certificate_v2.is_some())
+        + usize::from(source_pure_prism_certificate.is_some());
+    if certificate_count > 1 {
+        let message = if source_certificate.is_some()
+            && source_certificate_v2.is_some()
+            && source_pure_prism_certificate.is_none()
+        {
             "fem_mixed_p1_certificate_rejected: v1 and v2 certificates cannot be present together; fallback=none"
-                .to_string(),
-        );
+        } else {
+            "fem_mixed_p1_certificate_rejected: v1, v2, and pure_prism certificates cannot be present together; fallback=none"
+        };
+        return Err(message.to_string());
     }
     let (mesh, object_segments, mesh_parts) = pack_mesh_by_analysis(&mesh, &analysis)?;
     let mut build_report = asset.build_report.clone();
@@ -2385,6 +2605,47 @@ pub(crate) fn resolve_fem_domain_mesh_asset(
         report.mixed_topology_provenance = Some(fullmag_ir::FemMixedTopologyProvenanceIR {
             requested_topology: fullmag_ir::FemMeshTopologyFamilyIR::MixedP1,
             resolved_topology: fullmag_ir::FemMeshTopologyFamilyIR::MixedP1,
+            accepted_certificate_fingerprint: fingerprint,
+            requested_device,
+            precision: fullmag_ir::ExecutionPrecision::Double,
+            capability_status: fullmag_ir::FemMixedTopologyCapabilityStatusIR::Implemented,
+        });
+    }
+    if source_pure_prism_certificate.is_some() {
+        let report = build_report.as_mut().ok_or_else(|| {
+            "fem_pure_prism_p2_certificate_required: shared-domain build report is missing; fallback=none"
+                .to_string()
+        })?;
+        let certificate = report
+            .pure_prism_topology_certificate
+            .as_mut()
+            .ok_or_else(|| {
+                "fem_pure_prism_p2_certificate_required: accepted pure prism topology certificate is missing; fallback=none"
+                    .to_string()
+            })?;
+        let fingerprint = mesh
+            .mixed_topology_fingerprint_v3()
+            .map_err(|error| {
+                format!("fem_pure_prism_p2_packed_certificate_rejected: {error}; fallback=none")
+            })?;
+        certificate.topology_fingerprint_version = "v3".to_string();
+        certificate.topology_fingerprint = fingerprint.clone();
+        fullmag_ir::validate_pure_prism_topology_certificate_against_mesh(&mesh, certificate)
+            .map_err(|reasons| {
+                format!(
+                    "fem_pure_prism_p2_packed_certificate_rejected: {}; fallback=none",
+                    reasons.join("; ")
+                )
+            })?;
+        validate_mixed_p1_build_report(report, "packed")?;
+        let requested_device = match effective_runtime_device(problem) {
+            "cpu" => fullmag_ir::ExecutionDevice::Cpu,
+            "gpu" => fullmag_ir::ExecutionDevice::Gpu,
+            _ => fullmag_ir::ExecutionDevice::Auto,
+        };
+        report.mixed_topology_provenance = Some(fullmag_ir::FemMixedTopologyProvenanceIR {
+            requested_topology: fullmag_ir::FemMeshTopologyFamilyIR::PurePrismP2,
+            resolved_topology: fullmag_ir::FemMeshTopologyFamilyIR::PurePrismP2,
             accepted_certificate_fingerprint: fingerprint,
             requested_device,
             precision: fullmag_ir::ExecutionPrecision::Double,
@@ -2489,23 +2750,34 @@ fn certified_airbox_boundary_marker(
         let (outer_boundary_marker, source) = match (
             report.mixed_layer_topology_certificate.as_ref(),
             report.mixed_layer_topology_certificate_v2.as_ref(),
+            report.pure_prism_topology_certificate.as_ref(),
         ) {
-            (Some(_), Some(_)) => {
+            (Some(_), Some(_), None) => {
                 return Err(
                     "fem_mixed_p1_certificate_required: V1 and V2 certificates cannot be carried together; fallback=none"
                         .to_string(),
                 )
             }
-            (Some(certificate), None) => {
+            (Some(certificate), None, None) => {
                 (certificate.outer_boundary_marker, "mixed_topology_certificate")
             }
-            (None, Some(certificate)) => (
+            (None, Some(certificate), None) => (
                 certificate.outer_boundary_marker,
                 "mixed_topology_certificate_v2",
             ),
-            (None, None) => {
+            (None, None, Some(certificate)) => (
+                certificate.outer_boundary_marker,
+                "pure_prism_topology_certificate",
+            ),
+            (None, None, None) => {
                 return Err(
                     "fem_mixed_p1_certificate_required: outer airbox marker is not certified; fallback=none"
+                        .to_string(),
+                )
+            }
+            _ => {
+                return Err(
+                    "fem_mixed_p1_certificate_required: V1, V2, and pure_prism certificates cannot be carried together; fallback=none"
                         .to_string(),
                 )
             }

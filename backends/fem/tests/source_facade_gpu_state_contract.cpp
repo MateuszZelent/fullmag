@@ -103,27 +103,47 @@ void gpu_mesh_geometry_is_owned_by_cuda_mesh_module() {
             gpu_state_source.find("state.nodes_xyz") == std::string::npos &&
             gpu_state_source.find("state.mesh_element_count") == std::string::npos,
         "GPU mesh geometry upload must be delegated to the mesh-geometry upload module");
-    for (const std::string *source : {&dmi_field_source, &dmi_energy_source, &zhang_li_source}) {
+    check(
+        zhang_li_source.find("gpu.mesh_geometry.uploaded") != std::string::npos &&
+            zhang_li_source.find("gpu.mesh_geometry.element_count") !=
+                std::string::npos &&
+            zhang_li_source.find("gpu.mesh_geometry.nodes_xyz") != std::string::npos &&
+            zhang_li_source.find("gpu.mesh_geometry.elements") != std::string::npos &&
+            zhang_li_source.find("gpu.mesh_geometry.magnetic_element_mask") !=
+                std::string::npos &&
+            zhang_li_source.find("gpu.nodes_xyz") == std::string::npos &&
+            zhang_li_source.find("gpu.mesh_element_count") == std::string::npos,
+        "GPU RK Zhang-Li STT geometry consumer must use the mesh-geometry substate");
+    for (const std::string *source : {&dmi_field_source, &dmi_energy_source}) {
         check(
-            source->find("gpu.mesh_geometry.uploaded") != std::string::npos &&
-                source->find("gpu.mesh_geometry.element_count") !=
-                    std::string::npos &&
-                source->find("gpu.mesh_geometry.nodes_xyz") != std::string::npos &&
-                source->find("gpu.mesh_geometry.elements") != std::string::npos &&
-                source->find("gpu.mesh_geometry.magnetic_element_mask") !=
-                    std::string::npos &&
+            source->find("gpu.dmi_csr.") != std::string::npos &&
+                source->find("gpu.mesh_geometry") == std::string::npos &&
                 source->find("gpu.nodes_xyz") == std::string::npos &&
                 source->find("gpu.mesh_element_count") == std::string::npos,
-            "GPU RK DMI/STT geometry consumers must use the mesh-geometry substate");
+            "GPU RK DMI field/energy paths must consume the dmi_csr substate instead of flat tetrahedral mesh geometry");
     }
+    check(
+        gpu_state_header.find("#include \"gpu/cuda/interactions/dmi/dmi_csr_state.hpp\"") !=
+                std::string::npos &&
+            gpu_state_header.find("FemGpuDmiCsrDeviceState dmi_csr{}") !=
+                std::string::npos &&
+            gpu_state_source.find("#include \"gpu/cuda/interactions/dmi/dmi_csr_operator.hpp\"") !=
+                std::string::npos &&
+            gpu_state_source.find("gpu_dmi_csr_free(state.lifecycle, state.dmi_csr)") !=
+                std::string::npos,
+        "FemGpuState must store and destroy CSR DMI buffers through the dmi_csr substate");
     check(
         rk_plan_source.find("ctx.gpu_state.device.mesh_geometry.uploaded") !=
                 std::string::npos &&
             rk_plan_source.find("ctx.gpu_state.device.mesh_geometry.element_count") !=
                 std::string::npos &&
+            rk_plan_source.find("ctx.gpu_state.device.dmi_csr.interfacial.uploaded") !=
+                std::string::npos &&
+            rk_plan_source.find("ctx.gpu_state.device.dmi_csr.bulk.uploaded") !=
+                std::string::npos &&
             rk_plan_source.find("ctx.gpu_state.device.mesh_geometry_uploaded") ==
                 std::string::npos,
-        "GPU RK readiness planning must use the mesh-geometry substate");
+        "GPU RK readiness planning must use the mesh-geometry and dmi_csr substates");
     check(
         gpu_state_runtime_header.find(
             "bool gpu_state_requires_tetrahedral_mesh_geometry(const Context &ctx)") !=
@@ -133,13 +153,11 @@ void gpu_mesh_geometry_is_owned_by_cuda_mesh_module() {
                 std::string::npos,
         "GPU-state bootstrap must gate tetrahedral geometry upload by actual consumers");
     check(
-        gpu_state_runtime_source.find("ctx.dmi.interfacial_enabled") !=
+        gpu_state_runtime_source.find("return ctx.stt.zhang_li_enabled;") !=
                 std::string::npos &&
-            gpu_state_runtime_source.find("ctx.dmi.bulk_enabled") !=
-                std::string::npos &&
-            gpu_state_runtime_source.find("ctx.stt.zhang_li_enabled") !=
+            gpu_state_runtime_source.find("context_upload_mfem_dmi_to_gpu_state(") !=
                 std::string::npos,
-        "DMI and Zhang-Li STT must remain the explicit tetrahedral geometry consumers");
+        "Zhang-Li STT must be the sole tetrahedral geometry consumer while DMI uploads via CSR");
     check(
         mesh_geometry_upload_source.find(
             "mesh geometry upload requires tetrahedral element connectivity") !=
@@ -980,15 +998,19 @@ void gpu_local_interaction_workspace_is_owned_by_cuda_interactions_module() {
             gpu_state_source.find("state.zhang_li_rhs") == std::string::npos &&
             gpu_state_source.find("state.zhang_li_node_weight") == std::string::npos,
         "GPU state allocation/destroy must use the local-interactions substate");
-    for (const std::string *source : {&dmi_field_source, &dmi_energy_source, &zhang_li_source}) {
+    check(
+        zhang_li_source.find("gpu.local_interactions.vector.x") != std::string::npos &&
+            zhang_li_source.find("gpu.local_interactions.vector.y") !=
+                std::string::npos &&
+            zhang_li_source.find("gpu.local_interactions.vector.z") !=
+                std::string::npos &&
+            zhang_li_source.find("gpu.zhang_li_rhs") == std::string::npos,
+        "GPU Zhang-Li consumer must use the local-interactions vector workspace");
+    for (const std::string *source : {&dmi_field_source, &dmi_energy_source}) {
         check(
-            source->find("gpu.local_interactions.vector.x") != std::string::npos &&
-                source->find("gpu.local_interactions.vector.y") !=
-                    std::string::npos &&
-                source->find("gpu.local_interactions.vector.z") !=
-                    std::string::npos &&
+            source->find("gpu.local_interactions.vector") == std::string::npos &&
                 source->find("gpu.zhang_li_rhs") == std::string::npos,
-            "GPU DMI and Zhang-Li consumers must use the local-interactions vector workspace");
+            "GPU CSR DMI field/energy SpMV must accumulate in registers without local-interactions scatter buffers");
     }
     check(
         zhang_li_source.find("gpu.local_interactions.node_weight") !=

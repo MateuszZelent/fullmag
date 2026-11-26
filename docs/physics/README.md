@@ -62,6 +62,7 @@ Recommended filenames:
 - `0950-quasistatic-microwave-antenna-field-basis-and-k-selective-excitation.md`
 - [0952 · Harmoniczne źródło antenowe RF dla CPW](0952-harmonic-rf-antenna-cpw.md) — projekt modelu RF i kwalifikacji względem Maxwella.
 - `0960-canonical-llg-time-domain-solver-and-qualification-contract.md`
+- `1001-fem-gpu-pure-prism-p2-and-csr-dmi.md` — czysto-pryzmatyczna dyskretyzacja `pure_prism_p2` (P1 $\mathbf m$ + P2 $\phi$) na FEM CPU/GPU, zunifikowany operator CSR GPU DMI (`tet4`/`prism6`/`mixed`) oraz naprawa konforemności `layers >= 2`.
 - `1005-fem-multiphysics-sparse-and-parallel-solvers.md` — modernizacja rzadkich i równoległych solverów multifizycznych FEM (OE-F2, OE-F1, transport ładunku/spinu, OE-T0 KKT).
 
 The numbering is semantic, not bureaucratic.

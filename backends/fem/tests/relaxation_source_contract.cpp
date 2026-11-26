@@ -2769,25 +2769,31 @@ void mixed_p1_gpu_relaxators_depend_on_operators_not_tetrahedral_connectivity() 
 
     const auto dmi_gate = direct_energy.find(
         "if (!(bulk_mode ? ctx.dmi.bulk_enabled :\n              (ctx.dmi.interfacial_enabled || ctx.dmi.rotated_interfacial_enabled))) {");
-    const auto dmi_geometry = direct_energy.find("gpu.mesh_geometry.nodes_xyz");
+    const auto dmi_csr = direct_energy.find("gpu.dmi_csr.");
     check(
-        dmi_gate != std::string::npos && dmi_geometry != std::string::npos &&
-            dmi_gate < dmi_geometry,
-        "direct energy increments may consume tetrahedral geometry only behind the explicit DMI enablement gate");
+        dmi_gate != std::string::npos && dmi_csr != std::string::npos &&
+            dmi_gate < dmi_csr &&
+            direct_energy.find("fullmag_cuda_dmi_csr_energy_difference(") !=
+                std::string::npos &&
+            direct_energy.find("mesh_geometry") == std::string::npos,
+        "direct energy increments must consume CSR DMI only behind the explicit DMI enablement gate without tetrahedral geometry");
     check(
         gpu_state_runtime.find(
             "bool gpu_state_requires_tetrahedral_mesh_geometry(const Context &ctx)") !=
                 std::string::npos &&
-            gpu_state_runtime.find(
-                "return ctx.dmi.interfacial_enabled || ctx.dmi.rotated_interfacial_enabled ||") !=
+            gpu_state_runtime.find("return ctx.stt.zhang_li_enabled;") !=
                 std::string::npos &&
-            gpu_state_runtime.find("ctx.stt.zhang_li_enabled;") !=
+            gpu_state_runtime.find("context_upload_mfem_dmi_to_gpu_state(") !=
                 std::string::npos,
-        "flat tetrahedral GPU geometry must remain fail-closed to DMI and Zhang-Li owners");
+        "flat tetrahedral GPU geometry must remain fail-closed to Zhang-Li STT while DMI uses CSR upload");
     check(
-        rk_plan.find("device-resident mesh geometry for DMI") !=
+        rk_plan.find("device-resident CSR operator for interfacial DMI") !=
+                std::string::npos &&
+            rk_plan.find("device-resident CSR operator for bulk DMI") !=
                 std::string::npos &&
             rk_plan.find("device-resident mesh geometry for Zhang-Li STT") !=
+                std::string::npos &&
+            rk_plan.find("device-resident mesh geometry for DMI") ==
                 std::string::npos &&
             rk_plan.find(
                 "GPU RK device-resident path requires device-resident mesh geometry for exchange") ==
@@ -2795,7 +2801,7 @@ void mixed_p1_gpu_relaxators_depend_on_operators_not_tetrahedral_connectivity() 
             rk_plan.find(
                 "GPU RK device-resident path requires device-resident mesh geometry for demag") ==
                 std::string::npos,
-        "GPU RK planning must gate only geometry-owning interactions, not CSR exchange or device Poisson demag");
+        "GPU RK planning must gate tetrahedral geometry only for Zhang-Li STT, while CSR exchange, CSR DMI, and device Poisson demag stay topology-general");
 }
 
 } // namespace

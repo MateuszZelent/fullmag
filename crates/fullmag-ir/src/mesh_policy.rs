@@ -98,6 +98,7 @@ pub enum FemElementFamilyIR {
 #[serde(rename_all = "snake_case")]
 pub enum FemTransitionPolicyIR {
     PyramidToTetrahedra,
+    PurePrism,
     Reject,
 }
 
@@ -859,7 +860,9 @@ impl FemMeshPolicyIR {
                 (
                     FemSweepFaceTopologyIR::Triangular,
                     FemElementFamilyIR::Prism6,
-                    FemTransitionPolicyIR::PyramidToTetrahedra | FemTransitionPolicyIR::Reject,
+                    FemTransitionPolicyIR::PyramidToTetrahedra
+                        | FemTransitionPolicyIR::PurePrism
+                        | FemTransitionPolicyIR::Reject,
                 )
                 | (
                     FemSweepFaceTopologyIR::Quadrilateral,
@@ -1351,6 +1354,7 @@ impl FemMeshPolicyIR {
                     }
                     None => FemTransitionPolicyIR::Reject,
                     Some("pyramid_to_tetrahedra") => FemTransitionPolicyIR::PyramidToTetrahedra,
+                    Some("pure_prism") => FemTransitionPolicyIR::PurePrism,
                     Some("reject") => FemTransitionPolicyIR::Reject,
                     Some(other) => {
                         return Err(format!(

@@ -10,6 +10,7 @@
 #include "context.hpp"
 #include "cpu/mfem/runtime/mfem_context.hpp"
 #include "gpu/cuda/demag_poisson/poisson.hpp"
+#include "gpu/cuda/interactions/dmi/dmi_csr_operator.hpp"
 #include "gpu/cuda/reductions/object_average.hpp"
 #include "gpu/cuda/state/gpu_state.hpp"
 #include "gpu/cuda/interactions/zeeman/regional_field_kernels.cuh"
@@ -22,9 +23,7 @@ namespace fullmag::fem {
 
 bool gpu_state_requires_tetrahedral_mesh_geometry(const Context &ctx)
 {
-    return ctx.dmi.interfacial_enabled || ctx.dmi.rotated_interfacial_enabled ||
-        ctx.dmi.bulk_enabled ||
-        ctx.stt.zhang_li_enabled;
+    return ctx.stt.zhang_li_enabled;
 }
 
 namespace {
@@ -223,6 +222,9 @@ bool initialize_context_gpu_state(Context &ctx, std::string &error) {
     }
 #if FULLMAG_HAS_MFEM_STACK
     if (!context_upload_mfem_exchange_to_gpu_state(ctx, error)) {
+        return gpu_bootstrap_failed(ctx, error);
+    }
+    if (!context_upload_mfem_dmi_to_gpu_state(ctx, error)) {
         return gpu_bootstrap_failed(ctx, error);
     }
     if (!gpu_demag_poisson_initialize(ctx, error)) {
