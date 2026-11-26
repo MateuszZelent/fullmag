@@ -45,24 +45,22 @@ struct PurePrismMeshBuffers {
     std::vector<uint32_t> cell_types;
     std::vector<uint32_t> cell_offsets;
     std::vector<uint32_t> cell_nodes;
-    std::vector<uint32_t> cell_global_ordinals;
+    std::vector<uint64_t> cell_global_ordinals;
     std::vector<uint32_t> cell_markers;
     std::vector<uint32_t> facet_types;
     std::vector<uint32_t> facet_roles;
     std::vector<uint32_t> facet_offsets;
     std::vector<uint32_t> facet_nodes;
-    std::vector<uint32_t> facet_global_ordinals;
+    std::vector<uint64_t> facet_global_ordinals;
     std::vector<uint32_t> facet_markers;
 
     fullmag_fem_mesh_desc desc() const
     {
         fullmag_fem_mesh_desc d{};
+        d.abi_version = FULLMAG_FEM_MESH_DESC_ABI_VERSION;
+        d.struct_size = sizeof(fullmag_fem_mesh_desc);
         d.nodes_xyz = nodes_xyz.data();
-        d.nodes_len = static_cast<uint64_t>(nodes_xyz.size());
-        d.elements = nullptr;
-        d.elements_len = 0u;
-        d.element_markers = cell_markers.data();
-        d.element_markers_len = static_cast<uint64_t>(cell_markers.size());
+        d.nodes_xyz_len = static_cast<uint64_t>(nodes_xyz.size());
         d.cell_types = cell_types.data();
         d.cell_types_len = static_cast<uint64_t>(cell_types.size());
         d.cell_offsets = cell_offsets.data();
@@ -71,6 +69,8 @@ struct PurePrismMeshBuffers {
         d.cell_nodes_len = static_cast<uint64_t>(cell_nodes.size());
         d.cell_global_ordinals = cell_global_ordinals.data();
         d.cell_global_ordinals_len = static_cast<uint64_t>(cell_global_ordinals.size());
+        d.cell_markers = cell_markers.data();
+        d.cell_markers_len = static_cast<uint64_t>(cell_markers.size());
         d.facet_types = facet_types.data();
         d.facet_types_len = static_cast<uint64_t>(facet_types.size());
         d.facet_roles = facet_roles.data();
@@ -120,7 +120,7 @@ PurePrismMeshBuffers build_conforming_pure_prism_shared_domain()
     }
 
     mesh.cell_offsets.push_back(0u);
-    uint32_t cell_ord = 0u;
+    uint64_t cell_ord = 0u;
     for (uint32_t iz = 0; iz + 1u < kNz; ++iz) {
         for (uint32_t iy = 0; iy + 1u < kNy; ++iy) {
             for (uint32_t ix = 0; ix + 1u < kNx; ++ix) {
@@ -151,7 +151,7 @@ PurePrismMeshBuffers build_conforming_pure_prism_shared_domain()
     }
 
     mesh.facet_offsets.push_back(0u);
-    uint32_t facet_ord = 0u;
+    uint64_t facet_ord = 0u;
     const auto add_tri = [&](uint32_t a, uint32_t b, uint32_t c, uint32_t role, uint32_t marker) {
         mesh.facet_types.push_back(FULLMAG_FEM_FACET_TRI3);
         mesh.facet_roles.push_back(role);
@@ -294,10 +294,11 @@ fullmag_fem_plan_desc make_plan(
     plan.poisson_boundary_marker = 99;
     plan.robin_beta_mode = 2;
     plan.robin_beta_factor = 2.0;
-    plan.demag_solver.solver = FULLMAG_FEM_SOLVER_CG;
-    plan.demag_solver.preconditioner = FULLMAG_FEM_PRECOND_AMG;
-    plan.demag_solver.rtol = 1.0e-12;
-    plan.demag_solver.atol = 1.0e-20;
+    plan.demag_solver.solver = FULLMAG_FEM_LINEAR_SOLVER_CG;
+    plan.demag_solver.preconditioner = FULLMAG_FEM_PRECONDITIONER_AMG;
+    plan.demag_solver.relative_tolerance = 1.0e-12;
+    plan.demag_solver.has_absolute_tolerance = 1;
+    plan.demag_solver.absolute_tolerance = 1.0e-20;
     plan.demag_solver.max_iterations = 500u;
     plan.has_interfacial_dmi = 1;
     plan.dmi_constant = 2.5e-3;
@@ -308,7 +309,11 @@ fullmag_fem_plan_desc make_plan(
     plan.bulk_dmi_constant = 1.2e-3;
     plan.initial_magnetization_xyz = init_m.data();
     plan.initial_magnetization_len = static_cast<uint64_t>(init_m.size());
+    plan.gpu_device_index = -1;
     plan.mfem_device_string = device_str;
+    plan.gpu_demag_mode = (std::string(device_str) == "cuda")
+        ? FULLMAG_FEM_GPU_DEMAG_DEVICE_HYPRE_POISSON
+        : FULLMAG_FEM_GPU_DEMAG_UNSPECIFIED;
     return plan;
 }
 

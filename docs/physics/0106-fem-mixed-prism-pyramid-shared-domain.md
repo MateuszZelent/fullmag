@@ -1377,14 +1377,15 @@ $L\in\{1,2,3\}$ with requested count equal to realized count and exactly
 $L+1$ magnetic planes. Counts `0` and `4`, a non-exact request, a stale or
 mismatched fingerprint, any fallback, or `degraded=true` reject before native
 startup. Unsupported combinations—including `time_evolution`, FEM/BEM,
-PBC/Floquet, GPU DMI, STT, thermal, magnetoelastic, regional projection,
+PBC/Floquet, STT, thermal, magnetoelastic, regional projection,
 frequency-domain/eigen studies, DG0 interfaces, high order, multiple bodies,
 and physical multilayers—retain their existing rejection in certificate v1.
 The implemented v2 source contract admits only positive-gap bodies with
 body-owned P1 material fields; it still rejects
 touching sharp interfaces and explicit interlayer exchange until their
-operators are defined. CPU DMI is admitted by the lane-specific source
-contract. A free-tetrahedral
+operators are defined. CPU and GPU DMI (via the unified preassembled CSR GPU
+DMI operator documented in `docs/physics/1001-fem-gpu-pure-prism-p2-and-csr-dmi.md`)
+are admitted by the lane-specific source contract. A free-tetrahedral
 mesh is an explicit alternative configuration, never an automatic fallback.
 
 ### 4.4 Planner and capability matrix
@@ -1416,9 +1417,10 @@ precision, the narrow workload in Section 1, and no fallback. `auto` remains
 rejecting. Authored device intent, a managed-launcher override, the plan-bound
 effective device, and resolved execution must remain distinct provenance.
 
-On CPU, uniform or nodal-P1 uniaxial/cubic anisotropy and interfacial/bulk DMI
-are admitted. On GPU, uniform or nodal-P1 uniaxial/cubic anisotropy is admitted,
-but DMI remains fail-closed with `gpu_dmi_kernel_not_mixed_p1`. This paragraph
+On both CPU and GPU, uniform or nodal-P1 uniaxial/cubic anisotropy and
+interfacial, rotated interfacial, and bulk DMI are admitted (GPU via the
+unified preassembled skew-symmetric CSR DMI operator documented in
+`docs/physics/1001-fem-gpu-pure-prism-p2-and-csr-dmi.md`). This paragraph
 is source-contract status only and makes no runtime qualification claim.
 
 The exact CoFeB-ring source is the v2 source-contract fixture. Its mapping
@@ -1432,7 +1434,7 @@ unavailable. Managed runtime, operator parity, and physics qualification remain
 **NOT VERIFIED**; no current row is promoted by source presence alone.
 
 Until separately qualified, planning rejects FEM/BEM demag, PBC/Floquet,
-GPU DMI, STT/thermal/magnetoelastic terms, regional projections, eigen/frequency-
+STT/thermal/magnetoelastic terms, regional projections, eigen/frequency-
 domain studies, DG0/material interfaces, order greater than one, arbitrary OCC
 shapes, touching multiple bodies, and multilayers. Disconnected multiple
 bodies remain rejected by v1 and are admitted at source/contract level only through the implemented v2 rows; managed runtime and physics qualification remain **NOT VERIFIED**.
@@ -1596,7 +1598,8 @@ own fresh managed evidence:
   contract checks on certified mixed magnetic prism nodes using MFEM mass-row-
   sum weights for the CPU and GPU anisotropy paths;
 - CPU interfacial and bulk DMI field/energy contracts on the magnetic `prism6`
-  oracle; GPU DMI rejection with `gpu_dmi_kernel_not_mixed_p1`;
+  oracle and unified CSR GPU DMI field/energy/polarized-difference parity
+  contracts across `tet4`, `prism6`, and mixed meshes (`docs/physics/1001-fem-gpu-pure-prism-p2-and-csr-dmi.md`);
 - manufactured Poisson solution and RHS/sign tests across all three cell types;
 - Dirichlet/Robin airbox convergence and existing sphere/ellipsoid demag gates;
 - PG-BB/NCG energy-descent and overdamped-LLG trajectory/stop-reason gates;
@@ -1682,7 +1685,7 @@ No lower level implies a higher one.
   positive-gap disconnected-body extension is implemented at source/contract
   level under certificate v2; managed runtime, operators, CPU/GPU parity and
   physics qualification remain **NOT VERIFIED**.
-- PBC/Floquet, FEM/BEM/FMM, frequency-domain/eigen, GPU DMI, STT, thermal,
+- PBC/Floquet, FEM/BEM/FMM, frequency-domain/eigen, STT, thermal,
   magnetoelasticity, regional projections, DG0/material-interface publication,
   and order greater than one are deferred.
 - Adaptive remeshing and state transfer across mixed topology are deferred.
@@ -1773,7 +1776,7 @@ No lower level implies a higher one.
 | Uniform/nodal cubic CPU field/energy | `backends/fem/cpu/mfem/interactions/anisotropy_cubic.cpp` | `compute_cubic_anisotropy_field` | evaluates local `Kc1`/`Kc2`/`Kc3` fields and energy on magnetic P1 nodes | FEM CPU | source/contract evidence |
 | Uniform/nodal cubic GPU field/energy | `backends/fem/gpu/cuda/interactions/anisotropy/anisotropy_kernels.cu` | `fullmag_cuda_cubic_anisotropy_field_energy_blocks` | evaluates the same cubic nodal contract on device | FEM GPU | source/contract evidence |
 | CPU interfacial/bulk DMI | `backends/fem/cpu/mfem/interactions/dmi_interfacial.cpp`; `backends/fem/cpu/mfem/interactions/dmi_bulk.cpp` | `compute_interfacial_dmi_field`; `compute_bulk_dmi_field` | evaluates DMI fields and energies on magnetic prism6 elements | FEM CPU | source/contract evidence |
-| GPU mixed-P1 DMI rejection | `backends/fem/core/fem_mesh.cpp` | `validate_supported_physics_topology` | rejects mixed-P1 GPU DMI with `gpu_dmi_kernel_not_mixed_p1` before unsupported startup | FEM GPU | fail-closed source/contract evidence |
+| Native mixed/pure-prism topology gate | `backends/fem/core/fem_mesh.cpp` | `validate_supported_physics_topology` | admits bounded mixed-P1 and pure-prism-P2 CPU/GPU scopes including unified CSR GPU DMI while keeping Zhang-Li STT, FEM/BEM, and wider extended physics fail-closed | FEM CPU/GPU | source/contract evidence |
 | Exact multi-material source fixture | `examples/permalloy_layer_cofeb_rings_relax_300nm.py` | `study` | maps one swept prism layer, one disconnected tetrahedral ring, body-specific material/initial state, shared Poisson demag and GPU/double request into the v2 source contract; v1 remains rejecting | FEM CPU/GPU v2 source/contract | source/contract only; managed runtime, operator execution and physics qualification **NOT VERIFIED** |
 | Body-owned material lowering boundary | `packages/fullmag-py/src/fullmag/world.py` | `MagnetHandle._to_ferromagnet` | preserves one material and initial state per named magnetic body for implemented v2 source lowering | FEM CPU/GPU v2 source/contract | source/contract only; managed runtime and physics qualification **NOT VERIFIED** |
 | Body material ProblemIR export | `packages/fullmag-py/src/fullmag/runtime/script_builder.py` | `_export_geometry_entry` | exports per-body material and physics-stack fields into implemented v2 geometry lowering | FEM CPU/GPU v2 source/contract | source/contract only; managed runtime and physics qualification **NOT VERIFIED** |
