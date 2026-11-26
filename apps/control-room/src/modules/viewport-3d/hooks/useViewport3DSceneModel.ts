@@ -76,7 +76,7 @@ import {
 } from "@/kernel/resources/studyRuntimeResources";
 import { resourceDataRevision } from "@/kernel/resources/resourceState";
 import { useResource } from "@/kernel/resources/useResource";
-import type { SessionResourceIdentity } from "@/kernel/resources/sessionResourceIdentity";
+import { sessionRequestScopeKey, type SessionResourceIdentity } from "@/kernel/resources/sessionResourceIdentity";
 import {
   useSessionResourceIdentity,
   useSessionStatusSelector,
@@ -6257,34 +6257,33 @@ export function useViewport3DSceneModel({
     [fdmConductorBuilds],
   );
   const fdmConductorBuildResults = useFdmCuboidBuildResults(fdmConductorBuildEntries);
-  const fdmTargetViewsResult = useMemo(() => {
-    const magnetic = buildViewport3DFdmTargetViews({
+  const fdmMagneticTargetViews = useMemo(
+    () => buildViewport3DFdmTargetViews({
       membership: fdmMagneticRegionMembership,
       model: fdmInstanceModel,
       realizedRegionIds: fdmRealizedRegionIds,
       sceneObjectIds,
-    });
+    }),
+    [fdmInstanceModel, fdmMagneticRegionMembership, fdmRealizedRegionIds, sceneObjectIds],
+  );
+  const fdmTargetViewsResult = useMemo(() => {
     const conductorViews = fdmConductorBuilds.flatMap(({ entry, realizedRegionIds, target }) => {
       const built = fdmConductorBuildResults.get(target.id);
       return built?.buildKey === entry.buildKey && built.result?.model
         ? [buildFdmConductorTargetView(target, built.result.model, realizedRegionIds)]
         : [];
     });
-    if (!conductorViews.length) return magnetic;
+    if (!conductorViews.length) return fdmMagneticTargetViews;
     const conductorTargetIds = new Set(conductorViews.map(({ target }) => target.id));
     return {
       status: "ready" as const,
       reason: null,
-      views: [...magnetic.views.filter(({ target }) => !conductorTargetIds.has(target.id)), ...conductorViews],
+      views: [
+        ...fdmMagneticTargetViews.views.filter(({ target }) => !conductorTargetIds.has(target.id)),
+        ...conductorViews,
+      ],
     };
-  }, [
-    fdmConductorBuildResults,
-    fdmConductorBuilds,
-    fdmInstanceModel,
-    fdmRealizedRegionIds,
-    fdmMagneticRegionMembership,
-    sceneObjectIds,
-  ]);
+  }, [fdmConductorBuildResults, fdmConductorBuilds, fdmMagneticTargetViews]);
   const fdmTargetVectorAllocations = useMemo(() => {
     const targets: Viewport3DVectorBudgetTarget[] = [];
     if (fdmTargetViewsResult.status === "ready") {
@@ -6549,6 +6548,7 @@ export function useViewport3DSceneModel({
   const fdmAirboxVectorCellIndices =
     fdmAirboxBuildState?.result?.vectorCellIndices ?? null;
   const fdmTargetRenderState = useMemo(() => {
+    const colorSessionScope = sessionRequestScopeKey(sessionIdentity);
     const colorRequests: Viewport3DFdmSampledScalarColorRequest[] = [];
     const colorBuildKeysByTarget = new Map<
       string,
@@ -6592,7 +6592,7 @@ export function useViewport3DSceneModel({
             targetField?.requestId === "primary-field-vector"
               ? fieldVector.payloadRevision ?? fieldVector.revision
               : targetField
-                ? targetQuantityFieldVectors.payloadRevision ??
+                ? targetQuantityFieldVectors.payloadRevisionByRequestId.get(targetField.requestId) ??
                   targetQuantityFieldVectors.revision
                 : null;
           const targetFieldResourceKey =
@@ -6638,7 +6638,15 @@ export function useViewport3DSceneModel({
               : null;
           const targetSourceFieldBufferId =
             targetFieldBufferSource?.bufferId ?? "none";
-          const diagnosticsCacheKey = `${targetFieldResourceKey ?? targetSourceFieldBufferId}|${targetFieldRevision ?? "none"}|${targetFieldVector?.quantityId ?? "none"}:${targetFieldVector?.pointCount ?? 0}:${targetFieldVector?.values.byteLength ?? 0}`;
+          const diagnosticsCacheKey = JSON.stringify([
+            colorSessionScope,
+            fdmDomainGenerationId,
+            targetFieldResourceKey ?? targetSourceFieldBufferId,
+            targetFieldRevision,
+            targetFieldVector?.quantityId,
+            targetFieldVector?.pointCount,
+            targetFieldVector?.values.byteLength,
+          ]);
           const fieldCompatible = Boolean(
             targetFieldBuffer?.requestIdentityCompatible &&
               targetFieldVector &&
@@ -6695,6 +6703,7 @@ export function useViewport3DSceneModel({
             : view.cellIndices;
           const surfaceCompatibilityKey = JSON.stringify([
             "fdm-target-surface",
+            colorSessionScope,
             fdmDomainGenerationId ?? "none",
             fdmBuildTopologyRevision ?? "none",
             view.target.id,
@@ -6718,7 +6727,7 @@ export function useViewport3DSceneModel({
               domainCellCount: fdmDomain.totalCells,
               domainGridShape: fdmDomain.shape,
               fieldVector: targetFieldVector,
-              groupKey: `fdm-target-color:${view.target.id}:surface`,
+              groupKey: `fdm-target-color:${colorSessionScope ?? "none"}:${view.target.id}:surface`,
               rangeSource: surfaceRange ? "manual" : "raw_nodal",
               revisionSummary: surfaceColorBuildKey,
               scalarRange: surfaceRange,
@@ -6791,6 +6800,7 @@ export function useViewport3DSceneModel({
               colorPalette: settings.scalarColorPalette,
               compatibilityKey: JSON.stringify([
                 "fdm-target-vector",
+                colorSessionScope,
                 fdmDomainGenerationId ?? "none",
                 fdmBuildTopologyRevision ?? "none",
                 view.target.id,
@@ -6808,7 +6818,7 @@ export function useViewport3DSceneModel({
               domainCellCount: fdmDomain.totalCells,
               domainGridShape: fdmDomain.shape,
               fieldVector: targetFieldVector,
-              groupKey: `fdm-target-color:${view.target.id}:vector`,
+              groupKey: `fdm-target-color:${colorSessionScope ?? "none"}:${view.target.id}:vector`,
               rangeSource: vectorRange ? "manual" : "raw_nodal",
               revisionSummary: vectorColorBuildKey,
               scalarRange: vectorRange,
@@ -6835,6 +6845,7 @@ export function useViewport3DSceneModel({
               colorPalette: settings.scalarColorPalette,
               compatibilityKey: JSON.stringify([
                 "fdm-target-vector-glyph",
+                colorSessionScope,
                 fdmDomainGenerationId ?? "none",
                 fdmBuildTopologyRevision ?? "none",
                 view.target.id,
@@ -6852,7 +6863,7 @@ export function useViewport3DSceneModel({
               domainCellCount: fdmDomain.totalCells,
               domainGridShape: fdmDomain.shape,
               fieldVector: targetFieldVector,
-              groupKey: `fdm-target-color:${view.target.id}:vector-glyph`,
+              groupKey: `fdm-target-color:${colorSessionScope ?? "none"}:${view.target.id}:vector-glyph`,
               rangeSource: vectorRange ? "manual" : "raw_nodal",
               revisionSummary: vectorGlyphColorBuildKey,
               scalarRange: vectorRange,
@@ -6965,7 +6976,10 @@ export function useViewport3DSceneModel({
     primaryFieldRequest,
     sessionIdentity,
     targetQuantityFieldRequests,
-    targetQuantityFieldVectors,
+    targetQuantityFieldVectors.data,
+    targetQuantityFieldVectors.payloadRevisionByRequestId,
+    targetQuantityFieldVectors.responseMetadataByRequestId,
+    targetQuantityFieldVectors.revision,
     vectorScale,
   ]);
   const fdmTargetColorBuffers = useViewport3DFdmSampledScalarColors(

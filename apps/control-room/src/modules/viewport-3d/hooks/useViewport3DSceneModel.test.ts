@@ -6261,6 +6261,17 @@ describe("useViewport3DSceneModel", () => {
     expect(enablement).not.toContain("resolveFdmCuboidPassPlan");
   });
 
+  it("derives magnetic FDM topology independently of live conductor field refreshes", () => {
+    const source = readFileSync(sceneModelSourceUrl, "utf8");
+    const start = source.indexOf("const fdmMagneticTargetViews = useMemo(");
+    const end = source.indexOf("const fdmTargetViewsResult = useMemo(", start);
+    expect(start).toBeGreaterThan(0);
+    expect(end).toBeGreaterThan(start);
+    const magneticBuild = source.slice(start, end);
+    expect(magneticBuild).toContain("buildViewport3DFdmTargetViews");
+    expect(magneticBuild).not.toMatch(/fdmConductorBuild|targetQuantityFieldVectors/);
+  });
+
   it("passes the FDM target Surface scope and lift settings to the vector builder", () => {
     const source = readFileSync(sceneModelSourceUrl, "utf8");
     const targetBlock = source.slice(

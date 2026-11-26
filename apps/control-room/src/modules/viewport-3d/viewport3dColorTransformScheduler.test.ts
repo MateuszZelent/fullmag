@@ -9,6 +9,57 @@ import {
   disposeViewport3DColorTransformWorker,
 } from "./viewport3dColorTransformScheduler";
 import type { Viewport3DBuildDiagnosticRecord } from "./build-engine/viewport3dBuildEngineTypes";
+import type {
+  Viewport3DFieldColorBuildWorkerRequest,
+  Viewport3DFieldColorBuildWorkerResponse,
+} from "./field-colors/viewport3dFieldColorBuildWorker";
+
+class ControlledColorTransformWorker {
+  static latest: ControlledColorTransformWorker | null = null;
+
+  readonly postedRequests: Viewport3DFieldColorBuildWorkerRequest[] = [];
+  readonly terminated = vi.fn();
+  private readonly listeners = new Map<
+    string,
+    Set<EventListenerOrEventListenerObject>
+  >();
+
+  constructor() {
+    ControlledColorTransformWorker.latest = this;
+  }
+
+  postMessage(message: Viewport3DFieldColorBuildWorkerRequest): void {
+    this.postedRequests.push(message);
+  }
+
+  addEventListener(
+    type: string,
+    listener: EventListenerOrEventListenerObject,
+  ): void {
+    const listeners = this.listeners.get(type) ?? new Set();
+    listeners.add(listener);
+    this.listeners.set(type, listeners);
+  }
+
+  removeEventListener(
+    type: string,
+    listener: EventListenerOrEventListenerObject,
+  ): void {
+    this.listeners.get(type)?.delete(listener);
+  }
+
+  terminate(): void {
+    this.terminated();
+  }
+
+  respond(response: Viewport3DFieldColorBuildWorkerResponse): void {
+    const event = new MessageEvent("message", { data: response });
+    for (const listener of this.listeners.get("message") ?? []) {
+      if (typeof listener === "function") listener(event);
+      else listener.handleEvent(event);
+    }
+  }
+}
 
 function fieldVectorFixture(): DecodedFieldVector {
   return {
@@ -127,4 +178,89 @@ describe("viewport3dColorTransformScheduler", () => {
       }),
     ).rejects.toThrow("field-color worker is required");
   });
+
+  it(
+    "posts only the newest queued latest-wins color request after an active job finishes",
+    async () => {
+      vi.stubGlobal(
+        "Worker",
+        ControlledColorTransformWorker as unknown as typeof Worker,
+      );
+
+      const first = buildVertexScalarColorsOffMainThread(
+        { ...fieldVectorFixture(), quantityId: "first" },
+        {
+          buildKey: "field-color:first",
+          colorMode: "magnitude",
+          colorPalette: "viridis",
+          groupKey: "field-color:latest-wins",
+          latestWins: true,
+          shaderOnly: true,
+          workerRequired: true,
+        },
+      );
+      const firstAborted = expect(first).rejects.toMatchObject({
+        name: "AbortError",
+      });
+      const middle = buildVertexScalarColorsOffMainThread(
+        { ...fieldVectorFixture(), quantityId: "middle" },
+        {
+          buildKey: "field-color:middle",
+          colorMode: "magnitude",
+          colorPalette: "viridis",
+          groupKey: "field-color:latest-wins",
+          latestWins: true,
+          shaderOnly: true,
+          workerRequired: true,
+        },
+      );
+      const middleAborted = expect(middle).rejects.toMatchObject({
+        name: "AbortError",
+      });
+      const latest = buildVertexScalarColorsOffMainThread(
+        { ...fieldVectorFixture(), quantityId: "latest" },
+        {
+          buildKey: "field-color:latest",
+          colorMode: "magnitude",
+          colorPalette: "viridis",
+          groupKey: "field-color:latest-wins",
+          latestWins: true,
+          shaderOnly: true,
+          workerRequired: true,
+        },
+      );
+
+      const worker = ControlledColorTransformWorker.latest;
+      expect(worker).not.toBeNull();
+      expect(
+        worker?.postedRequests.map((request) => request.fieldVector.quantityId),
+      ).toEqual(["first"]);
+
+      const firstRequest = worker?.postedRequests[0];
+      if (!firstRequest) {
+        throw new Error("Expected the first color request to be posted.");
+      }
+      worker?.respond({
+        data: { colors: new Float32Array(6), range: { max: 1, min: 0 } },
+        id: firstRequest.id,
+        ok: true,
+      });
+
+      expect(
+        worker?.postedRequests.map((request) => request.fieldVector.quantityId),
+      ).toEqual(["first", "latest"]);
+
+      const latestRequest = worker?.postedRequests[1];
+      if (!latestRequest) {
+        throw new Error("Expected the latest color request to be posted.");
+      }
+      worker?.respond({
+        data: { colors: new Float32Array(6), range: { max: 1, min: 0 } },
+        id: latestRequest.id,
+        ok: true,
+      });
+
+      await Promise.all([firstAborted, middleAborted, latest]);
+    },
+  );
 });
