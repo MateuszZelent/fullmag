@@ -625,6 +625,7 @@ try {
 }
 
 async function assertModelExportDownloads(page, viewport, canvas) {
+  await setAuditStep(page, "export:model-downloads");
   const dialog = page.getByRole("dialog", { name: "Export 3D model" });
   const download = async (extension) => {
     const [file] = await Promise.all([
@@ -640,6 +641,14 @@ async function assertModelExportDownloads(page, viewport, canvas) {
     return data;
   };
 
+  // The preceding diagnostic reads open two nested, portalled popovers.
+  for (const name of ["Render diagnostics", "View layers"]) {
+    const popover = page.getByRole("dialog", { name, exact: true });
+    if (await popover.isVisible()) {
+      await page.keyboard.press("Escape");
+      await popover.waitFor({ state: "hidden", timeout: 5_000 });
+    }
+  }
   await viewport.getByRole("button", { name: "Export", exact: true }).click();
   await page.getByRole("menuitem", { name: "Export 3D model", exact: true }).click();
   await dialog.getByRole("checkbox", { name: "Include vector arrows" }).uncheck();
