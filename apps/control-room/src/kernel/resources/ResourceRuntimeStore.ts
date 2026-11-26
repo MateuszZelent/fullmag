@@ -14,7 +14,7 @@ interface LoadContext {
   signal: AbortSignal;
 }
 
-function sessionScopeKeyFromResourceKey(resourceKey: ResourceKey): string | undefined {
+export function sessionScopeKeyFromResourceKey(resourceKey: ResourceKey): string | undefined {
   const separatorIndex = resourceKey.indexOf("|");
   if (!resourceKey.startsWith("session=") || separatorIndex <= 0) {
     return undefined;

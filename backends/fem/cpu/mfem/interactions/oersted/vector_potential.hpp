@@ -1,5 +1,6 @@
 #pragma once
 
+#include "cpu/mfem/common/sparse_linear_solver.hpp"
 #include "cpu/mfem/transport/conservative_current_view.hpp"
 
 #include <cstdint>
@@ -9,20 +10,23 @@
 namespace fullmag::fem::oersted {
 
 /**
- * Bounded CPU/double reference policy for the OE-F2 exact-sequence solve.
+ * Sparse exact-sequence policy for the OE-F2 H_0(curl) x H^1_0 solve.
  *
- * The input mesh is the complete finite airbox/conductor domain.  The
+ * The input mesh is the complete finite airbox/conductor domain. The
  * conservative RT0 current view must use that same mesh; zero current in an
  * airbox element is represented by the RT0 field itself, not by a nodal
- * interpolation.  The implementation deliberately rejects larger systems
- * until the managed AMS/iterative lane is qualified.
+ * interpolation.
  */
 struct VectorPotentialOptions {
     double mu0_si = 1.25663706212e-6;
     double relative_tolerance = 1.0e-10;
-    int maximum_nd_dofs = 4096;
-    int maximum_h1_dofs = 2048;
+    int maximum_nd_dofs = 2'000'000;
+    int maximum_h1_dofs = 1'000'000;
     std::string boundary_gauge_variant = "tangential_A_h1_0.v1";
+    fullmag::fem::multiphysics::SparseExecutionTarget execution_target =
+        fullmag::fem::multiphysics::SparseExecutionTarget::Cpu;
+    fullmag::fem::multiphysics::SparseCpuBackendPolicy cpu_backend =
+        fullmag::fem::multiphysics::SparseCpuBackendPolicy::Auto;
 };
 
 struct VectorPotentialDiagnostics {
@@ -38,6 +42,10 @@ struct VectorPotentialDiagnostics {
     double compatible_divergence_residual = 0.0;
     double source_pairing_norm = 0.0;
     double nodal_projection_residual = 0.0;
+    std::string resolved_linear_solver;
+    int linear_iterations = 0;
+    double linear_solve_ms = 0.0;
+    double nodal_projection_ms = 0.0;
 };
 
 struct VectorPotentialResult {

@@ -1238,13 +1238,15 @@ describe("useViewport3DSceneModel", () => {
       'domainMeta.data?.discretization === "fdm" && domainMeta.data.grid',
     );
     expect(source).toContain(
-      "adaptFdmDomainPresentation(fdmDomainPresentation, FDM_DISPLAY_CELL_BUDGET)",
+      "adaptFdmDomainPresentation(fdmDomainPresentation, fdmDisplayCellBudget)",
     );
     expect(source).toContain("formatFdmDisplaySamplingSummary({");
     expect(source).toContain("budget: fdmDomain.displayCellBudget");
     expect(source).toContain("displaySamples: fdmDomain.displayCellCount");
     expect(source).toContain("stride: fdmDomain.stride");
     expect(source).toContain("total: fdmDomain.totalCells");
+    expect(source).toContain("material samples");
+    expect(source).toContain('fdmInstanceModel.boundaryCoverage === "sampled"');
     expect(source).not.toContain("`${fdmDomain.displayCellCount}/${fdmDomain.totalCells}`");
   });
 

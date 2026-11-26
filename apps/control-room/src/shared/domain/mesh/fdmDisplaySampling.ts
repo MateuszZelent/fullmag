@@ -1,4 +1,5 @@
 export const FDM_DISPLAY_CELL_BUDGET = 150_000;
+export const FDM_SURFACE_CELL_BUDGET = 300_000;
 export const FDM_NATIVE_LAYER_DISPLAY_CELL_BUDGET = 250_000;
 
 export interface FdmDisplaySampling {

@@ -1,3 +1,4 @@
+import { createSessionErrorHistoryFixture } from "./lib/session-error-history-fixture.mjs";
 import { mkdir, writeFile } from "node:fs/promises";
 import { PerspectiveCamera, Vector3 } from "three";
 import { resolve } from "node:path";
@@ -5027,6 +5028,7 @@ function inspectorModeComposition(fixture) {
 }
 
 async function installInspectorFixtureApi(page, fixture) {
+  const sessionErrors = createSessionErrorHistoryFixture(inspectorSessionStatus(fixture).session.session_id);
   await page.route("**/v2/**", async (route) => {
     const request = route.request();
     const url = new URL(request.url());
@@ -5137,6 +5139,10 @@ async function installInspectorFixtureApi(page, fixture) {
         status: "unavailable",
         utilization_cpu_percent: 0,
       });
+    }
+    const sessionErrorResponse = sessionErrors(request, path);
+    if (sessionErrorResponse) {
+      return fulfillJson(route, sessionErrorResponse.body, sessionErrorResponse.status);
     }
     if (path === "/v2/sessions/current/diagnostics/performance" && request.method() === "GET") {
       // The fixture has no native worker or performance samples. Keep the

@@ -17,6 +17,11 @@ namespace fullmag::fem::oersted {
 
 struct SurfaceRt0ProgressObserver;
 
+enum class DirectTetraExecutionPolicy : std::uint32_t {
+    CpuDeterministic = 0,
+    GpuHybridFarField = 1,
+};
+
 /**
  * CPU/double direct Biot--Savart policy for an affine tetrahedral RT0 source.
  * The kernel returns H in A/m, so no mu0 is included here.
@@ -27,6 +32,9 @@ struct DirectTetraQuadratureOptions {
     double absolute_tolerance_apm = 1.0e-9;
     double relative_tolerance = 1.0e-5;
     std::uint64_t maximum_source_target_pairs = 1'000'000;
+    int worker_threads = 0;
+    DirectTetraExecutionPolicy execution_policy =
+        DirectTetraExecutionPolicy::CpuDeterministic;
 };
 
 struct DirectTetraQuadratureWorkLimits {
@@ -41,6 +49,10 @@ struct DirectTetraQuadratureDiagnostics {
     double maximum_pair_error_apm = 0.0;
     std::uint64_t kernel_evaluations = 0;
     std::uint64_t ledger_leaf_visits = 0;
+    std::string resolved_execution_policy;
+    int effective_worker_threads = 1;
+    std::uint64_t gpu_farfield_pairs = 0;
+    std::uint64_t cpu_near_singular_pairs = 0;
 };
 
 struct DirectTetraTargetDiagnostics {

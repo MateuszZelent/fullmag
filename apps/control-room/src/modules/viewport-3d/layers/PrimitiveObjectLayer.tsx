@@ -39,6 +39,7 @@ import {
   buildPrimitiveTransformGizmoSegments,
   releasePrimitiveObjectGeometry,
   primitiveObjectSurfaceColor,
+  primitiveObjectWireframeRenderSemantic,
   resolvePrimitiveGroupTransform,
   resolvePrimitiveObjectRenderSettings,
   shouldRenderPrimitiveObject,
@@ -301,6 +302,7 @@ function RenderablePrimitiveObject({
     renderSettings,
     materialProfile,
   );
+  const wireframeSemantic = primitiveObjectWireframeRenderSemantic(object);
   const opacity = renderPlan.primitive.opacity;
   // A primitive-only object uses this field-free preview when no realized
   // FDM/FEM surface is available.  The inspector's Solid surface control
@@ -397,7 +399,7 @@ function RenderablePrimitiveObject({
         <lineSegments
           geometry={edgeGeometry}
           onPointerDown={handlePointerDown}
-          renderOrder={RENDER_POLICIES.featureEdges.renderOrder}
+          renderOrder={RENDER_POLICIES[wireframeSemantic].renderOrder}
           userData={{
             fallbackLabel: object.fallbackLabel,
             objectId: object.objectId,
@@ -407,7 +409,7 @@ function RenderablePrimitiveObject({
           <lineBasicMaterial
             color={wireframeColorFromSettings(renderSettings, colors.wire)}
             opacity={renderPlan.wireframe.opacity}
-            {...materialPolicyProps("featureEdges")}
+            {...materialPolicyProps(wireframeSemantic)}
           />
         </lineSegments>
       ) : null}

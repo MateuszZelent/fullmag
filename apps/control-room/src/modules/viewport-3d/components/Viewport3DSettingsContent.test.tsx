@@ -129,6 +129,25 @@ describe("Viewport3DSettingsContent", () => {
     expect(html).not.toContain('role="dialog"');
   });
 
+  it("exposes the FDM cell limit in Quality and reflects the local preference", async () => {
+    const settings = await mountContent("quality");
+    try {
+      const control = elementById(settings.container, "fm-view-fdm-cell-limit");
+      expect(control.getAttribute("aria-label")).toBe("FDM cell limit");
+      expect(control.getAttribute("aria-describedby")).toBe("fm-view-fdm-cell-limit-help");
+      expect(control.textContent).toContain("Auto");
+      expect(settings.container.textContent).toContain(
+        "Auto samples up to 150k cells, or keeps exact exterior grids up to 300k.",
+      );
+
+      await act(async () => viewport3dStore.setFdmCellBudget(75000));
+      expect(elementById(settings.container, "fm-view-fdm-cell-limit").textContent).toContain("75k");
+      expect(viewport3dStore.getSnapshot().widgets.fdmCellBudget).toBe(75000);
+    } finally {
+      await settings.cleanup();
+    }
+  });
+
   it("keeps Visualization mode above every tab and independent from the quality profile", async () => {
     const settings = await mountContent("view");
     try {

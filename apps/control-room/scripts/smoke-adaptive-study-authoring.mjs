@@ -1,3 +1,4 @@
+import { createSessionErrorHistoryFixture } from "./lib/session-error-history-fixture.mjs";
 import assert from "node:assert/strict";
 import { mkdir, writeFile } from "node:fs/promises";
 import { isAbsolute, resolve } from "node:path";
@@ -248,6 +249,7 @@ function makeFixture(stage) {
 }
 
 async function openStudyInspector(browser, { id, stage, realtime = false }) {
+  const sessionErrors = createSessionErrorHistoryFixture(SESSION_ID);
   const fixture = makeFixture(stage);
   const context = await browser.newContext({
     viewport: { width: 1600, height: 1000 },
@@ -352,6 +354,10 @@ async function openStudyInspector(browser, { id, stage, realtime = false }) {
         status: "ok",
         uptime_seconds: 1,
       });
+    }
+    const sessionErrorResponse = sessionErrors(request, path);
+    if (sessionErrorResponse) {
+      return fulfillJson(route, sessionErrorResponse.body, sessionErrorResponse.status);
     }
     if (method === "GET" && path === "/v2/sessions/current/status") {
       const status = makeStatus(fixture.scene.revision);

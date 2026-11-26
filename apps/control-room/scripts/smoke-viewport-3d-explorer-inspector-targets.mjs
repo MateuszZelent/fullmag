@@ -1,3 +1,4 @@
+import { createSessionErrorHistoryFixture } from "./lib/session-error-history-fixture.mjs";
 import { spawn } from "node:child_process";
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
@@ -696,6 +697,7 @@ async function installFixtureConfig(page) {
 }
 
 async function installFixtureApi(page, fixture) {
+  const sessionErrors = createSessionErrorHistoryFixture(fixture.status.session.session_id);
   // Keep unrelated platform/Home requests inside the isolated fixture origin.
   if (apiBase === "http://fullmag-target-smoke.fixture.invalid") {
     await page.route(`${apiBase}/**`, (route) => fulfillEmpty(route, 204));
@@ -731,6 +733,10 @@ async function installFixtureApi(page, fixture) {
         await delayedAck.released.promise;
       }
       return fulfillJson(route, fixture.visualization);
+    }
+    const sessionErrorResponse = sessionErrors(request, path);
+    if (sessionErrorResponse) {
+      return fulfillJson(route, sessionErrorResponse.body, sessionErrorResponse.status);
     }
     if (path === "/v2/sessions/current/status") return fulfillJson(route, fixture.status);
     if (path === "/v2/sessions/current/visualization/state") return fulfillJson(route, fixture.visualization);

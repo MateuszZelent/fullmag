@@ -296,31 +296,38 @@ describe("viewport3dDiagnostics", () => {
     expect(diagnostics).toContain("unaddressable-render-target:2");
   });
 
-  it("reports both visible and requested field revisions while syncing", () => {
-    expect(
-      buildViewport3DDiagnostics({
-        airboxPartCount: 0,
-        cache: { byteLength: 0, entryCount: 0 },
-        fieldPayloadRevision: 41,
-        fieldRequestedRevision: 42,
-        fieldRevision: 41,
-        fieldStatus: "stale",
-        objectCount: 0,
-        quantityId: "m",
-        topologyRevision: 7,
-        tracker: {
-          contextLosses: 0,
-          contextRestores: 0,
-          dirtyReason: null,
-          frames: 0,
-          geometries: 0,
-          materials: 0,
-          renderTargets: 0,
-          textures: 0,
-          workers: 0,
-        },
-      }),
-    ).toContain("field syncing r41 -> r42");
+  it("keeps exact field and carrier identities in render diagnostics while syncing", () => {
+    const summary = buildViewport3DDiagnostics({
+      airboxPartCount: 0,
+      cache: { byteLength: 0, entryCount: 0 },
+      fieldPayloadRevision: "fmvp:m:session-31",
+      fieldRequestedRevision: "generation:32",
+      fieldRevision: "fmvp:m:session-31",
+      fieldStatus: "stale",
+      manifestCarrierDegradedCount: 1,
+      manifestCarrierKind: "mesh-part",
+      manifestCarrierRejectedCount: 2,
+      objectCount: 0,
+      quantityId: "m",
+      topologyRevision: 7,
+      tracker: {
+        contextLosses: 0,
+        contextRestores: 0,
+        dirtyReason: null,
+        frames: 0,
+        geometries: 0,
+        materials: 0,
+        renderTargets: 0,
+        textures: 0,
+        workers: 0,
+      },
+    });
+
+    expect(summary).toContain(
+      "field syncing rfmvp:m:session-31 -> rgeneration:32",
+    );
+    expect(summary).toContain("carrier:mesh-part/1");
+    expect(summary).toContain("unaddressable-render-target:2");
   });
 
   it("includes bounded field-demand request explanations", () => {

@@ -88,7 +88,9 @@ extern "C" int fullmag_fem_evaluate_frozen_rt0_direct_observed_v1(
         const oe::DirectTetraQuadratureOptions options{
             request->base_quadrature_order,request->maximum_subdivision_depth,
             request->absolute_tolerance_apm,request->relative_tolerance,
-            request->maximum_source_target_pairs};
+            request->maximum_source_target_pairs,
+            0,
+            oe::DirectTetraExecutionPolicy::CpuDeterministic};
         const auto limits=oe::DirectTetraQuadrature::ResolveWorkLimits(options);
         require(request->target_points_xyz_len%3==0,"frozen direct target XYZ framing");
         const auto count=request->target_points_xyz_len/3;

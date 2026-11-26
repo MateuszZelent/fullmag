@@ -1,10 +1,13 @@
 #pragma once
 
+#include "cpu/mfem/common/sparse_linear_solver.hpp"
+
 #include <mfem.hpp>
 
 #include <array>
 #include <limits>
 #include <memory>
+#include <string>
 #include <vector>
 
 namespace fullmag::fem::transport {
@@ -41,6 +44,10 @@ struct SteadyTransportParameters {
     double relative_tolerance = 1.0e-12;
     int maximum_iterations = 1000;
     SpinInterfaceModel interface_model = SpinInterfaceModel::TransparentConformingH1;
+    fullmag::fem::multiphysics::SparseExecutionTarget execution_target =
+        fullmag::fem::multiphysics::SparseExecutionTarget::Cpu;
+    fullmag::fem::multiphysics::SparseCpuBackendPolicy cpu_backend =
+        fullmag::fem::multiphysics::SparseCpuBackendPolicy::Auto;
 };
 
 struct ChargeSolveDiagnostics {
@@ -49,6 +56,7 @@ struct ChargeSolveDiagnostics {
     double relative_residual = std::numeric_limits<double>::infinity();
     double net_boundary_current_a = std::numeric_limits<double>::infinity();
     std::array<double, 3> current_density_volume_average_apm2{};
+    std::string resolved_solver;
 };
 
 struct ChargeTerminalCurrentSolution {
@@ -68,6 +76,7 @@ struct SpinSolveDiagnostics {
     std::array<double, 3> torque_volume_average_per_s{};
     double torque_l2_per_s = 0.0;
     std::array<double, 3> spin_potential_top_minus_bottom_v{};
+    std::string resolved_solver;
 };
 
 struct ReciprocalSolveDiagnostics {

@@ -12022,6 +12022,20 @@
       "symbol": "worker_exit",
       "responsibility": "Potwierdzenie końca własnego procesu przed zwolnieniem zasobów.",
       "evidence_status": "source_only"
+    },
+    {
+      "id": "antenna-dtq-fused-h1-projection",
+      "path": "backends/fem/cpu/mfem/interactions/oersted/direct_tetra_quadrature.cpp",
+      "symbol": "DirectTetraQuadrature::ProjectField",
+      "responsibility": "Jednoprzebiegowa fuzja 3-składowej projekcji H1 ze wspólnym WorkBudget (z pominięciem punktowego limitu par) i jednorazową rzadką faktoryzacją masy SPD.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "antenna-dtq-cuda-farfield-kernel",
+      "path": "backends/fem/gpu/cuda/interactions/oersted/direct_tetra_farfield_kernels.cu",
+      "symbol": "fullmag_cuda_direct_tetra_evaluate_root_farfield",
+      "responsibility": "Opcjonalny akcelerator CUDA dalekiego pola (d_c > 3 R_s) z 106-bitową kompensacją TwoSum w rosnącej kolejności źródeł i przekazaniem par bliskich/osobliwych na CPU; fail-closed bez CUDA.",
+      "evidence_status": "source_only"
     }
   ],
   "public_api": {

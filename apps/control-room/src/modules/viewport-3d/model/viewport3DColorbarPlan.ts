@@ -31,6 +31,7 @@ export interface Viewport3DColorbarPlan {
   palette: string;
   projectionMode: Viewport3DTargetRenderPlan["shader"]["projectionMode"];
   quantityId: string;
+  manualRange: ScalarRange | null;
   range: ScalarRange | null;
   rangeSource: NonNullable<ScalarColorBuffer["rangeSource"]>;
   rangeState: Viewport3DColorbarRangeStateKind;
@@ -140,6 +141,7 @@ export function planViewport3DColorbars({
     palette: string;
     projectionMode: Viewport3DTargetRenderPlan["shader"]["projectionMode"];
     quantityId: string;
+    manualRange: ScalarRange | null;
     rangeSource: NonNullable<ScalarColorBuffer["rangeSource"]>;
     renderKey: string;
     scopeId: string | null;
@@ -162,6 +164,15 @@ export function planViewport3DColorbars({
     const scope = resolveViewport3DColorbarScope(target);
     const projectionMode = target.shader.projectionMode;
     const scalarRangePolicy = target.shader.scalarRangePolicy;
+    const manualRange =
+      scalarRangePolicy.mode === "manual" &&
+      typeof scalarRangePolicy.min === "number" &&
+      typeof scalarRangePolicy.max === "number" &&
+      Number.isFinite(scalarRangePolicy.min) &&
+      Number.isFinite(scalarRangePolicy.max) &&
+      scalarRangePolicy.min < scalarRangePolicy.max
+        ? { min: scalarRangePolicy.min, max: scalarRangePolicy.max }
+        : null;
     const palette = target.shader.palette;
     const rangeSource = viewport3DProjectionDefaultRangeSource({
       projectionMode,
@@ -186,6 +197,7 @@ export function planViewport3DColorbars({
         palette,
         projectionMode,
         quantityId: resolveCanonicalQuantityId(target.quantityId),
+        manualRange,
         rangeSource,
         renderKey: buildViewport3DColorbarRenderKey({
           palette,
@@ -217,6 +229,7 @@ export function planViewport3DColorbars({
       palette: group.palette,
       projectionMode: group.projectionMode,
       quantityId: group.quantityId,
+      manualRange: group.manualRange,
       range: rangeState.range,
       rangeSource: group.rangeSource,
       rangeState: rangeState.state,
@@ -256,6 +269,8 @@ export function resolveViewport3DColorbarRangeStates({
           colorMode: plan.colorMode,
           colorPalette: plan.palette,
           quantityId: plan.quantityId,
+          rangeSource: plan.rangeSource,
+          expectedRange: plan.manualRange,
         }),
       ) ?? null;
     const scopedScalarColors =
@@ -272,6 +287,8 @@ export function resolveViewport3DColorbarRangeStates({
               colorMode: plan.colorMode,
               colorPalette: plan.palette,
               quantityId: plan.quantityId,
+              rangeSource: plan.rangeSource,
+              expectedRange: plan.manualRange,
             }),
           ) ?? null
         : null;
@@ -304,13 +321,17 @@ export function resolveViewport3DColorbarRangeStates({
       colorMode: plan.colorMode,
       colorPalette: plan.palette,
       quantityId: plan.quantityId,
+      rangeSource: plan.rangeSource,
+      expectedRange: plan.manualRange,
     })
       ? candidate
       : null;
-    const vectorScale = plan.targetIds
-      .map((targetId) => fieldModel?.targetPasses?.get(targetId)?.vectors?.colorScale)
-      .find((scale) => scale && scale.colorMode === plan.colorMode &&
-        scale.colorPalette === plan.palette && sameRenderableFieldQuantityId(scale.quantityId, plan.quantityId));
+    const vectorScale = plan.rangeSource === "manual"
+      ? undefined
+      : plan.targetIds
+          .map((targetId) => fieldModel?.targetPasses?.get(targetId)?.vectors?.colorScale)
+          .find((scale) => scale && scale.colorMode === plan.colorMode &&
+            scale.colorPalette === plan.palette && sameRenderableFieldQuantityId(scale.quantityId, plan.quantityId));
     rangeStates.set(plan.groupKey, {
       range: buffer?.range ?? vectorScale?.range ?? null,
       state: buffer || vectorScale ? "current" : "pending",
@@ -334,11 +355,15 @@ export function scalarColorBufferMatchesColorbarRequest({
   colorMode,
   colorPalette,
   quantityId,
+  rangeSource,
+  expectedRange,
 }: {
   buffer: ScalarColorBuffer | null | undefined;
   colorMode: string;
   colorPalette: string;
   quantityId: string;
+  rangeSource?: NonNullable<ScalarColorBuffer["rangeSource"]>;
+  expectedRange?: ScalarRange | null;
 }): boolean {
   if (!buffer) return false;
   if (buffer.colorMode && buffer.colorMode !== colorMode) return false;
@@ -350,6 +375,23 @@ export function scalarColorBufferMatchesColorbarRequest({
     !sameRenderableFieldQuantityId(buffer.quantityId, quantityId)
   ) {
     return false;
+  }
+  if (
+    rangeSource !== undefined &&
+    ((rangeSource === "manual" && buffer.rangeSource !== "manual") ||
+      (rangeSource !== "manual" && buffer.rangeSource === "manual"))
+  ) {
+    return false;
+  }
+  if (rangeSource === "manual") {
+    if (
+      !expectedRange ||
+      !buffer.range ||
+      buffer.range.min !== expectedRange.min ||
+      buffer.range.max !== expectedRange.max
+    ) {
+      return false;
+    }
   }
   return true;
 }

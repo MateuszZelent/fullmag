@@ -82,7 +82,10 @@ export async function buildViewport3DFdmCuboidOffMainThread(
     {
       groupKey: options.groupKey,
       inputBytes: estimateFdmCuboidBuildInputBytes(request),
-      itemCount: request.domain?.displayCellCount ?? 0,
+      itemCount: Math.max(
+        request.domain?.displayCellCount ?? 0,
+        request.cellSelection === "active" ? request.domain?.surfaceCellBudget ?? 0 : 0,
+      ),
       key: buildKey,
       lane: "fdm-cuboid",
       outputBytesEstimate: estimateFdmCuboidBuildOutputBytes(request),

@@ -561,6 +561,15 @@ pub fn build_v2_router() -> Router<Arc<AppState>> {
             post(handlers::simulation::report_command_failure),
         )
         .route(
+            "/v2/sessions/current/diagnostics/session-errors",
+            get(handlers::diagnostics::session_errors::get_session_errors)
+                .post(handlers::diagnostics::session_errors::append_session_errors)
+                .delete(handlers::diagnostics::session_errors::clear_session_errors)
+                .layer(axum::extract::DefaultBodyLimit::max(
+                    handlers::diagnostics::session_errors::MAX_REQUEST_BYTES,
+                )),
+        )
+        .route(
             "/v2/sessions/current/diagnostics/performance",
             get(handlers::diagnostics::get_run_performance),
         )
