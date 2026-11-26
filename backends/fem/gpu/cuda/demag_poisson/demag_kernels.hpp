@@ -6,11 +6,46 @@
  */
 #pragma once
 
-#if FULLMAG_HAS_CUDA_RUNTIME
-#include <cuda_runtime.h>
 #include <cstdint>
 
 namespace fullmag::fem {
+
+inline constexpr int kDemagValidationNormMaxBlocks = 256;
+inline constexpr int kDemagValidationNormBlockSize = 256;
+
+/// Preallocated fixed-size device/host buffers for fused pair-norm certification.
+struct GpuValidationNormScratch {
+    void *d_partials = nullptr;
+    double *d_out_norms = nullptr;
+    double *h_norms = nullptr;
+    bool host_pinned = false;
+};
+
+} // namespace fullmag::fem
+
+#if FULLMAG_HAS_CUDA_RUNTIME
+#include <cuda_runtime.h>
+
+namespace fullmag::fem {
+
+/// Allocates fixed-size device/host buffers for fused pair-norm certification.
+cudaError_t fullmag_cuda_demag_validation_scratch_init(
+    GpuValidationNormScratch &scratch);
+
+/// Idempotently releases device/host buffers owned by `scratch`.
+void fullmag_cuda_demag_validation_scratch_destroy(
+    GpuValidationNormScratch &scratch);
+
+/// Multi-block overflow-safe scaled L2 norm for `rhs_values` and optional
+/// `residual_values` (when non-null) using one async D2H and one stream sync.
+cudaError_t fullmag_cuda_demag_validation_norm_pair(
+    const double *rhs_values,
+    const double *residual_values,
+    int rows,
+    GpuValidationNormScratch &scratch,
+    double &rhs_norm,
+    double &residual_norm,
+    cudaStream_t stream);
 
 /// Scaled local L2 norm. The scalar scratch may alias values[0].
 cudaError_t fullmag_cuda_demag_validation_norm(

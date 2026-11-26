@@ -22,11 +22,36 @@ namespace fullmag::fem {
 
 struct GpuDemagCudssDirectSolver;
 
+enum class GpuDemagSolverStrategy : uint32_t {
+    Auto = 0,
+    CgAmg = 1,
+    Cudss = 2,
+};
+
+enum class GpuDemagFallbackReason : uint32_t {
+    None = 0,
+    CudssUnavailable = 1,
+    CudssFactorExceedsVramBudget = 2,
+    CudssMemoryEstimateUnavailable = 3,
+};
+
+struct GpuDemagCudssResolution {
+    GpuDemagSolverStrategy requested_strategy = GpuDemagSolverStrategy::Auto;
+    GpuDemagSolverStrategy effective_strategy = GpuDemagSolverStrategy::Auto;
+    bool resolved_direct = false;
+    GpuDemagFallbackReason fallback_reason = GpuDemagFallbackReason::None;
+    int64_t estimated_device_peak_bytes = 0;
+    uint64_t device_budget_bytes = 0;
+    int64_t factor_nnz = 0;
+    uint64_t factor_device_bytes = 0;
+};
+
 /*
  * Device budget of the factorization (docs/physics/0997, eq-direct-memory-budget):
  * budget = min(free - max(512 MiB, total / 20), cap), where free and total come
  * from cudaMemGetInfo after the analysis phase and the optional cap from
- * FULLMAG_FEM_DEMAG_GPU_DIRECT_SOLVER_DEVICE_BUDGET_BYTES.
+ * FULLMAG_FEM_DEMAG_GPU_DIRECT_SOLVER_DEVICE_BUDGET_BYTES and/or
+ * FULLMAG_FEM_DEMAG_CUDSS_MAX_VRAM_MIB.
  */
 struct GpuDemagCudssDeviceBudget {
     uint64_t free_bytes = 0;
@@ -50,12 +75,31 @@ struct GpuDemagCudssDirectStats {
     bool factorization_started = false;
 };
 
+/* Process environment override for GPU demag direct-solver strategy. */
+inline constexpr const char *kDemagGpuDirectSolverEnv =
+    "FULLMAG_FEM_DEMAG_GPU_DIRECT_SOLVER";
+
 /* Diagnostic and test cap on the device budget, in bytes; it can only lower it. */
 inline constexpr const char *kDemagCudssDeviceBudgetCapEnv =
     "FULLMAG_FEM_DEMAG_GPU_DIRECT_SOLVER_DEVICE_BUDGET_BYTES";
 
+/* Optional cap on the device budget, in MiB; combined via min() with byte cap. */
+inline constexpr const char *kDemagCudssMaxVramMibEnv =
+    "FULLMAG_FEM_DEMAG_CUDSS_MAX_VRAM_MIB";
+
 /* True when the process environment requests the cuDSS direct realization. */
 bool demag_gpu_direct_solver_requested();
+
+/*
+ * Resolves the effective GPU demag solver strategy from the requested plan
+ * strategy and optional process environment override. Malformed overrides fail
+ * closed.
+ */
+bool resolve_demag_gpu_solver_strategy(
+    GpuDemagSolverStrategy requested,
+    const char *env_value,
+    GpuDemagSolverStrategy &effective,
+    std::string &error);
 
 /*
  * Evaluates the device budget. `cap_value` is the raw cap variable (null when
@@ -65,6 +109,18 @@ bool resolve_demag_cudss_device_budget(
     uint64_t free_bytes,
     uint64_t total_bytes,
     const char *cap_value,
+    GpuDemagCudssDeviceBudget &budget,
+    std::string &error);
+
+/*
+ * Evaluates the device budget combining optional byte and MiB caps via min().
+ * Any malformed non-empty cap fails closed.
+ */
+bool resolve_demag_cudss_device_budget(
+    uint64_t free_bytes,
+    uint64_t total_bytes,
+    const char *cap_bytes_value,
+    const char *cap_mib_value,
     GpuDemagCudssDeviceBudget &budget,
     std::string &error);
 
@@ -90,6 +146,38 @@ bool create_demag_cudss_direct_solver(
     const mfem::SparseMatrix &matrix,
     std::shared_ptr<GpuDemagCudssDirectSolver> &solver,
     GpuDemagCudssDirectStats &stats,
+    std::string &error);
+
+/*
+ * Three-state strategy resolver for a single SPD matrix (open or PBC-reduced
+ * Poisson). Under `Auto`, availability or VRAM budget rejection cleanly yields
+ * `solver = nullptr` and returns true with an explicit fallback reason; under
+ * `Cudss` it fails hard. Non-SPD (`CUDSS_DATA_INFO != 0`) and malformed budget
+ * caps always fail hard even under `Auto`.
+ */
+bool try_initialize_demag_cudss_direct(
+    GpuDemagSolverStrategy requested_strategy,
+    const mfem::SparseMatrix &matrix,
+    std::shared_ptr<GpuDemagCudssDirectSolver> &solver,
+    GpuDemagCudssDirectStats &stats,
+    GpuDemagCudssResolution &resolution,
+    std::string &error);
+
+/*
+ * Context-free atomic two-factor cuDSS resolver for GPU FEM/BEM (u1 Neumann +
+ * u2 Dirichlet). Analyzes both matrices first and checks
+ * max(peak_1, stable_1 + peak_2) <= budget before starting either
+ * factorization so u1 and u2 never split solver families.
+ */
+bool try_initialize_fem_bem_cudss_pair(
+    GpuDemagSolverStrategy requested_strategy,
+    const mfem::SparseMatrix &u1_matrix,
+    const mfem::SparseMatrix &u2_matrix,
+    std::shared_ptr<GpuDemagCudssDirectSolver> &u1_solver,
+    std::shared_ptr<GpuDemagCudssDirectSolver> &u2_solver,
+    GpuDemagCudssDirectStats &u1_stats,
+    GpuDemagCudssDirectStats &u2_stats,
+    GpuDemagCudssResolution &resolution,
     std::string &error);
 
 /* Enqueues the solve phase on `raw_stream`: solution = matrix^-1 * rhs. */

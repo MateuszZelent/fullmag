@@ -1,5 +1,7 @@
 #pragma once
 
+#include "gpu/cuda/demag_poisson/cudss_direct_solver.hpp"
+
 #include <cstdint>
 #include <limits>
 #include <string>
@@ -136,6 +138,8 @@ struct PoissonDemagRuntimeState {
     bool gpu_workspace_ready = false;
     uint64_t gpu_workspace_device_bytes = 0;
     int gpu_demag_mode = 0;
+    GpuDemagSolverStrategy gpu_solver_strategy = GpuDemagSolverStrategy::Auto;
+    GpuDemagCudssResolution gpu_cudss_resolution{};
     int64_t boundary_marker = 99; // Canonical u32 or an invalid signed legacy selector.
     int robin_beta_mode = 0;
     double robin_beta_factor = 1.0;

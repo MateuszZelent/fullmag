@@ -10,7 +10,9 @@
  */
 
 #include "cpu/mfem/interactions/demag_fem_bem_operator.hpp"
+#include "gpu/cuda/demag_poisson/cudss_direct_solver.hpp"
 #include "gpu/cuda/demag_poisson/operators.hpp"
+#include "gpu/cuda/demag_poisson/poisson.hpp"
 #include "gpu/cuda/state/component_field.hpp"
 
 #include <cstdint>
@@ -110,6 +112,18 @@ void gpu_demag_fem_bem_destroy(Context &ctx);
 bool gpu_demag_fem_bem_ready(const Context &ctx);
 uint64_t gpu_demag_fem_bem_device_bytes(const Context &ctx);
 const char *gpu_demag_fem_bem_operator_mode(const Context &ctx);
+
+bool gpu_demag_fem_bem_amg_coarse_relax_type(
+    const Context &ctx,
+    std::int32_t &relax_type,
+    std::string &error);
+
+GpuDemagPoissonLinearSolver gpu_demag_fem_bem_linear_solver(
+    const Context &ctx);
+
+bool gpu_demag_fem_bem_cudss_resolution(
+    const Context &ctx,
+    GpuDemagCudssResolution &resolution);
 
 bool compute_device_demag_fem_bem_for_device_stage(
     Context &ctx,

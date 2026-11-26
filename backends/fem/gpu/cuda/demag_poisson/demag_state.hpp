@@ -7,6 +7,7 @@
  * compatibility buffers used by the native FEM CUDA demag realization.
  */
 
+#include "gpu/cuda/demag_poisson/demag_predictor.hpp"
 #include "gpu/cuda/state/component_field.hpp"
 
 #include <cstdint>
@@ -30,6 +31,7 @@ struct FemGpuDemagPoissonDeviceState {
     std::uint8_t last_evaluation_purpose = 0;
     std::uint64_t field_only_evaluation_count = 0;
     std::uint64_t field_and_energy_evaluation_count = 0;
+    GpuDemagLinearPredictorState predictor{};
 };
 
 } // namespace fullmag::fem
