@@ -13,14 +13,17 @@ use std::sync::Arc;
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use crate::capabilities::GPU_M1_LIVE_PREVIEW_FIELDS;
 use crate::dispatch::FdmEngine;
 use crate::fdm::gpu::cuda::native::{NativeFdmBackend, NativeFdmPreviewSnapshot};
+use crate::fdm::gpu::cuda::spin_transport::{GpuM1TransportSession, NativeGpuM1TransportAbi};
+use crate::fdm::gpu::cuda::transport_publication::accepted_transport_field_snapshots;
 use crate::quantities::{
     active_fdm_preview_quantities, field_materialization_quantity_ids, normalized_quantity_name,
     quantity_spec, QuantityId, QuantityShape,
 };
 use crate::types::{
-    LiveFieldMaterializationState, LiveFieldMaterializationStatus, LivePreviewField,
+    FieldSnapshot, LiveFieldMaterializationState, LiveFieldMaterializationStatus, LivePreviewField,
     LivePreviewRequest, RunError, StepStats,
 };
 use crate::DisplaySelectionState;
@@ -36,6 +39,8 @@ pub(crate) const LIVE_OBSERVATION_MIN_INTERVAL: Duration = Duration::from_millis
 pub(crate) const LIVE_OBSERVATION_MAX_BYTES: u64 = 256 * 1024 * 1024;
 
 const TERMINAL_HARVEST_BUDGET: Duration = Duration::from_millis(500);
+const GPU_M1_NO_ACCEPTED_SAMPLE_MESSAGE: &str =
+    "accepted GPU M1 preview is unavailable: no accepted spin sample is available";
 
 #[derive(Debug, Clone, Copy, Default)]
 pub(crate) struct FdmLiveObservationTimings {
@@ -124,6 +129,13 @@ struct ObservationSnapshot {
 
 enum ObservationFieldSnapshot {
     Native(NativeFdmPreviewSnapshot),
+    /// Accepted GPU M1 output detached from the transport session before the
+    /// worker starts. The source stamp remains the accepted solver sample.
+    Materialized {
+        field: FieldSnapshot,
+        request: LivePreviewRequest,
+        grid: [u32; 3],
+    },
     /// `H_ant` or `H_drive`, resolved on the host from the plan's bases.
     Resolved {
         basis: Arc<FdmPlanIR>,
@@ -137,6 +149,68 @@ impl ObservationFieldSnapshot {
     fn into_live_preview_field(self, mask: Option<&[bool]>) -> Result<LivePreviewField, RunError> {
         match self {
             Self::Native(snapshot) => snapshot.into_live_preview_field(mask),
+            Self::Materialized {
+                field,
+                request,
+                grid,
+            } => {
+                let quantity = normalized_quantity_name(&request.quantity)?;
+                if field.name != quantity || field.location != "cell" {
+                    return Err(RunError {
+                        message: format!(
+                            "accepted GPU M1 preview '{}' has an incompatible field identity",
+                            request.quantity
+                        ),
+                    });
+                }
+                let cell_count = grid
+                    .into_iter()
+                    .try_fold(1usize, |count, extent| count.checked_mul(extent as usize))
+                    .ok_or_else(|| RunError {
+                        message: "accepted GPU M1 preview grid size overflowed".into(),
+                    })?;
+                let spec = quantity_spec(&quantity).ok_or_else(|| RunError {
+                    message: format!(
+                        "accepted GPU M1 preview '{}' has no quantity descriptor",
+                        request.quantity
+                    ),
+                })?;
+                if spec.shape != QuantityShape::VectorField || spec.n_comp != 3 {
+                    return Err(RunError {
+                        message: format!(
+                            "accepted GPU M1 preview '{}' is not a three-component vector",
+                            request.quantity
+                        ),
+                    });
+                }
+                let expected_values = cell_count.checked_mul(3).ok_or_else(|| RunError {
+                    message: "accepted GPU M1 preview value count overflowed".into(),
+                })?;
+                if field.component_count != spec.n_comp
+                    || field.revision == 0
+                    || field.values.len() != expected_values
+                {
+                    return Err(RunError {
+                        message: format!(
+                            "accepted GPU M1 preview '{}' returned {} values, expected {}",
+                            field.name,
+                            field.values.len(),
+                            expected_values
+                        ),
+                    });
+                }
+                let vectors = field
+                    .values
+                    .chunks_exact(3)
+                    .map(|vector| [vector[0], vector[1], vector[2]])
+                    .collect::<Vec<_>>();
+                let mut preview =
+                    crate::preview::build_grid_preview_field(&request, &vectors, grid, None);
+                preview.source_step = field.step;
+                preview.source_time_seconds = Some(field.time);
+                preview.source_revision = field.revision;
+                Ok(preview)
+            }
             Self::Resolved { basis, request, grid, time } => {
                 let count = grid.into_iter().try_fold(1usize, |n, extent| {
                     n.checked_mul(extent as usize)
@@ -408,6 +482,7 @@ pub(crate) struct FdmLiveObservationScheduler {
     original_grid: [u32; 3],
     active_mask: Option<Vec<bool>>,
     supported: BTreeSet<String>,
+    gpu_m1_module_id: Option<String>,
     job_tx: Option<SyncSender<ObservationJob>>,
     result_rx: Receiver<ObservationWorkerResult>,
     worker: Option<JoinHandle<()>>,
@@ -427,7 +502,22 @@ pub(crate) struct FdmLiveObservationScheduler {
 
 impl FdmLiveObservationScheduler {
     pub(crate) fn new(plan: &FdmPlanIR, original_grid: [u32; 3]) -> Self {
-        let supported = field_materialization_quantity_ids()
+        Self::new_with_transport_support(plan, original_grid, false)
+    }
+
+    /// Construct the live runner scheduler when an accepted GPU M1 transport
+    /// session is available. The session is still required at observation time;
+    /// this only makes the explicit spin-vector fields valid demand candidates.
+    pub(crate) fn new_with_gpu_m1_transport(plan: &FdmPlanIR, original_grid: [u32; 3]) -> Self {
+        Self::new_with_transport_support(plan, original_grid, true)
+    }
+
+    fn new_with_transport_support(
+        plan: &FdmPlanIR,
+        original_grid: [u32; 3],
+        gpu_m1_transport_available: bool,
+    ) -> Self {
+        let mut supported = field_materialization_quantity_ids()
             .into_iter()
             .filter(|quantity| {
                 active_fdm_preview_quantities(FdmEngine::CudaFdm, plan, &[*quantity])
@@ -436,6 +526,20 @@ impl FdmLiveObservationScheduler {
             })
             .map(str::to_string)
             .collect::<BTreeSet<_>>();
+        let gpu_m1_module_id = gpu_m1_transport_available
+            .then(|| {
+                plan.spin_transport_plans
+                    .first()
+                    .map(|module| module.module_id.clone())
+            })
+            .flatten();
+        if gpu_m1_module_id.is_some() {
+            supported.extend(
+                GPU_M1_LIVE_PREVIEW_FIELDS
+                    .iter()
+                    .map(|quantity| (*quantity).to_string()),
+            );
+        }
         let active_mask = plan.active_mask.clone();
         let (job_tx, job_rx) = mpsc::sync_channel(1);
         let (result_tx, result_rx) = mpsc::sync_channel(1);
@@ -464,6 +568,7 @@ impl FdmLiveObservationScheduler {
             original_grid,
             active_mask,
             supported,
+            gpu_m1_module_id,
             job_tx: worker.as_ref().map(|_| job_tx),
             result_rx,
             worker,
@@ -490,6 +595,25 @@ impl FdmLiveObservationScheduler {
         capture_time: f64,
         _solver_dt: f64,
     ) -> FdmLiveObservationPublication {
+        self.observe_with_gpu_m1_transport(
+            backend,
+            display_state,
+            capture_step,
+            capture_time,
+            _solver_dt,
+            None,
+        )
+    }
+
+    pub(crate) fn observe_with_gpu_m1_transport(
+        &mut self,
+        backend: &NativeFdmBackend,
+        display_state: &DisplaySelectionState,
+        capture_step: u64,
+        capture_time: f64,
+        solver_dt: f64,
+        gpu_transport: Option<&GpuM1TransportSession<NativeGpuM1TransportAbi>>,
+    ) -> FdmLiveObservationPublication {
         let started = Instant::now();
         if self.terminal {
             return FdmLiveObservationPublication::default();
@@ -500,6 +624,8 @@ impl FdmLiveObservationScheduler {
             display_state,
             capture_step,
             capture_time,
+            solver_dt,
+            gpu_transport,
             &mut timings,
         );
         self.take_publication(started, timings)
@@ -516,43 +642,89 @@ impl FdmLiveObservationScheduler {
         capture_time: f64,
         _solver_dt: f64,
     ) -> FdmLiveObservationPublication {
+        self.finish_with_gpu_m1_transport(
+            backend,
+            display_state,
+            capture_step,
+            capture_time,
+            _solver_dt,
+            None,
+        )
+    }
+
+    pub(crate) fn finish_with_gpu_m1_transport(
+        &mut self,
+        backend: &NativeFdmBackend,
+        display_state: &DisplaySelectionState,
+        capture_step: u64,
+        capture_time: f64,
+        solver_dt: f64,
+        gpu_transport: Option<&GpuM1TransportSession<NativeGpuM1TransportAbi>>,
+    ) -> FdmLiveObservationPublication {
         let started = Instant::now();
         if self.terminal {
             return FdmLiveObservationPublication::default();
         }
         let mut timings = FdmLiveObservationTimings::default();
+        let (terminal_demand, _) = requested_observation_demand(display_state, &self.supported);
+        let terminal_m1_quantities = terminal_demand
+            .quantities
+            .into_iter()
+            .filter(|quantity| GPU_M1_LIVE_PREVIEW_FIELDS.contains(&quantity.as_str()))
+            .collect::<Vec<_>>();
+        let terminal_publication_time =
+            super::canonical_fdm_publication_time(&self.resolved_basis, capture_time);
+        let has_accepted_m1_sample =
+            gpu_transport.is_some_and(|transport| transport.accepted_sequence().is_ok());
+        if has_accepted_m1_sample
+            && !terminal_m1_quantities.is_empty()
+            && !self.has_exact_source_stamp(
+                &terminal_m1_quantities,
+                capture_step,
+                terminal_publication_time,
+            )
+        {
+            self.force_schedule = true;
+        }
+        let last_submit_before_terminal_service = self.last_submit;
         self.service(
             backend,
             display_state,
             capture_step,
             capture_time,
+            solver_dt,
+            gpu_transport,
             &mut timings,
         );
+        let terminal_capture_was_submitted =
+            self.last_submit != last_submit_before_terminal_service;
 
         let deadline = Instant::now() + TERMINAL_HARVEST_BUDGET;
-        while self.in_flight.is_some() {
-            self.harvest(&mut timings);
-            if self.in_flight.is_none() {
-                break;
-            }
-            let remaining = deadline.saturating_duration_since(Instant::now());
-            if remaining.is_zero() {
-                break;
-            }
-            match self
-                .result_rx
-                .recv_timeout(remaining.min(Duration::from_millis(20)))
-            {
-                Ok(result) => self.promote_result(result, &mut timings),
-                Err(mpsc::RecvTimeoutError::Timeout) => {}
-                Err(mpsc::RecvTimeoutError::Disconnected) => {
-                    self.worker_error = Some(
-                        "native CUDA live observation worker disconnected during terminal harvest"
-                            .to_string(),
-                    );
-                    break;
-                }
-            }
+        self.wait_for_terminal_observation(deadline, &mut timings);
+        if has_accepted_m1_sample
+            && !terminal_m1_quantities.is_empty()
+            && !self.has_exact_source_stamp(
+                &terminal_m1_quantities,
+                capture_step,
+                terminal_publication_time,
+            )
+            && !terminal_capture_was_submitted
+            && self.in_flight.is_none()
+            && self.worker_error.is_none()
+        {
+            // An older in-flight observation can defer the terminal capture.
+            // Retry once after it drains, still under the terminal wait budget.
+            self.force_schedule = true;
+            self.service(
+                backend,
+                display_state,
+                capture_step,
+                capture_time,
+                solver_dt,
+                gpu_transport,
+                &mut timings,
+            );
+            self.wait_for_terminal_observation(deadline, &mut timings);
         }
 
         self.job_tx.take();
@@ -574,12 +746,54 @@ impl FdmLiveObservationScheduler {
         self.take_publication(started, timings)
     }
 
+    fn wait_for_terminal_observation(
+        &mut self,
+        deadline: Instant,
+        timings: &mut FdmLiveObservationTimings,
+    ) {
+        while self.in_flight.is_some() {
+            self.harvest(timings);
+            if self.in_flight.is_none() {
+                break;
+            }
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                break;
+            }
+            match self
+                .result_rx
+                .recv_timeout(remaining.min(Duration::from_millis(20)))
+            {
+                Ok(result) => self.promote_result(result, timings),
+                Err(mpsc::RecvTimeoutError::Timeout) => {}
+                Err(mpsc::RecvTimeoutError::Disconnected) => {
+                    self.worker_error = Some(
+                        "native CUDA live observation worker disconnected during terminal harvest"
+                            .to_string(),
+                    );
+                    break;
+                }
+            }
+        }
+    }
+
+    fn has_exact_source_stamp(&self, quantities: &[String], step: u64, time: f64) -> bool {
+        !quantities.is_empty()
+            && quantities.iter().all(|quantity| {
+                self.last_source.get(quantity).is_some_and(|source| {
+                    source.step == step && source.time.to_bits() == time.to_bits()
+                })
+            })
+    }
+
     fn service(
         &mut self,
         backend: &NativeFdmBackend,
         display_state: &DisplaySelectionState,
         capture_step: u64,
         capture_time: f64,
+        solver_dt: f64,
+        gpu_transport: Option<&GpuM1TransportSession<NativeGpuM1TransportAbi>>,
         timings: &mut FdmLiveObservationTimings,
     ) {
         let harvest_started = Instant::now();
@@ -713,6 +927,21 @@ impl FdmLiveObservationScheduler {
             }
         }
 
+        let accepted_m1_sample_arrived = demand.quantities.iter().any(|quantity| {
+            GPU_M1_LIVE_PREVIEW_FIELDS.contains(&quantity.as_str())
+                && self.statuses.get(quantity).is_some_and(|status| {
+                    status.state == LiveFieldMaterializationState::Error
+                        && status.source_step < capture_step
+                        && status
+                            .error
+                            .as_deref()
+                            .is_some_and(|error| error == GPU_M1_NO_ACCEPTED_SAMPLE_MESSAGE)
+                })
+        });
+        if accepted_m1_sample_arrived {
+            self.force_schedule = true;
+        }
+
         let can_accept_started = Instant::now();
         let can_accept = self.in_flight.is_none() && self.worker_error.is_none();
         timings.can_accept_wall_time_ns = elapsed_ns(can_accept_started);
@@ -726,6 +955,8 @@ impl FdmLiveObservationScheduler {
                 &demand,
                 capture_step,
                 capture_time,
+                solver_dt,
+                gpu_transport,
                 timings,
             );
         } else if self.worker_error.is_some() {
@@ -755,6 +986,8 @@ impl FdmLiveObservationScheduler {
         demand: &ObservationDemand,
         capture_step: u64,
         capture_time: f64,
+        solver_dt: f64,
+        gpu_transport: Option<&GpuM1TransportSession<NativeGpuM1TransportAbi>>,
         timings: &mut FdmLiveObservationTimings,
     ) {
         let schedule_started = Instant::now();
@@ -762,7 +995,11 @@ impl FdmLiveObservationScheduler {
         let identity = ObservationJobIdentity {
             request_revision: demand.revision,
             source_step: capture_step,
-            source_time_bits: super::canonical_fdm_publication_time(&self.resolved_basis, capture_time).to_bits(),
+            source_time_bits: super::canonical_fdm_publication_time(
+                &self.resolved_basis,
+                capture_time,
+            )
+            .to_bits(),
             quantities: demand.quantities.clone(),
         };
         timings.submit_descriptor_wall_time_ns = elapsed_ns(descriptor_started);
@@ -795,7 +1032,113 @@ impl FdmLiveObservationScheduler {
         let mut snapshots = Vec::with_capacity(demand.quantities.len());
         let mut schedule_vector_ns: u64 = 0;
         let mut schedule_energy_ns: u64 = 0;
+        let m1_quantities = demand
+            .quantities
+            .iter()
+            .filter(|quantity| GPU_M1_LIVE_PREVIEW_FIELDS.contains(&quantity.as_str()))
+            .cloned()
+            .collect::<Vec<_>>();
+        if !m1_quantities.is_empty() {
+            let started = Instant::now();
+            let publication_time =
+                super::canonical_fdm_publication_time(&self.resolved_basis, capture_time);
+            let materialized = match gpu_transport {
+                Some(transport) => match transport.accepted_sequence() {
+                    Ok(accepted_sequence) => transport
+                        .readback_accepted_artifacts_for(&m1_quantities)
+                        .map_err(|error| RunError {
+                            message: format!(
+                                "reading accepted GPU M1 preview fields failed: {error}"
+                            ),
+                        })
+                        .and_then(|artifacts| {
+                            let module_id =
+                                self.gpu_m1_module_id.as_deref().ok_or_else(|| RunError {
+                                    message: "GPU M1 preview has no resolved transport module"
+                                        .into(),
+                                })?;
+                            accepted_transport_field_snapshots(
+                                self.original_grid,
+                                artifacts,
+                                &m1_quantities,
+                                capture_step,
+                                publication_time,
+                                solver_dt,
+                                accepted_sequence,
+                                &format!("transport_module:{module_id}:full_solve_domain"),
+                            )
+                        }),
+                    Err(_) => Err(RunError {
+                        message: GPU_M1_NO_ACCEPTED_SAMPLE_MESSAGE.into(),
+                    }),
+                },
+                None => Err(RunError {
+                    message: GPU_M1_NO_ACCEPTED_SAMPLE_MESSAGE.into(),
+                }),
+            };
+            match materialized {
+                Ok(fields) => {
+                    for field in fields {
+                        if field.step != capture_step
+                            || field.time.to_bits() != publication_time.to_bits()
+                            || !m1_quantities.iter().any(|name| name == &field.name)
+                        {
+                            self.statuses.insert(
+                                field.name.clone(),
+                                LiveFieldMaterializationStatus {
+                                    quantity: field.name.clone(),
+                                    source_step: capture_step,
+                                    request_revision: demand.revision,
+                                    state: LiveFieldMaterializationState::Error,
+                                    error: Some(
+                                        "accepted GPU M1 preview identity does not match the requested solver sample".into(),
+                                    ),
+                                },
+                            );
+                            continue;
+                        }
+                        let request =
+                            full_grid_request(display_state, &field.name, self.original_grid);
+                        snapshots.push(ObservationSnapshot {
+                            quantity: field.name.clone(),
+                            snapshot: ObservationFieldSnapshot::Materialized {
+                                field,
+                                request,
+                                grid: self.original_grid,
+                            },
+                        });
+                    }
+                }
+                Err(error) => {
+                    for quantity in &m1_quantities {
+                        self.statuses.insert(
+                            quantity.clone(),
+                            LiveFieldMaterializationStatus {
+                                quantity: quantity.clone(),
+                                source_step: capture_step,
+                                request_revision: demand.revision,
+                                state: LiveFieldMaterializationState::Error,
+                                error: Some(error.message.clone()),
+                            },
+                        );
+                    }
+                }
+            }
+            let elapsed = elapsed_ns(started);
+            for quantity in &m1_quantities {
+                if quantity_spec(quantity)
+                    .is_some_and(|spec| spec.shape == QuantityShape::SpatialScalar)
+                {
+                    schedule_energy_ns = schedule_energy_ns.saturating_add(elapsed);
+                } else {
+                    schedule_vector_ns = schedule_vector_ns.saturating_add(elapsed);
+                }
+            }
+        }
         for quantity in &demand.quantities {
+            if GPU_M1_LIVE_PREVIEW_FIELDS.contains(&quantity.as_str()) {
+                continue;
+            }
             let request = full_grid_request(display_state, quantity, self.original_grid);
             let started = Instant::now();
             let snapshot = if super::artifacts::is_host_resolved_field_quantity(quantity) {
@@ -806,7 +1149,8 @@ impl FdmLiveObservationScheduler {
                     time: capture_time,
                 })
             } else {
-                backend.begin_live_preview_snapshot(&request, self.original_grid)
+                backend
+                    .begin_live_preview_snapshot(&request, self.original_grid)
                     .map(ObservationFieldSnapshot::Native)
             };
             match snapshot {
@@ -1110,8 +1454,9 @@ impl Drop for FdmLiveObservationScheduler {
 mod tests {
     use super::{
         estimated_peak_bytes, full_grid_request, requested_observation_demand,
-        source_stamp_is_newer, stamp_captured_field, ObservationDemand, ObservationJobIdentity,
-        SourceStamp, LIVE_OBSERVATION_MAX_BYTES,
+        source_stamp_is_newer, stamp_captured_field, ObservationDemand, ObservationFieldSnapshot,
+        ObservationJobIdentity, SourceStamp, GPU_M1_LIVE_PREVIEW_FIELDS,
+        LIVE_OBSERVATION_MAX_BYTES,
     };
     use crate::types::LivePreviewField;
     use crate::DisplaySelectionState;
@@ -1171,6 +1516,77 @@ mod tests {
         assert!(errors.is_empty());
         assert_eq!(demand.quantities, ["m", "frozen_spins"]);
         assert_eq!(demand.active_quantity.as_deref(), Some("m"));
+    }
+
+    #[test]
+    fn gpu_m1_live_demand_is_explicit_and_limited_to_spin_vectors() {
+        let mut display = DisplaySelectionState::default();
+        display.revision = 15;
+        display.selection.quantity = "m".to_string();
+        display.observation_quantities = vec![
+            "spin_potential".to_string(),
+            "torque_stt".to_string(),
+            "spin_current_tensor".to_string(),
+        ];
+        let supported = std::iter::once("m")
+            .chain(GPU_M1_LIVE_PREVIEW_FIELDS.iter().copied())
+            .map(str::to_string)
+            .collect::<BTreeSet<_>>();
+
+        let (demand, errors) = requested_observation_demand(&display, &supported);
+
+        assert_eq!(demand.quantities, ["spin_potential", "torque_stt", "m"]);
+        assert_eq!(errors.len(), 1);
+        assert_eq!(errors[0].0, "spin_current_tensor");
+        for quantity in GPU_M1_LIVE_PREVIEW_FIELDS {
+            let spec = crate::quantities::quantity_spec(quantity).unwrap();
+            assert_eq!(spec.shape, QuantityShape::VectorField);
+            assert_eq!(spec.n_comp, 3);
+        }
+
+        display.observation_quantities.clear();
+        let (m_only_demand, m_only_errors) = requested_observation_demand(&display, &supported);
+        assert!(m_only_errors.is_empty());
+        assert_eq!(m_only_demand.quantities, ["m"]);
+    }
+
+    #[test]
+    fn materialized_spin_vector_preview_keeps_the_accepted_stamp_and_full_grid_values() {
+        let mut display = DisplaySelectionState::default();
+        display.revision = 12;
+        display.selection.quantity = "spin_potential".to_string();
+        let grid = [2, 1, 1];
+        let field = super::FieldSnapshot::new(
+            "spin_potential",
+            17,
+            2.5e-12,
+            1.0e-13,
+            3,
+            "xyz",
+            "cell",
+            "transport_module:spin:full_solve_domain",
+            18,
+            vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
+        )
+        .unwrap();
+        let snapshot = ObservationFieldSnapshot::Materialized {
+            field,
+            request: full_grid_request(&display, "spin_potential", grid),
+            grid,
+        };
+
+        let preview = snapshot.into_live_preview_field(None).unwrap();
+
+        assert_eq!(preview.quantity, "spin_potential");
+        assert_eq!(preview.source_step, 17);
+        assert_eq!(preview.source_time_seconds, Some(2.5e-12));
+        assert_eq!(preview.source_revision, 18);
+        assert_eq!(preview.original_grid, grid);
+        assert_eq!(preview.preview_grid, grid);
+        assert_eq!(
+            preview.vector_field_values,
+            vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]
+        );
     }
 
     #[test]

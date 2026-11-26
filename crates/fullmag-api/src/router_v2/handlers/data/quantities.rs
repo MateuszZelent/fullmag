@@ -102,6 +102,8 @@ fn annotate_runtime_quantity_state(
         let Some(spec) = quantity_spec(&entry.id) else {
             continue;
         };
+        let live_spec = gpu_m1_live_preview_spec(snapshot, spec);
+        let spec = live_spec.as_ref().unwrap_or(spec);
         if prepared_only
             && !(entry.id == "m" && prepared_m_without_runtime_capabilities
                 || entry.id == "mat_alpha" && prepared_damping
@@ -234,6 +236,13 @@ fn annotate_runtime_quantity_state(
             entry.location = "node".to_owned();
         }
         entry.renderable = resolved.render == fullmag_runner::QuantityRenderCapability::Renderable;
+        if live_spec.is_some() {
+            entry.location = spec.location.as_str().to_owned();
+            entry.interactive_preview = spec.interactive_preview;
+            entry.supports_preview_2d = spec.supports_preview_2d;
+            entry.supports_preview_3d = spec.supports_preview_3d;
+            entry.publication_state = "interactive".to_owned();
+        }
         entry.resolved_capability = Some(resolved.into());
     }
 }
@@ -257,6 +266,13 @@ fn accepted_fields_await_run(docker_runtime: bool, run_status: Option<&str>) -> 
         && !run_status.is_some_and(|status| {
             matches!(status, "running" | "stopping" | "completed" | "failed" | "cancelled")
         })
+}
+
+pub(super) fn gpu_m1_live_preview_spec(
+    snapshot: &SessionStateResponse,
+    spec: &QuantitySpec,
+) -> Option<QuantitySpec> {
+    snapshot.capabilities.as_ref()?.gpu_m1_live_preview_spec(spec)
 }
 
 pub(crate) fn current_field_carriers(
@@ -770,6 +786,31 @@ mod tests {
             supports_lossy_fallback_override: false,
         });
         snapshot
+    }
+
+    #[test]
+    fn gpu_m1_catalog_admits_the_bound_cell_vector_preview() {
+        let id = "spin_potential";
+        let mut snapshot = snapshot_with_field_provider(id);
+        let mut catalog = QuantityCatalogResponse::build();
+        annotate_runtime_quantity_state(&mut catalog, &snapshot);
+        let descriptor = |catalog: &QuantityCatalogResponse| {
+            catalog.quantities.iter().find(|field| field.id == id).unwrap().clone()
+        };
+        assert!(!descriptor(&catalog).interactive_preview);
+
+        let caps = snapshot.capabilities.as_mut().unwrap();
+        caps.engine_id = RuntimeEngineId::FdmCuda;
+        caps.resolved_quantity_registry = Some(ResolvedQuantityProviderRegistry::from_resolved_plan(
+            caps.engine_id.as_str(), "double", [id], std::iter::empty::<&str>(),
+        ));
+        annotate_runtime_quantity_state(&mut catalog, &snapshot);
+        let live = descriptor(&catalog);
+        assert!(live.requestable && live.interactive_preview && live.renderable);
+        assert_eq!(live.location, "cell");
+        assert_eq!(live.publication_state, "interactive");
+        let tensor = catalog.quantities.iter().find(|field| field.id == "spin_current_tensor").unwrap();
+        assert!(!tensor.interactive_preview);
     }
 
     fn entry(id: &str) -> crate::schemas::quantities::QuantityCatalogEntry {

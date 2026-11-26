@@ -33,10 +33,12 @@ pub(crate) fn build_quantities(
         // magnetic quantity catalog or its interactive preview controls.
         return Vec::new();
     }
-    let dynamic_supported = metadata
+    let capabilities = metadata
         .and_then(|value| value.get("capabilities"))
-        .and_then(|value| serde_json::from_value::<BackendCapabilities>(value.clone()).ok())
-        .map(|caps| caps.preview_quantities)
+        .and_then(|value| serde_json::from_value::<BackendCapabilities>(value.clone()).ok());
+    let dynamic_supported = capabilities
+        .as_ref()
+        .map(|caps| caps.preview_quantities.clone())
         .or_else(|| {
             metadata
                 .and_then(|value| value.get("live_preview"))
@@ -66,8 +68,14 @@ pub(crate) fn build_quantities(
 
     quantity_specs()
         .iter()
-        .filter(|spec| spec.ui_exposed)
-        .map(|spec| {
+        .filter_map(|spec| {
+            let live_spec = capabilities
+                .as_ref()
+                .and_then(|capabilities| capabilities.gpu_m1_live_preview_spec(spec));
+            let spec = live_spec.as_ref().unwrap_or(spec);
+            if !spec.ui_exposed {
+                return None;
+            }
             let interactive_preview = spec.interactive_preview
                 && (dynamic_supported.is_empty() || dynamic_available(spec.id.as_str()));
             let available = match spec.shape {
@@ -104,7 +112,7 @@ pub(crate) fn build_quantities(
                 }),
             };
 
-            QuantityDescriptor {
+            Some(QuantityDescriptor {
                 id: spec.id.as_str().to_string(),
                 label: spec.label.to_string(),
                 kind: spec.shape.as_api_kind().to_string(),
@@ -121,7 +129,7 @@ pub(crate) fn build_quantities(
                 supports_preview_3d: spec.supports_preview_3d,
                 supports_history: spec.supports_history,
                 supports_export: spec.supports_export,
-            }
+            })
         })
         .collect()
 }
