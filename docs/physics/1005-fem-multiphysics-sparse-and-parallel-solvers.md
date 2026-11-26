@@ -1,8 +1,9 @@
 # FEM multiphysics sparse and parallel linear solvers (Oersted OE-F2, OE-F1, charge/spin transport, and OE-T0 KKT)
 
-- Status: source-implemented reference modernization; managed 5-profile Docker DEV qualification and A/B benchmarks pending Phase 2b execution
+- Status: verified reference modernization across 5 build profiles and A/B benchmarks (2026-11-26); C ABI v1/v2/v3 and planner GPU promotion remain deferred
 - Owners: Fullmag FEM multiphysics (Oersted and charge/spin transport)
 - Last updated: 2026-11-26
+- Related A/B audit: `docs/audits/2026-11-26-fem-multiphysics-solvers-ab.md`
 - Related physics owners:
   - `docs/physics/0950-quasistatic-microwave-antenna-field-basis-and-k-selective-excitation.md`
   - `docs/physics/0970-spin-hall-drift-diffusion-transport.md`
@@ -296,9 +297,11 @@ gates (never selected implicitly by CPU defaults or C ABI v1/v2/v3):
 
 1. `SparseExecutionTarget::GpuCudss`: NVIDIA cuDSS 0.8+ direct SPD Cholesky,
    symmetric indefinite saddle-point LU (full CSR, zero-diagonal-safe), and
-   general LU with
-   `CUDSS_DATA_MEMORY_ESTIMATES` VRAM preflight, `CUDSS_DATA_INFO != 0` hard
-   rejection, and host extended-precision verification/refinement.
+   general LU with scalar CSR/RHS normalization, `CUDSS_PIVOT_EPSILON_ALG_SCALED`,
+   device iterative refinement (`CUDSS_CONFIG_IR_N_STEPS = 5`),
+   `CUDSS_DATA_MEMORY_ESTIMATES` VRAM preflight, `CUDSS_DATA_INFO != 0` and
+   `CUDSS_DATA_NPIVOTS` deterministic singular-probe fail-closed checks, and
+   host extended-precision verification/refinement.
 2. `DirectTetraExecutionPolicy::GpuHybridFarField`: tiled CUDA far-field
    Biot--Savart kernel with 106-bit `DoubleDouble` accumulation in ascending
    source order and sorted CSR handoff of near/singular/unconverged pairs
@@ -321,18 +324,52 @@ gates (never selected implicitly by CPU defaults or C ABI v1/v2/v3):
 (validation)=
 ## 7. Validation and qualification
 
-Static host-side validation completed during Phase 0–2a:
+Managed 5-profile Docker DEV qualification and A/B benchmarks (`origin/master`
+`9ab99132d5` vs candidate `7801f23f25`, RTX 4080 SUPER SM `89-real`, AMD
+Threadripper 3960X, MFEM 4.10, HYPRE 3.1.0, PETSc/MUMPS/METIS, cuDSS 0.8.0.10)
+completed on 2026-11-26 (full tables in
+`docs/audits/2026-11-26-fem-multiphysics-solvers-ab.md`):
 
-- `scripts/check_repo_consistency.py`
-- `python3 -m unittest scripts/test_audit_fem_cpu_only_runtime.py`
-- `python3 -m pytest scripts/test_antenna_duffy_source.py scripts/test_antenna_global_quadrature_source.py scripts/test_antenna_quadrature_evidence_source.py scripts/test_affine_rt0_element_source.py scripts/test_antenna_rt0_normalization_source.py scripts/test_antenna_rt0_failure_diagnostics_source.py`
-- `python3 .agents/skills/scientific-documentation-contract/scripts/validate_changed_scientific_docs.py --base origin/master --head HEAD`
+- **Profile 1 (non-MFEM CI `native-modal-cabi-contract`):** 8/8 PASS (`0.05 s`).
+- **Profile 2 (FEM CPU `SLEPC=OFF`, Tier-2 HYPRE, `OMP_NUM_THREADS=4`):**
+  13/13 Wave 2 CTests PASS + 2-rank MPI `n=1` vs `n=2` bit-exact PASS +
+  `FULLMAG_OET0_LARGE_MESH=1` 3/3 bit-exact PASS (`6.67 s`).
+- **Profile 3 (OE-T0 TSan, `FULLMAG_OET0_TSAN=ON`, `FULLMAG_OET0_DISABLE_MPI=1`):**
+  clean `-fsanitize=thread` build/link PASS (runtime execution uses dedicated
+  `fem-cpu-tsan` seccomp service).
+- **Profile 4 (2-rank MPI byte identity):** `oet0-mpi-n1.bin == oet0-mpi-n2.bin`
+  bit-exact PASS on both Profile 2 (`SLEPC=OFF`) and Profile 5 (`SLEPC=ON`)
+  under `OMP_NUM_THREADS=4`.
+- **Profile 5 (FEM GPU + SLEPc + cuDSS + MPI, `OMP_NUM_THREADS=4`):**
+  13/13 Wave 2 CTests PASS (`46.35 s`) + 4/4 `CUDA_VISIBLE_DEVICES=""`
+  fail-closed/host-policy tests PASS (`10.68 s`) + `FULLMAG_OET0_LARGE_MESH=1`
+  3/3 bit-exact PASS (`5.58 s`).
+- **Rust, Python, and static gates:** `fullmag-fem-sys` 53/53, `fullmag-ir`
+  289/289, `fullmag-plan` 688/688, `fullmag-runner` default (`antenna` 150/150,
+  `oersted` 7/7, `transport` 106/106) and `--features fem-gpu` (`antenna`
+  179/179, `oersted` 28/28), 196/196 `pytest` (+23 subtests), 32/32 `unittest`,
+  `scripts/check_repo_consistency.py`, and
+  `validate_changed_scientific_docs.py --base origin/master --head HEAD` PASS.
 
-Managed Docker DEV qualification (5-profile build/CTest matrix: non-MFEM,
-FEM CPU `SLEPC=0`, OE-T0 TSan, 2-rank MPI byte identity, and FEM GPU+SLEPc+cuDSS
-plus Cargo tests and A/B wall-time benchmarks vs `origin/master`) is scheduled
-as Phase 2b immediately following whole-branch code review. No measured A/B
-speedups are claimed until Phase 2b executes and records real measurements.
+Measured A/B highlights (`9ab99132d5` vs `7801f23f25`):
+
+- **OE-F2 (`VectorPotentialSolver`):** `105.5x` speedup on `6x6x6` (`3273.23 ms -> 31.02 ms`
+  Tier-1 MUMPS, `err_A = 5.21e-15`; `47.91 ms` / `68.3x` Tier-2 HYPRE AMS,
+  `err_A = 1.08e-13`); unlocks `16x16x16` (`31,024` ND DOFs in `1.32 s` T1 /
+  `1.98 s` T2) and `20x20x20` (`59,660` ND + `9,261` H1 DOFs in `3.52 s` T1 /
+  `3.62 s` T2 at `362 MiB` RSS vs ~`38 GiB` dense).
+- **OE-F1 (`DirectTetraQuadrature`):** `13.53x` on `8x8x8` (`3.15M` pairs,
+  `15.32 s -> 1.13 s`, `W=16`, 0-ULP `memcmp == 0`), `18.93x` under opt-in
+  `GpuHybridFarField` (`0.81 s`, `max_rel_err = 5.59e-17` vs CPU `long double`),
+  and `3.00x` fewer kernels / `11.60x` faster fused `ProjectField` (with fixed
+  `byVDIM` scatter).
+- **Transport M1/M2 and OE-T0 KKT:** `8.02x` (T1) / `7.69x` (T2) / `5.82x`
+  (`cuda_cudss_spd`) on 8-terminal `16x16x8` charge; `11.60x` per column in
+  `ChargeTraceWorkspace`; `5.50x` (`cuda_cudss_lu`, `0.94 s`, `res <= 1.46e-15`)
+  and `5.32x` (T1 MUMPS, `0.97 s`) on stiff `12x12x12` M2 ($\lambda_J = 0.015 L$,
+  100x contrast, AHE) where baseline unpreconditioned `GMRES(100)` failed to
+  converge (`5.14 s`, `conv=0`); `6.87 s -> 5.64 s` (`1.22x` E2E) on
+  `FULLMAG_OET0_LARGE_MESH=1` (`21,600` faces, bit-exact 3/3).
 
 (limitations)=
 ## 8. Limitations and deferred work

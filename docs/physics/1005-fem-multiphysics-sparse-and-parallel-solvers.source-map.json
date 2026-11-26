@@ -6,14 +6,14 @@
     {
       "solver": "FEM",
       "device": "CPU",
-      "status": "source-implemented-verification-pending",
-      "reason": "3-tier CPU sparse linear solver (PETSc/MUMPS/METIS, HYPRE BoomerAMG/AMS/Block-AMG/ILU/Schur, MFEM serial TSan) and deterministic multi-threaded OE-F1 are implemented; managed 5-profile Docker DEV verification and A/B benchmarks execute in Phase 2b."
+      "status": "verified-reference-bounded",
+      "reason": "Verified across Profiles 1, 2 (13/13 + LARGE_MESH 3/3), 3 (TSan build), 4 (2-rank MPI byte-identity), and 5 (13/13 + CUDA_VISIBLE_DEVICES=\"\" 4/4 + LARGE_MESH 3/3) plus A/B benchmarks in docs/audits/2026-11-26-fem-multiphysics-solvers-ab.md."
     },
     {
       "solver": "FEM",
       "device": "GPU",
       "status": "unsupported",
-      "reason": "Opt-in C++ GpuCudss and GpuHybridFarField lanes are implemented behind strict fail-closed flags, while public C ABI v1/v2/v3 and planner GPU promotion remain unsupported until Phase 2b GPU qualification and a separate ABI/planner PR."
+      "reason": "Opt-in C++ GpuCudss and GpuHybridFarField lanes passed RTX 4080 SUPER parity and A/B benchmarks behind strict fail-closed flags, while public C ABI v1/v2/v3 and planner GPU promotion remain unsupported until a separate ABI/planner PR."
     },
     {
       "solver": "FDM",
