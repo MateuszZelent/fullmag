@@ -5317,17 +5317,24 @@ export class ControlRoomApi {
           path,
           response,
         });
+        const deferred = this.requestDiagnostics &&
+          !contractVersionError && !transportUnavailable &&
+          method === "GET" && path === DIAGNOSTICS_RUN_PERFORMANCE_PATH &&
+          response.status === 409 &&
+          await hasApiErrorCode(response, PERFORMANCE_OBSERVATION_BUSY_CODE);
         this.requireApiInstanceCurrent();
         this.requestDiagnostics?.record({
           byteLength: byteLengthFromHeaders(response.headers),
           channel: "http",
           contentType: response.headers.get("content-type"),
-          detail: responseDetail,
+          detail: deferred
+            ? `${responseDetail}; ${PERFORMANCE_OBSERVATION_BUSY_CODE}`
+            : responseDetail,
           direction: "rx",
           durationMs: Date.now() - started,
           etag: response.headers.get("etag"),
           method,
-          outcome: accepted ? "ok" : "error",
+          outcome: deferred ? "deferred" : accepted ? "ok" : "error",
           path,
           requestId,
           resourceKey: path,
@@ -5396,6 +5403,7 @@ export class ControlRoomApi {
 }
 
 const API_UNAVAILABLE_CODE = "API_UNAVAILABLE";
+export const PERFORMANCE_OBSERVATION_BUSY_CODE = "performance_observation_busy";
 const API_UNAVAILABLE_MESSAGE = "Fullmag API unavailable";
 
 function isTransportUnavailableResponse(
@@ -5785,6 +5793,15 @@ function byteLengthFromBody(body: BodyInit | null | undefined): number | null {
   }
 
   return null;
+}
+
+async function hasApiErrorCode(response: Response, code: string): Promise<boolean> {
+  try {
+    const payload: unknown = await response.clone().json();
+    return parseOpenApiError(payload, response.status).code === code;
+  } catch {
+    return false;
+  }
 }
 
 async function resolveResponseDiagnosticDetail({
