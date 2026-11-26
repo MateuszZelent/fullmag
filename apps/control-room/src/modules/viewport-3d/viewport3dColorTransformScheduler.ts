@@ -1,7 +1,5 @@
 "use client";
 
-import type { DecodedFieldVector } from "@/kernel/api/codecs";
-
 import type { Viewport3DBuildDiagnosticRecord } from "./build-engine/viewport3dBuildEngineTypes";
 import { recordViewport3DBuildDiagnostic } from "./build-engine/viewport3dBuildDiagnostics";
 import { createViewport3DBuildScheduler } from "./build-engine/viewport3dBuildScheduler";
@@ -29,10 +27,14 @@ export interface Viewport3DColorTransformBuildOptions
   onDiagnosticRecord?: (record: Viewport3DBuildDiagnosticRecord) => void;
   revisionSummary?: string;
   target?: Viewport3DFieldColorBuildTarget;
+  /** Reject instead of doing a potentially expensive synchronous fallback. */
+  workerRequired?: boolean;
 }
 
 interface PendingColorTransform {
   abortListener: (() => void) | null;
+  fieldVector: Viewport3DFieldVector;
+  options: Viewport3DColorTransformBuildOptions;
   reject: (reason: unknown) => void;
   resolve: (value: ScalarColorBuffer) => void;
   signal: AbortSignal | null;
@@ -97,18 +99,23 @@ async function executeVertexScalarColorBuild(
 ): Promise<ScalarColorBuffer> {
   throwIfAborted(options.signal);
   const client = getColorTransformWorkerClient();
-  if (client && isFloat64FieldVector(fieldVector)) {
+  if (client && isWorkerTransferableFieldVector(fieldVector)) {
     try {
       return await client.transform(fieldVector, options);
     } catch (error) {
       if (isAbortError(error)) throw error;
       colorTransformWorkerFallbackReason = "worker-error";
       options.recordFallback?.(colorTransformWorkerFallbackReason);
-      colorTransformWorkerClient = null;
     }
   } else if (!client) {
     options.recordFallback?.(
       colorTransformWorkerFallbackReason ?? "worker-unavailable",
+    );
+  }
+
+  if (options.workerRequired) {
+    throw new Error(
+      `Viewport 3D field-color worker is required (${colorTransformWorkerFallbackReason ?? "unsupported-field-vector"}).`,
     );
   }
 
@@ -206,10 +213,13 @@ function defaultFieldColorTarget(
   };
 }
 
-function isFloat64FieldVector(
+function isWorkerTransferableFieldVector(
   fieldVector: Viewport3DFieldVector,
-): fieldVector is DecodedFieldVector {
-  return fieldVector.dtype === "float64" && fieldVector.values instanceof Float64Array;
+): boolean {
+  return (
+    (fieldVector.dtype === "float32" && fieldVector.values instanceof Float32Array) ||
+    (fieldVector.dtype === "float64" && fieldVector.values instanceof Float64Array)
+  );
 }
 
 function cloneFieldColorBuildTargetForWorker(
@@ -237,6 +247,16 @@ function cloneFieldColorBuildTargetForWorker(
           pointIndices,
         },
         transferables: [pointIndices.buffer],
+      };
+    }
+    case "fdm-sampled": {
+      const cellOrdinals = new Uint32Array(target.cellOrdinals);
+      return {
+        target: {
+          ...target,
+          cellOrdinals,
+        },
+        transferables: [cellOrdinals.buffer],
       };
     }
     case "surface-faces": {
@@ -286,7 +306,9 @@ class ColorTransformWorkerClient {
   private idleTimeoutId: ReturnType<typeof setTimeout> | null = null;
   private nextId = 1;
   private readonly pending = new Map<number, PendingColorTransform>();
+  private readonly queuedIds: number[] = [];
   private readonly worker: Worker;
+  private activeId: number | null = null;
 
   constructor() {
     this.worker = new Worker(
@@ -305,7 +327,7 @@ class ColorTransformWorkerClient {
   }
 
   transform(
-    fieldVector: DecodedFieldVector,
+    fieldVector: Viewport3DFieldVector,
     options: Viewport3DColorTransformBuildOptions,
   ): Promise<ScalarColorBuffer> {
     if (this.disposed) {
@@ -316,23 +338,6 @@ class ColorTransformWorkerClient {
     throwIfAborted(options.signal);
     this.clearIdleDisposeTimer();
     const id = this.nextId++;
-    const values = new Float64Array(fieldVector.values);
-    const target = cloneFieldColorBuildTargetForWorker(
-      options.target ?? defaultFieldColorTarget(fieldVector),
-    );
-    const request: Viewport3DFieldColorBuildWorkerRequest = {
-      chunkSize: options.chunkSize,
-      colorMode: options.colorMode,
-      colorPalette: options.colorPalette,
-      fieldVector: {
-        ...fieldVector,
-        values,
-      },
-      id,
-      scalarRange: options.scalarRange,
-      shaderOnly: options.shaderOnly,
-      target: target.target,
-    };
 
     return new Promise((resolve, reject) => {
       const signal = options.signal ?? null;
@@ -346,17 +351,14 @@ class ColorTransformWorkerClient {
       }
       this.pending.set(id, {
         abortListener,
+        fieldVector,
+        options,
         reject,
         resolve,
         signal,
       });
-      try {
-        this.worker.postMessage(request, [values.buffer, ...target.transferables]);
-      } catch (error) {
-        this.clearPending(id);
-        this.dispose(error);
-        reject(error);
-      }
+      this.queuedIds.push(id);
+      this.dispatchNext();
     });
   }
 
@@ -364,6 +366,8 @@ class ColorTransformWorkerClient {
     if (this.disposed) return;
     this.disposed = true;
     this.clearIdleDisposeTimer();
+    this.activeId = null;
+    this.queuedIds.length = 0;
     const error =
       reason instanceof Error
         ? reason
@@ -385,26 +389,83 @@ class ColorTransformWorkerClient {
     return { timers: this.idleTimeoutId === null ? 0 : 1, workers: this.disposed ? 0 : 1 };
   }
 
+  private dispatchNext(): void {
+    if (this.disposed || this.activeId !== null) return;
+    this.clearIdleDisposeTimer();
+
+    while (this.queuedIds.length > 0) {
+      const id = this.queuedIds.shift();
+      if (id === undefined) continue;
+      const pending = this.pending.get(id);
+      if (!pending) continue;
+      if (pending.signal?.aborted) {
+        this.clearPending(id)?.reject(createAbortError());
+        continue;
+      }
+
+      const { fieldVector, options } = pending;
+      let values: Float32Array | Float64Array;
+      let transferables: Transferable[];
+      let request: Viewport3DFieldColorBuildWorkerRequest;
+      try {
+        values =
+          fieldVector.values instanceof Float32Array
+            ? new Float32Array(fieldVector.values)
+            : new Float64Array(fieldVector.values);
+        const target = cloneFieldColorBuildTargetForWorker(
+          options.target ?? defaultFieldColorTarget(fieldVector),
+        );
+        transferables = [values.buffer, ...target.transferables];
+        request = {
+          chunkSize: options.chunkSize,
+          colorMode: options.colorMode,
+          colorPalette: options.colorPalette,
+          fieldVector: {
+            ...fieldVector,
+            values,
+          },
+          id,
+          scalarRange: options.scalarRange,
+          shaderOnly: options.shaderOnly,
+          target: target.target,
+        };
+      } catch (error) {
+        this.clearPending(id)?.reject(error);
+        continue;
+      }
+
+      this.activeId = id;
+      try {
+        this.worker.postMessage(request, transferables);
+      } catch (error) {
+        this.activeId = null;
+        const failed = this.clearPending(id);
+        this.dispose(error);
+        failed?.reject(error);
+      }
+      return;
+    }
+    this.scheduleIdleDispose();
+  }
+
   private readonly handleMessage = (
     event: MessageEvent<Viewport3DFieldColorBuildWorkerResponse>,
   ): void => {
     if (this.disposed) return;
     const response = event.data;
+    if (response.id !== this.activeId) return;
+    this.activeId = null;
     const pending = this.clearPending(response.id);
-    if (!pending) {
-      return;
+    if (pending) {
+      if (response.ok) {
+        pending.resolve(response.data);
+      } else {
+        const error = new Error(response.error.message);
+        error.name = response.error.name;
+        pending.reject(error);
+      }
     }
-
-    if (response.ok) {
-      pending.resolve(response.data);
-      this.scheduleIdleDispose();
-      return;
-    }
-
-    const error = new Error(response.error.message);
-    error.name = response.error.name;
-    pending.reject(error);
-    this.scheduleIdleDispose();
+    this.dispatchNext();
   };
 
   private readonly handleError = (event: Event): void => {
@@ -428,14 +489,26 @@ class ColorTransformWorkerClient {
   }
 
   private abortPending(id: number): void {
+    if (this.activeId === id) {
+      const pending = this.clearPending(id);
+      pending?.reject(createAbortError());
+      return;
+    }
+    const queuedIndex = this.queuedIds.indexOf(id);
+    if (queuedIndex >= 0) this.queuedIds.splice(queuedIndex, 1);
     const pending = this.clearPending(id);
     if (!pending) return;
     pending.reject(createAbortError());
-    this.scheduleIdleDispose();
+    this.dispatchNext();
   }
 
   private scheduleIdleDispose(): void {
-    if (this.pending.size > 0 || this.idleTimeoutId !== null) return;
+    if (
+      this.activeId !== null ||
+      this.queuedIds.length > 0 ||
+      this.pending.size > 0 ||
+      this.idleTimeoutId !== null
+    ) return;
     this.idleTimeoutId = setTimeout(() => {
       this.idleTimeoutId = null;
       this.dispose();

@@ -177,6 +177,7 @@ export interface Viewport3DTargetQuantityFieldRequestsOptions {
   fieldCatalog?: FieldCatalogResource | null;
   quantityCatalog?: QuantityCatalogResource | null;
   fdmAirboxSettings?: VisualizationTargetSettings | null;
+  fdmObjectFieldsActive?: boolean;
   fdmSettings: VisualizationTargetSettings | null;
   fdmTargetSettings?: readonly Viewport3DFdmTargetSettingsForPlanning[];
   getPartSettings: (part: Viewport3DPlanMeshPart) => VisualizationTargetSettings;
@@ -900,6 +901,7 @@ export function resolveViewport3DTargetQuantityFieldDemandPlan({
   fieldCatalog,
   quantityCatalog,
   fdmAirboxSettings,
+  fdmObjectFieldsActive = false,
   fdmSettings,
   fdmTargetSettings = [],
   getPartSettings,
@@ -998,7 +1000,7 @@ export function resolveViewport3DTargetQuantityFieldDemandPlan({
   }
 
   for (const target of [
-    fdmSettings
+    fdmSettings && !fdmObjectFieldsActive
       ? { label: "FDM domain", settings: fdmSettings, targetId: "fdm-domain" }
       : null,
     fdmAirboxSettings

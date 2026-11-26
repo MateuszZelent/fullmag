@@ -73,14 +73,20 @@ void tetrahedral_mesh_geometry_is_required_only_by_its_gpu_consumers() {
 
     ctx.dmi.interfacial_enabled = true;
     check(
-        fullmag::fem::gpu_state_requires_tetrahedral_mesh_geometry(ctx),
-        "interfacial DMI must require tetrahedral GPU geometry");
+        !fullmag::fem::gpu_state_requires_tetrahedral_mesh_geometry(ctx),
+        "interfacial CSR DMI must not require tetrahedral GPU geometry");
     ctx.dmi.interfacial_enabled = false;
+
+    ctx.dmi.rotated_interfacial_enabled = true;
+    check(
+        !fullmag::fem::gpu_state_requires_tetrahedral_mesh_geometry(ctx),
+        "rotated interfacial CSR DMI must not require tetrahedral GPU geometry");
+    ctx.dmi.rotated_interfacial_enabled = false;
 
     ctx.dmi.bulk_enabled = true;
     check(
-        fullmag::fem::gpu_state_requires_tetrahedral_mesh_geometry(ctx),
-        "bulk DMI must require tetrahedral GPU geometry");
+        !fullmag::fem::gpu_state_requires_tetrahedral_mesh_geometry(ctx),
+        "bulk CSR DMI must not require tetrahedral GPU geometry");
     ctx.dmi.bulk_enabled = false;
 
     ctx.stt.zhang_li_enabled = true;

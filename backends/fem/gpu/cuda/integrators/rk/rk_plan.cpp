@@ -157,11 +157,18 @@ GpuRkPlan gpu_rk_plan_device_resident(const Context &ctx, std::string &reason)
         reason = "GPU RK device-resident path requires enable_exchange=true";
         return plan;
     }
-    if ((ctx.dmi.interfacial_enabled || ctx.dmi.rotated_interfacial_enabled ||
-         ctx.dmi.bulk_enabled) &&
-        (!ctx.gpu_state.device.mesh_geometry.uploaded ||
-            ctx.gpu_state.device.mesh_geometry.element_count != ctx.mesh.n_elements)) {
-        reason = "GPU RK device-resident path requires device-resident mesh geometry for DMI";
+    if ((ctx.dmi.interfacial_enabled || ctx.dmi.rotated_interfacial_enabled) &&
+        (!ctx.gpu_state.device.dmi_csr.interfacial.uploaded ||
+            ctx.gpu_state.device.dmi_csr.interfacial.rows !=
+                static_cast<uint64_t>(ctx.mesh.n_nodes))) {
+        reason = "GPU RK device-resident path requires device-resident CSR operator for interfacial DMI";
+        return plan;
+    }
+    if (ctx.dmi.bulk_enabled &&
+        (!ctx.gpu_state.device.dmi_csr.bulk.uploaded ||
+            ctx.gpu_state.device.dmi_csr.bulk.rows !=
+                static_cast<uint64_t>(ctx.mesh.n_nodes))) {
+        reason = "GPU RK device-resident path requires device-resident CSR operator for bulk DMI";
         return plan;
     }
     if (ctx.magnetoelastic.enabled) {

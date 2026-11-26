@@ -324,7 +324,7 @@
       "id": "rk-dmi-fields",
       "path": "backends/fem/gpu/cuda/integrators/rk/rk_dmi_fields.cu",
       "symbol": "gpu_rk_compute_dmi_field_contributions",
-      "responsibility": "Passes energy_out = nullptr for intermediate RK DMI field launches.",
+      "responsibility": "Passes energy_block_sums = nullptr for intermediate RK CSR DMI field launches.",
       "evidence_status": "contract_test"
     },
     {

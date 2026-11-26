@@ -12,6 +12,7 @@
 #include "gpu/cuda/exchange/exchange_state.hpp"
 #include "gpu/cuda/fields/field_buffer_state.hpp"
 #include "gpu/cuda/integrators/rk/rk_workspace_state.hpp"
+#include "gpu/cuda/interactions/dmi/dmi_csr_state.hpp"
 #include "gpu/cuda/interactions/local_interaction_workspace_state.hpp"
 #include "gpu/cuda/interactions/magnetoelastic/magnetoelastic_state.hpp"
 #include "gpu/cuda/materials/material_state.hpp"
@@ -45,6 +46,7 @@ struct FemGpuState {
 
     FemGpuDemagPoissonDeviceState demag_poisson{};
     LegacyGpuExchangeDeviceState legacy_exchange{};
+    FemGpuDmiCsrDeviceState dmi_csr{};
     FemGpuFieldBufferDeviceState fields{};
     FemGpuPackedFieldDownloadDeviceState packed_field_download{};
     FemGpuRkWorkspaceDeviceState rk{};

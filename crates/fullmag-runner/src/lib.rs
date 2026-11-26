@@ -2196,14 +2196,26 @@ fn require_supported_fem_topology(
     let has_v2_certificate = build_report.is_some_and(|report| {
         report.mixed_layer_topology_certificate_v2.is_some()
     });
-    if has_v1_certificate && has_v2_certificate {
+    let has_pure_prism_certificate = build_report.is_some_and(|report| {
+        report.pure_prism_topology_certificate.is_some()
+    });
+    let certificate_count = usize::from(has_v1_certificate)
+        + usize::from(has_v2_certificate)
+        + usize::from(has_pure_prism_certificate);
+    if certificate_count > 1 {
+        let message = if has_v1_certificate && has_v2_certificate && !has_pure_prism_certificate {
+            "fem_mixed_p1_runtime_certificate_rejected: V1 and V2 certificates cannot be carried together; fallback=none"
+        } else {
+            "fem_mixed_p1_runtime_certificate_rejected: V1, V2, and pure_prism certificates cannot be carried together; fallback=none"
+        };
         return Err(RunError {
-            message: "fem_mixed_p1_runtime_certificate_rejected: V1 and V2 certificates cannot be carried together; fallback=none".to_string(),
+            message: message.to_string(),
         });
     }
     let has_mixed_metadata = build_report.is_some_and(|report| {
         has_v1_certificate
             || has_v2_certificate
+            || has_pure_prism_certificate
             || report.mixed_topology_provenance.is_some()
     });
     if tetrahedral {
@@ -2216,7 +2228,7 @@ fn require_supported_fem_topology(
         };
     }
 
-    let qualified_family = cell_families.len() == 3
+    let qualified_mixed_family = cell_families.len() == 3
         && cell_families.contains(&fullmag_ir::FemCellTypeIR::Tet4)
         && cell_families.contains(&fullmag_ir::FemCellTypeIR::Prism6)
         && cell_families.contains(&fullmag_ir::FemCellTypeIR::Pyramid5)
@@ -2227,7 +2239,15 @@ fn require_supported_fem_topology(
             )
         })
         && facet_families.contains(&fullmag_ir::FemFacetTypeIR::Quad4);
-    if !qualified_family {
+    let qualified_pure_prism_family = cell_families == [fullmag_ir::FemCellTypeIR::Prism6]
+        && facet_families.iter().all(|family| {
+            matches!(
+                family,
+                fullmag_ir::FemFacetTypeIR::Tri3 | fullmag_ir::FemFacetTypeIR::Quad4
+            )
+        })
+        && facet_families.contains(&fullmag_ir::FemFacetTypeIR::Quad4);
+    if !qualified_mixed_family && !qualified_pure_prism_family {
         return Err(RunError {
             message: format!(
                 "fem_typed_topology_unsupported_before_backend: cells={cell_families:?}; facets={facet_families:?}; study={study_kind}; fallback=none"
@@ -2236,7 +2256,11 @@ fn require_supported_fem_topology(
     }
 
     let report = build_report.ok_or_else(|| RunError {
-        message: "fem_mixed_p1_runtime_certificate_required: shared-domain build report is missing; fallback=none".to_string(),
+        message: if qualified_pure_prism_family {
+            "fem_pure_prism_p2_runtime_certificate_required: shared-domain build report is missing; fallback=none".to_string()
+        } else {
+            "fem_mixed_p1_runtime_certificate_required: shared-domain build report is missing; fallback=none".to_string()
+        },
     })?;
     if !report
         .fallbacks_triggered
@@ -2246,34 +2270,219 @@ fn require_supported_fem_topology(
     {
         return Err(RunError {
             message: format!(
-                "fem_mixed_p1_runtime_build_report_rejected: fallbacks_triggered={:?}; degraded={}; required=fallbacks_triggered[]+degraded_false; fallback=none",
-                report.fallbacks_triggered, report.degraded
+                "{}: fallbacks_triggered={:?}; degraded={}; required=fallbacks_triggered[]+degraded_false; fallback=none",
+                if qualified_pure_prism_family {
+                    "fem_pure_prism_p2_runtime_build_report_rejected"
+                } else {
+                    "fem_mixed_p1_runtime_build_report_rejected"
+                },
+                report.fallbacks_triggered,
+                report.degraded
             ),
         });
     }
-    if let Some(certificate) = report.mixed_layer_topology_certificate_v2.as_ref() {
+    let (
+        is_pure_prism,
+        requested_layer_count,
+        realized_layer_count,
+        magnetic_plane_count,
+        cert_fallbacks_empty,
+        air_layers_valid,
+        requested_device,
+    ) = if qualified_pure_prism_family {
+        if has_v1_certificate || has_v2_certificate {
+            return Err(RunError {
+                message: "fem_pure_prism_p2_runtime_certificate_rejected: mixed v1/v2 certificate cannot be attached to a pure prism mesh; fallback=none".to_string(),
+            });
+        }
+        let certificate = report
+            .pure_prism_topology_certificate
+            .as_ref()
+            .ok_or_else(|| RunError {
+                message: "fem_pure_prism_p2_runtime_certificate_required: accepted pure prism topology certificate is missing; fallback=none".to_string(),
+            })?;
+        if certificate.topology_fingerprint_version != "v3" {
+            return Err(RunError {
+                message: format!(
+                    "fem_pure_prism_p2_runtime_certificate_rejected: unsupported fingerprint version {}; required=v3; fallback=none",
+                    certificate.topology_fingerprint_version
+                ),
+            });
+        }
         let fingerprint = mesh
-            .mixed_topology_fingerprint_for_version(&certificate.topology_fingerprint_version)
+            .mixed_topology_fingerprint_v3()
             .map_err(|error| RunError {
                 message: format!(
-                    "fem_mixed_p1_v2_runtime_certificate_rejected: {error}; fallback=none"
+                    "fem_pure_prism_p2_runtime_certificate_rejected: {error}; fallback=none"
                 ),
             })?;
         if certificate.topology_fingerprint != fingerprint {
             return Err(RunError {
                 message: format!(
-                    "fem_mixed_p1_v2_runtime_certificate_stale: certificate={} mesh={fingerprint}; fallback=none",
+                    "fem_pure_prism_p2_runtime_certificate_stale: certificate={} mesh={fingerprint}; fallback=none",
                     certificate.topology_fingerprint
                 ),
             });
         }
-        fullmag_ir::validate_mixed_layer_topology_certificate_v2_against_mesh(mesh, certificate)
+        fullmag_ir::validate_pure_prism_topology_certificate_against_mesh(mesh, certificate)
             .map_err(|reasons| RunError {
                 message: format!(
-                    "fem_mixed_p1_v2_runtime_certificate_rejected: {}; fallback=none",
+                    "fem_pure_prism_p2_runtime_certificate_rejected: {}; fallback=none",
                     reasons.join("; ")
                 ),
             })?;
+        let provenance = report
+            .mixed_topology_provenance
+            .as_ref()
+            .ok_or_else(|| RunError {
+                message: "fem_pure_prism_p2_runtime_provenance_required: accepted certificate identity is not bound to the plan; fallback=none".to_string(),
+            })?;
+        if provenance.accepted_certificate_fingerprint != fingerprint
+            || provenance.precision != precision
+            || precision != problem.backend_policy.execution_precision
+            || provenance.requested_topology != fullmag_ir::FemMeshTopologyFamilyIR::PurePrismP2
+            || provenance.resolved_topology != fullmag_ir::FemMeshTopologyFamilyIR::PurePrismP2
+        {
+            return Err(RunError {
+                message: "fem_pure_prism_p2_runtime_provenance_stale: plan provenance does not match the exact mesh fingerprint/topology/precision; fallback=none".to_string(),
+            });
+        }
+        let requested_device = match provenance.requested_device {
+            fullmag_ir::ExecutionDevice::Cpu => "cpu".to_string(),
+            fullmag_ir::ExecutionDevice::Gpu => "gpu".to_string(),
+            fullmag_ir::ExecutionDevice::Auto => "auto".to_string(),
+        };
+        let metadata_device =
+            crate::solver_runtime::selection::effective_fem_device_request_from_metadata(problem);
+        let expected_device = match metadata_device.as_str() {
+            "cpu" => fullmag_ir::ExecutionDevice::Cpu,
+            "gpu" | "cuda" => fullmag_ir::ExecutionDevice::Gpu,
+            _ => fullmag_ir::ExecutionDevice::Auto,
+        };
+        if provenance.requested_device != expected_device {
+            return Err(RunError {
+                message: "fem_pure_prism_p2_runtime_provenance_stale: authored/managed device metadata does not match plan-bound effective device; fallback=none".to_string(),
+            });
+        }
+        if provenance.capability_status != fullmag_ir::FemMixedTopologyCapabilityStatusIR::Implemented {
+            return Err(RunError {
+                message: "fem_pure_prism_p2_runtime_provenance_stale: capability status must be implemented until managed public runtime proof exists; fallback=none".to_string(),
+            });
+        }
+        (
+            true,
+            certificate.requested_layer_count,
+            certificate.realized_layer_count,
+            certificate.magnetic_plane_coordinates_m.len(),
+            certificate.fallbacks_triggered.is_empty(),
+            certificate.lower_air_layer_count > 0 && certificate.upper_air_layer_count > 0,
+            requested_device,
+        )
+    } else {
+        if has_pure_prism_certificate {
+            return Err(RunError {
+                message: "fem_mixed_p1_runtime_certificate_rejected: pure_prism certificate cannot be attached to a mixed prism/pyramid/tet mesh; fallback=none".to_string(),
+            });
+        }
+        if let Some(certificate) = report.mixed_layer_topology_certificate_v2.as_ref() {
+            let fingerprint = mesh
+                .mixed_topology_fingerprint_for_version(&certificate.topology_fingerprint_version)
+                .map_err(|error| RunError {
+                    message: format!(
+                        "fem_mixed_p1_v2_runtime_certificate_rejected: {error}; fallback=none"
+                    ),
+                })?;
+            if certificate.topology_fingerprint != fingerprint {
+                return Err(RunError {
+                    message: format!(
+                        "fem_mixed_p1_v2_runtime_certificate_stale: certificate={} mesh={fingerprint}; fallback=none",
+                        certificate.topology_fingerprint
+                    ),
+                });
+            }
+            fullmag_ir::validate_mixed_layer_topology_certificate_v2_against_mesh(mesh, certificate)
+                .map_err(|reasons| RunError {
+                    message: format!(
+                        "fem_mixed_p1_v2_runtime_certificate_rejected: {}; fallback=none",
+                        reasons.join("; ")
+                    ),
+                })?;
+            let provenance = report
+                .mixed_topology_provenance
+                .as_ref()
+                .ok_or_else(|| RunError {
+                    message: "fem_mixed_p1_runtime_provenance_required: accepted certificate identity is not bound to the plan; fallback=none".to_string(),
+                })?;
+            if provenance.accepted_certificate_fingerprint != fingerprint
+                || provenance.precision != precision
+                || precision != problem.backend_policy.execution_precision
+                || provenance.requested_topology != fullmag_ir::FemMeshTopologyFamilyIR::MixedP1
+                || provenance.resolved_topology != fullmag_ir::FemMeshTopologyFamilyIR::MixedP1
+            {
+                return Err(RunError {
+                    message: "fem_mixed_p1_runtime_provenance_stale: plan provenance does not match the exact mesh fingerprint/topology/precision; fallback=none".to_string(),
+                });
+            }
+            let requested_device = match provenance.requested_device {
+                fullmag_ir::ExecutionDevice::Cpu => "cpu",
+                fullmag_ir::ExecutionDevice::Gpu => "gpu",
+                fullmag_ir::ExecutionDevice::Auto => "auto",
+            };
+            let metadata_device =
+                crate::solver_runtime::selection::effective_fem_device_request_from_metadata(problem);
+            let expected_device = match metadata_device.as_str() {
+                "cpu" => fullmag_ir::ExecutionDevice::Cpu,
+                "gpu" | "cuda" => fullmag_ir::ExecutionDevice::Gpu,
+                _ => fullmag_ir::ExecutionDevice::Auto,
+            };
+            if provenance.requested_device != expected_device {
+                return Err(RunError {
+                    message: "fem_mixed_p1_runtime_provenance_stale: authored/managed device metadata does not match plan-bound effective device; fallback=none".to_string(),
+                });
+            }
+            if provenance.capability_status
+                != fullmag_ir::FemMixedTopologyCapabilityStatusIR::Implemented
+            {
+                return Err(RunError {
+                    message: "fem_mixed_p1_runtime_provenance_stale: capability status must be implemented until managed public runtime proof exists; fallback=none".to_string(),
+                });
+            }
+            return require_supported_mixed_v2_runtime_scope(
+                problem,
+                study_kind,
+                precision,
+                fem_plan,
+                certificate,
+                requested_device,
+            );
+        }
+        let certificate = report
+            .mixed_layer_topology_certificate
+            .as_ref()
+            .ok_or_else(|| RunError {
+                message: "fem_mixed_p1_runtime_certificate_required: accepted topology certificate is missing; fallback=none".to_string(),
+            })?;
+        let fingerprint = mesh
+            .mixed_topology_fingerprint_for_version(&certificate.topology_fingerprint_version)
+            .map_err(|error| RunError {
+                message: format!("fem_mixed_p1_runtime_certificate_rejected: {error}; fallback=none"),
+            })?;
+        if certificate.topology_fingerprint != fingerprint {
+            return Err(RunError {
+                message: format!(
+                    "fem_mixed_p1_runtime_certificate_stale: certificate={} mesh={fingerprint}; fallback=none",
+                    certificate.topology_fingerprint
+                ),
+            });
+        }
+        fullmag_ir::validate_mixed_layer_topology_certificate_against_mesh(mesh, certificate).map_err(
+            |reasons| RunError {
+                message: format!(
+                    "fem_mixed_p1_runtime_certificate_rejected: {}; fallback=none",
+                    reasons.join("; ")
+                ),
+            },
+        )?;
         let provenance = report
             .mixed_topology_provenance
             .as_ref()
@@ -2291,9 +2500,9 @@ fn require_supported_fem_topology(
             });
         }
         let requested_device = match provenance.requested_device {
-            fullmag_ir::ExecutionDevice::Cpu => "cpu",
-            fullmag_ir::ExecutionDevice::Gpu => "gpu",
-            fullmag_ir::ExecutionDevice::Auto => "auto",
+            fullmag_ir::ExecutionDevice::Cpu => "cpu".to_string(),
+            fullmag_ir::ExecutionDevice::Gpu => "gpu".to_string(),
+            fullmag_ir::ExecutionDevice::Auto => "auto".to_string(),
         };
         let metadata_device =
             crate::solver_runtime::selection::effective_fem_device_request_from_metadata(problem);
@@ -2307,87 +2516,21 @@ fn require_supported_fem_topology(
                 message: "fem_mixed_p1_runtime_provenance_stale: authored/managed device metadata does not match plan-bound effective device; fallback=none".to_string(),
             });
         }
-        if provenance.capability_status
-            != fullmag_ir::FemMixedTopologyCapabilityStatusIR::Implemented
-        {
+        if provenance.capability_status != fullmag_ir::FemMixedTopologyCapabilityStatusIR::Implemented {
             return Err(RunError {
                 message: "fem_mixed_p1_runtime_provenance_stale: capability status must be implemented until managed public runtime proof exists; fallback=none".to_string(),
             });
         }
-        return require_supported_mixed_v2_runtime_scope(
-            problem,
-            study_kind,
-            precision,
-            fem_plan,
-            certificate,
+        (
+            false,
+            certificate.requested_layer_count,
+            certificate.realized_layer_count,
+            certificate.magnetic_plane_coordinates_m.len(),
+            certificate.fallbacks_triggered.is_empty(),
+            true,
             requested_device,
-        );
-    }
-    let certificate = report
-        .mixed_layer_topology_certificate
-        .as_ref()
-        .ok_or_else(|| RunError {
-            message: "fem_mixed_p1_runtime_certificate_required: accepted topology certificate is missing; fallback=none".to_string(),
-        })?;
-    let fingerprint = mesh
-        .mixed_topology_fingerprint_for_version(&certificate.topology_fingerprint_version)
-        .map_err(|error| RunError {
-            message: format!("fem_mixed_p1_runtime_certificate_rejected: {error}; fallback=none"),
-        })?;
-    if certificate.topology_fingerprint != fingerprint {
-        return Err(RunError {
-            message: format!(
-                "fem_mixed_p1_runtime_certificate_stale: certificate={} mesh={fingerprint}; fallback=none",
-                certificate.topology_fingerprint
-            ),
-        });
-    }
-    fullmag_ir::validate_mixed_layer_topology_certificate_against_mesh(mesh, certificate).map_err(
-        |reasons| RunError {
-            message: format!(
-                "fem_mixed_p1_runtime_certificate_rejected: {}; fallback=none",
-                reasons.join("; ")
-            ),
-        },
-    )?;
-    let provenance = report
-        .mixed_topology_provenance
-        .as_ref()
-        .ok_or_else(|| RunError {
-            message: "fem_mixed_p1_runtime_provenance_required: accepted certificate identity is not bound to the plan; fallback=none".to_string(),
-        })?;
-    if provenance.accepted_certificate_fingerprint != fingerprint
-        || provenance.precision != precision
-        || precision != problem.backend_policy.execution_precision
-        || provenance.requested_topology != fullmag_ir::FemMeshTopologyFamilyIR::MixedP1
-        || provenance.resolved_topology != fullmag_ir::FemMeshTopologyFamilyIR::MixedP1
-    {
-        return Err(RunError {
-            message: "fem_mixed_p1_runtime_provenance_stale: plan provenance does not match the exact mesh fingerprint/topology/precision; fallback=none".to_string(),
-        });
-    }
-    let requested_device = match provenance.requested_device {
-        fullmag_ir::ExecutionDevice::Cpu => "cpu".to_string(),
-        fullmag_ir::ExecutionDevice::Gpu => "gpu".to_string(),
-        fullmag_ir::ExecutionDevice::Auto => "auto".to_string(),
+        )
     };
-    let metadata_device =
-        crate::solver_runtime::selection::effective_fem_device_request_from_metadata(problem);
-    let expected_device = match metadata_device.as_str() {
-        "cpu" => fullmag_ir::ExecutionDevice::Cpu,
-        "gpu" | "cuda" => fullmag_ir::ExecutionDevice::Gpu,
-        _ => fullmag_ir::ExecutionDevice::Auto,
-    };
-    if provenance.requested_device != expected_device {
-        return Err(RunError {
-            message: "fem_mixed_p1_runtime_provenance_stale: authored/managed device metadata does not match plan-bound effective device; fallback=none".to_string(),
-        });
-    }
-    if provenance.capability_status != fullmag_ir::FemMixedTopologyCapabilityStatusIR::Implemented {
-        return Err(RunError {
-            message: "fem_mixed_p1_runtime_provenance_stale: capability status must be implemented until managed public runtime proof exists; fallback=none".to_string(),
-        });
-    }
     let mut exchange_count = 0usize;
     let mut demag_count = 0usize;
     let mut demag_realization_supported = true;
@@ -2423,25 +2566,6 @@ fn require_supported_fem_topology(
             _ => energy_supported = false,
         }
     }
-    let has_dmi = fem_plan.is_some_and(|fem| {
-        fem.interfacial_dmi.is_some()
-            || fem.rotated_interfacial_dmi.is_some()
-            || fem.bulk_dmi.is_some()
-            || fem.dind_field.is_some()
-            || fem.dbulk_field.is_some()
-    }) || problem.energy_terms.iter().any(|term| {
-        matches!(
-            term,
-            fullmag_ir::EnergyTermIR::InterfacialDmi { .. }
-                | fullmag_ir::EnergyTermIR::BulkDmi { .. }
-                | fullmag_ir::EnergyTermIR::RotatedInterfacialDmi { .. }
-        )
-    }) || problem.materials.iter().any(|material| {
-        material.interfacial_dmi.is_some()
-            || material.bulk_dmi.is_some()
-            || material.dind_field.is_some()
-            || material.dbulk_field.is_some()
-    });
     let mut failed_predicates = Vec::new();
     if problem.backend_policy.requested_backend != fullmag_ir::BackendTarget::Fem {
         failed_predicates.push("backend_not_fem");
@@ -2619,18 +2743,23 @@ fn require_supported_fem_topology(
     if !energy_supported {
         failed_predicates.push("unsupported_energy_term");
     }
-    if !(1..=3).contains(&certificate.requested_layer_count) {
+    if is_pure_prism {
+        if requested_layer_count == 0 {
+            failed_predicates.push("certificate_requested_layer_count_not_supported");
+        }
+        if !air_layers_valid {
+            failed_predicates.push("certificate_air_layer_count_not_supported");
+        }
+    } else if !(1..=3).contains(&requested_layer_count) {
         failed_predicates.push("certificate_requested_layer_count_not_supported");
     }
-    if certificate.realized_layer_count != certificate.requested_layer_count {
+    if realized_layer_count != requested_layer_count {
         failed_predicates.push("certificate_realized_layer_count_mismatch");
     }
-    if certificate.magnetic_plane_coordinates_m.len()
-        != certificate.requested_layer_count as usize + 1
-    {
+    if magnetic_plane_count != requested_layer_count as usize + 1 {
         failed_predicates.push("certificate_magnetic_plane_count_mismatch");
     }
-    if !certificate.fallbacks_triggered.is_empty() {
+    if !cert_fallbacks_empty {
         failed_predicates.push("certificate_fallbacks_triggered");
     }
     match &problem.study {
@@ -2651,13 +2780,15 @@ fn require_supported_fem_topology(
         }
         _ => failed_predicates.push("study_not_relaxation_or_time_evolution"),
     }
-    if has_dmi && requested_device == "gpu" {
-        failed_predicates.push("gpu_dmi_kernel_not_mixed_p1");
-    }
     if !failed_predicates.is_empty() {
+        let prefix = if is_pure_prism {
+            "fem_pure_prism_p2_runtime_scope_rejected"
+        } else {
+            "fem_mixed_p1_runtime_scope_rejected"
+        };
         return Err(RunError {
             message: format!(
-                "fem_mixed_p1_runtime_scope_rejected: study={study_kind}; requested_device={requested_device}; precision={precision:?}; required=explicit_cpu_or_gpu+strict+double+P1+exchange+poisson_robin_or_dirichlet+relaxation_PG_BB_NCG_LLG_overdamped_or_time_evolution_heun_rk4_rk23_rk45+regional_field_drive_supported_by_time_evolution; failed_predicates=[{}]; fallback=none",
+                "{prefix}: study={study_kind}; requested_device={requested_device}; precision={precision:?}; required=explicit_cpu_or_gpu+strict+double+P1+exchange+poisson_robin_or_dirichlet+relaxation_PG_BB_NCG_LLG_overdamped_or_time_evolution_heun_rk4_rk23_rk45+regional_field_drive_supported_by_time_evolution; failed_predicates=[{}]; fallback=none",
                 failed_predicates.join(",")
             ),
         });
@@ -2683,6 +2814,8 @@ fn require_tetrahedral_fem_plan_mesh(
             .all(|family| *family == fullmag_ir::FemFacetTypeIR::Tri3);
     let has_mixed_metadata = build_report.is_some_and(|report| {
         report.mixed_layer_topology_certificate.is_some()
+            || report.mixed_layer_topology_certificate_v2.is_some()
+            || report.pure_prism_topology_certificate.is_some()
             || report.mixed_topology_provenance.is_some()
     });
     if tetrahedral && !has_mixed_metadata {
@@ -8835,43 +8968,469 @@ mod tests {
     }
 
     #[test]
-    fn fem_topology_guard_accepts_cpu_dmi_and_rejects_gpu_tetrahedral_only_dmi_kernel() {
-        let (mut cpu_problem, mut cpu_plan) =
-            certified_mixed_relaxation_guard_fixture_for_layers_and_device(
-                1,
-                fullmag_ir::ExecutionDevice::Cpu,
-            );
-        cpu_problem
-            .energy_terms
-            .push(fullmag_ir::EnergyTermIR::BulkDmi { d: 2.0e-3 });
-        let BackendPlanIR::Fem(cpu_fem) = &mut cpu_plan.backend_plan else {
-            panic!("mixed relaxation fixture must produce a FEM plan");
-        };
-        cpu_fem.bulk_dmi = Some(2.0e-3);
-        require_supported_fem_topology(&cpu_problem, &cpu_plan)
-            .expect("mixed P1 CPU DMI uses the topology-aware MFEM weak operator");
+    fn fem_topology_guard_accepts_cpu_and_gpu_dmi_on_mixed_p1() {
+        for requested_device in [
+            fullmag_ir::ExecutionDevice::Cpu,
+            fullmag_ir::ExecutionDevice::Gpu,
+        ] {
+            let (mut problem, mut plan) =
+                certified_mixed_relaxation_guard_fixture_for_layers_and_device(1, requested_device);
+            problem.energy_terms.extend([
+                fullmag_ir::EnergyTermIR::InterfacialDmi {
+                    d: 2.0e-3,
+                    interface_normal: None,
+                },
+                fullmag_ir::EnergyTermIR::RotatedInterfacialDmi {
+                    d: 1.5e-3,
+                    object_ids: None,
+                },
+                fullmag_ir::EnergyTermIR::BulkDmi { d: 2.0e-3 },
+            ]);
+            let BackendPlanIR::Fem(fem) = &mut plan.backend_plan else {
+                panic!("mixed relaxation fixture must produce a FEM plan");
+            };
+            fem.interfacial_dmi = Some(2.0e-3);
+            fem.rotated_interfacial_dmi = Some(1.5e-3);
+            fem.bulk_dmi = Some(2.0e-3);
+            require_supported_fem_topology(&problem, &plan).unwrap_or_else(|error| {
+                panic!("mixed P1 {requested_device:?} DMI must cross the runner guard: {error:?}")
+            });
+        }
+    }
 
-        let (mut gpu_problem, mut gpu_plan) =
-            certified_mixed_relaxation_guard_fixture_for_layers_and_device(
-                1,
+    fn certified_pure_prism_relaxation_guard_fixture_for_layers_and_device(
+        layer_count: u32,
+        requested_device: fullmag_ir::ExecutionDevice,
+    ) -> (fullmag_ir::ProblemIR, fullmag_ir::ExecutionPlanIR) {
+        let device = match requested_device {
+            fullmag_ir::ExecutionDevice::Cpu => "cpu",
+            fullmag_ir::ExecutionDevice::Gpu => "gpu",
+            _ => panic!("pure prism runtime fixture requires explicit CPU or GPU"),
+        };
+        let mut problem = fem_session_runtime_problem();
+        problem.problem_meta.runtime_metadata.insert(
+            "runtime_selection".to_string(),
+            json!({"device": device, "precision": "double"}),
+        );
+        let mut plan =
+            fullmag_plan::plan(&problem).expect("tetrahedral FEM runtime fixture should plan");
+        problem.energy_terms = vec![
+            fullmag_ir::EnergyTermIR::Exchange,
+            fullmag_ir::EnergyTermIR::Demag {
+                realization: fullmag_ir::RequestedFemDemagIR::PoissonRobin,
+            },
+        ];
+        problem.study = fullmag_ir::StudyIR::Relaxation {
+            algorithm: fullmag_ir::RelaxationAlgorithmIR::ProjectedGradientBb,
+            dynamics: None,
+            stop: fullmag_ir::RelaxStopIR {
+                torque_tolerance_apm: Some(1.0e-4),
+                energy_tolerance_j: None,
+                max_steps: Some(16),
+                max_relaxation_time_s: None,
+            },
+            sampling: problem.study.sampling().clone(),
+        };
+
+        let base_xy = [
+            [-1.0_f64, -1.0],
+            [1.0, -1.0],
+            [1.0, 1.0],
+            [-1.0, 1.0],
+            [-2.0, -2.0],
+            [2.0, -2.0],
+            [2.0, 2.0],
+            [-2.0, 2.0],
+        ];
+        let mut z_planes = Vec::with_capacity(layer_count as usize + 3);
+        z_planes.push(-2.0_f64);
+        let mut magnetic_planes = Vec::with_capacity(layer_count as usize + 1);
+        for k in 0..=layer_count {
+            let z = -1.0 + 2.0 * (k as f64) / (layer_count as f64);
+            magnetic_planes.push(z);
+            z_planes.push(z);
+        }
+        z_planes.push(2.0_f64);
+
+        let mut nodes = Vec::with_capacity(z_planes.len() * 8);
+        for &z in &z_planes {
+            for xy in &base_xy {
+                nodes.push([xy[0], xy[1], z]);
+            }
+        }
+        let inner_tris: [[u32; 3]; 2] = [[0, 1, 2], [0, 2, 3]];
+        let outer_tris: [[u32; 3]; 8] = [
+            [4, 5, 1],
+            [4, 1, 0],
+            [5, 6, 2],
+            [5, 2, 1],
+            [6, 7, 3],
+            [6, 3, 2],
+            [7, 4, 0],
+            [7, 0, 3],
+        ];
+        let mut cell_types = Vec::new();
+        let mut cell_offsets = vec![0u32];
+        let mut cell_nodes = Vec::new();
+        let mut cell_parts = Vec::new();
+        let mut element_markers = Vec::new();
+        let total_layers = layer_count as usize + 2;
+        for layer in 0..total_layers {
+            let lo = (layer * 8) as u32;
+            let hi = ((layer + 1) * 8) as u32;
+            let is_mag = layer >= 1 && layer <= layer_count as usize;
+            for [a, b, c] in inner_tris {
+                cell_types.push(fullmag_ir::FemCellTypeIR::Prism6);
+                cell_nodes.extend([lo + a, lo + b, lo + c, hi + a, hi + b, hi + c]);
+                cell_offsets.push(cell_nodes.len() as u32);
+                cell_parts.push(if is_mag {
+                    fullmag_ir::FemCellMeshPartIR::Magnetic
+                } else {
+                    fullmag_ir::FemCellMeshPartIR::FarAir
+                });
+                element_markers.push(if is_mag { 1 } else { 0 });
+            }
+            for [a, b, c] in outer_tris {
+                cell_types.push(fullmag_ir::FemCellTypeIR::Prism6);
+                cell_nodes.extend([lo + a, lo + b, lo + c, hi + a, hi + b, hi + c]);
+                cell_offsets.push(cell_nodes.len() as u32);
+                cell_parts.push(fullmag_ir::FemCellMeshPartIR::FarAir);
+                element_markers.push(0);
+            }
+        }
+        let mut facet_types = Vec::new();
+        let mut facet_roles = Vec::new();
+        let mut facet_offsets = vec![0u32];
+        let mut facet_nodes = Vec::new();
+        let mut boundary_markers = Vec::new();
+        let mut push_facet = |role: fullmag_ir::FemFacetRoleIR, marker: u32, nodes: &[u32]| {
+            facet_types.push(if nodes.len() == 3 {
+                fullmag_ir::FemFacetTypeIR::Tri3
+            } else {
+                fullmag_ir::FemFacetTypeIR::Quad4
+            });
+            facet_roles.push(role);
+            facet_nodes.extend_from_slice(nodes);
+            facet_offsets.push(facet_nodes.len() as u32);
+            boundary_markers.push(marker);
+        };
+        let top_off = (total_layers * 8) as u32;
+        for [a, b, c] in inner_tris.iter().chain(outer_tris.iter()).copied() {
+            push_facet(fullmag_ir::FemFacetRoleIR::Exterior, 3, &[a, c, b]);
+            push_facet(
+                fullmag_ir::FemFacetRoleIR::Exterior,
+                3,
+                &[top_off + a, top_off + b, top_off + c],
+            );
+        }
+        for layer in 0..total_layers {
+            let lo = (layer * 8) as u32;
+            let hi = ((layer + 1) * 8) as u32;
+            for [a, b] in [[4u32, 5], [5, 6], [6, 7], [7, 4]] {
+                push_facet(
+                    fullmag_ir::FemFacetRoleIR::Exterior,
+                    3,
+                    &[lo + a, lo + b, hi + b, hi + a],
+                );
+            }
+        }
+        let mag_bot_off = 8u32;
+        let mag_top_off = ((layer_count as usize + 1) * 8) as u32;
+        for [a, b, c] in inner_tris {
+            push_facet(
+                fullmag_ir::FemFacetRoleIR::MaterialInterface,
+                2,
+                &[mag_bot_off + a, mag_bot_off + b, mag_bot_off + c],
+            );
+            push_facet(
+                fullmag_ir::FemFacetRoleIR::MaterialInterface,
+                2,
+                &[mag_top_off + a, mag_top_off + b, mag_top_off + c],
+            );
+        }
+        for layer in 1..=layer_count as usize {
+            let lo = (layer * 8) as u32;
+            let hi = ((layer + 1) * 8) as u32;
+            for [a, b] in [[0u32, 1], [1, 2], [2, 3], [3, 0]] {
+                push_facet(
+                    fullmag_ir::FemFacetRoleIR::MaterialInterface,
+                    2,
+                    &[lo + a, lo + b, hi + b, hi + a],
+                );
+            }
+        }
+        let cell_count = cell_types.len();
+        let facet_count = facet_types.len();
+        let mesh = fullmag_ir::MeshIR {
+            mesh_name: format!("pure-prism-runner-l{layer_count}"),
+            nodes,
+            cells: fullmag_ir::FemConnectivityIR {
+                types: cell_types,
+                offsets: cell_offsets,
+                nodes: cell_nodes,
+                global_ordinals: (0..cell_count as u64).collect(),
+                mesh_parts: cell_parts,
+            },
+            element_markers,
+            facets: fullmag_ir::FemFacetConnectivityIR {
+                types: facet_types,
+                roles: facet_roles,
+                offsets: facet_offsets,
+                nodes: facet_nodes,
+                global_ordinals: (0..facet_count as u64).collect(),
+            },
+            boundary_markers,
+            periodic_boundary_pairs: Vec::new(),
+            periodic_node_pairs: Vec::new(),
+            per_domain_quality: std::collections::HashMap::new(),
+        };
+        let fingerprint = mesh
+            .mixed_topology_fingerprint_v3()
+            .expect("pure prism v3 fingerprint");
+        let mag_cells = 2u64 * u64::from(layer_count);
+        let air_cells = 20u64 + 8u64 * u64::from(layer_count);
+        let jac_min = 1.0_f64.min(2.0 / f64::from(layer_count));
+        let scaled_min = 1.0 / 10.0_f64.sqrt();
+        let certificate = fullmag_ir::PurePrismTopologyCertificateV1IR {
+            schema_version: "pure_prism_topology_certificate.v1".to_string(),
+            certificate_status: "accepted".to_string(),
+            requested_sweep_direction: "z".to_string(),
+            resolved_sweep_direction: "z".to_string(),
+            requested_layer_count: layer_count,
+            realized_layer_count: layer_count,
+            lower_air_layer_count: 1,
+            upper_air_layer_count: 1,
+            magnetic_plane_coordinates_m: magnetic_planes,
+            plane_tolerance_m: 2.0e-8,
+            interface_marker: 2,
+            outer_boundary_marker: 3,
+            magnetic_bounds_min_m: [-1.0, -1.0, -1.0],
+            magnetic_bounds_max_m: [1.0, 1.0, 1.0],
+            airbox_bounds_min_m: [-2.0, -2.0, -2.0],
+            airbox_bounds_max_m: [2.0, 2.0, 2.0],
+            magnetic_bounds_relative_error: 0.0,
+            airbox_bounds_relative_error: 0.0,
+            cell_family_counts_by_marker: std::collections::BTreeMap::from([
+                (
+                    "0".to_string(),
+                    std::collections::BTreeMap::from([("prism6".to_string(), air_cells)]),
+                ),
+                (
+                    "1".to_string(),
+                    std::collections::BTreeMap::from([("prism6".to_string(), mag_cells)]),
+                ),
+            ]),
+            cell_family_counts_by_part: std::collections::BTreeMap::from([
+                (
+                    "far_air".to_string(),
+                    std::collections::BTreeMap::from([("prism6".to_string(), air_cells)]),
+                ),
+                (
+                    "magnetic".to_string(),
+                    std::collections::BTreeMap::from([("prism6".to_string(), mag_cells)]),
+                ),
+            ]),
+            facet_family_counts_by_role_marker: std::collections::BTreeMap::from([
+                (
+                    "exterior:3".to_string(),
+                    std::collections::BTreeMap::from([
+                        ("quad4".to_string(), 4u64 * (u64::from(layer_count) + 2)),
+                        ("tri3".to_string(), 20u64),
+                    ]),
+                ),
+                (
+                    "material_interface:2".to_string(),
+                    std::collections::BTreeMap::from([
+                        ("quad4".to_string(), 4u64 * u64::from(layer_count)),
+                        ("tri3".to_string(), 4u64),
+                    ]),
+                ),
+            ]),
+            jacobian_minima_m3_by_family: std::collections::BTreeMap::from([(
+                "prism6".to_string(),
+                jac_min,
+            )]),
+            quality_metric: "mixed_topology_scaled_jacobian.v1".to_string(),
+            scaled_jacobian_minima_by_family: std::collections::BTreeMap::from([(
+                "prism6".to_string(),
+                scaled_min,
+            )]),
+            scaled_jacobian_p05_by_family: std::collections::BTreeMap::from([(
+                "prism6".to_string(),
+                scaled_min,
+            )]),
+            magnetic_volume_m3: 8.0,
+            expected_magnetic_volume_m3: 8.0,
+            magnetic_relative_volume_error: 0.0,
+            air_volume_m3: 56.0,
+            shared_domain_volume_m3: 64.0,
+            expected_shared_domain_volume_m3: 64.0,
+            shared_domain_relative_volume_error: 0.0,
+            marker_coverage_complete: true,
+            nonconforming_face_count: 0,
+            orphan_face_count: 0,
+            nonmanifold_face_count: 0,
+            coincident_interface_face_count: 0,
+            topology_fingerprint_version: "v3".to_string(),
+            topology_fingerprint: fingerprint.clone(),
+            gmsh_version: "4.15.2".to_string(),
+            strategy: "pure_prism_extruded_shared_domain".to_string(),
+            effective_gmsh_thread_count: 1,
+            deterministic_inputs: serde_json::from_value(json!({
+                "algorithm_2d": 6,
+                "element_order": 1,
+                "gmsh_version": "4.15.2",
+                "random_factor": 0.0,
+                "thread_count": 1,
+                "extrusion_stages": 3,
+                "lateral_grading": "math_eval_distance_linear",
+                "airbox_growth_rate": 1.9,
+                "scaled_jacobian_p05_min": 0.1
+            }))
+            .unwrap(),
+            fallbacks_triggered: Vec::new(),
+        };
+        let BackendPlanIR::Fem(fem) = &mut plan.backend_plan else {
+            panic!("pure prism runtime fixture must produce a FEM plan");
+        };
+        fem.enable_demag = true;
+        fem.demag_realization = Some(fullmag_ir::ResolvedFemDemagIR::PoissonRobin);
+        fem.relaxation = Some(fullmag_ir::RelaxationControlIR {
+            algorithm: fullmag_ir::RelaxationAlgorithmIR::ProjectedGradientBb,
+            stop: fullmag_ir::RelaxStopIR {
+                torque_tolerance_apm: Some(1.0e-4),
+                energy_tolerance_j: None,
+                max_steps: Some(16),
+                max_relaxation_time_s: None,
+            },
+        });
+        fem.mfem_device_string = Some(device.to_string());
+        fem.mesh = mesh;
+        fem.initial_magnetization = vec![[1.0, 0.0, 0.0]; fem.mesh.nodes.len()];
+        let mut report: fullmag_ir::FemSharedDomainBuildReportIR = serde_json::from_value(json!({
+            "build_mode": "pure_prism_extruded_shared_domain",
+            "fallbacks_triggered": [],
+            "degraded": false,
+            "pure_prism_topology_certificate": certificate,
+        }))
+        .expect("pure prism shared-domain report should deserialize");
+        report.mixed_topology_provenance = Some(fullmag_ir::FemMixedTopologyProvenanceIR {
+            requested_topology: fullmag_ir::FemMeshTopologyFamilyIR::PurePrismP2,
+            resolved_topology: fullmag_ir::FemMeshTopologyFamilyIR::PurePrismP2,
+            accepted_certificate_fingerprint: fingerprint,
+            requested_device,
+            precision: fem.precision,
+            capability_status: fullmag_ir::FemMixedTopologyCapabilityStatusIR::Implemented,
+        });
+        fem.mesh_build_report = Some(report);
+        (problem, plan)
+    }
+
+    #[test]
+    fn fem_topology_guard_accepts_pure_prism_p2_cpu_and_gpu_with_dmi_and_arbitrary_layers() {
+        for requested_device in [
+            fullmag_ir::ExecutionDevice::Cpu,
+            fullmag_ir::ExecutionDevice::Gpu,
+        ] {
+            for layer_count in [1u32, 4u32] {
+                let (mut problem, mut plan) =
+                    certified_pure_prism_relaxation_guard_fixture_for_layers_and_device(
+                        layer_count,
+                        requested_device,
+                    );
+                problem.energy_terms.extend([
+                    fullmag_ir::EnergyTermIR::InterfacialDmi {
+                        d: 2.0e-3,
+                        interface_normal: None,
+                    },
+                    fullmag_ir::EnergyTermIR::RotatedInterfacialDmi {
+                    d: 1.5e-3,
+                    object_ids: None,
+                },
+                    fullmag_ir::EnergyTermIR::BulkDmi { d: 3.0e-3 },
+                ]);
+                let BackendPlanIR::Fem(fem) = &mut plan.backend_plan else {
+                    panic!("pure prism fixture must produce a FEM plan");
+                };
+                fem.interfacial_dmi = Some(2.0e-3);
+                fem.rotated_interfacial_dmi = Some(1.5e-3);
+                fem.bulk_dmi = Some(3.0e-3);
+                require_supported_fem_topology(&problem, &plan).unwrap_or_else(|error| {
+                    panic!(
+                        "pure_prism_p2 {requested_device:?} L={layer_count} with DMI must pass runner guard: {error:?}"
+                    )
+                });
+            }
+        }
+    }
+
+    #[test]
+    fn fem_topology_guard_rejects_pure_prism_p2_unqualified_or_stale_fail_closed() {
+        // Stale v3 fingerprint must fail closed.
+        let (problem, mut stale_plan) =
+            certified_pure_prism_relaxation_guard_fixture_for_layers_and_device(
+                2,
                 fullmag_ir::ExecutionDevice::Gpu,
             );
-        gpu_problem
-            .energy_terms
-            .push(fullmag_ir::EnergyTermIR::BulkDmi { d: 2.0e-3 });
-        let BackendPlanIR::Fem(gpu_fem) = &mut gpu_plan.backend_plan else {
-            panic!("mixed relaxation fixture must produce a FEM plan");
-        };
-        gpu_fem.bulk_dmi = Some(2.0e-3);
-        let error = require_supported_fem_topology(&gpu_problem, &gpu_plan)
-            .expect_err("mixed P1 GPU DMI must fail before its tetrahedral-only CUDA kernel");
+        if let BackendPlanIR::Fem(fem) = &mut stale_plan.backend_plan {
+            fem.mesh_build_report
+                .as_mut()
+                .unwrap()
+                .pure_prism_topology_certificate
+                .as_mut()
+                .unwrap()
+                .topology_fingerprint = format!("sha256:{}", "0".repeat(64));
+        }
+        let stale_err = topology_guard_error(&problem, &stale_plan);
         assert!(
-            error
-                .message
-                .contains("failed_predicates=[gpu_dmi_kernel_not_mixed_p1]"),
-            "{error:?}"
+            stale_err.contains("fem_pure_prism_p2_runtime_certificate_stale"),
+            "{stale_err}"
         );
-        assert!(error.message.contains("fallback=none"), "{error:?}");
+        assert!(stale_err.contains("fallback=none"), "{stale_err}");
+
+        // Zhang-Li STT must fail closed on pure_prism_p2.
+        let (mut stt_problem, stt_plan) =
+            certified_pure_prism_relaxation_guard_fixture_for_layers_and_device(
+                2,
+                fullmag_ir::ExecutionDevice::Gpu,
+            );
+        stt_problem.current_density = Some([1.0e11, 0.0, 0.0]);
+        stt_problem.stt_degree = Some(0.5);
+        let stt_err = topology_guard_error(&stt_problem, &stt_plan);
+        assert!(
+            stt_err.contains("fem_pure_prism_p2_runtime_scope_rejected"),
+            "{stt_err}"
+        );
+        assert!(stt_err.contains("current_density_present"), "{stt_err}");
+        assert!(stt_err.contains("fallback=none"), "{stt_err}");
+
+        // Mutual exclusivity: V1 + pure_prism on same report must fail closed.
+        let (_, v1_plan) = certified_mixed_cpu_relaxation_guard_fixture();
+        let v1_cert = match &v1_plan.backend_plan {
+            BackendPlanIR::Fem(fem) => fem
+                .mesh_build_report
+                .as_ref()
+                .and_then(|report| report.mixed_layer_topology_certificate.clone())
+                .unwrap(),
+            _ => unreachable!(),
+        };
+        let (comb_problem, mut comb_plan) =
+            certified_pure_prism_relaxation_guard_fixture_for_layers_and_device(
+                2,
+                fullmag_ir::ExecutionDevice::Gpu,
+            );
+        if let BackendPlanIR::Fem(fem) = &mut comb_plan.backend_plan {
+            fem.mesh_build_report
+                .as_mut()
+                .unwrap()
+                .mixed_layer_topology_certificate = Some(v1_cert);
+        }
+        let comb_err = topology_guard_error(&comb_problem, &comb_plan);
+        assert!(
+            comb_err.contains("cannot be carried together"),
+            "{comb_err}"
+        );
+        assert!(comb_err.contains("fallback=none"), "{comb_err}");
     }
     #[test]
     fn fem_topology_guard_rejects_correctly_bound_exact_four_layer_cpu_and_gpu() {
@@ -9177,9 +9736,8 @@ mod tests {
             "runtime_selection".to_string(),
             json!({"device": "gpu", "precision": "double"}),
         );
-        problem
-            .energy_terms
-            .push(fullmag_ir::EnergyTermIR::BulkDmi { d: 1.0 });
+        problem.current_density = Some([1.0e11, 0.0, 0.0]);
+        problem.stt_degree = Some(0.5);
         let BackendPlanIR::Fem(fem) = &mut plan.backend_plan else {
             unreachable!()
         };
@@ -9195,6 +9753,7 @@ mod tests {
             .message
             .contains("fem_mixed_p1_runtime_scope_rejected"));
         assert!(error.message.contains("requested_device=gpu"));
+        assert!(error.message.contains("current_density_present"));
         assert!(error.message.contains("fallback=none"));
     }
 

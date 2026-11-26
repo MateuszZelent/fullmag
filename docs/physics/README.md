@@ -64,6 +64,7 @@ Recommended filenames:
 - `0960-canonical-llg-time-domain-solver-and-qualification-contract.md`
 - `0999-fem-gpu-short-range-kernel-optimizations.md` — bramkowanie martwych redukcji etapów pośrednich RK (DMI, anizotropia, magnetoelastyczność, termika, `h_drive_zeroed`), rozdział `gpu_relax_dd` (FP64 FMA w RK vs DD w relaksacji), fuzja `H_eff` oraz zastąpienie strided `cudaMemcpy2D` pakowaniem device AoS/SoA.
 - `1000-fem-gpu-driven-response-cudss.md` — jednorazowa analiza symboliczna i bezpośredni solver rzadki `cuDSS` (`CUDSS_MTYPE_GENERAL`, `CUDSS_C_64F`) dla przemiatań RF w dziedzinie częstotliwości (open-airbox $k=0$ oraz `periodic_airbox_k0`), geometryczne preskalowanie blokowe 2×2 + ekwilibracja Ruiza, preflight VRAM i niezależna certyfikacja rezyduów $(r_q, r_\phi)$.
+- `1001-fem-gpu-pure-prism-p2-and-csr-dmi.md` — czysto-pryzmatyczna dyskretyzacja `pure_prism_p2` (P1 $\mathbf m$ + P2 $\phi$) na FEM CPU/GPU, zunifikowany operator CSR GPU DMI (`tet4`/`prism6`/`mixed`) oraz naprawa konforemności `layers >= 2`.
 - `1005-fem-multiphysics-sparse-and-parallel-solvers.md` — modernizacja rzadkich i równoległych solverów multifizycznych FEM (OE-F2, OE-F1, transport ładunku/spinu, OE-T0 KKT).
 
 The numbering is semantic, not bureaucratic.

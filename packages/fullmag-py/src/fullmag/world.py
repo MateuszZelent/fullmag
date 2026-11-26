@@ -1509,9 +1509,9 @@ def _validate_layered_mesh_spec(
         raise ValueError(f"{context}.sweep_direction must be 'auto', 'x', 'y', or 'z'")
     if spec.element_family not in {None, "prism", "hex"}:
         raise ValueError(f"{context}.element_family must be 'prism' or 'hex'")
-    if spec.transition_policy not in {None, "pyramid_to_tetrahedra", "reject"}:
+    if spec.transition_policy not in {None, "pyramid_to_tetrahedra", "pure_prism", "reject"}:
         raise ValueError(
-            f"{context}.transition_policy must be 'pyramid_to_tetrahedra' or 'reject'"
+            f"{context}.transition_policy must be 'pyramid_to_tetrahedra', 'pure_prism', or 'reject'"
         )
     if spec.through_thickness_distribution not in {
         None,
@@ -1584,17 +1584,18 @@ def _validate_layered_mesh_spec(
     if spec.topology == "prismatic" and spec.transition_policy not in {
         None,
         "pyramid_to_tetrahedra",
+        "pure_prism",
     }:
         raise ValueError(
-            f"{context} prismatic thin-film topology requires pyramid_to_tetrahedra transition"
+            f"{context} prismatic thin-film topology requires 'pyramid_to_tetrahedra' or 'pure_prism' transition"
         )
     if spec.element_family == "hex":
         if spec.mesh_strategy not in {None, "swept_hex"}:
             raise ValueError(f"{context} hex elements require mesh_strategy='swept_hex'")
         if spec.sweep_face_meshing not in {None, "quadrilateral"}:
             raise ValueError(f"{context} hex elements require quadrilateral source faces")
-        if spec.transition_policy == "pyramid_to_tetrahedra":
-            raise ValueError(f"{context} hex elements contradict pyramid_to_tetrahedra transition")
+        if spec.transition_policy in {"pyramid_to_tetrahedra", "pure_prism"}:
+            raise ValueError(f"{context} hex elements contradict {spec.transition_policy} transition")
 
     layered_strategy = spec.mesh_strategy in {"swept_prism", "swept_hex"}
     typed_layered_intent = spec.topology == "prismatic" or any(
@@ -1751,7 +1752,7 @@ class GeometryMeshHandle:
         sweep_direction: Literal["auto", "x", "y", "z"] | None = None,
         element_family: Literal["prism", "hex"] | None = None,
         transition_policy: Literal[
-            "pyramid_to_tetrahedra", "reject"
+            "pyramid_to_tetrahedra", "pure_prism", "reject"
         ]
         | None = None,
         exact_layer_count: bool | None = None,
@@ -1866,7 +1867,7 @@ class GeometryMeshHandle:
         sweep_direction: Literal["auto", "x", "y", "z"] | None = None,
         element_family: Literal["prism", "hex"] | None = None,
         transition_policy: Literal[
-            "pyramid_to_tetrahedra", "reject"
+            "pyramid_to_tetrahedra", "pure_prism", "reject"
         ]
         | None = None,
         exact_layer_count: bool | None = None,
@@ -2225,7 +2226,7 @@ class GeometryMeshHandle:
         symmetric: bool = False,
         face_meshing: Literal["triangular", "quadrilateral"] = "triangular",
         sweep_direction: Literal["auto", "x", "y", "z"] = "auto",
-        transition: Literal["pyramid_to_tetrahedra", "reject"] | None = None,
+        transition: Literal["pyramid_to_tetrahedra", "pure_prism", "reject"] | None = None,
         exact_layers: bool | None = None,
     ) -> "GeometryMeshHandle":
         """Configure swept (through-thickness) meshing for thin-film geometries.
@@ -2277,15 +2278,15 @@ class GeometryMeshHandle:
         resolved_transition = transition or (
             "pyramid_to_tetrahedra" if element_family == "prism" else "reject"
         )
-        if resolved_transition not in {"pyramid_to_tetrahedra", "reject"}:
+        if resolved_transition not in {"pyramid_to_tetrahedra", "pure_prism", "reject"}:
             raise ValueError(
                 f"{self._owner._name}.mesh.swept.transition must be "
-                "'pyramid_to_tetrahedra' or 'reject'"
+                "'pyramid_to_tetrahedra', 'pure_prism', or 'reject'"
             )
-        if element_family == "hex" and resolved_transition == "pyramid_to_tetrahedra":
+        if element_family == "hex" and resolved_transition in {"pyramid_to_tetrahedra", "pure_prism"}:
             raise ValueError(
                 f"{self._owner._name}.mesh.swept quadrilateral/hex meshing "
-                "contradicts transition='pyramid_to_tetrahedra'"
+                f"contradicts transition={resolved_transition!r}"
             )
         resolved_exact_layers = True if exact_layers is None else exact_layers
         if (
@@ -2344,7 +2345,7 @@ class GeometryMeshHandle:
         layers: int = 1,
         topology: Literal["tetrahedral", "prismatic"] | None = None,
         exact_layers: bool | None = None,
-        transition: Literal["pyramid_to_tetrahedra", "reject"] | None = None,
+        transition: Literal["pyramid_to_tetrahedra", "pure_prism", "reject"] | None = None,
         interface_maximum_element_size: float | None = None,
         surface_maximum_element_size: float | None = None,
         interface_thickness: float | None = None,
@@ -2389,10 +2390,10 @@ class GeometryMeshHandle:
                     "requires exact_layers=True"
                 )
             resolved_transition = transition or "pyramid_to_tetrahedra"
-            if resolved_transition != "pyramid_to_tetrahedra":
+            if resolved_transition not in {"pyramid_to_tetrahedra", "pure_prism"}:
                 raise ValueError(
                     f"{self._owner._name}.mesh.thin_film prismatic topology requires "
-                    "transition='pyramid_to_tetrahedra'"
+                    "transition='pyramid_to_tetrahedra' or transition='pure_prism'"
                 )
         else:
             if exact_layers is not None or transition is not None:
@@ -5883,6 +5884,7 @@ class StudyMeshHandle:
         mesh = mesh_data_from_ir(mesh_ir)
         boundary_map = _boundary_semantic_map(mesh)
         certificate = mesh.mixed_layer_topology_certificate
+        pure_prism_certificate = mesh.pure_prism_topology_certificate
         artifact = MeshArtifact(
             mesh=mesh,
             mesh_name=str(mesh_ir.get("mesh_name", "study_domain")),
@@ -5891,7 +5893,11 @@ class StudyMeshHandle:
             topology_fingerprint=(
                 certificate.topology_fingerprint
                 if certificate is not None
-                else mesh.topology_fingerprint_v3()
+                else (
+                    str(pure_prism_certificate["topology_fingerprint"])
+                    if pure_prism_certificate is not None
+                    else mesh.topology_fingerprint_v3()
+                )
             ),
             region_markers=[dict(entry) for entry in domain.get("region_markers", [])],
             object_region_markers=[
@@ -9272,8 +9278,11 @@ def _build_explicit_mesh_assets(
         # CSR payload from JSON would repeat validation and native bridging.
         mesh, region_markers, build_report = realized_domain_meshes[0]
         certificate = getattr(mesh, "mixed_layer_topology_certificate", None)
+        pure_prism_certificate = getattr(mesh, "pure_prism_topology_certificate", None)
         if certificate is not None:
             topology_fingerprint = str(certificate.topology_fingerprint)
+        elif pure_prism_certificate is not None:
+            topology_fingerprint = str(pure_prism_certificate["topology_fingerprint"])
         else:
             topology_fingerprint = str(mesh.topology_fingerprint_v3())
         authoring_document = _current_mesh_authoring_document()

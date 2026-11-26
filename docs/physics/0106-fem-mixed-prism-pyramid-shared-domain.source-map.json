@@ -517,7 +517,13 @@
       "id": "mixed-tet-repair",
       "path": "packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py",
       "symbol": "_repair_mixed_tetrahedra",
-      "responsibility": "Validate and execute the private fail-closed mixed-tetrahedral repair policy before extraction and certificate generation."
+      "responsibility": "Validate and execute the private fail-closed mixed-tetrahedral repair policy and deterministic same-side tet untangling before extraction and certificate generation."
+    },
+    {
+      "id": "mixed-tet-untangle",
+      "path": "packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py",
+      "symbol": "_untangle_same_side_mixed_tetrahedra",
+      "responsibility": "Detect and deterministically untangle inverted same_side_two_owner_face tet4 cavities for layers >= 2 via interior-node Chebyshev centering and local tet reorientation."
     },
     {
       "id": "certificate",
@@ -668,7 +674,7 @@
       "id": "python-mixed-p1-scope",
       "path": "packages/fullmag-py/src/fullmag/model/problem.py",
       "symbol": "_validate_authored_mixed_p1_scope",
-      "responsibility": "Admit uniform or nodal uniaxial/cubic anisotropy and CPU DMI while preserving fail-closed GPU DMI authoring semantics."
+      "responsibility": "Admit uniform or nodal uniaxial/cubic anisotropy and CPU/GPU DMI (via unified CSR GPU DMI) while preserving fail-closed guards for unsupported extended physics."
     },
     {
       "id": "planner",
@@ -714,7 +720,7 @@
     },
     {
       "id": "mixed-topology-surface-selection",
-      "path": "apps/control-room/src/modules/viewport-3d/layers/MeshPartLayer.tsx",
+      "path": "apps/control-room/src/modules/viewport-3d/layers/MeshPartLayer.model.ts",
       "symbol": "resolveMeshPartSurfacePickIdentity",
       "responsibility": "Expose exact cell identity only for complete aligned maps and preserve boundary-only legacy picks only when all identity maps are absent."
     },
@@ -830,7 +836,13 @@
       "id": "mixed-p1-native-scope",
       "path": "backends/fem/core/fem_mesh.cpp",
       "symbol": "validate_supported_physics_topology",
-      "responsibility": "Admit the bounded mixed-P1 CPU/GPU anisotropy scopes and reject GPU DMI fail-closed with gpu_dmi_kernel_not_mixed_p1 before native startup."
+      "responsibility": "Admit the bounded mixed-P1 and pure-prism-P2 CPU/GPU scopes including unified CSR GPU DMI while keeping Zhang-Li STT, FEM/BEM, and wider extended physics fail-closed."
+    },
+    {
+      "id": "dmi-csr-gpu",
+      "path": "backends/fem/gpu/cuda/interactions/dmi/dmi_csr_operator.cpp",
+      "symbol": "build_gpu_dmi_csr_from_mfem",
+      "responsibility": "Assemble skew-symmetric nodal edge-vector CSR DMI operators across tet4, prism6, and mixed H1 P1 meshes for GPU runtime execution."
     },
     {
       "id": "exact-rings-source",
@@ -956,10 +968,10 @@
       },
       {
         "python": "GeometryMeshHandle.thin_film.transition",
-        "type": "\"pyramid_to_tetrahedra\" | \"reject\" | None",
+        "type": "\"pyramid_to_tetrahedra\" | \"pure_prism\" | \"reject\" | None",
         "default": "None",
         "si_unit": "1",
-        "validation": "mixed shared-domain execution requires `\"pyramid_to_tetrahedra\"`",
+        "validation": "mixed-P1 requires `\"pyramid_to_tetrahedra\"`; pyramid-free P2 prism domains select `\"pure_prism\"` (`docs/physics/1001-fem-gpu-pure-prism-p2-and-csr-dmi.md`)",
         "meaning": "conforming air transition policy",
         "backend_support": "FEM CPU/GPU only",
         "problem_ir": "problem_meta.runtime_metadata.mesh_workflow.per_geometry[].transition_policy"

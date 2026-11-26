@@ -63,6 +63,29 @@ describe("viewport3dInspect", () => {
     });
   });
 
+  it("reads a compact layer field using the global cell identity", () => {
+    const sample = buildViewport3DFdmInspectSample({
+      fieldVector: {
+        ...vectorField([1, 2, 3, 4, 5, 6], "H_ex"),
+        indexing: "explicit_node_indices",
+        nodeIndices: [5, 7],
+      },
+      instanceId: 1,
+      model: { ...fdmModel([5, 7]), gridShape: [8, 1, 1] },
+      quantityId: "H_ex",
+      targetId: "object:film",
+      worldPosition: [2, 3, 4],
+    });
+    expect(sample).toMatchObject({
+      components: [{ label: "Hx", value: 4 }, { label: "Hy", value: 5 },
+        { label: "Hz", value: 6 }, { label: "|H|", value: expect.closeTo(Math.sqrt(77)) }],
+      pointIndex: 7,
+      targetId: "object:film",
+      targetLabel: "Cell 7",
+      status: "ready",
+    });
+  });
+
   it("formats vector quantities with physical component labels and units", () => {
     const sample = buildViewport3DFdmInspectSample({
       fieldVector: vectorField([1, 2, 2], "H_demag"),

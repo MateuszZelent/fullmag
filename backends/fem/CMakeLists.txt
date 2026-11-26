@@ -60,6 +60,7 @@ set(FEM_SOURCES
     gpu/cuda/integrators/rk/rk_step_stats.cpp
     gpu/cuda/integrators/rk/rk_step_stats_publication.cpp
     gpu/cuda/integrators/rk/rk_workspace_memory.cpp
+    gpu/cuda/interactions/dmi/dmi_csr_operator.cpp
     gpu/cuda/interactions/local_interaction_workspace_memory.cpp
     gpu/cuda/interactions/magnetoelastic/magnetoelastic_memory.cpp
     gpu/cuda/interactions/magnetoelastic/magnetoelastic_upload.cpp
@@ -356,6 +357,7 @@ if(FULLMAG_USE_MFEM_STACK)
             gpu/cuda/integrators/rk/rk_total_energy_reduction.cu
             gpu/cuda/integrators/rk/rk_zhang_li_torque.cu
             gpu/cuda/interactions/anisotropy/anisotropy_kernels.cu
+            gpu/cuda/interactions/dmi/dmi_csr_kernels.cu
             gpu/cuda/interactions/dmi/dmi_kernels.cu
             gpu/cuda/interactions/magnetoelastic/magnetoelastic_kernels.cu
             gpu/cuda/interactions/oersted/oersted_kernels.cu
@@ -1811,6 +1813,40 @@ target_include_directories(fem_dmi_contract PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
 add_test(NAME fem_dmi_contract COMMAND fem_dmi_contract)
+
+if(FULLMAG_USE_MFEM_STACK AND FULLMAG_ENABLE_CUDA)
+    add_executable(fem_cuda_csr_dmi_prism_contract tests/cuda_csr_dmi_prism_contract.cpp)
+    target_link_libraries(fem_cuda_csr_dmi_prism_contract PRIVATE fullmag_fem CUDA::cudart)
+    if(TARGET MFEM::mfem)
+        target_link_libraries(fem_cuda_csr_dmi_prism_contract PRIVATE MFEM::mfem)
+    else()
+        target_link_libraries(fem_cuda_csr_dmi_prism_contract PRIVATE mfem)
+    endif()
+    target_include_directories(fem_cuda_csr_dmi_prism_contract PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+    )
+    add_test(
+        NAME fem_cuda_csr_dmi_prism_contract
+        COMMAND fem_cuda_csr_dmi_prism_contract
+    )
+
+    add_executable(fem_pure_prism_p2_gpu_contract tests/fem_pure_prism_p2_gpu_contract.cpp)
+    target_link_libraries(fem_pure_prism_p2_gpu_contract PRIVATE fullmag_fem CUDA::cudart)
+    if(TARGET MFEM::mfem)
+        target_link_libraries(fem_pure_prism_p2_gpu_contract PRIVATE MFEM::mfem)
+    else()
+        target_link_libraries(fem_pure_prism_p2_gpu_contract PRIVATE mfem)
+    endif()
+    target_include_directories(fem_pure_prism_p2_gpu_contract PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+    )
+    add_test(
+        NAME fem_pure_prism_p2_gpu_contract
+        COMMAND fem_pure_prism_p2_gpu_contract
+    )
+endif()
 
 add_executable(
     fem_rotated_dmi_absolute_scale_contract

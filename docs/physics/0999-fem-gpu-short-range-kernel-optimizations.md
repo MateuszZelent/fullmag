@@ -212,7 +212,7 @@ These optimizations are internal FEM GPU realization improvements and add no new
 (implementation-mapping)=
 ## Implementation mapping
 
-- `backends/fem/gpu/cuda/integrators/rk/rk_dmi_fields.cu::gpu_rk_compute_dmi_field_contributions` passes `energy_out = nullptr` on intermediate RK stages.
+- `backends/fem/gpu/cuda/integrators/rk/rk_dmi_fields.cu::gpu_rk_compute_dmi_field_contributions` passes `energy_block_sums = nullptr` to the unified CSR DMI kernels (`fullmag_cuda_dmi_csr_field_energy` / `fullmag_cuda_dmi_csr_periodic_field_energy`, see note `1001`) on intermediate RK stages.
 - `backends/fem/gpu/cuda/interactions/dmi/dmi_kernels.cu::fullmag_cuda_dmi_field_energy` dispatches predicated `dmi_element_residual_kernel<ComputeEnergy>` implementing {eq}`eq-dmi-block-reduce-energy`.
 - `backends/fem/gpu/cuda/interactions/anisotropy/anisotropy_kernels.hpp::fullmag_cuda_uniaxial_anisotropy_field_energy_blocks` and `fullmag_cuda_cubic_anisotropy_field_energy_blocks` gate per-block energy reductions on `block_sums != nullptr`.
 - `backends/fem/gpu/cuda/interactions/magnetoelastic/magnetoelastic_kernels.hpp::fullmag_cuda_magnetoelastic_field_energy_blocks` gates prescribed-strain energy reduction on `block_sums != nullptr`.
@@ -266,7 +266,7 @@ These optimizations are internal FEM GPU realization improvements and add no new
 
 | Path | Symbol | Responsibility | Lane and evidence |
 |---|---|---|---|
-| `backends/fem/gpu/cuda/integrators/rk/rk_dmi_fields.cu` | `gpu_rk_compute_dmi_field_contributions` | Passes `energy_out = nullptr` for intermediate RK DMI field launches | FEM GPU; source and CUDA contract test |
+| `backends/fem/gpu/cuda/integrators/rk/rk_dmi_fields.cu` | `gpu_rk_compute_dmi_field_contributions` | Passes `energy_block_sums = nullptr` for intermediate RK CSR DMI field launches | FEM GPU; source and CUDA contract test |
 | `backends/fem/gpu/cuda/interactions/dmi/dmi_kernels.cu` | `fullmag_cuda_dmi_field_energy` | Dispatches predicated `dmi_element_residual_kernel<ComputeEnergy>` with deadlock-free `cub::BlockReduce` | FEM GPU; CUDA contract test |
 | `backends/fem/gpu/cuda/interactions/anisotropy/anisotropy_kernels.hpp` | `fullmag_cuda_uniaxial_anisotropy_field_energy_blocks` | Uniaxial anisotropy field kernel gating energy reduction on `block_sums != nullptr` | FEM GPU; CUDA contract test |
 | `backends/fem/gpu/cuda/interactions/anisotropy/anisotropy_kernels.hpp` | `fullmag_cuda_cubic_anisotropy_field_energy_blocks` | Cubic anisotropy field kernel gating energy reduction on `block_sums != nullptr` | FEM GPU; CUDA contract test |

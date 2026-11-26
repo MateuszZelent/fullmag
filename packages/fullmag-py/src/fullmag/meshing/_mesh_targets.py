@@ -797,6 +797,7 @@ class SharedDomainBuildReport:
     realized_regions_count: int = 0
     mixed_layer_topology_certificate: dict[str, object] | None = None
     mixed_layer_topology_certificate_v2: dict[str, object] | None = None
+    pure_prism_topology_certificate: dict[str, object] | None = None
 
     def to_dict(self) -> dict[str, object]:
         """Serialize to a plain-dict form suitable for JSON / IR embedding."""
@@ -865,6 +866,11 @@ class SharedDomainBuildReport:
             "mixed_layer_topology_certificate_v2": (
                 dict(self.mixed_layer_topology_certificate_v2)
                 if self.mixed_layer_topology_certificate_v2 is not None
+                else None
+            ),
+            "pure_prism_topology_certificate": (
+                dict(self.pure_prism_topology_certificate)
+                if self.pure_prism_topology_certificate is not None
                 else None
             ),
         }
