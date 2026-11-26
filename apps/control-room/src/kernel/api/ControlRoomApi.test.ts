@@ -4077,6 +4077,31 @@ describe("ControlRoomApi", () => {
     }
   });
 
+  it("keeps the initiating session on a failure that arrives after switching sessions", async () => {
+    const diagnostics = new RequestDiagnosticsController();
+    let activeScope = "initial-session";
+    const fetchStarted = Promise.withResolvers<void>();
+    const response = Promise.withResolvers<Response>();
+    const api = new ControlRoomApi({
+      baseUrl: "http://127.0.0.1:8765",
+      diagnostics,
+      getDiagnosticSessionScope: () => activeScope,
+      fetchImpl: () => {
+        fetchStarted.resolve();
+        return response.promise;
+      },
+    });
+
+    const request = api.sessions.current.status();
+    await fetchStarted.promise;
+    activeScope = "next-session";
+    response.resolve(jsonResponse({ message: "Late failure" }, { status: 409 }));
+    await expect(request).rejects.toMatchObject({ status: 409 });
+    expect(diagnostics.list().filter(isRequestDiagnosticFailure)).toMatchObject([
+      { outcome: "error", sessionScopeKey: "initial-session" },
+    ]);
+  });
+
   it("keeps an unexpected HTTP 409 on another resource as an error", async () => {
     const diagnostics = new RequestDiagnosticsController();
     const api = new ControlRoomApi({

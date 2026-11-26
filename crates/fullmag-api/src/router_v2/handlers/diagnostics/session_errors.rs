@@ -95,6 +95,8 @@ pub(crate) struct SessionErrorHistoryResource {
     session_id: String,
     revision: u64,
     clear_generation: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    cleared_at_ms: Option<u64>,
     entries: Vec<SessionErrorEntry>,
 }
 
@@ -120,6 +122,7 @@ impl PersistedHistory {
                 session_id: session_id.into(),
                 revision: 0,
                 clear_generation: 0,
+                cleared_at_ms: None,
                 entries: Vec::new(),
             },
             recent_event_ids: VecDeque::new(),
@@ -233,6 +236,8 @@ fn update(
             changed
         } else {
             stored.resource.clear_generation = stored.resource.clear_generation.saturating_add(1);
+            stored.resource.cleared_at_ms =
+                Some(u64::try_from(crate::session::unix_time_millis_now()).unwrap_or(u64::MAX));
             stored.resource.entries.clear();
             stored.recent_event_ids.clear();
             true
@@ -456,6 +461,11 @@ mod tests {
         update(&workspace, "session-a", batch(0, vec![event("id-1", 1, 1)])).unwrap();
         let cleared = update(&workspace, "session-a", None).unwrap().unwrap();
         assert_eq!(cleared.clear_generation, 1);
+        assert!(cleared.cleared_at_ms.unwrap() > 0);
+        assert_eq!(
+            load(&workspace, "session-a").unwrap().cleared_at_ms,
+            cleared.cleared_at_ms
+        );
         assert!(cleared.entries.is_empty());
         assert!(
             update(&workspace, "session-a", batch(0, vec![event("id-2", 2, 1)]))

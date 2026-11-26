@@ -2418,5 +2418,7 @@ Backend scala powtarzające się problemy i przechowuje 150 najnowszych wpisów
 oraz identyfikatory 4096 ostatnich zdarzeń do rozpoznawania ponowień.
 `DELETE` aktualizuje generację czyszczenia. Opóźniony zapis oparty na
 poprzedniej generacji zwraca `409 session_error_history_cleared`.
+Odczyt zwraca czas ostatniego czyszczenia według backendu, więc druga karta
+może ponowić zapis zdarzeń zarejestrowanych po tym czasie.
 Zapiski z przeglądarki sprzed migracji są przesyłane jako zdarzenia importu.
 Przeglądarka zachowuje lokalnie oczekujące zdarzenia do potwierdzenia zapisu.

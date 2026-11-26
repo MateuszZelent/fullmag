@@ -16407,6 +16407,8 @@ export interface components {
         SessionErrorHistoryResource: {
             /** Format: int64 */
             clearGeneration: number;
+            /** Format: int64 */
+            clearedAtMs?: number | null;
             entries: components["schemas"]["SessionErrorEntry"][];
             /** Format: int64 */
             revision: number;

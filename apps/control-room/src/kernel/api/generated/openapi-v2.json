@@ -42966,6 +42966,14 @@
             "minimum": 0,
             "type": "integer"
           },
+          "clearedAtMs": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
           "entries": {
             "items": {
               "$ref": "#/components/schemas/SessionErrorEntry"
