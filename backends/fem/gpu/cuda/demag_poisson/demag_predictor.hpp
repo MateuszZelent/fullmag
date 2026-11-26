@@ -28,6 +28,7 @@ struct GpuDemagLinearPredictorState {
     double t_prev = 0.0;
     uint64_t operator_signature = 0;
     double last_solved_stage_time_s = -std::numeric_limits<double>::infinity();
+    uint64_t commit_generation = 0;
 };
 
 /// Clears predictor validity metadata without freeing device history buffers.

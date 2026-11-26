@@ -133,7 +133,8 @@ bool gpu_rk_finalize_accepted_step(
     if (!endpoint_rhs_ready) {
         GpuPerformanceCounterDelta final_rhs_delta{};
         final_rhs_delta.rhs_evaluations = 1;
-        if (ctx.poisson_demag.gpu_demag_mode != FULLMAG_FEM_GPU_DEMAG_DEVICE_HYPRE_POISSON) {
+        if (ctx.poisson_demag.gpu_demag_mode != FULLMAG_FEM_GPU_DEMAG_DEVICE_HYPRE_POISSON &&
+            ctx.poisson_demag.gpu_demag_mode != FULLMAG_FEM_GPU_DEMAG_DEVICE_HYPRE_FEM_BEM) {
             final_rhs_delta.demag_solves =
                 ctx.poisson_demag.solves_current_step -
                 demag_solves_before_final_rhs;

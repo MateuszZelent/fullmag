@@ -469,6 +469,7 @@ struct RkStepTransaction::Impl {
             gpu_predictor_operator_signature = predictor.operator_signature;
             gpu_predictor_last_solved_stage_time_s =
                 predictor.last_solved_stage_time_s;
+            gpu_predictor_commit_generation = predictor.commit_generation;
         }
         gpu_hybrid_stage_m = ctx.gpu_state.device.demag_poisson.hybrid_stage_m_xyz;
         gpu_hybrid_demag = ctx.gpu_state.device.demag_poisson.hybrid_demag_xyz;
@@ -673,7 +674,8 @@ struct RkStepTransaction::Impl {
         {
             auto &predictor = ctx.gpu_state.device.demag_poisson.predictor;
             if (predictor.d_phi_curr == gpu_predictor_d_phi_curr &&
-                predictor.d_phi_prev == gpu_predictor_d_phi_prev) {
+                predictor.d_phi_prev == gpu_predictor_d_phi_prev &&
+                predictor.commit_generation == gpu_predictor_commit_generation) {
                 predictor.history_count = gpu_predictor_history_count;
                 predictor.t_curr = gpu_predictor_t_curr;
                 predictor.t_prev = gpu_predictor_t_prev;
@@ -750,6 +752,7 @@ struct RkStepTransaction::Impl {
     uint64_t gpu_predictor_operator_signature = 0;
     double gpu_predictor_last_solved_stage_time_s =
         -std::numeric_limits<double>::infinity();
+    uint64_t gpu_predictor_commit_generation = 0;
     std::vector<double> gpu_hybrid_stage_m;
     std::vector<double> gpu_hybrid_demag;
     double gpu_hybrid_demag_energy = 0.0;

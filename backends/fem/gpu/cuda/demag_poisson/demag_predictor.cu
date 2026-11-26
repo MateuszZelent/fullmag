@@ -200,6 +200,7 @@ bool gpu_demag_predictor_commit_accepted_potential(
         state.history_count = 1u;
     }
 
+    state.commit_generation += 1u;
     const cudaError_t copy_rc = cudaMemcpyAsync(
         state.d_phi_curr,
         d_accepted_solution,

@@ -66,10 +66,12 @@ bool gpu_rk_has_discontinuous_or_host_drive(const Context &ctx)
         }
     }
     // Oersted time_dep_kind: 0 = constant, 1 = sinusoidal, 2 = pulse (step jump).
-    if (ctx.oersted.time_dep_kind >= FULLMAG_FEM_TIME_PULSE) {
+    if (ctx.oersted.has_cylinder &&
+        ctx.oersted.time_dep_kind >= FULLMAG_FEM_TIME_PULSE) {
         return true;
     }
-    if (waveform_kind_is_discontinuous_or_host(ctx.sot.envelope_kind)) {
+    if (ctx.sot.enabled &&
+        waveform_kind_is_discontinuous_or_host(ctx.sot.envelope_kind)) {
         return true;
     }
     return false;

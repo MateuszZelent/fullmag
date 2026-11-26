@@ -452,6 +452,12 @@ void test_fsal_policy_and_signature_matrix()
           "HOST_EXPRESSION regional drive must fail closed and disable FSAL");
     ctx.zeeman.regional_drives.clear();
 
+    ctx.oersted.has_cylinder = false;
+    ctx.oersted.time_dep_kind = 2u;
+    check(!gpu_rk_has_discontinuous_or_host_drive(ctx) &&
+              gpu_rk_rhs_allows_fsal_k0_reuse(ctx),
+          "inactive Oersted cylinder with stale pulse kind must not disable FSAL");
+    ctx.oersted.time_dep_kind = 0u;
     ctx.oersted.has_cylinder = true;
     ctx.oersted.time_dep_kind = 1u;
     check(!gpu_rk_has_discontinuous_or_host_drive(ctx) &&
@@ -464,6 +470,11 @@ void test_fsal_policy_and_signature_matrix()
     ctx.oersted.time_dep_kind = 0u;
     ctx.oersted.has_cylinder = false;
 
+    ctx.sot.enabled = false;
+    ctx.sot.envelope_kind = FULLMAG_FEM_TIME_PULSE;
+    check(!gpu_rk_has_discontinuous_or_host_drive(ctx) &&
+              gpu_rk_rhs_allows_fsal_k0_reuse(ctx),
+          "inactive SOT with stale pulse envelope must not disable FSAL");
     ctx.sot.enabled = true;
     ctx.sot.envelope_kind = FULLMAG_FEM_TIME_SINUSOIDAL;
     check(!gpu_rk_has_discontinuous_or_host_drive(ctx) &&
@@ -1332,10 +1343,27 @@ void test_predictor_reduces_krylov_iterations_heun_and_rk4()
 
 #endif
 
+void clear_ambient_cudss_env()
+{
+#if defined(_WIN32)
+    _putenv_s("FULLMAG_FEM_DEMAG_GPU_DIRECT_SOLVER", "");
+    _putenv_s("FULLMAG_FEM_DEMAG_GPU_DIRECT_SOLVER_DEVICE_BUDGET_BYTES", "");
+    _putenv_s("FULLMAG_FEM_DEMAG_CUDSS_MAX_VRAM_MIB", "");
+#else
+    check(unsetenv("FULLMAG_FEM_DEMAG_GPU_DIRECT_SOLVER") == 0,
+          "unset FULLMAG_FEM_DEMAG_GPU_DIRECT_SOLVER");
+    check(unsetenv("FULLMAG_FEM_DEMAG_GPU_DIRECT_SOLVER_DEVICE_BUDGET_BYTES") == 0,
+          "unset FULLMAG_FEM_DEMAG_GPU_DIRECT_SOLVER_DEVICE_BUDGET_BYTES");
+    check(unsetenv("FULLMAG_FEM_DEMAG_CUDSS_MAX_VRAM_MIB") == 0,
+          "unset FULLMAG_FEM_DEMAG_CUDSS_MAX_VRAM_MIB");
+#endif
+}
+
 } // namespace
 
 int main()
 {
+    clear_ambient_cudss_env();
     test_fsal_policy_and_signature_matrix();
 #if FULLMAG_HAS_CUDA_RUNTIME && FULLMAG_HAS_MFEM_STACK
     int device_count = 0;

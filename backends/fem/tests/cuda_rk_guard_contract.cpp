@@ -368,6 +368,20 @@ void minimal_rk_transaction_restores_only_authoritative_gpu_state()
               gpu.demag_poisson.predictor.operator_signature == 0x123456789abcdef0ULL &&
               gpu.demag_poisson.predictor.last_solved_stage_time_s == 2.0,
           "GPU transaction predictor metadata rollback");
+    // Late rollback after an in-place overwrite of d_phi_curr (same pointers,
+    // bumped commit_generation) must fail closed and invalidate predictor state.
+    {
+        const uint64_t gen_before = gpu.demag_poisson.predictor.commit_generation;
+        fullmag::fem::RkStepTransaction late_tx(ctx);
+        check(late_tx.begin(error), error.c_str());
+        gpu.demag_poisson.predictor.commit_generation = gen_before + 1u;
+        gpu.demag_poisson.predictor.history_count = 1u;
+        gpu.demag_poisson.predictor.t_curr = 9.0;
+        check(late_tx.rollback(error), error.c_str());
+        check(gpu.demag_poisson.predictor.history_count == 0u &&
+                  gpu.demag_poisson.predictor.commit_generation == gen_before + 1u,
+              "late rollback after predictor commit_generation advance must invalidate fail-closed");
+    }
     fullmag::fem::gpu_rk_retain_restored_fsal_on_retry(ctx);
     check(gpu.rk.fsal_valid,
           "adaptive retry must preserve the restored deterministic FSAL derivative");
