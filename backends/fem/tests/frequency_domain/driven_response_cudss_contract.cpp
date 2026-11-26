@@ -1246,6 +1246,7 @@ bool test_static_periodic_k0_lifting_and_h_demag_recovery()
     req.gpu_direct_policy = DrivenFrequencyResponseGpuDirectPolicy::Required;
     req.solver_options.relative_tolerance = 1.0e-10;
     req.requires_periodic_airbox_dynamic_demag = true;
+    req.periodic_airbox_delta_phi_dof_count = full_nodes;
     req.mfem_validation_problem.descriptor.demag_enabled = true;
     req.mfem_validation_problem.descriptor.exchange_enabled = true;
     req.mfem_validation_problem.exchange_edges = edges.data();
