@@ -1,5 +1,6 @@
 #include "device_solver.hpp"
 
+#include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
@@ -147,6 +148,23 @@ bool checked_add(uint64_t left, uint64_t right, uint64_t *value) {
     return true;
 }
 
+bool set_candidate_upper_bound(memory::UpperBound *bound,
+                               uint64_t candidate_bytes) {
+    if (bound == nullptr || !bound->valid) return false;
+    uint64_t persistent_and_hierarchy = 0;
+    if (!checked_add(bound->persistent_storage_bytes, bound->hierarchy_bytes,
+                     &persistent_and_hierarchy) ||
+        !checked_add(persistent_and_hierarchy, candidate_bytes,
+                     &bound->materialization_phase_peak_bytes))
+        return false;
+    bound->candidate_bytes = candidate_bytes;
+    bound->phase_peak_bytes = std::max(
+        bound->hierarchy_build_phase_peak_bytes,
+        std::max(bound->solve_phase_peak_bytes,
+                 bound->materialization_phase_peak_bytes));
+    return true;
+}
+
 bool allocate_bytes(void **pointer, uint64_t bytes) {
     if (bytes == 0) return true;
     return cudaMalloc(pointer, bytes) == cudaSuccess;
@@ -267,7 +285,8 @@ __device__ const fullmag_fdm_gpu_transport_spin_boundary_face_v1 *boundary(
 }
 
 __device__ const fullmag_fdm_gpu_transport_spin_interface_v1 *interface_at(
-    const SolveInput &in, uint32_t axis, uint64_t face_index) {
+    const SolveInput &in, uint32_t axis, uint64_t face_index,
+    uint64_t *record_index = nullptr) {
     using Interface = fullmag_fdm_gpu_transport_spin_interface_v1;
     uint64_t begin = 0;
     uint64_t end = in.views[2].element_count;
@@ -283,8 +302,9 @@ __device__ const fullmag_fdm_gpu_transport_spin_interface_v1 *interface_at(
     }
     if (begin == in.views[2].element_count) return nullptr;
     const auto *face = record_at<Interface>(in, 2, begin);
-    return face->axis == axis && face->canonical_face_index == face_index
-        ? face : nullptr;
+    if (face->axis != axis || face->canonical_face_index != face_index) return nullptr;
+    if (record_index != nullptr) *record_index = begin;
+    return face;
 }
 
 __device__ double harmonic(double left, double right) {
@@ -469,6 +489,120 @@ __device__ void mixing_flux(
         const double to_transmitted = incoming[component] + backflow[component];
         negative_flux[component] = from_is_negative ? from_outgoing : -to_transmitted;
         positive_flux[component] = from_is_negative ? to_transmitted : -from_outgoing;
+    }
+}
+
+__device__ double spin_torque_prefactor(
+    const SolveInput &in,
+    const fullmag_fdm_gpu_transport_spin_cell_v1 *cell_record) {
+    const auto *formula = formula_ids(in);
+    return formula != nullptr && cell_record != nullptr &&
+            cell_record->torque_target != 0 &&
+            cell_record->saturation_magnetization > 0.0
+        ? -(formula->gamma_e * kHbar /
+            (2.0 * kElementaryCharge * cell_record->saturation_magnetization))
+        : 0.0;
+}
+
+struct LocalSpinTerms {
+    double reaction_sf[3]{};
+    double reaction_j[3]{};
+    double reaction_phi[3]{};
+    double torque_volume[3]{};
+};
+
+__device__ LocalSpinTerms local_spin_terms(
+    const SolveInput &in, const double *solution, uint64_t cell) {
+    LocalSpinTerms terms{};
+    const auto *cell_record = spin_cell(in, cell);
+    const auto *material = cell_record != nullptr
+        ? spin_material(in, cell_record->material_index) : nullptr;
+    if (material == nullptr) return terms;
+
+    const uint64_t cells = in.grid[0] * in.grid[1] * in.grid[2];
+    const double mu[3] = {solution[cell], solution[cells + cell],
+                          solution[2 * cells + cell]};
+    const double m[3] = {in.m_stage[cell], in.m_stage[cells + cell],
+                         in.m_stage[2 * cells + cell]};
+    const double sf = material->spin_flip_length > 0.0
+        ? material->spin_conductivity /
+              (2.0 * material->spin_flip_length * material->spin_flip_length)
+        : 0.0;
+    const double exchange = material->exchange_length > 0.0
+        ? material->spin_conductivity /
+              (2.0 * material->exchange_length * material->exchange_length)
+        : 0.0;
+    const double dephasing = material->dephasing_length > 0.0
+        ? material->spin_conductivity /
+              (2.0 * material->dephasing_length * material->dephasing_length)
+        : 0.0;
+    const double cross[3] = {mu[1] * m[2] - mu[2] * m[1],
+                             mu[2] * m[0] - mu[0] * m[2],
+                             mu[0] * m[1] - mu[1] * m[0]};
+    const double projection = mu[0] * m[0] + mu[1] * m[1] + mu[2] * m[2];
+    const double prefactor = spin_torque_prefactor(in, cell_record);
+    for (uint32_t component = 0; component < 3; ++component) {
+        terms.reaction_sf[component] = sf * mu[component];
+        terms.reaction_j[component] = exchange * cross[component];
+        terms.reaction_phi[component] =
+            dephasing * (mu[component] - m[component] * projection);
+        terms.torque_volume[component] = prefactor *
+            (terms.reaction_j[component] + terms.reaction_phi[component]);
+    }
+    return terms;
+}
+
+__device__ double mixing_surface_torque(
+    const SolveInput &in,
+    const fullmag_fdm_gpu_transport_spin_interface_v1 &interface_record,
+    const double absorbed[3], uint32_t component) {
+    const auto *cell_record = spin_cell(in, interface_record.to_cell);
+    const double prefactor = spin_torque_prefactor(in, cell_record);
+    if (prefactor == 0.0) return 0.0;
+    const uint32_t axis = interface_record.axis;
+    const double face_area = in.cell_size[(axis + 1) % 3] *
+                             in.cell_size[(axis + 2) % 3];
+    const double volume = in.cell_size[0] * in.cell_size[1] * in.cell_size[2];
+    const double factor = prefactor * face_area / volume;
+    return factor * absorbed[component];
+}
+
+__global__ void materialize_torque_volume_kernel(
+    SolveInput in, const double *solution, double *torque_total) {
+    const uint64_t cells = in.grid[0] * in.grid[1] * in.grid[2];
+    for (uint64_t cell = uint64_t(blockIdx.x) * blockDim.x + threadIdx.x;
+         cell < cells; cell += uint64_t(blockDim.x) * gridDim.x) {
+        const LocalSpinTerms terms = local_spin_terms(in, solution, cell);
+        for (uint32_t component = 0; component < 3; ++component)
+            torque_total[uint64_t(component) * cells + cell] =
+                terms.torque_volume[component];
+    }
+}
+
+__global__ void add_mixing_torque_axis_kernel(
+    SolveInput in, const double *solution, double *torque_total,
+    uint32_t axis) {
+    const uint64_t cells = in.grid[0] * in.grid[1] * in.grid[2];
+    const uint64_t interface_count = in.views[2].element_count;
+    for (uint64_t index = uint64_t(blockIdx.x) * blockDim.x + threadIdx.x;
+         index < interface_count; index += uint64_t(blockDim.x) * gridDim.x) {
+        const auto *interface_record =
+            record_at<fullmag_fdm_gpu_transport_spin_interface_v1>(in, 2, index);
+        if (interface_record->axis != axis || interface_record->kind !=
+            FULLMAG_FDM_GPU_TRANSPORT_SPIN_INTERFACE_MIXING_CONDUCTANCE_V2 ||
+            interface_at(in, axis, interface_record->canonical_face_index) !=
+                interface_record ||
+            spin_torque_prefactor(in, spin_cell(in, interface_record->to_cell)) == 0.0)
+            continue;
+        double negative_flux[3]{}, positive_flux[3]{}, incoming[3]{},
+            backflow[3]{}, absorbed[3]{};
+        mixing_flux(in, *interface_record, solution, true, negative_flux,
+                    positive_flux, incoming, backflow, absorbed, nullptr);
+        const uint64_t torque_cell = interface_record->to_cell;
+        for (uint32_t component = 0; component < 3; ++component)
+            atomicAdd(torque_total + uint64_t(component) * cells + torque_cell,
+                      mixing_surface_torque(in, *interface_record, absorbed,
+                                            component));
     }
 }
 
@@ -1337,19 +1471,10 @@ __global__ void materialize_faces_kernel(SolveInput in, const double *solution,
             const auto *torque_record = spin_cell(in, torque_cell);
             if (torque_record != nullptr && torque_record->torque_target != 0 &&
                 torque_record->saturation_magnetization > 0.0) {
-                const double face_area = in.cell_size[(axis + 1) % 3] *
-                    in.cell_size[(axis + 2) % 3];
-                const double volume = in.cell_size[0] * in.cell_size[1] *
-                    in.cell_size[2];
-                const auto *formula = formula_ids(in);
-                const double factor = formula == nullptr ? 0.0 :
-                    -(formula->gamma_e * kHbar /
-                      (2.0 * kElementaryCharge *
-                       torque_record->saturation_magnetization)) *
-                    face_area / volume;
                 for (uint32_t component = 0; component < 3; ++component) {
                     const uint64_t index = component * cells + torque_cell;
-                    const double surface = factor * absorbed[component];
+                    const double surface = mixing_surface_torque(
+                        in, *interface_record, absorbed, component);
                     atomicAdd(buffers.torque_surface + index, surface);
                     atomicAdd(buffers.torque_total + index, surface);
                 }
@@ -1435,43 +1560,14 @@ __global__ void materialize_cells_kernel(
         buffers.cell_region_ids[cell] =
             cell_record != nullptr ? cell_record->region_id : 0;
         if (material == nullptr) continue;
-        const double mu[3] = {solution[cell], solution[cells + cell],
-                              solution[2 * cells + cell]};
-        const double m[3] = {in.m_stage[cell], in.m_stage[cells + cell],
-                             in.m_stage[2 * cells + cell]};
-        const double sf = material->spin_flip_length > 0.0
-            ? material->spin_conductivity /
-                  (2.0 * material->spin_flip_length * material->spin_flip_length)
-            : 0.0;
-        const double exchange = material->exchange_length > 0.0
-            ? material->spin_conductivity /
-                  (2.0 * material->exchange_length * material->exchange_length)
-            : 0.0;
-        const double dephasing = material->dephasing_length > 0.0
-            ? material->spin_conductivity /
-                  (2.0 * material->dephasing_length * material->dephasing_length)
-            : 0.0;
-        const double cross[3] = {mu[1] * m[2] - mu[2] * m[1],
-                                 mu[2] * m[0] - mu[0] * m[2],
-                                 mu[0] * m[1] - mu[1] * m[0]};
-        const double projection = mu[0] * m[0] + mu[1] * m[1] + mu[2] * m[2];
+        const LocalSpinTerms terms = local_spin_terms(in, solution, cell);
         for (uint32_t component = 0; component < 3; ++component) {
             const uint64_t index = component * cells + cell;
-            buffers.reaction_sf[index] = sf * mu[component];
-            buffers.reaction_j[index] = exchange * cross[component];
-            buffers.reaction_phi[index] =
-                dephasing * (mu[component] - m[component] * projection);
-            const double magnetic_sink = buffers.reaction_j[index] +
-                                         buffers.reaction_phi[index];
-            const auto *formula = formula_ids(in);
-            const double torque = formula != nullptr && cell_record->torque_target != 0 &&
-                                  cell_record->saturation_magnetization > 0.0
-                ? -(formula->gamma_e * kHbar /
-                    (2.0 * kElementaryCharge * cell_record->saturation_magnetization)) *
-                    magnetic_sink
-                : 0.0;
-            buffers.torque_volume[index] = torque;
-            buffers.torque_total[index] = torque;
+            buffers.reaction_sf[index] = terms.reaction_sf[component];
+            buffers.reaction_j[index] = terms.reaction_j[component];
+            buffers.reaction_phi[index] = terms.reaction_phi[component];
+            buffers.torque_volume[index] = terms.torque_volume[component];
+            buffers.torque_total[index] = terms.torque_volume[component];
         }
     }
 }
@@ -1494,10 +1590,42 @@ struct MaxClosure {
 
 constexpr int kClosureThreads = 256;
 
+__device__ void expected_torque_components(
+    const SolveInput &in, const double *solution, uint64_t cell,
+    double expected[3]) {
+    const LocalSpinTerms local = local_spin_terms(in, solution, cell);
+    for (uint32_t component = 0; component < 3; ++component)
+        expected[component] = local.torque_volume[component];
+    uint64_t x = 0, y = 0, z = 0;
+    coordinates(in, cell, &x, &y, &z);
+    const uint64_t coordinate[3] = {x, y, z};
+    const uint64_t extent[3] = {in.grid[0], in.grid[1], in.grid[2]};
+    for (uint32_t axis = 0; axis < 3; ++axis) {
+        for (int32_t side : {-1, 1}) {
+            if ((side < 0 && coordinate[axis] == 0) ||
+                (side > 0 && coordinate[axis] + 1 == extent[axis]))
+                continue;
+            const uint64_t plane = side < 0
+                ? coordinate[axis] : coordinate[axis] + 1;
+            const uint64_t face = face_index(in, axis, x, y, z, plane);
+            const auto *interface_record = interface_at(in, axis, face);
+            if (interface_record == nullptr || interface_record->to_cell != cell ||
+                interface_record->kind !=
+                    FULLMAG_FDM_GPU_TRANSPORT_SPIN_INTERFACE_MIXING_CONDUCTANCE_V2)
+                continue;
+            double negative_flux[3]{}, positive_flux[3]{}, incoming[3]{},
+                backflow[3]{}, absorbed[3]{};
+            mixing_flux(in, *interface_record, solution, true, negative_flux,
+                        positive_flux, incoming, backflow, absorbed, nullptr);
+            for (uint32_t component = 0; component < 3; ++component)
+                expected[component] += mixing_surface_torque(
+                    in, *interface_record, absorbed, component);
+        }
+    }
+}
+
 __global__ void measure_materialized_closure_kernel(
-    SolveInput in, Buffers buffers, const uint64_t *interface_offsets,
-    const uint32_t *interface_indices, const uint8_t *interface_roles,
-    MaterializationDiagnostics *diagnostics)
+    SolveInput in, Buffers buffers, MaterializationDiagnostics *diagnostics)
 {
     const uint64_t cells = buffers.cells;
     const uint64_t interface_count = buffers.interface_observation_count;
@@ -1519,31 +1647,39 @@ __global__ void measure_materialized_closure_kernel(
     }
 
     const double volume = in.cell_size[0] * in.cell_size[1] * in.cell_size[2];
-    const auto *formula = formula_ids(in);
     for (uint64_t cell = first; cell < cells; cell += stride) {
         double sink[3]{};
         for (uint32_t component = 0; component < 3; ++component) {
             const uint64_t row = component * cells + cell;
             sink[component] = buffers.reaction_j[row] + buffers.reaction_phi[row];
         }
-        // Each incident interface has a self block and a neighbor block in
-        // this row. Inspect its observation once, before publication sorting.
-        for (uint64_t entry = interface_offsets[cell]; entry < interface_offsets[cell + 1];
-             ++entry) {
-            if ((interface_roles[entry] & 1u) != 0) continue;
-            const auto &observation = observations[interface_indices[entry]];
-            if (observation.to_cell != cell) continue;
-            const double area = in.cell_size[(observation.axis + 1) % 3] *
-                                in.cell_size[(observation.axis + 2) % 3];
-            for (uint32_t component = 0; component < 3; ++component)
-                sink[component] += observation.lane2_xyz[component] * area / volume;
+        const double prefactor = spin_torque_prefactor(in, spin_cell(in, cell));
+        if (prefactor != 0.0 && interface_count != 0) {
+            uint64_t x = 0, y = 0, z = 0;
+            coordinates(in, cell, &x, &y, &z);
+            const uint64_t coordinate[3] = {x, y, z};
+            for (uint32_t axis = 0; axis < 3; ++axis) {
+                const double area = in.cell_size[(axis + 1) % 3] *
+                                    in.cell_size[(axis + 2) % 3];
+                for (uint64_t side = 0; side < 2; ++side) {
+                    const uint64_t plane = coordinate[axis] + side;
+                    if (plane == 0 || plane == in.grid[axis]) continue;
+                    const uint64_t face = face_index(in, axis, x, y, z, plane);
+                    uint64_t interface_index = 0;
+                    const auto *interface_record =
+                        interface_at(in, axis, face, &interface_index);
+                    if (interface_record == nullptr || interface_record->to_cell != cell ||
+                        interface_record->kind !=
+                            FULLMAG_FDM_GPU_TRANSPORT_SPIN_INTERFACE_MIXING_CONDUCTANCE_V2)
+                        continue;
+                    // Before publication sorting, each observation has its
+                    // static interface record's index. Audit the stored flux.
+                    const auto &observation = observations[interface_index];
+                    for (uint32_t component = 0; component < 3; ++component)
+                        sink[component] += observation.lane2_xyz[component] * area / volume;
+                }
+            }
         }
-        const auto *record = spin_cell(in, cell);
-        const double prefactor = formula != nullptr && record != nullptr &&
-                record->torque_target != 0 && record->saturation_magnetization > 0.0
-            ? -(formula->gamma_e * kHbar /
-                (2.0 * kElementaryCharge * record->saturation_magnetization))
-            : 0.0;
         for (uint32_t component = 0; component < 3; ++component) {
             const double expected = prefactor == 0.0 ? 0.0 : prefactor * sink[component];
             const double actual = buffers.torque_total[component * cells + cell];
@@ -1576,6 +1712,68 @@ double closure_ratio(unsigned long long error_bits, unsigned long long scale_bit
     std::memcpy(&error, &error_bits, sizeof(error));
     std::memcpy(&scale, &scale_bits, sizeof(scale));
     return error / std::fmax(scale, 1.0e-300);
+}
+
+__global__ void measure_compact_closure_kernel(
+    SolveInput in, const double *solution, const double *torque_total,
+    MaterializationDiagnostics *diagnostics) {
+    const uint64_t cells = in.grid[0] * in.grid[1] * in.grid[2];
+    const uint64_t interface_count = in.views[2].element_count;
+    const uint64_t first = uint64_t(blockIdx.x) * blockDim.x + threadIdx.x;
+    const uint64_t stride = uint64_t(blockDim.x) * gridDim.x;
+    ClosureMaxima local{};
+
+    for (uint64_t interface_index = first; interface_index < interface_count;
+         interface_index += stride) {
+        const auto *interface_record =
+            record_at<fullmag_fdm_gpu_transport_spin_interface_v1>(
+                in, 2, interface_index);
+        if (interface_record->kind !=
+            FULLMAG_FDM_GPU_TRANSPORT_SPIN_INTERFACE_MIXING_CONDUCTANCE_V2)
+            continue;
+        double negative_flux[3]{}, positive_flux[3]{}, incoming[3]{},
+            backflow[3]{}, absorbed[3]{};
+        mixing_flux(in, *interface_record, solution, true, negative_flux,
+                    positive_flux, incoming, backflow, absorbed, nullptr);
+        for (uint32_t component = 0; component < 3; ++component) {
+            local.interface_error = fmax(local.interface_error,
+                fabs(negative_flux[component] - positive_flux[component] -
+                     absorbed[component]));
+            local.interface_scale = fmax(local.interface_scale,
+                fabs(negative_flux[component]) + fabs(positive_flux[component]) +
+                fabs(absorbed[component]));
+        }
+    }
+
+    for (uint64_t cell = first; cell < cells; cell += stride) {
+        double expected[3]{};
+        expected_torque_components(in, solution, cell, expected);
+        for (uint32_t component = 0; component < 3; ++component) {
+            const double actual = torque_total[uint64_t(component) * cells + cell];
+            local.torque_error = fmax(local.torque_error,
+                                      fabs(actual - expected[component]));
+            local.torque_scale = fmax(local.torque_scale,
+                                      fabs(actual) + fabs(expected[component]));
+        }
+    }
+
+    using BlockReduce = cub::BlockReduce<ClosureMaxima, kClosureThreads>;
+    __shared__ typename BlockReduce::TempStorage storage;
+    const ClosureMaxima block = BlockReduce(storage).Reduce(local, MaxClosure{});
+    if (threadIdx.x == 0) {
+        atomicMax(&diagnostics->interface_error_bits,
+                  static_cast<unsigned long long>(
+                      __double_as_longlong(block.interface_error)));
+        atomicMax(&diagnostics->interface_scale_bits,
+                  static_cast<unsigned long long>(
+                      __double_as_longlong(block.interface_scale)));
+        atomicMax(&diagnostics->torque_error_bits,
+                  static_cast<unsigned long long>(
+                      __double_as_longlong(block.torque_error)));
+        atomicMax(&diagnostics->torque_scale_bits,
+                  static_cast<unsigned long long>(
+                      __double_as_longlong(block.torque_scale)));
+    }
 }
 
 __global__ void materialize_observation_range_kernel(
@@ -1628,7 +1826,8 @@ void release(Buffers &buffers) noexcept {
                             buffers.qx, buffers.qy, buffers.qz,
                             buffers.reaction_sf, buffers.reaction_j,
                             buffers.reaction_phi, buffers.torque_volume,
-                            buffers.torque_surface, buffers.torque_total}) {
+                            buffers.torque_surface, buffers.torque_total,
+                            buffers.retained_endpoint}) {
         if (pointer != nullptr) (void)cudaFree(pointer);
     }
     if (buffers.cell_region_ids != nullptr) (void)cudaFree(buffers.cell_region_ids);
@@ -1680,6 +1879,213 @@ void release(SparseState &state) noexcept {
     state = {};
 }
 
+namespace {
+
+struct MaterializationScratch {
+    MaterializationDiagnostics diagnostics{};
+    unsigned long long digest[5]{};
+};
+
+uint32_t materialize_full_fields_impl(
+    const SolveInput &input, const double *rhs, const double *solution,
+    const uint8_t *hierarchy_digest, bool copy_torque_destination,
+    SolveOutput *output) noexcept {
+    if (output == nullptr || input.stream == nullptr || input.m_stage == nullptr ||
+        rhs == nullptr || solution == nullptr || hierarchy_digest == nullptr)
+        return FULLMAG_FDM_GPU_TRANSPORT_ERROR_INVALID_DESCRIPTOR;
+
+    uint64_t xy = 0, cells = 0, qx_faces = 0, qy_faces = 0, qz_faces = 0;
+    if (!checked_mul(input.grid[0], input.grid[1], &xy) ||
+        !checked_mul(xy, input.grid[2], &cells) ||
+        input.grid[0] == UINT64_MAX || input.grid[1] == UINT64_MAX ||
+        input.grid[2] == UINT64_MAX ||
+        !checked_mul(input.grid[0] + 1, input.grid[1], &qx_faces) ||
+        !checked_mul(qx_faces, input.grid[2], &qx_faces) ||
+        !checked_mul(input.grid[0], input.grid[1] + 1, &qy_faces) ||
+        !checked_mul(qy_faces, input.grid[2], &qy_faces) ||
+        !checked_mul(xy, input.grid[2] + 1, &qz_faces) ||
+        cells > UINT64_MAX / 3)
+        return FULLMAG_FDM_GPU_TRANSPORT_ERROR_OUT_OF_RESOURCES;
+
+    const uint64_t unknowns = 3 * cells;
+    const uint64_t interface_count = input.views[2].element_count;
+    Buffers candidate{};
+    candidate.cells = cells;
+    candidate.qx_values = 3 * qx_faces;
+    candidate.qy_values = 3 * qy_faces;
+    candidate.qz_values = 3 * qz_faces;
+    candidate.interface_observation_count = interface_count;
+    if (!checked_mul(2, cells, &candidate.observation_count) ||
+        !checked_add(candidate.observation_count, interface_count,
+                     &candidate.observation_count))
+        return FULLMAG_FDM_GPU_TRANSPORT_ERROR_OUT_OF_RESOURCES;
+
+    uint64_t cell_values = 0, face_values = 0, double_values = 0;
+    uint64_t region_bytes = 0, interface_bytes = 0, observation_bytes = 0;
+    if (!checked_mul(cells, 21, &cell_values) ||
+        !checked_add(candidate.qx_values, candidate.qy_values, &face_values) ||
+        !checked_add(face_values, candidate.qz_values, &face_values) ||
+        !checked_add(cell_values, face_values, &double_values) ||
+        !checked_mul(double_values, sizeof(double), &candidate.owned_bytes) ||
+        !checked_mul(cells, sizeof(uint32_t), &region_bytes) ||
+        !checked_mul(interface_count,
+                     sizeof(fullmag_fdm_gpu_transport_spin_observation_record_v1),
+                     &interface_bytes) ||
+        !checked_add(region_bytes, interface_bytes, &observation_bytes) ||
+        !checked_add(candidate.owned_bytes, observation_bytes,
+                     &candidate.owned_bytes))
+        return FULLMAG_FDM_GPU_TRANSPORT_ERROR_OUT_OF_RESOURCES;
+
+    const uint32_t blocks = static_cast<uint32_t>(
+        (cells + 255) / 256 > 65535 ? 65535 : (cells + 255) / 256);
+    const bool buffers_ok =
+        allocate_zero(&candidate.mu_x, cells, input.stream) &&
+        allocate_zero(&candidate.mu_y, cells, input.stream) &&
+        allocate_zero(&candidate.mu_z, cells, input.stream) &&
+        allocate_zero(&candidate.qx, candidate.qx_values, input.stream) &&
+        allocate_zero(&candidate.qy, candidate.qy_values, input.stream) &&
+        allocate_zero(&candidate.qz, candidate.qz_values, input.stream) &&
+        allocate_zero(&candidate.reaction_sf, unknowns, input.stream) &&
+        allocate_zero(&candidate.reaction_j, unknowns, input.stream) &&
+        allocate_zero(&candidate.reaction_phi, unknowns, input.stream) &&
+        allocate_zero(&candidate.torque_volume, unknowns, input.stream) &&
+        allocate_zero(&candidate.torque_surface, unknowns, input.stream) &&
+        allocate_zero(&candidate.torque_total, unknowns, input.stream) &&
+        allocate_bytes(reinterpret_cast<void **>(&candidate.cell_region_ids),
+                       region_bytes) &&
+        (region_bytes == 0 ||
+         cudaMemsetAsync(candidate.cell_region_ids, 0, region_bytes,
+                         input.stream) == cudaSuccess) &&
+        allocate_bytes(reinterpret_cast<void **>(&candidate.interface_observations),
+                       interface_bytes) &&
+        (interface_bytes == 0 ||
+         cudaMemsetAsync(candidate.interface_observations, 0, interface_bytes,
+                         input.stream) == cudaSuccess);
+    if (!buffers_ok) {
+        release(candidate);
+        return FULLMAG_FDM_GPU_TRANSPORT_ERROR_OUT_OF_MEMORY;
+    }
+
+    MaterializationScratch *scratch = nullptr;
+    if (cudaMalloc(reinterpret_cast<void **>(&scratch), sizeof(*scratch)) != cudaSuccess) {
+        release(candidate);
+        return FULLMAG_FDM_GPU_TRANSPORT_ERROR_OUT_OF_MEMORY;
+    }
+    auto fail = [&](uint32_t status) {
+        if (scratch != nullptr) (void)cudaFree(scratch);
+        release(candidate);
+        return status;
+    };
+    if (cudaMemsetAsync(scratch, 0, sizeof(*scratch), input.stream) != cudaSuccess)
+        return fail(FULLMAG_FDM_GPU_TRANSPORT_ERROR_CUDA_RUNTIME_ERROR);
+
+    materialize_cells_kernel<<<blocks, 256, 0, input.stream>>>(
+        input, solution, candidate);
+    for (uint32_t axis = 0; axis < 3; ++axis) {
+        const uint64_t faces = axis == 0 ? qx_faces : axis == 1 ? qy_faces : qz_faces;
+        const uint32_t face_blocks = static_cast<uint32_t>(
+            (faces + 255) / 256 > 65535 ? 65535 : (faces + 255) / 256);
+        materialize_faces_kernel<<<face_blocks, 256, 0, input.stream>>>(
+            input, solution, candidate, axis);
+    }
+    if (interface_count != 0) {
+        const uint32_t interface_blocks = static_cast<uint32_t>(
+            (interface_count + 255) / 256 > 65535
+                ? 65535 : (interface_count + 255) / 256);
+        materialize_interfaces_kernel<<<interface_blocks, 256, 0, input.stream>>>(
+            input, solution, candidate);
+    }
+    const uint64_t closure_elements = cells > interface_count ? cells : interface_count;
+    const uint64_t closure_grid =
+        (closure_elements + kClosureThreads - 1) / kClosureThreads;
+    const uint32_t closure_blocks = static_cast<uint32_t>(
+        closure_grid > 65535 ? 65535 : closure_grid);
+    measure_materialized_closure_kernel<<<closure_blocks, kClosureThreads, 0,
+                                          input.stream>>>(
+        input, candidate, &scratch->diagnostics);
+    if (interface_count != 0) {
+        try {
+            thrust::sort(thrust::cuda::par.on(input.stream),
+                         candidate.interface_observations,
+                         candidate.interface_observations + interface_count,
+                         ObservationIdentityLess{});
+        } catch (...) {
+            return fail(FULLMAG_FDM_GPU_TRANSPORT_ERROR_CUDA_RUNTIME_ERROR);
+        }
+    }
+    if (cudaPeekAtLastError() != cudaSuccess ||
+        cudaStreamSynchronize(input.stream) != cudaSuccess)
+        return fail(FULLMAG_FDM_GPU_TRANSPORT_ERROR_CUDA_RUNTIME_ERROR);
+
+    MaterializationDiagnostics diagnostics{};
+    if (cudaMemcpyAsync(&diagnostics, &scratch->diagnostics, sizeof(diagnostics),
+                        cudaMemcpyDeviceToHost, input.stream) != cudaSuccess ||
+        cudaStreamSynchronize(input.stream) != cudaSuccess)
+        return fail(FULLMAG_FDM_GPU_TRANSPORT_ERROR_CUDA_RUNTIME_ERROR);
+    if (cudaMemsetAsync(scratch->digest, 0, sizeof(scratch->digest), input.stream) !=
+        cudaSuccess)
+        return fail(FULLMAG_FDM_GPU_TRANSPORT_ERROR_CUDA_RUNTIME_ERROR);
+
+    const double *digest_fields[] = {
+        rhs, solution, candidate.qx, candidate.qy, candidate.qz,
+        candidate.reaction_sf, candidate.reaction_j, candidate.reaction_phi,
+        candidate.torque_volume, candidate.torque_surface, candidate.torque_total};
+    const uint64_t digest_counts[] = {
+        unknowns, unknowns, candidate.qx_values, candidate.qy_values,
+        candidate.qz_values, unknowns, unknowns, unknowns, unknowns, unknowns,
+        unknowns};
+    for (uint64_t domain = 0; domain < 11; ++domain) {
+        const uint64_t count = digest_counts[domain];
+        const uint32_t field_blocks = static_cast<uint32_t>(
+            (count + 255) / 256 > 65535 ? 65535 : (count + 255) / 256);
+        hash_fp64_result_kernel<<<field_blocks == 0 ? 1 : field_blocks, 256, 0,
+                                  input.stream>>>(
+            digest_fields[domain], count, domain, scratch->digest);
+    }
+    unsigned long long result_words[5]{};
+    if (cudaPeekAtLastError() != cudaSuccess ||
+        cudaMemcpyAsync(result_words, scratch->digest, sizeof(result_words),
+                        cudaMemcpyDeviceToHost, input.stream) != cudaSuccess ||
+        cudaStreamSynchronize(input.stream) != cudaSuccess || result_words[4] != 0)
+        return fail(FULLMAG_FDM_GPU_TRANSPORT_ERROR_CUDA_RUNTIME_ERROR);
+    if (input.test_failure_boundary == 60)
+        return fail(FULLMAG_FDM_GPU_TRANSPORT_ERROR_CUDA_RUNTIME_ERROR);
+
+    if (copy_torque_destination && input.torque_destination != nullptr) {
+        if (cudaMemcpyAsync(input.torque_destination, candidate.torque_total,
+                            unknowns * sizeof(double), cudaMemcpyDeviceToDevice,
+                            input.stream) != cudaSuccess ||
+            cudaStreamSynchronize(input.stream) != cudaSuccess)
+            return fail(FULLMAG_FDM_GPU_TRANSPORT_ERROR_CUDA_RUNTIME_ERROR);
+        output->state_d2d_count = 1;
+        output->state_d2d_bytes = unknowns * sizeof(double);
+    }
+    (void)cudaFree(scratch);
+    scratch = nullptr;
+
+    output->buffers = candidate;
+    output->reason = FULLMAG_FDM_GPU_TRANSPORT_CONVERGENCE_CONVERGED;
+    output->interface_balance = closure_ratio(
+        diagnostics.interface_error_bits, diagnostics.interface_scale_bits);
+    output->torque_balance = closure_ratio(
+        diagnostics.torque_error_bits, diagnostics.torque_scale_bits);
+    output->control_d2h_count = 2;
+    output->control_d2h_bytes = sizeof(diagnostics) + sizeof(result_words);
+    output->transfer_count = output->control_d2h_count;
+    output->transfer_bytes = output->control_d2h_bytes;
+    output->control_host_sync_count = 3 +
+        (copy_torque_destination && input.torque_destination != nullptr);
+    output->peak_bytes = candidate.owned_bytes + sizeof(MaterializationScratch);
+    std::memcpy(output->hierarchy_digest, hierarchy_digest, 32);
+    for (uint32_t byte = 0; byte < 32; ++byte)
+        output->deterministic_compute_digest[byte] = uint8_t(
+            (result_words[byte / 8] >> ((byte % 8) * 8)) ^
+            hierarchy_digest[byte] ^ input.accepted_snapshot_digest[byte]);
+    return FULLMAG_FDM_GPU_TRANSPORT_ERROR_OK;
+}
+
+} // namespace
+
 uint32_t solve_device(const SolveInput &input, SolveOutput *output) noexcept {
     const auto trace_begin = std::chrono::steady_clock::now();
     auto trace_phase = [&](const char *phase) {
@@ -1693,7 +2099,12 @@ uint32_t solve_device(const SolveInput &input, SolveOutput *output) noexcept {
         input.grid[1] == 0 || input.grid[2] == 0 || input.m_stage == nullptr ||
         !std::isfinite(input.relative_tolerance) ||
         input.relative_tolerance <= 0.0 || input.max_iterations == 0 ||
-        input.sparse_state == nullptr || input.operator_revision == 0)
+        input.sparse_state == nullptr || input.operator_revision == 0 ||
+        (input.output_mode != SolveOutputMode::FullFields &&
+         input.output_mode != SolveOutputMode::TorqueOnly &&
+         input.output_mode != SolveOutputMode::RetainEndpoint) ||
+        (input.output_mode != SolveOutputMode::FullFields &&
+         input.torque_destination == nullptr))
         return FULLMAG_FDM_GPU_TRANSPORT_ERROR_INVALID_DESCRIPTOR;
     uint64_t xy = 0, cells = 0, qx_faces = 0, qy_faces = 0, qz_faces = 0;
     if (!checked_mul(input.grid[0], input.grid[1], &xy) ||
@@ -1720,6 +2131,9 @@ uint32_t solve_device(const SolveInput &input, SolveOutput *output) noexcept {
 
     if (cells > UINT64_MAX / 3) return FULLMAG_FDM_GPU_TRANSPORT_ERROR_OUT_OF_RESOURCES;
     const uint64_t unknowns = 3 * cells;
+    uint64_t retained_endpoint_bytes = 0;
+    if (!checked_mul(unknowns, 3 * sizeof(double), &retained_endpoint_bytes))
+        return FULLMAG_FDM_GPU_TRANSPORT_ERROR_OUT_OF_RESOURCES;
     uint64_t observation_count = 0, region_bytes = 0, interface_observation_bytes = 0;
     if (!checked_mul(2, cells, &observation_count) ||
         !checked_add(observation_count, input.views[2].element_count,
@@ -1737,9 +2151,19 @@ uint32_t solve_device(const SolveInput &input, SolveOutput *output) noexcept {
     const uint64_t interface_count=input.views[2].element_count;
     const uint64_t interface_entries=4*interface_count;
     const uint64_t grid_for_memory[3]{input.grid[0], input.grid[1], input.grid[2]};
-    const memory::UpperBound cold_memory = memory::estimate_upper_bound(
+    memory::UpperBound cold_memory = memory::estimate_upper_bound(
         grid_for_memory, interface_count, 0, 0, 0, false);
     if (!cold_memory.valid)
+        return FULLMAG_FDM_GPU_TRANSPORT_ERROR_OUT_OF_RESOURCES;
+    uint64_t mode_candidate_bytes = 0;
+    if (input.output_mode == SolveOutputMode::FullFields) {
+        if (!checked_add(cold_memory.candidate_bytes,
+                         sizeof(MaterializationScratch), &mode_candidate_bytes))
+            return FULLMAG_FDM_GPU_TRANSPORT_ERROR_OUT_OF_RESOURCES;
+    } else if (input.output_mode == SolveOutputMode::RetainEndpoint) {
+        mode_candidate_bytes = retained_endpoint_bytes;
+    }
+    if (!set_candidate_upper_bound(&cold_memory, mode_candidate_bytes))
         return FULLMAG_FDM_GPU_TRANSPORT_ERROR_OUT_OF_RESOURCES;
     memory::Input memory_input{};
     memory_input.total_device_bytes = input.total_device_bytes;
@@ -1839,15 +2263,23 @@ uint32_t solve_device(const SolveInput &input, SolveOutput *output) noexcept {
     candidate.qz_values = 3 * qz_faces;
     candidate.observation_count = observation_count;
     candidate.interface_observation_count = input.views[2].element_count;
-    uint64_t candidate_double_values = 0;
-    if (!checked_add(21 * cells,
-                     candidate.qx_values + candidate.qy_values + candidate.qz_values,
+    uint64_t candidate_cell_values = 0, candidate_face_values = 0;
+    uint64_t candidate_double_values = 0, full_candidate_bytes = 0;
+    if (!checked_mul(21, cells, &candidate_cell_values) ||
+        !checked_add(candidate.qx_values, candidate.qy_values,
+                     &candidate_face_values) ||
+        !checked_add(candidate_face_values, candidate.qz_values,
+                     &candidate_face_values) ||
+        !checked_add(candidate_cell_values, candidate_face_values,
                      &candidate_double_values) ||
-        !checked_mul(candidate_double_values, sizeof(double), &candidate.owned_bytes) ||
-        !checked_add(candidate.owned_bytes, observation_storage_bytes,
-                     &candidate.owned_bytes)) {
+        !checked_mul(candidate_double_values, sizeof(double), &full_candidate_bytes) ||
+        !checked_add(full_candidate_bytes, observation_storage_bytes,
+                     &full_candidate_bytes))
         return FULLMAG_FDM_GPU_TRANSPORT_ERROR_OUT_OF_RESOURCES;
-    }
+    candidate.owned_bytes = input.output_mode == SolveOutputMode::FullFields
+        ? full_candidate_bytes
+        : input.output_mode == SolveOutputMode::RetainEndpoint
+            ? retained_endpoint_bytes : 0;
     auto &s=state.storage;
     if(cudaMemsetAsync(s.digest_accumulator,0,5*sizeof(unsigned long long),input.stream)!=cudaSuccess ||
        cudaMemsetAsync(s.solution_soa,0,unknowns*sizeof(double),input.stream)!=cudaSuccess) {
@@ -1890,10 +2322,11 @@ uint32_t solve_device(const SolveInput &input, SolveOutput *output) noexcept {
         uint64_t retained_coarse_cells = 0;
         for (uint32_t level = 1; level < state.hierarchy.level_count; ++level)
             retained_coarse_cells += state.hierarchy.levels[level].cells;
-        const memory::UpperBound warm_memory = memory::estimate_upper_bound(
+        memory::UpperBound warm_memory = memory::estimate_upper_bound(
             grid_for_memory, interface_count, state.storage.owned_bytes,
             state.hierarchy.owned_bytes, retained_coarse_cells, true);
-        if (!warm_memory.valid)
+        if (!warm_memory.valid ||
+            !set_candidate_upper_bound(&warm_memory, mode_candidate_bytes))
             return FULLMAG_FDM_GPU_TRANSPORT_ERROR_OUT_OF_RESOURCES;
         memory::Input warm_input = memory_input;
         warm_input.required_new_bytes = std::max(
@@ -1929,180 +2362,308 @@ uint32_t solve_device(const SolveInput &input, SolveOutput *output) noexcept {
                      &materialization_peak_bytes) ||
         !checked_add(materialization_peak_bytes, candidate.owned_bytes,
                      &materialization_peak_bytes) ||
+        (input.output_mode == SolveOutputMode::FullFields &&
+         !checked_add(materialization_peak_bytes, sizeof(MaterializationScratch),
+                      &materialization_peak_bytes)) ||
         materialization_peak_bytes > resolved_device_budget_bytes)
         return FULLMAG_FDM_GPU_TRANSPORT_ERROR_OUT_OF_RESOURCES;
-    const bool buffers_ok =
-        allocate_zero(&candidate.mu_x, cells, input.stream) &&
-        allocate_zero(&candidate.mu_y, cells, input.stream) &&
-        allocate_zero(&candidate.mu_z, cells, input.stream) &&
-        allocate_zero(&candidate.qx, candidate.qx_values, input.stream) &&
-        allocate_zero(&candidate.qy, candidate.qy_values, input.stream) &&
-        allocate_zero(&candidate.qz, candidate.qz_values, input.stream) &&
-        allocate_zero(&candidate.reaction_sf, unknowns, input.stream) &&
-        allocate_zero(&candidate.reaction_j, unknowns, input.stream) &&
-        allocate_zero(&candidate.reaction_phi, unknowns, input.stream) &&
-        allocate_zero(&candidate.torque_volume, unknowns, input.stream) &&
-        allocate_zero(&candidate.torque_surface, unknowns, input.stream) &&
-        allocate_zero(&candidate.torque_total, unknowns, input.stream) &&
-        allocate_bytes(reinterpret_cast<void **>(&candidate.cell_region_ids),
-                       region_bytes) &&
-        (region_bytes == 0 ||
-         cudaMemsetAsync(candidate.cell_region_ids, 0, region_bytes,
-                         input.stream) == cudaSuccess) &&
-        allocate_bytes(
-            reinterpret_cast<void **>(&candidate.interface_observations),
-            interface_observation_bytes) &&
-        (interface_observation_bytes == 0 ||
-         cudaMemsetAsync(candidate.interface_observations, 0,
-                         interface_observation_bytes, input.stream) == cudaSuccess);
-    if (!buffers_ok) {
-        release(candidate);
-        return FULLMAG_FDM_GPU_TRANSPORT_ERROR_OUT_OF_MEMORY;
-    }
-    MaterializationDiagnostics diagnostics{};
-    MaterializationDiagnostics *device_diagnostics = nullptr;
-    if (cudaMalloc(reinterpret_cast<void **>(&device_diagnostics),
-                   sizeof(MaterializationDiagnostics)) != cudaSuccess) {
-        release(candidate);
-        return FULLMAG_FDM_GPU_TRANSPORT_ERROR_OUT_OF_MEMORY;
-    }
-    if (cudaMemsetAsync(device_diagnostics, 0, sizeof(*device_diagnostics),
-                        input.stream) != cudaSuccess) {
-        cudaFree(device_diagnostics);
-        release(candidate);
-        return FULLMAG_FDM_GPU_TRANSPORT_ERROR_CUDA_RUNTIME_ERROR;
-    }
-    materialize_cells_kernel<<<blocks,256,0,input.stream>>>(
-        input, s.solution_soa, candidate);
-    for (uint32_t axis = 0; axis < 3; ++axis) {
-        const uint64_t faces = axis == 0 ? qx_faces : axis == 1 ? qy_faces : qz_faces;
-        const uint32_t face_blocks = uint32_t(
-            (faces + 255) / 256 > 65535 ? 65535 : (faces + 255) / 256);
-        materialize_faces_kernel<<<face_blocks,256,0,input.stream>>>(
-            input, s.solution_soa, candidate, axis);
-    }
-    if (interface_count != 0) {
-        const uint32_t interface_blocks = uint32_t(
-            (interface_count + 255) / 256 > 65535
-                ? 65535 : (interface_count + 255) / 256);
-        materialize_interfaces_kernel<<<interface_blocks,256,0,input.stream>>>(
-            input, s.solution_soa, candidate);
-    }
-    const uint64_t closure_elements = cells > interface_count ? cells : interface_count;
-    const uint64_t closure_grid = (closure_elements + kClosureThreads - 1) / kClosureThreads;
-    const uint32_t closure_blocks =
-        static_cast<uint32_t>(closure_grid > 65535 ? 65535 : closure_grid);
-    measure_materialized_closure_kernel<<<closure_blocks, kClosureThreads, 0, input.stream>>>(
-        input, candidate, s.interface_row_offsets, s.interface_record_indices,
-        s.interface_roles, device_diagnostics);
-    if (interface_count != 0) {
-        try {
-            thrust::sort(thrust::cuda::par.on(input.stream),
-                         candidate.interface_observations,
-                         candidate.interface_observations + interface_count,
-                         ObservationIdentityLess{});
-        } catch (...) {
-            cudaFree(device_diagnostics);
-            release(candidate);
+
+    auto record_state_metrics = [&]() {
+        output->amg_apply_count = metrics.amg_applications;
+        output->fine_unknowns = build.fine_unknowns;
+        output->coarse_unknowns = build.coarse_unknowns;
+        output->hierarchy_levels = build.level_count;
+        output->hierarchy_build_count = was_cached ? 0 : 1;
+        output->cache_hit_count = was_cached ? 1 : 0;
+        state.amg_apply_count += metrics.amg_applications;
+        state.fine_unknown_count = build.fine_unknowns;
+        state.coarse_unknown_count = build.coarse_unknowns;
+        state.hierarchy_levels = build.level_count;
+        std::memcpy(state.hierarchy_digest, state.hierarchy.operator_digest, 32);
+        std::memcpy(output->hierarchy_digest, state.hierarchy.operator_digest, 32);
+        output->forbidden_transfer_bytes = metrics.forbidden_transfer_bytes;
+    };
+
+    if (input.output_mode != SolveOutputMode::FullFields) {
+        const uint64_t vector_bytes = unknowns * sizeof(double);
+        const bool retain_endpoint =
+            input.output_mode == SolveOutputMode::RetainEndpoint;
+        if (retain_endpoint &&
+            cudaMemsetAsync(s.digest_accumulator, 0,
+                            5 * sizeof(unsigned long long), input.stream) !=
+                cudaSuccess)
             return FULLMAG_FDM_GPU_TRANSPORT_ERROR_CUDA_RUNTIME_ERROR;
+
+        materialize_torque_volume_kernel<<<blocks, 256, 0, input.stream>>>(
+            input, s.solution_soa, input.torque_destination);
+        if (interface_count != 0) {
+            const uint32_t interface_blocks = static_cast<uint32_t>(
+                (interface_count + 255) / 256 > 65535
+                    ? 65535 : (interface_count + 255) / 256);
+            for (uint32_t axis = 0; axis < 3; ++axis)
+                add_mixing_torque_axis_kernel<<<interface_blocks, 256, 0,
+                                                input.stream>>>(
+                    input, s.solution_soa, input.torque_destination, axis);
         }
+
+        MaterializationDiagnostics diagnostics{};
+        if (retain_endpoint) {
+            const uint64_t closure_elements = cells > interface_count
+                ? cells : interface_count;
+            const uint64_t closure_grid =
+                (closure_elements + kClosureThreads - 1) / kClosureThreads;
+            const uint32_t closure_blocks = static_cast<uint32_t>(
+                closure_grid > 65535 ? 65535 : closure_grid);
+            auto *device_diagnostics = reinterpret_cast<
+                MaterializationDiagnostics *>(s.digest_accumulator);
+            measure_compact_closure_kernel<<<closure_blocks, kClosureThreads, 0,
+                                             input.stream>>>(
+                input, s.solution_soa, input.torque_destination,
+                device_diagnostics);
+            if (cudaPeekAtLastError() != cudaSuccess ||
+                cudaMemcpyAsync(&diagnostics, device_diagnostics,
+                                sizeof(diagnostics), cudaMemcpyDeviceToHost,
+                                input.stream) != cudaSuccess ||
+                cudaStreamSynchronize(input.stream) != cudaSuccess)
+                return FULLMAG_FDM_GPU_TRANSPORT_ERROR_CUDA_RUNTIME_ERROR;
+        }
+
+        if (cudaMemsetAsync(s.digest_accumulator, 0,
+                            5 * sizeof(unsigned long long), input.stream) !=
+            cudaSuccess)
+            return FULLMAG_FDM_GPU_TRANSPORT_ERROR_CUDA_RUNTIME_ERROR;
+        const double *digest_fields[] = {
+            s.rhs_soa, s.solution_soa, input.torque_destination};
+        const uint64_t digest_counts[] = {unknowns, unknowns, unknowns};
+        for (uint64_t domain = 0; domain < 3; ++domain) {
+            const uint32_t field_blocks = static_cast<uint32_t>(
+                (digest_counts[domain] + 255) / 256 > 65535
+                    ? 65535 : (digest_counts[domain] + 255) / 256);
+            hash_fp64_result_kernel<<<field_blocks, 256, 0, input.stream>>>(
+                digest_fields[domain], digest_counts[domain], domain,
+                s.digest_accumulator);
+        }
+        unsigned long long result_words[5]{};
+        if (cudaPeekAtLastError() != cudaSuccess ||
+            cudaMemcpyAsync(result_words, s.digest_accumulator,
+                            sizeof(result_words), cudaMemcpyDeviceToHost,
+                            input.stream) != cudaSuccess ||
+            cudaStreamSynchronize(input.stream) != cudaSuccess ||
+            result_words[4] != 0)
+            return FULLMAG_FDM_GPU_TRANSPORT_ERROR_CUDA_RUNTIME_ERROR;
+        if (input.test_failure_boundary == 60)
+            return FULLMAG_FDM_GPU_TRANSPORT_ERROR_CUDA_RUNTIME_ERROR;
+
+        if (retain_endpoint) {
+            if (!allocate_bytes(reinterpret_cast<void **>(&candidate.retained_endpoint),
+                                retained_endpoint_bytes))
+                return FULLMAG_FDM_GPU_TRANSPORT_ERROR_OUT_OF_MEMORY;
+            const cudaError_t copy_m = cudaMemcpyAsync(
+                candidate.retained_endpoint, input.m_stage, vector_bytes,
+                cudaMemcpyDeviceToDevice, input.stream);
+            const cudaError_t copy_rhs = copy_m == cudaSuccess
+                ? cudaMemcpyAsync(candidate.retained_endpoint + unknowns,
+                                  s.rhs_soa, vector_bytes,
+                                  cudaMemcpyDeviceToDevice, input.stream)
+                : copy_m;
+            const cudaError_t copy_solution = copy_rhs == cudaSuccess
+                ? cudaMemcpyAsync(candidate.retained_endpoint + 2 * unknowns,
+                                  s.solution_soa, vector_bytes,
+                                  cudaMemcpyDeviceToDevice, input.stream)
+                : copy_rhs;
+            if (copy_solution != cudaSuccess ||
+                cudaStreamSynchronize(input.stream) != cudaSuccess) {
+                release(candidate);
+                return FULLMAG_FDM_GPU_TRANSPORT_ERROR_CUDA_RUNTIME_ERROR;
+            }
+            output->state_d2d_count = 3;
+            output->state_d2d_bytes = retained_endpoint_bytes;
+        }
+
+        output->buffers = candidate;
+        output->iterations = metrics.iterations;
+        output->reason = FULLMAG_FDM_GPU_TRANSPORT_CONVERGENCE_CONVERGED;
+        output->algebraic_residual = metrics.relative_residual;
+        output->local_balance = metrics.relative_residual;
+        output->global_balance = metrics.relative_residual;
+        if (retain_endpoint) {
+            output->interface_balance = closure_ratio(
+                diagnostics.interface_error_bits,
+                diagnostics.interface_scale_bits);
+            output->torque_balance = closure_ratio(
+                diagnostics.torque_error_bits, diagnostics.torque_scale_bits);
+        }
+        output->control_d2h_count = build.control_transfer_count +
+            metrics.control_transfer_count + 2 + retain_endpoint;
+        output->control_d2h_bytes = build.control_transfer_bytes +
+            metrics.control_transfer_bytes + sizeof(digest_words) +
+            sizeof(result_words) + (retain_endpoint ? sizeof(diagnostics) : 0);
+        output->transfer_count = output->control_d2h_count;
+        output->transfer_bytes = output->control_d2h_bytes;
+        output->control_host_sync_count = build.control_host_sync_count +
+            metrics.control_host_sync_count + 2 + retain_endpoint + retain_endpoint;
+        output->peak_bytes = solve_peak_bytes > materialization_peak_bytes
+            ? solve_peak_bytes : materialization_peak_bytes;
+        record_state_metrics();
+        bool digest_nonzero = false;
+        for (uint32_t byte = 0; byte < 32; ++byte) {
+            output->deterministic_compute_digest[byte] = uint8_t(
+                (result_words[byte / 8] >> ((byte % 8) * 8)) ^
+                state.hierarchy.operator_digest[byte] ^
+                input.accepted_snapshot_digest[byte]);
+            digest_nonzero = digest_nonzero ||
+                output->deterministic_compute_digest[byte] != 0;
+        }
+        if (!digest_nonzero) output->deterministic_compute_digest[31] = 1;
+        trace_phase(retain_endpoint ? "retained_endpoint" : "torque_only");
+        return FULLMAG_FDM_GPU_TRANSPORT_ERROR_OK;
     }
-    if (cudaPeekAtLastError() != cudaSuccess ||
-        cudaStreamSynchronize(input.stream) != cudaSuccess) {
-        cudaFree(device_diagnostics); release(candidate);
-        return FULLMAG_FDM_GPU_TRANSPORT_ERROR_CUDA_RUNTIME_ERROR;
-    }
-    if (cudaMemcpyAsync(&diagnostics, device_diagnostics, sizeof(diagnostics),
-                        cudaMemcpyDeviceToHost, input.stream) != cudaSuccess ||
-        cudaStreamSynchronize(input.stream) != cudaSuccess) {
-        cudaFree(device_diagnostics); release(candidate);
-        return FULLMAG_FDM_GPU_TRANSPORT_ERROR_CUDA_RUNTIME_ERROR;
-    }
-    cudaFree(device_diagnostics);
-    if (cudaMemsetAsync(s.digest_accumulator, 0,
-                        5 * sizeof(unsigned long long), input.stream) != cudaSuccess) {
-        release(candidate);
-        return FULLMAG_FDM_GPU_TRANSPORT_ERROR_CUDA_RUNTIME_ERROR;
-    }
-    const uint32_t digest_blocks = uint32_t(
-        (unknowns + 255) / 256 > 65535 ? 65535 : (unknowns + 255) / 256);
-    const double *digest_fields[] = {
-        s.rhs_soa, s.solution_soa, candidate.qx, candidate.qy, candidate.qz,
-        candidate.reaction_sf, candidate.reaction_j, candidate.reaction_phi,
-        candidate.torque_volume, candidate.torque_surface, candidate.torque_total};
-    const uint64_t digest_counts[] = {
-        unknowns, unknowns, candidate.qx_values, candidate.qy_values,
-        candidate.qz_values, unknowns, unknowns, unknowns, unknowns, unknowns,
-        unknowns};
-    for (uint64_t domain = 0; domain < 11; ++domain) {
-        const uint32_t field_blocks = uint32_t(
-            (digest_counts[domain] + 255) / 256 > 65535
-                ? 65535 : (digest_counts[domain] + 255) / 256);
-        hash_fp64_result_kernel<<<field_blocks == 0 ? digest_blocks : field_blocks,
-                                  256, 0, input.stream>>>(
-            digest_fields[domain], digest_counts[domain], domain,
-            s.digest_accumulator);
-    }
-    unsigned long long result_words[5]{};
-    if (cudaPeekAtLastError() != cudaSuccess ||
-        cudaMemcpyAsync(result_words, s.digest_accumulator, sizeof(result_words),
-                        cudaMemcpyDeviceToHost, input.stream) != cudaSuccess ||
-        cudaStreamSynchronize(input.stream) != cudaSuccess || result_words[4] != 0) {
-        release(candidate);
-        return FULLMAG_FDM_GPU_TRANSPORT_ERROR_CUDA_RUNTIME_ERROR;
-    }
-    if (input.test_failure_boundary == 60) {
-        release(candidate);
-        return FULLMAG_FDM_GPU_TRANSPORT_ERROR_CUDA_RUNTIME_ERROR;
-    }
-    if (input.torque_destination != nullptr &&
-        (cudaMemcpyAsync(input.torque_destination, candidate.torque_total,
-                         unknowns * sizeof(double), cudaMemcpyDeviceToDevice,
-                         input.stream) != cudaSuccess ||
-         cudaStreamSynchronize(input.stream) != cudaSuccess)) {
-        release(candidate);
-        return FULLMAG_FDM_GPU_TRANSPORT_ERROR_CUDA_RUNTIME_ERROR;
-    }
-    trace_phase("materialize_and_diagnostics");
-    output->buffers = candidate;
+
+    status = materialize_full_fields_impl(
+        input, s.rhs_soa, s.solution_soa, state.hierarchy.operator_digest,
+        true, output);
+    if (status != FULLMAG_FDM_GPU_TRANSPORT_ERROR_OK) return status;
     output->iterations = metrics.iterations;
     output->reason = FULLMAG_FDM_GPU_TRANSPORT_CONVERGENCE_CONVERGED;
-    // The normalized sparse FV residual is the authoritative local/global closure.
     output->algebraic_residual = metrics.relative_residual;
     output->local_balance = metrics.relative_residual;
     output->global_balance = metrics.relative_residual;
-    output->interface_balance =
-        closure_ratio(diagnostics.interface_error_bits, diagnostics.interface_scale_bits);
-    output->torque_balance =
-        closure_ratio(diagnostics.torque_error_bits, diagnostics.torque_scale_bits);
-    output->control_d2h_count = build.control_transfer_count +
-        metrics.control_transfer_count + 3;
-    output->control_d2h_bytes = build.control_transfer_bytes +
-        metrics.control_transfer_bytes + sizeof(digest_words) + sizeof(diagnostics) +
-        sizeof(result_words);
+    output->control_d2h_count += build.control_transfer_count +
+        metrics.control_transfer_count + 1;
+    output->control_d2h_bytes += build.control_transfer_bytes +
+        metrics.control_transfer_bytes + sizeof(digest_words);
     output->transfer_count = output->control_d2h_count;
     output->transfer_bytes = output->control_d2h_bytes;
-    output->control_host_sync_count = build.control_host_sync_count +
-        metrics.control_host_sync_count + 4 + (input.torque_destination != nullptr);
-    output->forbidden_transfer_bytes = metrics.forbidden_transfer_bytes;
-    output->peak_bytes = solve_peak_bytes > materialization_peak_bytes
-        ? solve_peak_bytes : materialization_peak_bytes;
-    output->amg_apply_count = metrics.amg_applications;
-    output->fine_unknowns = build.fine_unknowns;
-    output->coarse_unknowns = build.coarse_unknowns;
-    output->hierarchy_levels = build.level_count;
-    for (uint32_t byte = 0; byte < 32; ++byte)
-        output->hierarchy_digest[byte] = state.hierarchy.operator_digest[byte];
-    for (uint32_t byte = 0; byte < 32; ++byte)
-        output->deterministic_compute_digest[byte] = uint8_t(
-            (result_words[byte / 8] >> ((byte % 8) * 8)) ^
-            state.hierarchy.operator_digest[byte] ^
-            input.accepted_snapshot_digest[byte]);
-    output->hierarchy_build_count=was_cached ? 0 : 1;
-    output->cache_hit_count=was_cached ? 1 : 0;
-    state.amg_apply_count+=metrics.amg_applications; state.fine_unknown_count=build.fine_unknowns;
-    state.coarse_unknown_count=build.coarse_unknowns; state.hierarchy_levels=build.level_count;
-    std::memcpy(state.hierarchy_digest,state.hierarchy.operator_digest,32);
+    output->control_host_sync_count += build.control_host_sync_count +
+        metrics.control_host_sync_count + 1;
+    const uint64_t full_peak = materialization_peak_bytes;
+    output->peak_bytes = solve_peak_bytes > full_peak ? solve_peak_bytes : full_peak;
+    record_state_metrics();
+    trace_phase("materialize_and_diagnostics");
+    return FULLMAG_FDM_GPU_TRANSPORT_ERROR_OK;
+}
+
+uint32_t materialize_endpoint(
+    const SolveInput &input, const Buffers &endpoint,
+    const uint8_t *hierarchy_digest, SolveOutput *output) noexcept {
+    const auto trace_begin = std::chrono::steady_clock::now();
+    auto trace_phase = [&](const char *phase) {
+        if (std::getenv("FULLMAG_FDM_GPU_TRACE_SPIN_SOLVE") == nullptr) return;
+        std::fprintf(stderr, "spin_materialize_phase phase=%s elapsed=%.6f\n",
+                     phase, std::chrono::duration<double>(
+                         std::chrono::steady_clock::now() - trace_begin).count());
+        std::fflush(stderr);
+    };
+    if (output == nullptr || input.stream == nullptr || hierarchy_digest == nullptr ||
+        input.grid[0] == 0 || input.grid[1] == 0 || input.grid[2] == 0 ||
+        endpoint.retained_endpoint == nullptr ||
+        !std::isfinite(input.cell_size[0]) || !std::isfinite(input.cell_size[1]) ||
+        !std::isfinite(input.cell_size[2]) || input.cell_size[0] <= 0.0 ||
+        input.cell_size[1] <= 0.0 || input.cell_size[2] <= 0.0)
+        return FULLMAG_FDM_GPU_TRANSPORT_ERROR_INVALID_DESCRIPTOR;
+
+    uint64_t xy = 0, cells = 0, qx_faces = 0, qy_faces = 0, qz_faces = 0;
+    if (!checked_mul(input.grid[0], input.grid[1], &xy) ||
+        !checked_mul(xy, input.grid[2], &cells) || cells > UINT64_MAX / 3 ||
+        input.grid[0] == UINT64_MAX || input.grid[1] == UINT64_MAX ||
+        input.grid[2] == UINT64_MAX ||
+        !checked_mul(input.grid[0] + 1, input.grid[1], &qx_faces) ||
+        !checked_mul(qx_faces, input.grid[2], &qx_faces) ||
+        !checked_mul(input.grid[0], input.grid[1] + 1, &qy_faces) ||
+        !checked_mul(qy_faces, input.grid[2], &qy_faces) ||
+        !checked_mul(xy, input.grid[2] + 1, &qz_faces))
+        return FULLMAG_FDM_GPU_TRANSPORT_ERROR_OUT_OF_RESOURCES;
+    const uint64_t unknowns = 3 * cells;
+    uint64_t endpoint_bytes = 0;
+    if (!checked_mul(unknowns, 3 * sizeof(double), &endpoint_bytes) ||
+        endpoint.cells != cells || endpoint.owned_bytes < endpoint_bytes)
+        return FULLMAG_FDM_GPU_TRANSPORT_ERROR_INVALID_DESCRIPTOR;
+    if (input.accepted_potential == nullptr || input.accepted_jx == nullptr ||
+        input.accepted_jy == nullptr || input.accepted_jz == nullptr ||
+        input.accepted_jx_count != qx_faces || input.accepted_jy_count != qy_faces ||
+        input.accepted_jz_count != qz_faces ||
+        input.accepted_interface_count != input.views[2].element_count ||
+        (input.accepted_interface_count != 0 &&
+         (input.accepted_interface_from_trace_v == nullptr ||
+          input.accepted_interface_to_trace_v == nullptr ||
+          input.accepted_interface_delta_trace_v == nullptr ||
+          input.accepted_interface_charge_current_density == nullptr)))
+        return FULLMAG_FDM_GPU_TRANSPORT_ERROR_STALE_SNAPSHOT;
+
+    const uint64_t grid_for_memory[3] = {
+        input.grid[0], input.grid[1], input.grid[2]};
+    const memory::UpperBound full_shape = memory::estimate_upper_bound(
+        grid_for_memory, input.views[2].element_count, 0, 0, 0, false);
+    uint64_t required_materialization_bytes = 0;
+    if (!full_shape.valid ||
+        !checked_add(full_shape.candidate_bytes, sizeof(MaterializationScratch),
+                     &required_materialization_bytes))
+        return FULLMAG_FDM_GPU_TRANSPORT_ERROR_OUT_OF_RESOURCES;
+
+    memory::Input budget{};
+    budget.total_device_bytes = input.total_device_bytes;
+    budget.free_device_bytes = input.free_device_bytes;
+    budget.static_baseline_bytes = input.static_baseline_bytes;
+    budget.tracked_resident_bytes = input.tracked_resident_bytes;
+    budget.old_accepted_bytes = input.old_accepted_bytes;
+    budget.allocator_limit_bytes = input.allocator_limit;
+    budget.workspace_limit_bytes = input.workspace_limit;
+    budget.required_new_bytes = required_materialization_bytes;
+    budget.phase_peak_bytes = required_materialization_bytes;
+    budget.workspace_bytes = 0;
+    budget.first_solve = input.old_accepted_bytes == 0;
+    budget.first_required_is_conservative_upper_bound = false;
+
+    // Observation callers supply fresh free-memory fields after the compact
+    // endpoint is resident. When they do not provide solver accounting, derive
+    // its fixed-budget resident split without counting that endpoint twice.
+    if (budget.old_accepted_bytes == 0 && budget.tracked_resident_bytes == 0) {
+        if (input.resident_external_bytes < endpoint_bytes)
+            return FULLMAG_FDM_GPU_TRANSPORT_ERROR_OUT_OF_RESOURCES;
+        uint64_t tracked = input.resident_external_bytes - endpoint_bytes;
+        if (input.sparse_state != nullptr) {
+            if (!checked_add(tracked, input.sparse_state->storage.owned_bytes,
+                             &tracked) ||
+                !checked_add(tracked, input.sparse_state->hierarchy.owned_bytes,
+                             &tracked))
+                return FULLMAG_FDM_GPU_TRANSPORT_ERROR_OUT_OF_RESOURCES;
+        }
+        budget.tracked_resident_bytes = tracked;
+        budget.old_accepted_bytes = endpoint_bytes;
+        budget.first_solve = false;
+    }
+    output->memory_plan = memory::plan(budget);
+    if (output->memory_plan.preflight != memory::Preflight::ready)
+        return FULLMAG_FDM_GPU_TRANSPORT_ERROR_OUT_OF_RESOURCES;
+    trace_phase("preflight");
+
+    uint64_t materialization_peak = input.resident_external_bytes;
+    if (input.sparse_state != nullptr &&
+        (!checked_add(materialization_peak,
+                      input.sparse_state->storage.owned_bytes,
+                      &materialization_peak) ||
+         !checked_add(materialization_peak,
+                      input.sparse_state->hierarchy.owned_bytes,
+                      &materialization_peak)))
+        return FULLMAG_FDM_GPU_TRANSPORT_ERROR_OUT_OF_RESOURCES;
+    SolveInput material_input = input;
+    material_input.m_stage = endpoint.retained_endpoint;
+    const uint32_t status = materialize_full_fields_impl(
+        material_input, endpoint.retained_endpoint + unknowns,
+        endpoint.retained_endpoint + 2 * unknowns, hierarchy_digest, false,
+        output);
+    if (status != FULLMAG_FDM_GPU_TRANSPORT_ERROR_OK) return status;
+    if (!checked_add(materialization_peak, output->buffers.owned_bytes,
+                     &materialization_peak) ||
+        !checked_add(materialization_peak, sizeof(MaterializationScratch),
+                     &materialization_peak)) {
+        release(output->buffers);
+        return FULLMAG_FDM_GPU_TRANSPORT_ERROR_OUT_OF_RESOURCES;
+    }
+    output->peak_bytes = materialization_peak;
+    output->memory_plan = memory::plan(budget);
+    output->reason = FULLMAG_FDM_GPU_TRANSPORT_CONVERGENCE_CONVERGED;
+    trace_phase("full_fields");
     return FULLMAG_FDM_GPU_TRANSPORT_ERROR_OK;
 }
 

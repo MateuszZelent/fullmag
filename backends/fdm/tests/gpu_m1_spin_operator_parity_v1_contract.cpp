@@ -51,6 +51,7 @@ constexpr uint64_t kCharge = FULLMAG_FDM_GPU_TRANSPORT_FEATURE_M1_CHARGE;
 constexpr uint64_t kSpin = FULLMAG_FDM_GPU_TRANSPORT_FEATURE_STEADY_SPIN;
 constexpr uint64_t kChargeSpin = kCharge | kSpin;
 constexpr uint64_t kReadback = FULLMAG_FDM_GPU_TRANSPORT_FEATURE_ARTIFACT_READBACK;
+constexpr uint64_t kCheckpoint = FULLMAG_FDM_GPU_TRANSPORT_FEATURE_CHECKPOINT_V1;
 constexpr double kRelativeTolerance = 2.0e-8;
 constexpr double kAbsolutePotentialTolerance = 2.0e-11;
 constexpr double kAbsoluteFluxTolerance = 2.0e-7;
@@ -145,14 +146,16 @@ void require_llg_stage_transfer_audit(
                         record.bytes == 0 && record.count > 0,
                     scenario + ": invalid local stream synchronization audit");
             break;
-        case FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_REASON_SOLVE_STATE_D2D:
+        case FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_REASON_SOLVE_STATE_D2D: {
             ++reason_counts[2];
+            const bool endpoint = record.stage_id == expected_stages;
             require(record.direction ==
                         FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_DIRECTION_D2D &&
-                        record.bytes == 3 * cell_count * sizeof(double) &&
-                        record.count == 1,
-                    scenario + ": invalid device-resident torque handoff");
+                        record.bytes == (endpoint ? 12 : 3) * cell_count * sizeof(double) &&
+                        record.count >= 3,
+                    scenario + ": invalid magnetization staging or endpoint retention");
             break;
+        }
         case FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_REASON_SOLVED_TRANSPORT_RHS:
             ++reason_counts[3];
             require(record.direction ==
@@ -673,6 +676,84 @@ void require_observations_equal(
     }
 }
 
+void require_bound_spin_checkpoint(
+    fullmag_fdm_gpu_transport_context_handle_v1 context,
+    const fullmag_fdm_gpu_charge_snapshot_info_v1 &snapshot,
+    const uint8_t *static_digest)
+{
+    constexpr uint32_t include_charge_and_spin = UINT32_C(0x3f);
+    fullmag_fdm_gpu_transport_checkpoint_size_request_v1 size_request{};
+    fullmag_fdm_gpu_transport_checkpoint_size_result_v1 size_result{};
+    init_record(size_request, kChargeSpin | kCheckpoint);
+    init_record(size_result, kChargeSpin | kCheckpoint);
+    size_request.context_handle = context;
+    size_request.snapshot_handle = snapshot.snapshot_handle;
+    size_request.accepted_sequence = snapshot.accepted_sequence;
+    size_request.schema_version = FULLMAG_FDM_GPU_TRANSPORT_CHECKPOINT_SCHEMA_V1;
+    size_request.inclusion_mask = include_charge_and_spin;
+    std::memcpy(size_request.static_descriptor_digest, static_digest, 32);
+    const uint64_t before_size = latest_telemetry_cursor(context);
+    fullmag_fdm_gpu_transport_telemetry_v1 accepted_stage{};
+    uint64_t accepted_stage_count = 0;
+    require(before_size != 0 &&
+                fullmag_fdm_gpu_transport_query_telemetry_v1(
+                    context, before_size - 1, &accepted_stage, 1, &accepted_stage_count) ==
+                    FULLMAG_FDM_GPU_TRANSPORT_ERROR_OK &&
+                accepted_stage_count == 1 &&
+                accepted_stage.reason == FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_REASON_SOLVED_TRANSPORT_RHS,
+            "accepted endpoint solve provenance is missing");
+    require(fullmag_fdm_gpu_transport_checkpoint_query_size_v1(&size_request, &size_result) ==
+                FULLMAG_FDM_GPU_TRANSPORT_ERROR_OK &&
+                size_result.required_bytes != 0 && size_result.section_count == 20,
+            "bound spin checkpoint size query failed");
+    require(latest_telemetry_cursor(context) == before_size,
+            "checkpoint size query observed fields or changed the transfer audit");
+
+    std::vector<uint8_t> payload(size_result.required_bytes);
+    fullmag_fdm_gpu_transport_buffer_view_v1 view{};
+    init_record(view);
+    view.address = reinterpret_cast<uint64_t>(payload.data());
+    view.element_count = payload.size();
+    view.byte_stride = 1;
+    view.byte_length = payload.size();
+    view.element_type = FULLMAG_FDM_GPU_TRANSPORT_ELEMENT_TYPE_RAW_BYTES;
+    view.pointer_space = FULLMAG_FDM_GPU_TRANSPORT_POINTER_SPACE_HOST_WRITE_ONLY;
+    view.component_order = FULLMAG_FDM_GPU_TRANSPORT_COMPONENT_ORDER_SCALAR;
+    fullmag_fdm_gpu_transport_checkpoint_export_request_v1 export_request{};
+    init_record(export_request, kChargeSpin | kCheckpoint);
+    export_request.context_handle = context;
+    export_request.snapshot_handle = snapshot.snapshot_handle;
+    export_request.accepted_sequence = snapshot.accepted_sequence;
+    export_request.cadence_id = 1;
+    export_request.destination_view_ptr = reinterpret_cast<uint64_t>(&view);
+    export_request.exact_capacity = payload.size();
+    export_request.expected_size = payload.size();
+    export_request.inclusion_mask = include_charge_and_spin;
+    auto export_once = [&]() {
+        fullmag_fdm_gpu_transport_checkpoint_export_result_v1 result{};
+        init_record(result, kChargeSpin | kCheckpoint);
+        require(fullmag_fdm_gpu_transport_checkpoint_export_v1(&export_request, &result) ==
+                    FULLMAG_FDM_GPU_TRANSPORT_ERROR_OK &&
+                    result.committed_bytes == payload.size(),
+                "bound spin checkpoint export failed");
+        return result;
+    };
+
+    const auto first = export_once();
+    const auto &digest = accepted_stage.scientific_continuation_digest;
+    require(std::search(payload.begin(), payload.end(), digest, digest + sizeof(digest)) !=
+                payload.end(),
+            "field reconstruction changed the accepted endpoint compute digest");
+    const uint64_t first_cursor = latest_telemetry_cursor(context);
+    const auto second = export_once();
+    const uint64_t second_cursor = latest_telemetry_cursor(context);
+    require(first_cursor - before_size == second_cursor - first_cursor + 2,
+            "the accepted spin observations must be reconstructed on the first export only");
+    require(std::memcmp(first.spin_digest, second.spin_digest, 32) == 0 &&
+                std::memcmp(first.warm_start_digest, second.warm_start_digest, 32) == 0,
+            "repeat checkpoint export changed the accepted scientific state");
+}
+
 std::vector<double> readback(
     fullmag_fdm_gpu_transport_context_handle_v1 context,
     const fullmag_fdm_gpu_charge_snapshot_info_v1 &snapshot,
@@ -734,7 +815,7 @@ GpuResult solve_gpu(const Scenario &scenario) {
             return interface.kind ==
                    FULLMAG_FDM_GPU_TRANSPORT_SPIN_INTERFACE_MIXING_CONDUCTANCE_V2;
         });
-    const uint64_t create_features = kChargeSpin | kReadback |
+    const uint64_t create_features = kChargeSpin | kReadback | kCheckpoint |
         (has_mixing ? FULLMAG_FDM_GPU_TRANSPORT_FEATURE_MIXING_V2 : 0);
     init_record(create, create_features);
     create.device_ordinal = device;
@@ -1016,7 +1097,7 @@ GpuResult solve_gpu(const Scenario &scenario) {
                         FULLMAG_FDM_ERR_CUDA,
                     scenario.name + ": " + label + " failure was accepted");
             const auto failed_receipt = query_execution_receipt(llg, scenario.name);
-            require((failed_receipt.executed_device_operator_mask &
+            require((failed_receipt.device_operator_mask &
                          FULLMAG_FDM_OPERATOR_GPU_TRANSPORT) == 0,
                     scenario.name + ": " + label +
                         " failure published executed GPU transport");
@@ -1060,6 +1141,7 @@ GpuResult solve_gpu(const Scenario &scenario) {
                     created.context_handle, kFaultHoldInFlight) ==
                     FULLMAG_FDM_GPU_TRANSPORT_ERROR_OK,
                 scenario.name + ": could not arm in-flight hold");
+        const uint64_t hold_start_cursor = latest_telemetry_cursor(created.context_handle);
         int held_step_status = FULLMAG_FDM_OK;
         std::thread held_step([&] {
             held_step_status = fullmag_fdm_backend_step(llg, 1.0e-18, &llg_stats);
@@ -1077,6 +1159,26 @@ GpuResult solve_gpu(const Scenario &scenario) {
         }
         require(hold_reached != 0,
                 scenario.name + ": transport RHS did not reach the in-flight hold");
+        std::array<fullmag_fdm_gpu_transport_telemetry_v1, 16> held_stage_records{};
+        uint64_t held_stage_count = 0;
+        require(fullmag_fdm_gpu_transport_query_telemetry_v1(
+                    created.context_handle, hold_start_cursor, held_stage_records.data(),
+                    held_stage_records.size(), &held_stage_count) ==
+                    FULLMAG_FDM_GPU_TRANSPORT_ERROR_OK &&
+                    held_stage_count != 0,
+                scenario.name + ": in-flight transport audit is missing");
+        const auto &held_stage = held_stage_records[held_stage_count - 1];
+        require(held_stage.reason == FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_REASON_SOLVED_TRANSPORT_RHS,
+                scenario.name + ": in-flight transport attempt did not solve its RHS");
+        auto competing_request = request;
+        competing_request.attempt_id = held_stage.attempt_id;
+        competing_request.stage_id = held_stage.stage_id;
+        fullmag_fdm_gpu_steady_spin_solve_result_v1 competing_result{};
+        init_record(competing_result, kChargeSpin);
+        require(fullmag_fdm_gpu_transport_solve_steady_spin_v1(
+                    &competing_request, &competing_result) ==
+                    FULLMAG_FDM_GPU_TRANSPORT_ERROR_INVALID_STATE,
+                scenario.name + ": standalone spin solve entered a bound LLG transaction");
         require(fullmag_fdm_context_unbind_gpu_transport_v1(llg) ==
                     FULLMAG_FDM_ERR_INVALID,
                 scenario.name + ": unbind succeeded while torque storage was in flight");
@@ -1093,7 +1195,7 @@ GpuResult solve_gpu(const Scenario &scenario) {
         require(held_step_status == FULLMAG_FDM_OK,
                 scenario.name + ": held transport step did not finish after release");
         const auto successful_receipt = query_execution_receipt(llg, scenario.name);
-        require((successful_receipt.executed_device_operator_mask &
+        require((successful_receipt.device_operator_mask &
                      FULLMAG_FDM_OPERATOR_GPU_TRANSPORT) != 0,
                 scenario.name + ": successful transport step did not commit execution");
         require(fullmag_fdm_context_unbind_gpu_transport_v1(llg) ==
@@ -1341,6 +1443,8 @@ GpuResult solve_gpu(const Scenario &scenario) {
                 scenario.name + ": fresh RK4 baseline step failed");
         const SpinAudit rk4_after_fresh = spin_audit(created.context_handle);
         const std::vector<double> rk4_fresh_m = read_llg_m(rk4_llg, cells(scenario));
+        require_bound_spin_checkpoint(
+            created.context_handle, snapshot, descriptor.descriptor_digest);
         const std::vector<double> rk4_fresh_mu = readback(
             created.context_handle, snapshot,
             FULLMAG_FDM_GPU_TRANSPORT_ARTIFACT_FIELD_MU_S, 3 * cells(scenario));

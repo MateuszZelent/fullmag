@@ -583,7 +583,8 @@ void launch_heun_step_fp64(Context &ctx, double dt, fullmag_fdm_step_stats *stat
     // consume this torque view, but must never trigger another spin solve.
     if (!context_evaluate_gpu_transport_rhs(
             ctx, ctx.m, step_start_time + dt,
-            ctx.gpu_transport_active_attempt_id, 3)) return;
+            ctx.gpu_transport_active_attempt_id, 3,
+            GpuTransportStageRole::EndpointCandidate)) return;
 
     const uint64_t accepted_step = ctx.step_count + 1;
     const bool fill_control_stats =

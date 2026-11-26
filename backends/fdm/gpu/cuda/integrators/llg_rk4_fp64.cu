@@ -234,7 +234,8 @@ void launch_rk4_step_fp64(Context &ctx, double dt, fullmag_fdm_step_stats *stats
     // every stats mode.  The diagnostic branch below only consumes this view.
     if (!context_evaluate_gpu_transport_rhs(
             ctx, ctx.m, step_start_time + dt,
-            ctx.gpu_transport_active_attempt_id, 5)) return;
+            ctx.gpu_transport_active_attempt_id, 5,
+            GpuTransportStageRole::EndpointCandidate)) return;
 
     context_stage_accepted_step(ctx, dt);
 

@@ -17,6 +17,8 @@ use crate::fdm::gpu::cuda::artifacts::{
 #[cfg(feature = "cuda")]
 use crate::fdm::gpu::cuda::live_observations::FdmLiveObservationScheduler;
 #[cfg(feature = "cuda")]
+use crate::capabilities::GPU_M1_LIVE_PREVIEW_FIELDS;
+#[cfg(feature = "cuda")]
 use crate::fdm::gpu::cuda::native::{
     single_grid_demag_operator_kind, NativeFdmBackend, NativeStatsMode, NativeStatsPolicy,
 };
@@ -1150,9 +1152,13 @@ pub(crate) fn execute_cuda_fdm(
         &mut steps,
         &mut artifacts,
     )?;
-    let mut live_observations = live
-        .as_ref()
-        .map(|_| FdmLiveObservationScheduler::new(plan, plan.grid.cells));
+    let mut live_observations = live.as_ref().map(|_| {
+        if gpu_transport.is_some() && direct_minimizer_control(plan.relaxation.as_ref()).is_none() {
+            FdmLiveObservationScheduler::new_with_gpu_m1_transport(plan, plan.grid.cells)
+        } else {
+            FdmLiveObservationScheduler::new(plan, plan.grid.cells)
+        }
+    });
     // The accepted observer does not consume continuation checkpoints. The
     // stage handoff is published once, after the terminal sample is drained.
     let mut final_frozen_checkpoint = if terminal.is_none() {
@@ -1263,12 +1269,13 @@ pub(crate) fn execute_cuda_fdm(
                     let preview_targets_global_scalar =
                         display_is_global_scalar(&display_selection);
                     let mut observation_publication = live_observations.as_mut().map(|scheduler| {
-                        scheduler.observe(
+                        scheduler.observe_with_gpu_m1_transport(
                             &backend,
                             &display_selection,
                             current_stats.step,
                             current_stats.time,
                             current_stats.dt,
+                            gpu_transport.as_ref(),
                         )
                     });
                     let (preview_field, cached_preview_fields) =
@@ -1498,12 +1505,13 @@ pub(crate) fn execute_cuda_fdm(
                 let mut observation_publication =
                     display_selection.as_ref().and_then(|display_selection| {
                         live_observations.as_mut().map(|scheduler| {
-                            scheduler.observe(
+                            scheduler.observe_with_gpu_m1_transport(
                                 &backend,
                                 display_selection,
                                 stats.step,
                                 stats.time,
                                 stats.dt,
+                                gpu_transport.as_ref(),
                             )
                         })
                     });
@@ -1745,24 +1753,44 @@ pub(crate) fn execute_cuda_fdm(
         None
     };
     let mut terminal_stats = terminal_capture;
+    let terminal_display_state = live
+        .as_ref()
+        .and_then(|consumer| consumer.display_selection.map(|get| get()))
+        .unwrap_or_default();
+    let terminal_publication_time =
+        super::canonical_fdm_publication_time(plan, terminal_stats.time);
+    let mut terminal_spin_preview_field = None;
+    let mut terminal_spin_cached_fields = Vec::new();
     if let Some(scheduler) = live_observations.as_mut() {
-        let terminal_display_state = live
-            .as_ref()
-            .and_then(|consumer| consumer.display_selection.map(|get| get()))
-            .unwrap_or_default();
-        let mut publication = scheduler.finish(
+        let mut publication = scheduler.finish_with_gpu_m1_transport(
             &backend,
             &terminal_display_state,
             terminal_stats.step,
             terminal_stats.time,
             terminal_stats.dt,
+            gpu_transport.as_ref(),
         );
         publication.apply_to_stats(&mut terminal_stats);
+        let is_exact_terminal_spin_field = |field: &LivePreviewField| {
+            GPU_M1_LIVE_PREVIEW_FIELDS.contains(&field.quantity.as_str())
+                && field.source_step == terminal_stats.step
+                && field
+                    .source_time_seconds
+                    .is_some_and(|time| time.to_bits() == terminal_publication_time.to_bits())
+        };
+        terminal_spin_preview_field = publication
+            .preview_field
+            .take()
+            .filter(&is_exact_terminal_spin_field);
+        terminal_spin_cached_fields = publication
+            .cached_preview_fields
+            .take()
+            .unwrap_or_default()
+            .into_iter()
+            .filter(is_exact_terminal_spin_field)
+            .collect();
         // Terminal accepted-field fragments are a durable observation stream.
-        // The bounded display scheduler remains useful for its status updates,
-        // but its sampled fields are not mixed into that stream.
-        drop(publication.preview_field.take());
-        drop(publication.cached_preview_fields.take());
+        // Keep its display-only fields on a separate callback below.
         if latest_stats.is_some() {
             latest_stats = Some(terminal_stats.clone());
         }
@@ -1861,6 +1889,32 @@ pub(crate) fn execute_cuda_fdm(
                 hysteresis_settle_step_method: None,
                 scalar_row_due: false,
                 terminal_field_snapshot: true,
+                finished: false,
+                magnetization_carrier: None,
+            });
+            if action == StepAction::Stop {
+                cancelled = true;
+            }
+        }
+        // The terminal field fragments reset the consumer's field cache.
+        // Append the exact display observation after the last reset.
+        if terminal_spin_preview_field.is_some() || !terminal_spin_cached_fields.is_empty() {
+            let action = (live.on_step)(StepUpdate {
+                coupled_checkpoint: None,
+                stats: super::canonical_fdm_publication_stats(plan, terminal_stats.clone()),
+                grid: live.grid,
+                fem_mesh_generation_id: None,
+                magnetization: None,
+                preview_field: terminal_spin_preview_field,
+                cached_preview_fields: (!terminal_spin_cached_fields.is_empty())
+                    .then_some(terminal_spin_cached_fields),
+                hysteresis_field_m_t: None,
+                hysteresis_point_index: None,
+                hysteresis_settle_step_index: None,
+                hysteresis_settle_step_kind: None,
+                hysteresis_settle_step_method: None,
+                scalar_row_due: false,
+                terminal_field_snapshot: false,
                 finished: false,
                 magnetization_carrier: None,
             });
