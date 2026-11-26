@@ -3734,6 +3734,15 @@ fn execute_native_fem(
             (stats.effective_fem_omp_threads > 0).then_some(stats.effective_fem_omp_threads as u32)
         }),
         fem_poisson_demag: fem_poisson_demag_provenance(plan, initial_stats),
+        fem_bem_demag: if plan.demag_realization
+            == Some(fullmag_ir::ResolvedFemDemagIR::FredkinKoehler)
+        {
+            backend
+                .demag_fem_bem_provenance()?
+                .map(|value| value.into_provenance())
+        } else {
+            None
+        },
         ..Default::default()
     };
     apply_energy_minimizer_provenance(&mut provenance, plan.relaxation.as_ref());
@@ -3763,7 +3772,13 @@ fn execute_native_fem(
         Some(&gpu_state_info),
         Some(&gpu_rk_plan_info),
     );
-    apply_native_fem_gpu_demag_linear_solver(&mut provenance, backend.gpu_demag_linear_solver()?);
+    let gpu_demag_provenance = backend.gpu_demag_linear_solver_provenance()?;
+    apply_native_fem_gpu_demag_linear_solver_provenance(
+        &mut provenance,
+        Some(gpu_demag_provenance.requested_strategy),
+        gpu_demag_provenance.resolved_linear_solver,
+        gpu_demag_provenance.fallback_reason,
+    );
     if execution_mode == ExecutionMode::Strict && execution_engine == "fem_native_gpu" {
         let build_info = native_fem::strict_gpu_runtime_build_info()?;
         provenance.mfem_version = Some(build_info.mfem_version);
@@ -3894,15 +3909,35 @@ fn execute_native_fem(
     )
 }
 
-/// Records the linear-solver realization that the native GPU Poisson demag
-/// workspace resolved (docs/physics/0997); `None` leaves the field absent.
-#[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
-pub(crate) fn apply_native_fem_gpu_demag_linear_solver(
+/// Records the GPU demag linear-solver strategy, resolved realization, and
+/// optional fallback reason on both Poisson and FEM/BEM provenance blocks
+/// (docs/physics/0997). Leaves all three fields absent when no GPU demag
+/// workspace resolved (`resolved_linear_solver == None`).
+#[cfg(any(test, feature = "fem-gpu", feature = "fem-native"))]
+pub(crate) fn apply_native_fem_gpu_demag_linear_solver_provenance(
     provenance: &mut ExecutionProvenance,
+    requested_strategy: Option<&str>,
     resolved_linear_solver: Option<&str>,
+    fallback_reason: Option<&str>,
 ) {
+    let (requested, resolved, fallback) = if let Some(resolved_name) = resolved_linear_solver {
+        (
+            requested_strategy.map(str::to_string),
+            Some(resolved_name.to_string()),
+            fallback_reason.map(str::to_string),
+        )
+    } else {
+        (None, None, None)
+    };
     if let Some(poisson) = provenance.fem_poisson_demag.as_mut() {
-        poisson.resolved_linear_solver = resolved_linear_solver.map(str::to_string);
+        poisson.requested_linear_solver_strategy = requested.clone();
+        poisson.resolved_linear_solver = resolved.clone();
+        poisson.linear_solver_fallback_reason = fallback.clone();
+    }
+    if let Some(bem) = provenance.fem_bem_demag.as_mut() {
+        bem.requested_linear_solver_strategy = requested;
+        bem.resolved_linear_solver = resolved;
+        bem.linear_solver_fallback_reason = fallback;
     }
 }
 
@@ -3934,7 +3969,9 @@ pub(crate) fn fem_poisson_demag_provenance(
         preconditioner: policy.preconditioner,
         rtol: policy.rtol,
         max_iterations: policy.max_iterations,
+        requested_linear_solver_strategy: None,
         resolved_linear_solver: None,
+        linear_solver_fallback_reason: None,
         actual_iterations: stats.map(|entry| entry.poisson_iterations),
         final_residual: stats.and_then(|entry| {
             entry
@@ -5177,7 +5214,7 @@ mod tests {
         for (device, realization, expected_preconditioner) in [
             ("cuda", PoissonRobin, "AMG"),
             ("cuda", PoissonDirichlet, "AMG"),
-            ("cuda", FredkinKoehler, "JACOBI"),
+            ("cuda", FredkinKoehler, "AMG"),
             ("cpu", FredkinKoehler, "AMG"),
         ] {
             plan.mfem_device_string = Some(device.to_string());
@@ -5197,6 +5234,66 @@ mod tests {
         };
         plan.demag_solver_policy = Some(explicit_policy.clone());
         assert_eq!(resolved_native_fem_demag_solver_policy(&plan), explicit_policy);
+    }
+
+    #[test]
+    fn apply_native_fem_gpu_demag_linear_solver_provenance_updates_poisson_and_bem() {
+        let mut provenance = ExecutionProvenance {
+            fem_poisson_demag: Some(FemPoissonDemagProvenance::default()),
+            fem_bem_demag: Some(crate::types::FemBemDemagProvenance {
+                operator_mode: "device_hypre_fem_bem".to_string(),
+                operator_fingerprint: "fp".to_string(),
+                boundary_node_count: 16,
+                boundary_triangle_count: 24,
+                near_block_count: 1,
+                far_block_count: 0,
+                near_entry_count: 64,
+                far_row_count: 0,
+                max_rank: 0,
+                relative_error_estimate: 0.0,
+                resident_bytes: 1024,
+                device_bytes: 2048,
+                operator_build_count: 1,
+                operator_upload_count: 1,
+                apply_count: 2,
+                requested_linear_solver_strategy: None,
+                resolved_linear_solver: None,
+                linear_solver_fallback_reason: None,
+            }),
+            ..ExecutionProvenance::default()
+        };
+
+        apply_native_fem_gpu_demag_linear_solver_provenance(
+            &mut provenance,
+            Some("auto"),
+            Some("hypre_krylov"),
+            Some("cudss_factor_exceeds_vram_budget"),
+        );
+        let poisson = provenance.fem_poisson_demag.as_ref().unwrap();
+        assert_eq!(poisson.requested_linear_solver_strategy.as_deref(), Some("auto"));
+        assert_eq!(poisson.resolved_linear_solver.as_deref(), Some("hypre_krylov"));
+        assert_eq!(
+            poisson.linear_solver_fallback_reason.as_deref(),
+            Some("cudss_factor_exceeds_vram_budget")
+        );
+        let bem = provenance.fem_bem_demag.as_ref().unwrap();
+        assert_eq!(bem.requested_linear_solver_strategy.as_deref(), Some("auto"));
+        assert_eq!(bem.resolved_linear_solver.as_deref(), Some("hypre_krylov"));
+        assert_eq!(
+            bem.linear_solver_fallback_reason.as_deref(),
+            Some("cudss_factor_exceeds_vram_budget")
+        );
+
+        // Unavailable GPU demag leaves all three GPU strategy/fallback fields absent.
+        apply_native_fem_gpu_demag_linear_solver_provenance(&mut provenance, Some("auto"), None, None);
+        let poisson = provenance.fem_poisson_demag.as_ref().unwrap();
+        assert_eq!(poisson.requested_linear_solver_strategy, None);
+        assert_eq!(poisson.resolved_linear_solver, None);
+        assert_eq!(poisson.linear_solver_fallback_reason, None);
+        let bem = provenance.fem_bem_demag.as_ref().unwrap();
+        assert_eq!(bem.requested_linear_solver_strategy, None);
+        assert_eq!(bem.resolved_linear_solver, None);
+        assert_eq!(bem.linear_solver_fallback_reason, None);
     }
 
     #[cfg(feature = "fem-gpu")]

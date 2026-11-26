@@ -4926,12 +4926,20 @@ def _fem_demag_solver_policy_from_value(
         return None
     if not isinstance(value, Mapping):
         raise ValueError(f"{context} must be an object or null")
-    allowed = {"solver", "preconditioner", "rtol", "atol", "max_iterations", "print_level"}
+    allowed = {
+        "solver",
+        "preconditioner",
+        "rtol",
+        "atol",
+        "max_iterations",
+        "print_level",
+        "gpu_strategy",
+    }
     unknown = sorted(str(key) for key in value if key not in allowed)
     if unknown:
         raise ValueError(f"{context} has unsupported keys: {', '.join(unknown)}")
     kwargs: dict[str, object] = {}
-    for key in ("solver", "preconditioner"):
+    for key in ("solver", "preconditioner", "gpu_strategy"):
         if value.get(key) is not None:
             kwargs[key] = str(value[key])
     for key in ("rtol", "atol"):
@@ -5004,7 +5012,8 @@ def _render_fem_demag_solver_call(policy: FemLinearSolverPolicy, *, surface: str
         f"rtol={_py_number(policy.rtol)}, "
         f"atol={_py_literal(policy.atol)}, "
         f"max_iterations={policy.max_iterations}, "
-        f"print_level={policy.print_level})"
+        f"print_level={policy.print_level}, "
+        f"gpu_strategy={_py_repr(policy.gpu_strategy)})"
     )
 
 
@@ -5030,6 +5039,7 @@ def _export_fem_demag_solver_policy(problem: Problem) -> dict[str, object] | Non
         "rtol": policy.rtol,
         "max_iterations": policy.max_iterations,
         "print_level": policy.print_level,
+        "gpu_strategy": policy.gpu_strategy,
     }
     if policy.atol is not None:
         payload["atol"] = policy.atol

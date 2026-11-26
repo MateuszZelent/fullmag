@@ -363,6 +363,9 @@ impl NativeFemDemagFemBemProvenance {
             operator_build_count: self.operator_build_count,
             operator_upload_count: self.operator_upload_count,
             apply_count: self.apply_count,
+            requested_linear_solver_strategy: None,
+            resolved_linear_solver: None,
+            linear_solver_fallback_reason: None,
         }
     }
 }
@@ -431,8 +434,8 @@ fn linear_solve_operator_bits_are_consistent(required_operator_mask: u64) -> boo
     !(krylov && direct) && (!direct || demag_solve)
 }
 
-/// Provenance name of the native GPU Poisson linear-solver realization, or
-/// `None` when no device Poisson workspace is initialized.
+/// Provenance name of the native GPU demag linear-solver realization, or
+/// `None` when no device GPU demag workspace is initialized.
 pub(crate) fn gpu_demag_linear_solver_name(value: u32) -> Result<Option<&'static str>, RunError> {
     match value {
         ffi::FULLMAG_FEM_GPU_DEMAG_LINEAR_SOLVER_UNAVAILABLE => Ok(None),
@@ -441,6 +444,70 @@ pub(crate) fn gpu_demag_linear_solver_name(value: u32) -> Result<Option<&'static
         other => Err(RunError {
             message: format!("FEM GPU demag linear-solver query returned unknown value {other}"),
         }),
+    }
+}
+
+pub(crate) fn gpu_demag_solver_strategy_name(value: u32) -> Result<&'static str, RunError> {
+    match value {
+        ffi::FULLMAG_FEM_GPU_DEMAG_SOLVER_STRATEGY_AUTO => Ok("auto"),
+        ffi::FULLMAG_FEM_GPU_DEMAG_SOLVER_STRATEGY_CG_AMG => Ok("cg_amg"),
+        ffi::FULLMAG_FEM_GPU_DEMAG_SOLVER_STRATEGY_CUDSS => Ok("cudss"),
+        other => Err(RunError {
+            message: format!("FEM GPU demag solver strategy query returned unknown value {other}"),
+        }),
+    }
+}
+
+pub(crate) fn gpu_demag_fallback_reason_name(
+    value: u32,
+) -> Result<Option<&'static str>, RunError> {
+    match value {
+        ffi::FULLMAG_FEM_GPU_DEMAG_FALLBACK_NONE => Ok(None),
+        ffi::FULLMAG_FEM_GPU_DEMAG_FALLBACK_CUDSS_UNAVAILABLE => Ok(Some("cudss_unavailable")),
+        ffi::FULLMAG_FEM_GPU_DEMAG_FALLBACK_CUDSS_FACTOR_EXCEEDS_VRAM_BUDGET => {
+            Ok(Some("cudss_factor_exceeds_vram_budget"))
+        }
+        ffi::FULLMAG_FEM_GPU_DEMAG_FALLBACK_CUDSS_MEMORY_ESTIMATE_UNAVAILABLE => {
+            Ok(Some("cudss_memory_estimate_unavailable"))
+        }
+        other => Err(RunError {
+            message: format!("FEM GPU demag fallback reason query returned unknown value {other}"),
+        }),
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct NativeFemGpuDemagLinearSolverProvenance {
+    pub(crate) requested_strategy: &'static str,
+    pub(crate) resolved_linear_solver: Option<&'static str>,
+    pub(crate) fallback_reason: Option<&'static str>,
+    pub(crate) estimated_device_peak_bytes: u64,
+    pub(crate) device_budget_bytes: u64,
+    pub(crate) factor_nnz: u64,
+    pub(crate) factor_device_bytes: u64,
+}
+
+impl NativeFemGpuDemagLinearSolverProvenance {
+    pub(crate) fn from_ffi(
+        raw: ffi::fullmag_fem_gpu_demag_linear_solver_provenance_v1,
+    ) -> Result<Self, RunError> {
+        if raw.reserved != 0 {
+            return Err(RunError {
+                message: format!(
+                    "FEM GPU demag linear-solver provenance query returned non-zero reserved field {}",
+                    raw.reserved
+                ),
+            });
+        }
+        Ok(Self {
+            requested_strategy: gpu_demag_solver_strategy_name(raw.requested_strategy)?,
+            resolved_linear_solver: gpu_demag_linear_solver_name(raw.resolved_linear_solver)?,
+            fallback_reason: gpu_demag_fallback_reason_name(raw.fallback_reason)?,
+            estimated_device_peak_bytes: raw.estimated_device_peak_bytes,
+            device_budget_bytes: raw.device_budget_bytes,
+            factor_nnz: raw.factor_nnz,
+            factor_device_bytes: raw.factor_device_bytes,
+        })
     }
 }
 
@@ -1110,6 +1177,76 @@ mod tests {
             Some("cudss_direct")
         );
         assert!(gpu_demag_linear_solver_name(3).is_err());
+
+        assert_eq!(
+            gpu_demag_solver_strategy_name(ffi::FULLMAG_FEM_GPU_DEMAG_SOLVER_STRATEGY_AUTO)
+                .unwrap(),
+            "auto"
+        );
+        assert_eq!(
+            gpu_demag_solver_strategy_name(ffi::FULLMAG_FEM_GPU_DEMAG_SOLVER_STRATEGY_CG_AMG)
+                .unwrap(),
+            "cg_amg"
+        );
+        assert_eq!(
+            gpu_demag_solver_strategy_name(ffi::FULLMAG_FEM_GPU_DEMAG_SOLVER_STRATEGY_CUDSS)
+                .unwrap(),
+            "cudss"
+        );
+        assert!(gpu_demag_solver_strategy_name(3).is_err());
+
+        assert_eq!(
+            gpu_demag_fallback_reason_name(ffi::FULLMAG_FEM_GPU_DEMAG_FALLBACK_NONE).unwrap(),
+            None
+        );
+        assert_eq!(
+            gpu_demag_fallback_reason_name(ffi::FULLMAG_FEM_GPU_DEMAG_FALLBACK_CUDSS_UNAVAILABLE)
+                .unwrap(),
+            Some("cudss_unavailable")
+        );
+        assert_eq!(
+            gpu_demag_fallback_reason_name(
+                ffi::FULLMAG_FEM_GPU_DEMAG_FALLBACK_CUDSS_FACTOR_EXCEEDS_VRAM_BUDGET
+            )
+            .unwrap(),
+            Some("cudss_factor_exceeds_vram_budget")
+        );
+        assert_eq!(
+            gpu_demag_fallback_reason_name(
+                ffi::FULLMAG_FEM_GPU_DEMAG_FALLBACK_CUDSS_MEMORY_ESTIMATE_UNAVAILABLE
+            )
+            .unwrap(),
+            Some("cudss_memory_estimate_unavailable")
+        );
+        assert!(gpu_demag_fallback_reason_name(4).is_err());
+
+        let parsed = NativeFemGpuDemagLinearSolverProvenance::from_ffi(
+            ffi::fullmag_fem_gpu_demag_linear_solver_provenance_v1 {
+                requested_strategy: ffi::FULLMAG_FEM_GPU_DEMAG_SOLVER_STRATEGY_AUTO,
+                resolved_linear_solver: ffi::FULLMAG_FEM_GPU_DEMAG_LINEAR_SOLVER_HYPRE_KRYLOV,
+                fallback_reason:
+                    ffi::FULLMAG_FEM_GPU_DEMAG_FALLBACK_CUDSS_FACTOR_EXCEEDS_VRAM_BUDGET,
+                reserved: 0,
+                estimated_device_peak_bytes: 1_000_000,
+                device_budget_bytes: 500_000,
+                factor_nnz: 0,
+                factor_device_bytes: 0,
+            },
+        )
+        .unwrap();
+        assert_eq!(parsed.requested_strategy, "auto");
+        assert_eq!(parsed.resolved_linear_solver, Some("hypre_krylov"));
+        assert_eq!(
+            parsed.fallback_reason,
+            Some("cudss_factor_exceeds_vram_budget")
+        );
+        assert!(NativeFemGpuDemagLinearSolverProvenance::from_ffi(
+            ffi::fullmag_fem_gpu_demag_linear_solver_provenance_v1 {
+                reserved: 1,
+                ..Default::default()
+            },
+        )
+        .is_err());
     }
 
     /// The hand-written Rust mirror must match the public C header.
@@ -1160,6 +1297,34 @@ mod tests {
             (
                 "FULLMAG_FEM_GPU_DEMAG_LINEAR_SOLVER_CUDSS_DIRECT",
                 ffi::FULLMAG_FEM_GPU_DEMAG_LINEAR_SOLVER_CUDSS_DIRECT,
+            ),
+            (
+                "FULLMAG_FEM_GPU_DEMAG_SOLVER_STRATEGY_AUTO",
+                ffi::FULLMAG_FEM_GPU_DEMAG_SOLVER_STRATEGY_AUTO,
+            ),
+            (
+                "FULLMAG_FEM_GPU_DEMAG_SOLVER_STRATEGY_CG_AMG",
+                ffi::FULLMAG_FEM_GPU_DEMAG_SOLVER_STRATEGY_CG_AMG,
+            ),
+            (
+                "FULLMAG_FEM_GPU_DEMAG_SOLVER_STRATEGY_CUDSS",
+                ffi::FULLMAG_FEM_GPU_DEMAG_SOLVER_STRATEGY_CUDSS,
+            ),
+            (
+                "FULLMAG_FEM_GPU_DEMAG_FALLBACK_NONE",
+                ffi::FULLMAG_FEM_GPU_DEMAG_FALLBACK_NONE,
+            ),
+            (
+                "FULLMAG_FEM_GPU_DEMAG_FALLBACK_CUDSS_UNAVAILABLE",
+                ffi::FULLMAG_FEM_GPU_DEMAG_FALLBACK_CUDSS_UNAVAILABLE,
+            ),
+            (
+                "FULLMAG_FEM_GPU_DEMAG_FALLBACK_CUDSS_FACTOR_EXCEEDS_VRAM_BUDGET",
+                ffi::FULLMAG_FEM_GPU_DEMAG_FALLBACK_CUDSS_FACTOR_EXCEEDS_VRAM_BUDGET,
+            ),
+            (
+                "FULLMAG_FEM_GPU_DEMAG_FALLBACK_CUDSS_MEMORY_ESTIMATE_UNAVAILABLE",
+                ffi::FULLMAG_FEM_GPU_DEMAG_FALLBACK_CUDSS_MEMORY_ESTIMATE_UNAVAILABLE,
             ),
         ] {
             let definition = format!("{name} = {value},");

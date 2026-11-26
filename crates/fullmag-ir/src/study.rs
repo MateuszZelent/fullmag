@@ -1015,6 +1015,8 @@ pub struct FemLinearSolverPolicy {
     pub max_iterations: u32,
     #[serde(default)]
     pub print_level: u32,
+    #[serde(default = "default_fem_gpu_strategy")]
+    pub gpu_strategy: String,
 }
 
 fn default_linear_solver() -> String {
@@ -1029,6 +1031,9 @@ fn default_rtol() -> f64 {
 fn default_max_iterations() -> u32 {
     500
 }
+fn default_fem_gpu_strategy() -> String {
+    "auto".to_string()
+}
 
 impl Default for FemLinearSolverPolicy {
     fn default() -> Self {
@@ -1039,6 +1044,7 @@ impl Default for FemLinearSolverPolicy {
             atol: None,
             max_iterations: default_max_iterations(),
             print_level: 0,
+            gpu_strategy: default_fem_gpu_strategy(),
         }
     }
 }
@@ -2383,4 +2389,38 @@ pub(crate) fn default_branch_mode() -> String {
 
 fn default_field_segment_endpoint_policy() -> String {
     "include_stop".to_string()
+}
+
+#[cfg(test)]
+mod fem_linear_solver_policy_tests {
+    use super::FemLinearSolverPolicy;
+
+    #[test]
+    fn legacy_fem_linear_solver_policy_json_defaults_gpu_strategy_to_auto() {
+        let legacy: FemLinearSolverPolicy = serde_json::from_value(serde_json::json!({
+            "solver": "CG",
+            "preconditioner": "AMG",
+            "rtol": 1e-8,
+            "max_iterations": 500,
+            "print_level": 0
+        }))
+        .expect("legacy policy JSON without gpu_strategy must deserialize");
+        assert_eq!(legacy.gpu_strategy, "auto");
+        assert_eq!(legacy, FemLinearSolverPolicy::default());
+    }
+
+    #[test]
+    fn fem_linear_solver_policy_roundtrips_explicit_gpu_strategies() {
+        for strategy in ["auto", "cg_amg", "cudss"] {
+            let policy = FemLinearSolverPolicy {
+                gpu_strategy: strategy.to_string(),
+                ..Default::default()
+            };
+            let json = serde_json::to_value(&policy).expect("policy must serialize");
+            assert_eq!(json["gpu_strategy"], strategy);
+            let roundtrip: FemLinearSolverPolicy =
+                serde_json::from_value(json).expect("policy must deserialize");
+            assert_eq!(roundtrip, policy);
+        }
+    }
 }

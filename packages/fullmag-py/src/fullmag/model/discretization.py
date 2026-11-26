@@ -44,6 +44,7 @@ _DEMAG_MODES = ("auto", "two_d_stack", "three_d")
 _DEMAG_FFT_BACKENDS = ("auto", "rustfft", "fftw", "mkl", "cufft")
 _FEM_LINEAR_SOLVERS = ("CG", "GMRES")
 _FEM_PRECONDITIONERS = ("AMG", "JACOBI", "NONE")
+_FEM_GPU_STRATEGIES = ("auto", "cg_amg", "cudss")
 
 
 @dataclass(frozen=True, slots=True)
@@ -170,6 +171,7 @@ class FemLinearSolverPolicy:
     atol: float | None = None
     max_iterations: int = 500
     print_level: int = 0
+    gpu_strategy: Literal["auto", "cg_amg", "cudss"] = "auto"
 
     def __post_init__(self) -> None:
         if self.solver not in _FEM_LINEAR_SOLVERS:
@@ -180,6 +182,11 @@ class FemLinearSolverPolicy:
             raise ValueError(
                 "preconditioner must be one of "
                 f"{_FEM_PRECONDITIONERS!r}, got {self.preconditioner!r}"
+            )
+        if self.gpu_strategy not in _FEM_GPU_STRATEGIES:
+            raise ValueError(
+                "gpu_strategy must be one of "
+                f"{_FEM_GPU_STRATEGIES!r}, got {self.gpu_strategy!r}"
             )
         require_positive(self.rtol, "rtol")
         if self.atol is not None:
@@ -196,6 +203,7 @@ class FemLinearSolverPolicy:
             "rtol": self.rtol,
             "max_iterations": self.max_iterations,
             "print_level": self.print_level,
+            "gpu_strategy": self.gpu_strategy,
         }
         if self.atol is not None:
             payload["atol"] = self.atol

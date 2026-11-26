@@ -11,6 +11,7 @@
 
 #include "context.hpp"
 #include "gpu/cuda/demag_fem_bem/fem_bem.hpp"
+#include "gpu/cuda/demag_poisson/demag_kernels.hpp"
 #include "gpu/cuda/demag_poisson/hypre_device_solver.hpp"
 #include "gpu/cuda/demag_poisson/hypre_stream_interop.hpp"
 #include "gpu/cuda/demag_poisson/operators.hpp"
@@ -105,6 +106,13 @@ bool gpu_demag_poisson_initialize(Context &ctx, std::string &error)
         destroy_demag_poisson_operators(*workspace);
         return false;
     }
+    if (!cuda_ok(
+            fullmag_cuda_demag_validation_scratch_init(workspace->validation_scratch),
+            "fullmag_cuda_demag_validation_scratch_init",
+            error)) {
+        destroy_demag_poisson_operators(*workspace);
+        return false;
+    }
 
     workspace->ready = true;
     // Includes the cuDSS factor when the direct-solve override is active.
@@ -145,6 +153,7 @@ void gpu_demag_poisson_destroy(Context &ctx)
     ctx.poisson_demag.gpu_workspace = nullptr;
     ctx.poisson_demag.gpu_workspace_ready = false;
     ctx.poisson_demag.gpu_workspace_device_bytes = 0;
+    ctx.poisson_demag.gpu_cudss_resolution = GpuDemagCudssResolution{};
 #else
     (void)ctx;
 #endif
@@ -185,8 +194,13 @@ uint64_t gpu_demag_poisson_device_bytes(const Context &ctx)
 GpuDemagPoissonLinearSolver gpu_demag_poisson_linear_solver(const Context &ctx)
 {
 #if FULLMAG_HAS_MFEM_STACK
-    if (!ctx.demag.enabled ||
-        ctx.poisson_demag.gpu_demag_mode != FULLMAG_FEM_GPU_DEMAG_DEVICE_HYPRE_POISSON) {
+    if (!ctx.demag.enabled) {
+        return GpuDemagPoissonLinearSolver::Unavailable;
+    }
+    if (ctx.poisson_demag.gpu_demag_mode == FULLMAG_FEM_GPU_DEMAG_DEVICE_HYPRE_FEM_BEM) {
+        return gpu_demag_fem_bem_linear_solver(ctx);
+    }
+    if (ctx.poisson_demag.gpu_demag_mode != FULLMAG_FEM_GPU_DEMAG_DEVICE_HYPRE_POISSON) {
         return GpuDemagPoissonLinearSolver::Unavailable;
     }
     const GpuDemagPoissonWorkspace *workspace = workspace_ptr(ctx);
@@ -199,6 +213,38 @@ GpuDemagPoissonLinearSolver gpu_demag_poisson_linear_solver(const Context &ctx)
 #else
     (void)ctx;
     return GpuDemagPoissonLinearSolver::Unavailable;
+#endif
+}
+
+bool gpu_demag_linear_solver_provenance(
+    const Context &ctx,
+    GpuDemagCudssResolution &out_resolution)
+{
+    out_resolution = GpuDemagCudssResolution{};
+#if FULLMAG_HAS_MFEM_STACK
+    if (!ctx.demag.enabled) {
+        return false;
+    }
+    if (ctx.poisson_demag.gpu_demag_mode == FULLMAG_FEM_GPU_DEMAG_DEVICE_HYPRE_FEM_BEM) {
+        return gpu_demag_fem_bem_cudss_resolution(ctx, out_resolution);
+    }
+    if (ctx.poisson_demag.gpu_demag_mode != FULLMAG_FEM_GPU_DEMAG_DEVICE_HYPRE_POISSON) {
+        return false;
+    }
+    const GpuDemagPoissonWorkspace *workspace = workspace_ptr(ctx);
+    if (workspace == nullptr || !workspace->ready) {
+        return false;
+    }
+    out_resolution = ctx.poisson_demag.gpu_cudss_resolution;
+    out_resolution.resolved_direct = (workspace->direct_solver != nullptr);
+    if (out_resolution.requested_strategy == GpuDemagSolverStrategy::Auto &&
+        ctx.poisson_demag.gpu_solver_strategy != GpuDemagSolverStrategy::Auto) {
+        out_resolution.requested_strategy = ctx.poisson_demag.gpu_solver_strategy;
+    }
+    return true;
+#else
+    (void)ctx;
+    return false;
 #endif
 }
 

@@ -59,7 +59,7 @@ const std::array<uint32_t, 5> kFacetOffsets = {0, 3, 6, 9, 12};
 const std::array<uint64_t, 4> kFacetOrdinals = {0, 1, 2, 3};
 bool g_use_gpu = false;
 
-constexpr std::array<std::pair<uint64_t, const char *>, 10> kGpuOperatorIds = {{
+constexpr std::array<std::pair<uint64_t, const char *>, 11> kGpuOperatorIds = {{
     {FULLMAG_FEM_GPU_OPERATOR_EXCHANGE, "exchange"},
     {FULLMAG_FEM_GPU_OPERATOR_DEMAG_RHS, "demag_rhs"},
     {FULLMAG_FEM_GPU_OPERATOR_DEMAG_SOLVE, "demag_solve"},
@@ -70,6 +70,7 @@ constexpr std::array<std::pair<uint64_t, const char *>, 10> kGpuOperatorIds = {{
     {FULLMAG_FEM_GPU_OPERATOR_RK_STEPPER, "rk_stepper"},
     {FULLMAG_FEM_GPU_OPERATOR_REDUCTIONS, "reductions"},
     {FULLMAG_FEM_GPU_OPERATOR_PRECONDITIONER, "preconditioner"},
+    {FULLMAG_FEM_GPU_OPERATOR_DIRECT_SOLVE, "direct_solve"},
 }};
 
 [[noreturn]] void fail(const std::string &message)

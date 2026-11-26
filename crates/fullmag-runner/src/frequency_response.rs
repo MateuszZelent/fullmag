@@ -5422,6 +5422,7 @@ mod tests {
             atol: None,
             max_iterations: 700,
             print_level: 0,
+            gpu_strategy: "auto".to_string(),
         };
 
         let input_preflight = serde_json::json!({
@@ -5730,6 +5731,7 @@ mod tests {
             atol: None,
             max_iterations: 1000,
             print_level: 0,
+            gpu_strategy: "auto".to_string(),
         });
 
         let backend_plan = super::frequency_response_demag_backend_plan(&plan);

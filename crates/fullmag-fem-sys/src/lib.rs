@@ -64,6 +64,15 @@ pub const FULLMAG_FEM_GPU_OPERATOR_DIRECT_SOLVE: u64 = 1 << 12;
 pub const FULLMAG_FEM_GPU_DEMAG_LINEAR_SOLVER_UNAVAILABLE: u32 = 0;
 pub const FULLMAG_FEM_GPU_DEMAG_LINEAR_SOLVER_HYPRE_KRYLOV: u32 = 1;
 pub const FULLMAG_FEM_GPU_DEMAG_LINEAR_SOLVER_CUDSS_DIRECT: u32 = 2;
+/// `fullmag_fem_gpu_demag_solver_strategy_v1` values.
+pub const FULLMAG_FEM_GPU_DEMAG_SOLVER_STRATEGY_AUTO: u32 = 0;
+pub const FULLMAG_FEM_GPU_DEMAG_SOLVER_STRATEGY_CG_AMG: u32 = 1;
+pub const FULLMAG_FEM_GPU_DEMAG_SOLVER_STRATEGY_CUDSS: u32 = 2;
+/// `fullmag_fem_gpu_demag_fallback_reason_v1` values.
+pub const FULLMAG_FEM_GPU_DEMAG_FALLBACK_NONE: u32 = 0;
+pub const FULLMAG_FEM_GPU_DEMAG_FALLBACK_CUDSS_UNAVAILABLE: u32 = 1;
+pub const FULLMAG_FEM_GPU_DEMAG_FALLBACK_CUDSS_FACTOR_EXCEEDS_VRAM_BUDGET: u32 = 2;
+pub const FULLMAG_FEM_GPU_DEMAG_FALLBACK_CUDSS_MEMORY_ESTIMATE_UNAVAILABLE: u32 = 3;
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -919,6 +928,7 @@ pub struct fullmag_fem_mixed_body_certificate_v2 {
 
 pub const FULLMAG_FEM_PLAN_DESC_V3_ABI_VERSION: u32 = 3;
 pub const FULLMAG_FEM_PLAN_DESC_V4_ABI_VERSION: u32 = 4;
+pub const FULLMAG_FEM_PLAN_DESC_V5_ABI_VERSION: u32 = 5;
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
@@ -937,6 +947,29 @@ pub struct fullmag_fem_plan_desc_v4 {
     pub base: fullmag_fem_plan_desc_v3,
     pub poisson_boundary_marker: u32,
     pub reserved: u32,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct fullmag_fem_plan_desc_v5 {
+    pub abi_version: u32,
+    pub struct_size: u32,
+    pub gpu_demag_solver_strategy: u32,
+    pub reserved: u32,
+    pub base: fullmag_fem_plan_desc_v4,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct fullmag_fem_gpu_demag_linear_solver_provenance_v1 {
+    pub requested_strategy: u32,
+    pub resolved_linear_solver: u32,
+    pub fallback_reason: u32,
+    pub reserved: u32,
+    pub estimated_device_peak_bytes: u64,
+    pub device_budget_bytes: u64,
+    pub factor_nnz: u64,
+    pub factor_device_bytes: u64,
 }
 
 #[repr(C)]
@@ -3584,6 +3617,10 @@ extern "C" {
         plan: *const fullmag_fem_plan_desc_v4,
         adaptive_config: *const fullmag_fem_adaptive_config_v2,
     ) -> *mut fullmag_fem_backend;
+    pub fn fullmag_fem_backend_create_v6(
+        plan: *const fullmag_fem_plan_desc_v5,
+        adaptive_config: *const fullmag_fem_adaptive_config_v2,
+    ) -> *mut fullmag_fem_backend;
     pub fn fullmag_fem_backend_begin_stage(
         handle: *mut fullmag_fem_backend,
         stage_start_time_s: f64,
@@ -3799,6 +3836,11 @@ extern "C" {
     pub fn fullmag_fem_backend_get_gpu_demag_linear_solver_v1(
         handle: *mut fullmag_fem_backend,
         out_linear_solver: *mut u32,
+    ) -> i32;
+
+    pub fn fullmag_fem_backend_get_gpu_demag_linear_solver_provenance_v1(
+        handle: *const fullmag_fem_backend,
+        out_provenance: *mut fullmag_fem_gpu_demag_linear_solver_provenance_v1,
     ) -> i32;
 
     pub fn fullmag_fem_backend_get_gpu_state_info(
@@ -4339,12 +4381,24 @@ mod tests {
         assert_eq!(FULLMAG_FEM_MIXED_BODY_CERTIFICATE_V2_ABI_VERSION, 2);
         assert_eq!(FULLMAG_FEM_PLAN_DESC_V3_ABI_VERSION, 3);
         assert_eq!(FULLMAG_FEM_PLAN_DESC_V4_ABI_VERSION, 4);
+        assert_eq!(FULLMAG_FEM_PLAN_DESC_V5_ABI_VERSION, 5);
         assert_eq!(std::mem::size_of::<fullmag_fem_plan_desc_v2>(), 1640);
         assert_eq!(std::mem::size_of::<fullmag_fem_plan_desc_v3>(), 1656);
         assert_eq!(std::mem::size_of::<fullmag_fem_plan_desc_v4>(), 1672);
+        assert_eq!(std::mem::size_of::<fullmag_fem_plan_desc_v5>(), 1688);
         assert_eq!(std::mem::offset_of!(fullmag_fem_plan_desc_v4, base), 8);
         assert_eq!(std::mem::offset_of!(fullmag_fem_plan_desc_v4, poisson_boundary_marker),
                    8 + std::mem::size_of::<fullmag_fem_plan_desc_v3>());
+        assert_eq!(
+            std::mem::offset_of!(fullmag_fem_plan_desc_v5, gpu_demag_solver_strategy),
+            8
+        );
+        assert_eq!(std::mem::offset_of!(fullmag_fem_plan_desc_v5, reserved), 12);
+        assert_eq!(std::mem::offset_of!(fullmag_fem_plan_desc_v5, base), 16);
+        assert_eq!(
+            std::mem::size_of::<fullmag_fem_gpu_demag_linear_solver_provenance_v1>(),
+            48
+        );
         assert_eq!(std::mem::offset_of!(fullmag_fem_plan_desc_v3, base), 8);
         assert_eq!(
             std::mem::offset_of!(fullmag_fem_plan_desc_v3, mixed_body_certificate_v2),

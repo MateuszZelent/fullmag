@@ -836,6 +836,33 @@ typedef struct {
     uint32_t reserved; /* Must be zero. */
 } fullmag_fem_plan_desc_v4;
 
+/* GPU demag linear-solver strategy requested at backend creation time
+   (docs/physics/0997). */
+typedef enum {
+    FULLMAG_FEM_GPU_DEMAG_SOLVER_STRATEGY_AUTO = 0,
+    FULLMAG_FEM_GPU_DEMAG_SOLVER_STRATEGY_CG_AMG = 1,
+    FULLMAG_FEM_GPU_DEMAG_SOLVER_STRATEGY_CUDSS = 2,
+} fullmag_fem_gpu_demag_solver_strategy_v1;
+
+/* Explicit fallback reason when AUTO falls back from cuDSS to HYPRE Krylov. */
+typedef enum {
+    FULLMAG_FEM_GPU_DEMAG_FALLBACK_NONE = 0,
+    FULLMAG_FEM_GPU_DEMAG_FALLBACK_CUDSS_UNAVAILABLE = 1,
+    FULLMAG_FEM_GPU_DEMAG_FALLBACK_CUDSS_FACTOR_EXCEEDS_VRAM_BUDGET = 2,
+    FULLMAG_FEM_GPU_DEMAG_FALLBACK_CUDSS_MEMORY_ESTIMATE_UNAVAILABLE = 3,
+} fullmag_fem_gpu_demag_fallback_reason_v1;
+
+/* Versioned plan wrapper delivering gpu_demag_solver_strategy BEFORE
+   gpu_demag_poisson_initialize runs during backend creation. */
+#define FULLMAG_FEM_PLAN_DESC_V5_ABI_VERSION 5u
+typedef struct fullmag_fem_plan_desc_v5 {
+    uint32_t abi_version;               /* FULLMAG_FEM_PLAN_DESC_V5_ABI_VERSION */
+    uint32_t struct_size;               /* sizeof(fullmag_fem_plan_desc_v5) */
+    uint32_t gpu_demag_solver_strategy; /* fullmag_fem_gpu_demag_solver_strategy_v1 */
+    uint32_t reserved;                  /* Must be zero. */
+    fullmag_fem_plan_desc_v4 base;
+} fullmag_fem_plan_desc_v5;
+
 /*
  * Standalone M1 steady charge/spin transport ABI.
  *
@@ -4077,6 +4104,11 @@ FULLMAG_FEM_API fullmag_fem_backend *fullmag_fem_backend_create_v5(
     const fullmag_fem_adaptive_config_v2 *adaptive_config
 );
 
+FULLMAG_FEM_API fullmag_fem_backend *fullmag_fem_backend_create_v6(
+    const fullmag_fem_plan_desc_v5 *plan,
+    const fullmag_fem_adaptive_config_v2 *adaptive_config
+);
+
 FULLMAG_FEM_API int fullmag_fem_get_regional_field_drive_abi_layout(
     fullmag_fem_regional_field_drive_abi_layout *out_layout
 );
@@ -4439,10 +4471,10 @@ FULLMAG_FEM_API int fullmag_fem_backend_get_gpu_demag_amg_coarse_relax_type_v1(
 );
 
 /*
- * Linear-solver realization of the initialized device Poisson demag workspace
- * (`device_hypre_poisson`, docs/physics/0997). UNAVAILABLE when no such
- * workspace is ready: demag disabled, FEM CPU, FEM/BEM or the explicit hybrid
- * CPU-Poisson mode.
+ * Linear-solver realization of the initialized device GPU demag workspace
+ * (`device_hypre_poisson` or `device_hypre_fem_bem`, docs/physics/0997).
+ * UNAVAILABLE when no such workspace is ready: demag disabled, FEM CPU, or
+ * the explicit hybrid CPU-Poisson mode.
  */
 typedef enum {
     FULLMAG_FEM_GPU_DEMAG_LINEAR_SOLVER_UNAVAILABLE = 0,
@@ -4453,6 +4485,22 @@ typedef enum {
 FULLMAG_FEM_API int fullmag_fem_backend_get_gpu_demag_linear_solver_v1(
     fullmag_fem_backend *handle,
     uint32_t *out_linear_solver
+);
+
+typedef struct fullmag_fem_gpu_demag_linear_solver_provenance_v1 {
+    uint32_t requested_strategy;     /* fullmag_fem_gpu_demag_solver_strategy_v1 */
+    uint32_t resolved_linear_solver; /* fullmag_fem_gpu_demag_linear_solver_v1 */
+    uint32_t fallback_reason;        /* fullmag_fem_gpu_demag_fallback_reason_v1 */
+    uint32_t reserved;               /* zero */
+    uint64_t estimated_device_peak_bytes;
+    uint64_t device_budget_bytes;
+    uint64_t factor_nnz;
+    uint64_t factor_device_bytes;
+} fullmag_fem_gpu_demag_linear_solver_provenance_v1;
+
+FULLMAG_FEM_API int fullmag_fem_backend_get_gpu_demag_linear_solver_provenance_v1(
+    const fullmag_fem_backend *handle,
+    fullmag_fem_gpu_demag_linear_solver_provenance_v1 *out_provenance
 );
 
 FULLMAG_FEM_API int fullmag_fem_backend_get_gpu_rk_plan_info(

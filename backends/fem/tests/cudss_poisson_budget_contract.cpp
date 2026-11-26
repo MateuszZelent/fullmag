@@ -1,15 +1,12 @@
 /*
- * Memory preflight of the opt-in cuDSS Poisson demag solve
+ * Three-state cuDSS strategy resolver, memory preflight, MAX_VRAM_MIB cap,
+ * atomic FEM/BEM pair preflight, and singular non-SPD rejection contract
  * (docs/physics/0997, eq-direct-memory-budget).
- *
- * The budget arithmetic runs everywhere. With a cuDSS build the contract also
- * factors a small SPD matrix within the budget, checks one solve, and shows that
- * a 1-byte budget cap rejects the same matrix after analysis, before the
- * factorization starts.
  */
 
 #include "gpu/cuda/demag_poisson/cudss_direct_solver.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
@@ -43,6 +40,13 @@ bool contains(const std::string &text, const char *needle)
     return text.find(needle) != std::string::npos;
 }
 
+void clear_cudss_env()
+{
+    check(unsetenv(kDemagGpuDirectSolverEnv) == 0, "strategy env must be clearable");
+    check(unsetenv(kDemagCudssDeviceBudgetCapEnv) == 0, "byte cap env must be clearable");
+    check(unsetenv(kDemagCudssMaxVramMibEnv) == 0, "MiB cap env must be clearable");
+}
+
 void budget_keeps_the_larger_margin_and_only_lowers_with_a_cap()
 {
     GpuDemagCudssDeviceBudget budget;
@@ -74,12 +78,87 @@ void budget_keeps_the_larger_margin_and_only_lowers_with_a_cap()
               budget.cap_bytes == 0,
           "an empty cap variable must count as unset");
 
-    for (const char *invalid : {"0", "-1", "1e9", "12 MiB", "99999999999999999999999"}) {
+    for (const char *invalid : {"0", "-1", "1e9", "12 MiB", "12 34", "99999999999999999999999"}) {
         error.clear();
         check(!resolve_demag_cudss_device_budget(6 * kGiB, 8 * kGiB, invalid, budget, error),
-              "a malformed cap must fail closed");
+              "a malformed byte cap must fail closed");
         check(contains(error, kDemagCudssDeviceBudgetCapEnv),
-              "a malformed cap error must name the variable");
+              "a malformed byte cap error must name the variable");
+    }
+
+    // FULLMAG_FEM_DEMAG_CUDSS_MAX_VRAM_MIB conversion and min() combination.
+    check(resolve_demag_cudss_device_budget(6 * kGiB, 8 * kGiB, nullptr, " 32 ", budget, error),
+          "a positive MiB cap must resolve");
+    check(budget.cap_bytes == 32 * kMiB && budget.budget_bytes == 32 * kMiB,
+          "MiB cap must convert via MiB * 2^20");
+    check(resolve_demag_cudss_device_budget(6 * kGiB, 8 * kGiB, "1000000", "32", budget, error),
+          "byte cap < MiB cap must resolve");
+    check(budget.cap_bytes == 1000000 && budget.budget_bytes == 1000000,
+          "combined cap must use min(bytes_cap, mib_cap_bytes) when bytes cap is smaller");
+    check(resolve_demag_cudss_device_budget(
+              6 * kGiB, 8 * kGiB, "100000000", "32", budget, error),
+          "MiB cap < byte cap must resolve");
+    check(budget.cap_bytes == 32 * kMiB && budget.budget_bytes == 32 * kMiB,
+          "combined cap must use min(bytes_cap, mib_cap_bytes) when MiB cap is smaller");
+    check(resolve_demag_cudss_device_budget(6 * kGiB, 8 * kGiB, "", "  ", budget, error) &&
+              budget.cap_bytes == 0 && budget.budget_bytes == 6 * kGiB - 512 * kMiB,
+          "empty/whitespace byte and MiB caps must count as unset");
+
+    // 17592186044416 MiB == 2^44 MiB == 2^64 bytes -> overflows uint64_t.
+    for (const char *invalid_mib :
+         {"0", "-5", "abc", "12 MiB", "17592186044416", "99999999999999999999999"}) {
+        error.clear();
+        check(!resolve_demag_cudss_device_budget(
+                  6 * kGiB, 8 * kGiB, "4096", invalid_mib, budget, error),
+              "malformed or overflowing MiB cap must fail closed even when byte cap is valid");
+        check(contains(error, kDemagCudssMaxVramMibEnv),
+              "malformed MiB cap error must name FULLMAG_FEM_DEMAG_CUDSS_MAX_VRAM_MIB");
+    }
+    error.clear();
+    check(!resolve_demag_cudss_device_budget(6 * kGiB, 8 * kGiB, "abc", "32", budget, error) &&
+              contains(error, kDemagCudssDeviceBudgetCapEnv),
+          "malformed byte cap must fail closed even when MiB cap is valid");
+}
+
+void strategy_env_precedence_and_validation()
+{
+    GpuDemagSolverStrategy effective = GpuDemagSolverStrategy::Auto;
+    std::string error;
+
+    for (const GpuDemagSolverStrategy requested : {
+             GpuDemagSolverStrategy::Auto,
+             GpuDemagSolverStrategy::CgAmg,
+             GpuDemagSolverStrategy::Cudss,
+         }) {
+        check(resolve_demag_gpu_solver_strategy(requested, nullptr, effective, error) &&
+                  effective == requested,
+              "unset env must preserve requested strategy");
+        check(resolve_demag_gpu_solver_strategy(requested, "   ", effective, error) &&
+                  effective == requested,
+              "whitespace env must preserve requested strategy");
+    }
+
+    check(resolve_demag_gpu_solver_strategy(
+              GpuDemagSolverStrategy::CgAmg, " cudss ", effective, error) &&
+              effective == GpuDemagSolverStrategy::Cudss,
+          "env=cudss must override requested strategy to Cudss");
+    check(resolve_demag_gpu_solver_strategy(
+              GpuDemagSolverStrategy::Cudss, "AUTO", effective, error) &&
+              effective == GpuDemagSolverStrategy::Auto,
+          "env=auto must override requested strategy to Auto");
+    for (const char *off_val : {"cg_amg", "hypre", "off", " HYPRE "}) {
+        check(resolve_demag_gpu_solver_strategy(
+                  GpuDemagSolverStrategy::Cudss, off_val, effective, error) &&
+                  effective == GpuDemagSolverStrategy::CgAmg,
+              "env=cg_amg/hypre/off must override requested strategy to CgAmg");
+    }
+    for (const char *invalid : {"bogus", "cg amg", "1", "direct"}) {
+        error.clear();
+        check(!resolve_demag_gpu_solver_strategy(
+                  GpuDemagSolverStrategy::Auto, invalid, effective, error),
+              "invalid strategy env value must fail closed");
+        check(contains(error, kDemagGpuDirectSolverEnv),
+              "invalid strategy env error must name FULLMAG_FEM_DEMAG_GPU_DIRECT_SOLVER");
     }
 }
 
@@ -126,11 +205,25 @@ std::unique_ptr<mfem::SparseMatrix> laplacian(int n)
     return matrix;
 }
 
+// Periodic graph Laplacian with zero row sums (exact 1D constant nullspace,
+// mimicking a 3D pure-Neumann periodic Poisson operator without a gauge pin).
+std::unique_ptr<mfem::SparseMatrix> singular_periodic_neumann_laplacian(int n)
+{
+    auto matrix = std::make_unique<mfem::SparseMatrix>(n, n);
+    for (int i = 0; i < n; ++i) {
+        matrix->Add(i, i, 2.0);
+        matrix->Add(i, (i + n - 1) % n, -1.0);
+        matrix->Add(i, (i + 1) % n, -1.0);
+    }
+    matrix->Finalize();
+    return matrix;
+}
+
 void in_budget_factor_solves_and_capped_budget_rejects_after_analysis()
 {
     constexpr int n = 200;
     const auto matrix = laplacian(n);
-    check(unsetenv(kDemagCudssDeviceBudgetCapEnv) == 0, "cap variable must be clearable");
+    clear_cudss_env();
 
     std::shared_ptr<GpuDemagCudssDirectSolver> solver;
     GpuDemagCudssDirectStats stats;
@@ -199,7 +292,180 @@ void in_budget_factor_solves_and_capped_budget_rejects_after_analysis()
               contains(error, "capped by") && contains(error, "factorization was not started"),
           "the over-budget error must name the estimate, the budget and the cap");
     std::printf("over-budget request: %s\n", error.c_str());
-    check(unsetenv(kDemagCudssDeviceBudgetCapEnv) == 0, "cap variable must be clearable");
+    clear_cudss_env();
+}
+
+void three_state_strategy_fallback_and_singular_rejection()
+{
+    constexpr int n = 200;
+    const auto spd = laplacian(n);
+    const auto singular = singular_periodic_neumann_laplacian(n);
+    clear_cudss_env();
+
+    std::shared_ptr<GpuDemagCudssDirectSolver> solver;
+    GpuDemagCudssDirectStats stats;
+    GpuDemagCudssResolution resolution;
+    std::string error;
+
+    // 1. Explicit CgAmg never initializes cuDSS.
+    check(try_initialize_demag_cudss_direct(
+              GpuDemagSolverStrategy::CgAmg, *spd, solver, stats, resolution, error),
+          ("CgAmg strategy must succeed cleanly: " + error).c_str());
+    check(solver == nullptr && !resolution.resolved_direct &&
+              resolution.requested_strategy == GpuDemagSolverStrategy::CgAmg &&
+              resolution.effective_strategy == GpuDemagSolverStrategy::CgAmg &&
+              resolution.fallback_reason == GpuDemagFallbackReason::None &&
+              !stats.factorization_started && stats.analysis_ms == 0.0,
+          "CgAmg must skip cuDSS completely without fallback");
+
+    // 2. Auto in-budget resolves to cuDSS direct.
+    check(try_initialize_demag_cudss_direct(
+              GpuDemagSolverStrategy::Auto, *spd, solver, stats, resolution, error),
+          ("Auto strategy in-budget must succeed: " + error).c_str());
+    check(solver != nullptr && resolution.resolved_direct &&
+              resolution.requested_strategy == GpuDemagSolverStrategy::Auto &&
+              resolution.effective_strategy == GpuDemagSolverStrategy::Auto &&
+              resolution.fallback_reason == GpuDemagFallbackReason::None &&
+              stats.factorization_started,
+          "Auto in-budget must factorize with cuDSS");
+    solver.reset();
+
+    // 3. Auto over-budget falls back cleanly to HYPRE Krylov without starting factorization.
+    check(setenv(kDemagCudssDeviceBudgetCapEnv, "1", 1) == 0, "byte cap must set");
+    error.clear();
+    check(try_initialize_demag_cudss_direct(
+              GpuDemagSolverStrategy::Auto, *spd, solver, stats, resolution, error),
+          ("Auto over-budget must fall back cleanly: " + error).c_str());
+    check(solver == nullptr && !resolution.resolved_direct &&
+              resolution.requested_strategy == GpuDemagSolverStrategy::Auto &&
+              resolution.fallback_reason == GpuDemagFallbackReason::CudssFactorExceedsVramBudget &&
+              !stats.factorization_started && stats.analysis_ms > 0.0 &&
+              resolution.estimated_device_peak_bytes > 1 && resolution.device_budget_bytes == 1,
+          "Auto over-budget must report CudssFactorExceedsVramBudget before factorization");
+
+    // 4. Forced Cudss over-budget fails hard before factorization.
+    error.clear();
+    check(!try_initialize_demag_cudss_direct(
+              GpuDemagSolverStrategy::Cudss, *spd, solver, stats, resolution, error),
+          "Forced Cudss over-budget must fail hard");
+    check(solver == nullptr && !stats.factorization_started &&
+              contains(error, "estimated device peak of") &&
+              contains(error, "device budget of") &&
+              contains(error, "factorization was not started"),
+          "Forced Cudss over-budget must name estimate and budget without factorizing");
+    clear_cudss_env();
+
+    // 5. Malformed MAX_VRAM_MIB fails hard even under Auto and CgAmg.
+    for (const char *bad_mib : {"0", "-5", "abc", "17592186044416"}) {
+        check(setenv(kDemagCudssMaxVramMibEnv, bad_mib, 1) == 0, "bad MiB cap must set");
+        for (const GpuDemagSolverStrategy strategy :
+             {GpuDemagSolverStrategy::Auto, GpuDemagSolverStrategy::CgAmg}) {
+            error.clear();
+            check(!try_initialize_demag_cudss_direct(
+                      strategy, *spd, solver, stats, resolution, error),
+                  "malformed MAX_VRAM_MIB must fail closed regardless of strategy");
+            check(contains(error, kDemagCudssMaxVramMibEnv),
+                  "malformed MAX_VRAM_MIB error must name env var");
+        }
+    }
+    clear_cudss_env();
+
+    // 6. Singular 3D-PBC pure-Neumann matrix (zero row sums, no gauge pin) MUST
+    // fail closed via CUDSS_DATA_INFO != 0 even under Auto (no silent fallback!).
+    error.clear();
+    check(!try_initialize_demag_cudss_direct(
+              GpuDemagSolverStrategy::Auto, *singular, solver, stats, resolution, error),
+          "singular pure-Neumann matrix must fail closed even under Auto");
+    check(solver == nullptr && !resolution.resolved_direct &&
+              (contains(error, "info=") || contains(error, "not symmetric positive definite")),
+          "singular pure-Neumann failure must report non-SPD factorization info");
+}
+
+void fem_bem_pair_atomic_budget_and_failure_cleanup()
+{
+    const auto u1 = laplacian(200);
+    const auto u2 = laplacian(220);
+    const auto singular = singular_periodic_neumann_laplacian(200);
+    clear_cudss_env();
+
+    std::shared_ptr<GpuDemagCudssDirectSolver> u1_solver;
+    std::shared_ptr<GpuDemagCudssDirectSolver> u2_solver;
+    GpuDemagCudssDirectStats u1_stats;
+    GpuDemagCudssDirectStats u2_stats;
+    GpuDemagCudssResolution resolution;
+    std::string error;
+
+    // 1. In-budget pair factorizes both matrices cleanly.
+    check(try_initialize_fem_bem_cudss_pair(
+              GpuDemagSolverStrategy::Auto, *u1, *u2, u1_solver, u2_solver,
+              u1_stats, u2_stats, resolution, error),
+          ("in-budget FEM/BEM pair must succeed: " + error).c_str());
+    check(u1_solver != nullptr && u2_solver != nullptr && resolution.resolved_direct &&
+              resolution.fallback_reason == GpuDemagFallbackReason::None &&
+              u1_stats.factorization_started && u2_stats.factorization_started &&
+              u1_stats.estimated_device_peak_bytes > 0 &&
+              u2_stats.estimated_device_peak_bytes > 0,
+          "in-budget FEM/BEM pair must factorize both u1 and u2");
+    const uint64_t peak_1 = static_cast<uint64_t>(u1_stats.estimated_device_peak_bytes);
+    const uint64_t stable_1 = u1_stats.estimated_device_stable_bytes > 0
+        ? static_cast<uint64_t>(u1_stats.estimated_device_stable_bytes)
+        : 0u;
+    const uint64_t peak_2 = static_cast<uint64_t>(u2_stats.estimated_device_peak_bytes);
+    const uint64_t combined_peak = std::max(peak_1, stable_1 + peak_2);
+    check(static_cast<uint64_t>(resolution.estimated_device_peak_bytes) == combined_peak,
+          "pair resolution must record max(peak_1, stable_1 + peak_2)");
+    u1_solver.reset();
+    u2_solver.reset();
+
+    // 2. Boundary cap where u1 fits alone (peak_1 <= budget), but
+    //    stable_1 + peak_2 > budget: neither factorization may start!
+    check(combined_peak > peak_1,
+          "test fixture must have combined pair peak strictly above u1 peak alone");
+    const std::string boundary_cap = std::to_string(peak_1);
+    check(setenv(kDemagCudssDeviceBudgetCapEnv, boundary_cap.c_str(), 1) == 0,
+          "boundary cap must be settable");
+
+    // Sanity check: u1 alone fits under boundary_cap.
+    GpuDemagCudssResolution single_resolution;
+    check(try_initialize_demag_cudss_direct(
+              GpuDemagSolverStrategy::Auto, *u1, u1_solver, u1_stats, single_resolution, error) &&
+              u1_solver != nullptr && single_resolution.resolved_direct,
+          "u1 alone must fit under the boundary cap");
+    u1_solver.reset();
+
+    // Under Auto, the pair must fall back atomically with neither factorization started.
+    error.clear();
+    check(try_initialize_fem_bem_cudss_pair(
+              GpuDemagSolverStrategy::Auto, *u1, *u2, u1_solver, u2_solver,
+              u1_stats, u2_stats, resolution, error),
+          ("boundary-capped FEM/BEM pair under Auto must fall back cleanly: " + error).c_str());
+    check(u1_solver == nullptr && u2_solver == nullptr && !resolution.resolved_direct &&
+              resolution.fallback_reason == GpuDemagFallbackReason::CudssFactorExceedsVramBudget &&
+              !u1_stats.factorization_started && !u2_stats.factorization_started,
+          "boundary-capped FEM/BEM pair under Auto must leave both handles null before factorization");
+
+    // Under forced Cudss, the pair must fail hard with neither factorization started.
+    error.clear();
+    check(!try_initialize_fem_bem_cudss_pair(
+              GpuDemagSolverStrategy::Cudss, *u1, *u2, u1_solver, u2_solver,
+              u1_stats, u2_stats, resolution, error),
+          "boundary-capped FEM/BEM pair under Cudss must fail hard");
+    check(u1_solver == nullptr && u2_solver == nullptr &&
+              !u1_stats.factorization_started && !u2_stats.factorization_started &&
+              contains(error, "estimated device peak of") &&
+              contains(error, "device budget of"),
+          "boundary-capped FEM/BEM pair under Cudss must fail without leaking u1");
+    clear_cudss_env();
+
+    // 3. Atomic failure cleanup: if u1 factorizes and u2 fails (non-SPD),
+    //    u1_solver must be destroyed and returned null.
+    error.clear();
+    check(!try_initialize_fem_bem_cudss_pair(
+              GpuDemagSolverStrategy::Auto, *u1, *singular, u1_solver, u2_solver,
+              u1_stats, u2_stats, resolution, error),
+          "FEM/BEM pair with non-SPD u2 must fail closed even under Auto");
+    check(u1_solver == nullptr && u2_solver == nullptr && !resolution.resolved_direct,
+          "FEM/BEM pair failure on u2 must destroy u1_solver atomically");
 }
 
 #endif
@@ -209,9 +475,12 @@ void in_budget_factor_solves_and_capped_budget_rejects_after_analysis()
 int main()
 {
     budget_keeps_the_larger_margin_and_only_lowers_with_a_cap();
+    strategy_env_precedence_and_validation();
     factor_fit_check_names_the_estimate_and_the_budget();
 #if FULLMAG_FEM_CUDSS_POISSON_ENABLED
     in_budget_factor_solves_and_capped_budget_rejects_after_analysis();
+    three_state_strategy_fallback_and_singular_rejection();
+    fem_bem_pair_atomic_budget_and_failure_cleanup();
 #else
     std::printf("SKIP: cuDSS factorization part needs a FEM GPU build with cuDSS\n");
 #endif

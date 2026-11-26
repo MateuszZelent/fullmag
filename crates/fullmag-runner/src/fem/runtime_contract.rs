@@ -298,6 +298,9 @@ pub(crate) fn fem_poisson_demag_provenance(
         preconditioner: policy.preconditioner,
         rtol: policy.rtol,
         max_iterations: policy.max_iterations,
+        requested_linear_solver_strategy: None,
+        resolved_linear_solver: None,
+        linear_solver_fallback_reason: None,
         actual_iterations: stats.map(|entry| entry.poisson_iterations),
         final_residual: stats.and_then(|entry| {
             entry
