@@ -7,7 +7,7 @@
 #if FULLMAG_HAS_CUDA_RUNTIME
 #include "context.hpp"
 #include "gpu/cuda/exchange/exchange_kernels.hpp"
-#include "gpu/cuda/interactions/dmi/dmi_kernels.hpp"
+#include "gpu/cuda/interactions/dmi/dmi_csr_kernels.hpp"
 #include "gpu/cuda/integrators/rk/rk_component_copy.hpp"
 #include "gpu/cuda/integrators/rk/rk_energy_reductions.hpp"
 #include "gpu/cuda/integrators/rk/rk_rhs_runtime.hpp"
@@ -302,23 +302,100 @@ bool direct_difference(
               (ctx.dmi.interfacial_enabled || ctx.dmi.rotated_interfacial_enabled))) {
             return true;
         }
-        fullmag_cuda_dmi_energy_difference(
-            gpu.mesh_geometry.nodes_xyz, gpu.mesh_geometry.elements,
-            gpu.mesh_geometry.magnetic_element_mask,
-            base_m.x, base_m.y, base_m.z,
-            gpu.magnetization.m.x, gpu.magnetization.m.y, gpu.magnetization.m.z,
-            bulk_mode ? gpu.materials.dbulk : gpu.materials.dind,
-            tail + delta_tail_slot,
-            tail + absolute_tail_slot,
-            bulk_mode ? ctx.dmi.bulk_D : ctx.dmi.interfacial_D,
-            bulk_mode ? 0.0 : ctx.dmi.rotated_interfacial_D,
-            ctx.dmi.interface_normal[0], ctx.dmi.interface_normal[1],
-            ctx.dmi.interface_normal[2],
-            bulk_mode ? !ctx.material_fields.Dbulk_field.empty()
-                      : !ctx.material_fields.Dind_field.empty(),
-            !bulk_mode && ctx.dmi.rotated_interfacial_enabled,
-            bulk_mode, static_cast<int>(ctx.mesh.n_elements), stream);
-        if (!cuda_launch_ok("launch GPU direct minimizer DMI difference", reason)) {
+        const auto &chan = bulk_mode ? gpu.dmi_csr.bulk : gpu.dmi_csr.interfacial;
+        if (!chan.uploaded ||
+            chan.rows != static_cast<uint64_t>(node_count) ||
+            chan.csr_row_offsets == nullptr) {
+            reason = "GPU direct minimizer DMI difference requires device-resident CSR operator";
+            return false;
+        }
+        int dmi_reduction_blocks = block_count;
+        if (gpu.mesh_regions.has_periodic_reduced_nodes) {
+            if (!chan.periodic_reduced_ready ||
+                chan.periodic_reduced_row_offsets == nullptr ||
+                gpu.mesh_regions.periodic_reduced_representative_nodes == nullptr ||
+                chan.periodic_reduced_rows == 0u ||
+                chan.periodic_reduced_rows >
+                    static_cast<uint64_t>(std::numeric_limits<int>::max()) ||
+                chan.periodic_reduced_rows != gpu.mesh_regions.periodic_reduced_node_count) {
+                reason =
+                    "GPU periodic DMI difference requires a precomputed reduced CSR and representative map";
+                return false;
+            }
+            if (chan.periodic_reduced_nnz == 0u) {
+                return cuda_ok(
+                           cudaMemsetAsync(tail + delta_tail_slot, 0, sizeof(double), stream),
+                           "cudaMemsetAsync GPU direct minimizer zero DMI delta",
+                           reason) &&
+                    cuda_ok(
+                        cudaMemsetAsync(tail + absolute_tail_slot, 0, sizeof(double), stream),
+                        "cudaMemsetAsync GPU direct minimizer zero DMI absolute",
+                        reason);
+            }
+            if (chan.periodic_reduced_col_indices == nullptr ||
+                chan.periodic_reduced_dx == nullptr ||
+                chan.periodic_reduced_dy == nullptr ||
+                chan.periodic_reduced_dz == nullptr) {
+                reason = "GPU periodic DMI CSR value buffers are null for non-zero nnz";
+                return false;
+            }
+            const int reduced_rows = static_cast<int>(chan.periodic_reduced_rows);
+            fullmag_cuda_dmi_csr_energy_difference(
+                chan.periodic_reduced_row_offsets,
+                chan.periodic_reduced_col_indices,
+                chan.periodic_reduced_dx,
+                chan.periodic_reduced_dy,
+                chan.periodic_reduced_dz,
+                base_m.x, base_m.y, base_m.z,
+                gpu.magnetization.m.x, gpu.magnetization.m.y, gpu.magnetization.m.z,
+                gpu.reductions.scalar_workspace,
+                gpu.rk.k[1].x,
+                reduced_rows,
+                stream,
+                gpu.mesh_regions.periodic_reduced_representative_nodes);
+            dmi_reduction_blocks = (reduced_rows + 255) / 256;
+        } else {
+            if (chan.nnz == 0u) {
+                return cuda_ok(
+                           cudaMemsetAsync(tail + delta_tail_slot, 0, sizeof(double), stream),
+                           "cudaMemsetAsync GPU direct minimizer zero DMI delta",
+                           reason) &&
+                    cuda_ok(
+                        cudaMemsetAsync(tail + absolute_tail_slot, 0, sizeof(double), stream),
+                        "cudaMemsetAsync GPU direct minimizer zero DMI absolute",
+                        reason);
+            }
+            if (chan.csr_col_indices == nullptr ||
+                chan.csr_dx == nullptr ||
+                chan.csr_dy == nullptr ||
+                chan.csr_dz == nullptr) {
+                reason = "GPU direct minimizer DMI CSR value buffers are null for non-zero nnz";
+                return false;
+            }
+            fullmag_cuda_dmi_csr_energy_difference(
+                chan.csr_row_offsets,
+                chan.csr_col_indices,
+                chan.csr_dx,
+                chan.csr_dy,
+                chan.csr_dz,
+                base_m.x, base_m.y, base_m.z,
+                gpu.magnetization.m.x, gpu.magnetization.m.y, gpu.magnetization.m.z,
+                gpu.reductions.scalar_workspace,
+                gpu.rk.k[1].x,
+                node_count,
+                stream,
+                nullptr);
+            dmi_reduction_blocks = (node_count + 255) / 256;
+        }
+        if (!cuda_launch_ok("launch GPU direct minimizer DMI difference", reason) ||
+            !reduce_scalar_sum(
+                ctx, stream, gpu.reductions.scalar_workspace, dmi_reduction_blocks,
+                tail + delta_tail_slot,
+                "launch GPU direct minimizer DMI delta reduction", reason) ||
+            !reduce_scalar_sum(
+                ctx, stream, gpu.rk.k[1].x, dmi_reduction_blocks,
+                tail + absolute_tail_slot,
+                "launch GPU direct minimizer DMI absolute reduction", reason)) {
             return false;
         }
         return true;

@@ -120,9 +120,9 @@ void gpu_rk_audit04_demag_and_dmi_contracts_are_source_visible() {
             gpu_rk_rhs.find("gpu_rk_accumulate_effective_field_for_magnetization(") != std::string::npos,
         "GPU RK RHS runtime must expose an effective-field-only path for direct minimizers");
     check(
-        gpu_rk_dmi_fields.find("fullmag_cuda_dmi_field_energy(") != std::string::npos &&
+        gpu_rk_dmi_fields.find("fullmag_cuda_dmi_csr_field_energy(") != std::string::npos &&
             gpu_rk_dmi_fields.find("fullmag_cuda_dmi_field_energy_serial(") == std::string::npos,
-        "GPU RK must call the parallel DMI kernel wrapper, not the serial placeholder");
+        "GPU RK must call the CSR DMI kernel wrapper, not the serial placeholder");
     check(
         dmi_kernels_header.find("fullmag_cuda_dmi_field_energy(") != std::string::npos &&
             dmi_kernels_header.find("fullmag_cuda_dmi_field_energy_serial(") == std::string::npos,
@@ -270,36 +270,44 @@ int main() {
         blocked.dmi.interfacial_enabled = true;
         require_blocked(
             blocked,
-            "device-resident mesh geometry",
-            "GPU RK device-resident path must reject DMI without device mesh geometry");
-    }
-    {
-        auto blocked = ctx;
-        blocked.dmi.interfacial_enabled = true;
-        blocked.gpu_state.device.mesh_geometry.uploaded = true;
-        blocked.gpu_state.device.mesh_geometry.element_count = ctx.mesh.n_elements;
-        reason.clear();
-        const auto dmi_plan = fullmag::fem::gpu_rk_plan_device_resident(blocked, reason);
-        check(
-            dmi_plan.stage_count == 2,
-            "GPU RK device-resident path should preserve Heun stages with device interfacial DMI");
-        check(
-            reason.find("DMI") == std::string::npos,
-            "GPU RK device-resident path must not reject interfacial DMI after device residual support");
+            "device-resident CSR operator for interfacial DMI",
+            "GPU RK device-resident path must reject interfacial DMI without device CSR operator");
     }
     {
         auto blocked = ctx;
         blocked.dmi.bulk_enabled = true;
-        blocked.gpu_state.device.mesh_geometry.uploaded = true;
-        blocked.gpu_state.device.mesh_geometry.element_count = ctx.mesh.n_elements;
+        require_blocked(
+            blocked,
+            "device-resident CSR operator for bulk DMI",
+            "GPU RK device-resident path must reject bulk DMI without device CSR operator");
+    }
+    {
+        auto blocked = ctx;
+        blocked.dmi.interfacial_enabled = true;
+        blocked.gpu_state.device.dmi_csr.interfacial.uploaded = true;
+        blocked.gpu_state.device.dmi_csr.interfacial.rows = ctx.mesh.n_nodes;
         reason.clear();
         const auto dmi_plan = fullmag::fem::gpu_rk_plan_device_resident(blocked, reason);
         check(
             dmi_plan.stage_count == 2,
-            "GPU RK device-resident path should preserve Heun stages with device bulk DMI");
+            "GPU RK device-resident path should preserve Heun stages with device interfacial CSR DMI");
+        check(
+            reason.find("DMI") == std::string::npos,
+            "GPU RK device-resident path must not reject interfacial DMI after device CSR support");
+    }
+    {
+        auto blocked = ctx;
+        blocked.dmi.bulk_enabled = true;
+        blocked.gpu_state.device.dmi_csr.bulk.uploaded = true;
+        blocked.gpu_state.device.dmi_csr.bulk.rows = ctx.mesh.n_nodes;
+        reason.clear();
+        const auto dmi_plan = fullmag::fem::gpu_rk_plan_device_resident(blocked, reason);
+        check(
+            dmi_plan.stage_count == 2,
+            "GPU RK device-resident path should preserve Heun stages with device bulk CSR DMI");
         check(
             reason.find("bulk DMI") == std::string::npos,
-            "GPU RK device-resident path must not reject bulk DMI after device residual support");
+            "GPU RK device-resident path must not reject bulk DMI after device CSR support");
     }
     {
         auto blocked = ctx;
