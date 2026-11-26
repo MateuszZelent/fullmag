@@ -4,6 +4,7 @@
 #include "frequency_domain/modal_eigen_request.hpp"
 
 #include <array>
+#include <complex>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -84,6 +85,23 @@ struct FloquetSharedDomainSparseModalOperator {
     const char *boundary_kind = nullptr;
     const char *gauge_policy = nullptr;
 };
+
+// Independently certify the exported GPU mode on the original phase-constrained
+// MFEM descriptor. This post-processing neither factors nor solves a system.
+struct FloquetDeviceModeCertificate {
+    double magnetic_relative_residual = 0.0;
+    double potential_relative_residual = 0.0;
+    double scalar_phase_seam_relative_residual = 0.0;
+    double tangent_frame_seam_relative_residual = 0.0;
+    double cartesian_magnetic_seam_relative_residual = 0.0;
+    double equilibrium_pair_relative_residual = 0.0;
+    std::vector<std::complex<double>> cartesian_delta_m;
+};
+
+bool certify_floquet_device_mode(
+    const FloquetSharedDomainSparseModalOperator &operator_view,
+    std::vector<std::complex<double>> &q_reduced, std::vector<std::complex<double>> &phi_reduced,
+    std::complex<double> lambda, double tolerance, FloquetDeviceModeCertificate &out);
 
 /*
  * Optional owner for one native frequency-window execution.  The object is

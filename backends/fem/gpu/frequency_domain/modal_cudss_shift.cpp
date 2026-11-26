@@ -10,6 +10,7 @@
 #include <complex>
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
 #include <limits>
 #include <vector>
@@ -167,7 +168,43 @@ struct CudssModalShift::Impl {
             cudaMemcpyAsync(target, input, bytes, cudaMemcpyHostToDevice, stream) == cudaSuccess;
     }
 
-    const char *initialize(const OpenAirboxAugmentedPencil &pencil, int block_columns)
+    const char *check_device_memory_budget(
+        std::optional<std::size_t> device_budget_cap_bytes) const noexcept
+    {
+        // cuDSS 0.8 reports stable and peak device bytes in slots 0 and 1.
+        std::array<std::int64_t, 16> estimates{};
+        std::size_t written = 0;
+        if (cudssDataGet(handle, data, CUDSS_DATA_MEMORY_ESTIMATES, estimates.data(),
+                         sizeof(estimates), &written) != CUDSS_STATUS_SUCCESS ||
+            written < 2u * sizeof(estimates[0]) || estimates[1] <= 0) {
+            return "cudss_peak_memory_estimate_unavailable";
+        }
+
+        std::size_t free_bytes = 0;
+        std::size_t total_bytes = 0;
+        if (cudaMemGetInfo(&free_bytes, &total_bytes) != cudaSuccess ||
+            total_bytes == 0 || free_bytes > total_bytes) {
+            return "cudss_device_memory_budget_unavailable";
+        }
+
+        constexpr std::size_t minimum_reserve_bytes = 512u * 1024u * 1024u;
+        const std::size_t reserve = std::max(minimum_reserve_bytes, total_bytes / 20u);
+        const std::size_t available = free_bytes > reserve ? free_bytes - reserve : 0;
+        const std::size_t budget = std::min(available, device_budget_cap_bytes.value_or(available));
+        const auto peak = static_cast<std::uint64_t>(estimates[1]);
+        if (peak > budget) {
+            std::fprintf(stderr,
+                         "fullmag: modal cuDSS factorization rejected before launch: "
+                         "estimated_peak_device_bytes=%llu device_budget_bytes=%zu "
+                         "device_free_bytes=%zu device_reserve_bytes=%zu\n",
+                         static_cast<unsigned long long>(peak), budget, free_bytes, reserve);
+            return "cudss_peak_memory_budget_exceeded";
+        }
+        return nullptr;
+    }
+
+    const char *initialize(const OpenAirboxAugmentedPencil &pencil, int block_columns,
+                           std::optional<std::size_t> device_budget_cap_bytes)
     {
         static_assert(sizeof(std::complex<double>) == sizeof(double2));
         static_assert(sizeof(std::uint32_t) == sizeof(std::int32_t));
@@ -215,8 +252,12 @@ struct CudssModalShift::Impl {
         }
 
         if (cudssExecute(handle, CUDSS_PHASE_ANALYSIS, config, data, matrix,
-                         solution_descriptor, rhs_descriptor) != CUDSS_STATUS_SUCCESS) {
+                         solution_descriptor, rhs_descriptor) != CUDSS_STATUS_SUCCESS ||
+            cudaStreamSynchronize(stream) != cudaSuccess) {
             return "cudss_symbolic_analysis_failed";
+        }
+        if (const char *failure = check_device_memory_budget(device_budget_cap_bytes)) {
+            return failure;
         }
         if (cudssExecute(handle, CUDSS_PHASE_FACTORIZATION, config, data, matrix,
                          solution_descriptor, rhs_descriptor) != CUDSS_STATUS_SUCCESS ||
@@ -251,7 +292,8 @@ CudssModalShift::CudssModalShift() : state_(std::make_unique<Impl>()) {}
 CudssModalShift::~CudssModalShift() = default;
 
 std::unique_ptr<CudssModalShift> CudssModalShift::create(
-    const OpenAirboxAugmentedPencil &pencil, int block_columns, cudaStream_t stream, const char **failure)
+    const OpenAirboxAugmentedPencil &pencil, int block_columns, cudaStream_t stream, const char **failure,
+    std::optional<std::size_t> device_budget_cap_bytes)
 {
     if (failure == nullptr) {
         return nullptr;
@@ -267,7 +309,7 @@ std::unique_ptr<CudssModalShift> CudssModalShift::create(
     }
     auto factor = std::unique_ptr<CudssModalShift>(new CudssModalShift);
     factor->state_->stream = stream;
-    *failure = factor->state_->initialize(pencil, block_columns);
+    *failure = factor->state_->initialize(pencil, block_columns, device_budget_cap_bytes);
     if (*failure != nullptr) {
         return nullptr;
     }

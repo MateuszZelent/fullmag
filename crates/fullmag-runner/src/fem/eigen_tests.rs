@@ -4141,7 +4141,7 @@ pub(super) fn bounded_open_airbox_k0_execution_plan() -> FemEigenPlanIR {
     plan
 }
 
-fn bounded_floquet_dynamic_demag_execution_plan() -> FemEigenPlanIR {
+pub(super) fn bounded_floquet_dynamic_demag_execution_plan() -> FemEigenPlanIR {
     let mut plan = bounded_k0_execution_plan();
     plan.domain_mesh_mode = fullmag_ir::FemDomainMeshModeIR::SharedDomainMeshWithAir;
     plan.demag_realization = Some(fullmag_ir::ResolvedFemDemagIR::PoissonRobin);
@@ -4159,6 +4159,17 @@ fn bounded_floquet_dynamic_demag_execution_plan() -> FemEigenPlanIR {
     config.boundary_pair_id = None;
     config.pair_ids = vec!["x_faces".to_string(), "y_faces".to_string()];
     assert!(native_cpu_modal_window_has_floquet_dynamic_demag_path(&plan));
+    plan
+}
+
+pub(super) fn bounded_floquet_gpu_execution_plan() -> FemEigenPlanIR {
+    let mut plan = bounded_floquet_dynamic_demag_execution_plan();
+    plan.target = fullmag_ir::EigenTargetIR::Nearest {
+        frequency_hz: 2.0e9,
+    };
+    plan.magnetostatic_bc = fullmag_ir::MagnetostaticBoundaryConditionIR::FloquetAirbox;
+    plan.material.damping = 0.0;
+    assert!(native_gpu_modal_window_has_floquet_dynamic_demag_path(&plan));
     plan
 }
 
@@ -4188,16 +4199,28 @@ fn exact_k0_resolution(
 fn exact_floquet_dynamic_demag_resolution(
     requested_device: fullmag_ir::ExecutionDevice,
 ) -> fullmag_ir::FemEigenExecutionResolutionIR {
+    let (resolved_device, resolved_engine, selection_reason) = match requested_device {
+        fullmag_ir::ExecutionDevice::Gpu => (
+            fullmag_ir::ExecutionDevice::Gpu,
+            fullmag_ir::FemEigenEngineIR::GpuModalDeviceKrylov,
+            "fem_eigen.floquet_airbox_dynamic_demag.explicit_gpu",
+        ),
+        _ => (
+            fullmag_ir::ExecutionDevice::Cpu,
+            fullmag_ir::FemEigenEngineIR::FloquetAirboxCpuSchurSlepc,
+            "fem_eigen.floquet_airbox_dynamic_demag.explicit_cpu",
+        ),
+    };
     fullmag_ir::FemEigenExecutionResolutionIR {
         requested_device,
-        resolved_device: fullmag_ir::ExecutionDevice::Cpu,
+        resolved_device,
         requested_precision: fullmag_ir::ExecutionPrecision::Double,
         resolved_precision: fullmag_ir::ExecutionPrecision::Double,
         requested_engine: fullmag_ir::FemEigenEngineIR::Auto,
-        resolved_engine: fullmag_ir::FemEigenEngineIR::FloquetAirboxCpuSchurSlepc,
+        resolved_engine,
         fallback_used: false,
         fallback_reason: None,
-        selection_reason: "fem_eigen.floquet_airbox_dynamic_demag.explicit_cpu".to_string(),
+        selection_reason: selection_reason.to_string(),
     }
 }
 
@@ -4516,13 +4539,77 @@ fn planned_floquet_dynamic_demag_nearest_target_dispatches_same_cpu_engine() {
 }
 
 #[test]
-fn planned_floquet_dynamic_demag_rejects_gpu_resolution_without_fallback() {
-    let plan = bounded_floquet_dynamic_demag_execution_plan();
-    let mut resolution = exact_floquet_dynamic_demag_resolution(fullmag_ir::ExecutionDevice::Gpu);
-    resolution.resolved_device = fullmag_ir::ExecutionDevice::Gpu;
-    resolution.resolved_engine = fullmag_ir::FemEigenEngineIR::GpuModalDeviceKrylov;
+fn planned_floquet_dynamic_demag_gpu_resolution_dispatches_exact_nearest_lane() {
+    let plan = bounded_floquet_gpu_execution_plan();
+    let resolution = exact_floquet_dynamic_demag_resolution(fullmag_ir::ExecutionDevice::Gpu);
+    let execution = resolve_fem_eigen_execution_resolution(&plan, Some(&resolution))
+        .expect("explicit Floquet GPU resolution must validate for the exact bounded slice")
+        .expect("explicit bounded Floquet GPU must have an exact execution");
+
+    assert_eq!(execution.lane(), FemEigenExecutionLane::Gpu);
+    assert_eq!(
+        execution.native_target(),
+        Some(native_fem::NativeModalExecutionTarget::ProductionGpu)
+    );
+    assert_eq!(execution.engine_id(), "gpu_modal_device_krylov");
+}
+
+#[test]
+fn planned_floquet_gpu_empty_selector_uses_the_complete_mesh_pair_set() {
+    let mut plan = bounded_floquet_gpu_execution_plan();
+    let SpinWaveBoundaryConditionIR::Config(config) = &mut plan.spin_wave_bc else {
+        unreachable!("the bounded Floquet fixture uses structured boundary conditions");
+    };
+    config.pair_ids.clear();
+    let resolution = exact_floquet_dynamic_demag_resolution(fullmag_ir::ExecutionDevice::Gpu);
+    let execution = resolve_fem_eigen_execution_resolution(&plan, Some(&resolution))
+        .expect("empty selector uses every certified mesh pair")
+        .expect("the exact GPU resolution survives implicit pair selection");
+    assert_eq!(execution.lane(), FemEigenExecutionLane::Gpu);
+}
+
+#[test]
+fn planned_floquet_dynamic_demag_gpu_resolution_rejects_window_and_path_without_fallback() {
+    let mut plan = bounded_floquet_gpu_execution_plan();
+    plan.target = fullmag_ir::EigenTargetIR::FrequencyWindow {
+        frequency_min_hz: 1.0e8,
+        frequency_max_hz: 5.0e9,
+    };
+    let resolution = exact_floquet_dynamic_demag_resolution(fullmag_ir::ExecutionDevice::Gpu);
     let error = resolve_fem_eigen_execution_resolution(&plan, Some(&resolution))
-        .expect_err("dynamic Floquet demag is CPU-only and must reject GPU resolution");
+        .expect_err("the GPU Floquet cuDSS slice must reject window selection");
+    assert!(error
+        .message
+        .contains("resolved engine does not match the bounded modal plan scope"));
+
+    let mut plan = bounded_floquet_gpu_execution_plan();
+    plan.k_sampling = Some(fullmag_ir::KSamplingIR::Path {
+        points: vec![
+            fullmag_ir::KPointIR {
+                label: Some("Gamma".to_string()),
+                k_vector: [0.0, 0.0, 0.0],
+            },
+            fullmag_ir::KPointIR {
+                label: Some("X".to_string()),
+                k_vector: [1.0e6, 0.0, 0.0],
+            },
+        ],
+        samples_per_segment: vec![2],
+        closed: false,
+    });
+    let error = resolve_fem_eigen_execution_resolution(&plan, Some(&resolution))
+        .expect_err("the GPU Floquet cuDSS slice must reject path expansion");
+    assert!(error
+        .message
+        .contains("resolved engine does not match the bounded modal plan scope"));
+}
+
+#[test]
+fn planned_floquet_dynamic_demag_gpu_resolution_fails_closed_on_unbounded_scope() {
+    let plan = bounded_floquet_dynamic_demag_execution_plan();
+    let resolution = exact_floquet_dynamic_demag_resolution(fullmag_ir::ExecutionDevice::Gpu);
+    let error = resolve_fem_eigen_execution_resolution(&plan, Some(&resolution))
+        .expect_err("a non-GPU-qualified Floquet window must not admit explicit GPU");
     assert!(error
         .message
         .contains("resolved engine does not match the bounded modal plan scope"));
@@ -7800,15 +7887,20 @@ fn native_shared_domain_modes_require_phi_and_block_residuals() {
     .expect("native sparse Floquet adapter must parse the physical shared-domain q/phi payload");
     assert_eq!(modes[0].vector, phased.vector);
     assert_eq!(modes[0].phi_vector, phased.phi_vector);
-    let residuals = super::eigen_native_artifacts::native_modal_block_residuals(
-        &modes[0],
-        Some("floquet_airbox_cpu_schur_slepc"),
-    );
-    assert_eq!(residuals["scope"], "reduced_original_blocks_only");
-    assert!(residuals["eps_full"].is_null());
-    assert_eq!(residuals["certified"], false);
-    assert_eq!(residuals["full_descriptor_certified"], false);
-    assert_eq!(residuals["reduced_pencil_certified"], true);
+    for adapter in [
+        "floquet_airbox_cpu_schur_slepc",
+        "floquet_airbox_gpu_augmented_cudss",
+    ] {
+        let residuals = super::eigen_native_artifacts::native_modal_block_residuals(
+            &modes[0],
+            Some(adapter),
+        );
+        assert_eq!(residuals["scope"], "reduced_original_blocks_only");
+        assert!(residuals["eps_full"].is_null());
+        assert_eq!(residuals["certified"], false);
+        assert_eq!(residuals["full_descriptor_certified"], false);
+        assert_eq!(residuals["reduced_pencil_certified"], true);
+    }
 
     let mut certified_mode = mode.clone();
     certified_mode["floquet_descriptor_certified"] = serde_json::json!(true);
@@ -7838,19 +7930,28 @@ fn native_shared_domain_modes_require_phi_and_block_residuals() {
         Some(&phase_context),
     )
     .expect("a mode with full projected equations, seams, and gauge policy should parse");
-    let certified_residuals = super::eigen_native_artifacts::native_modal_block_residuals(
-        &certified_modes[0],
-        Some("floquet_airbox_cpu_schur_slepc"),
-    );
-    assert_eq!(
-        certified_residuals["scope"],
-        "full_projected_weak_form_and_periodic_seams"
-    );
-    assert_eq!(certified_residuals["full_descriptor_certified"], true);
-    assert_eq!(certified_residuals["certified"], true);
-    assert!((certified_residuals["eps_full"].as_f64().unwrap() - 2.0e-12).abs() < 1.0e-24);
-    assert!((certified_residuals["eps_reduced"].as_f64().unwrap() - 4.0e-12).abs() < 1.0e-24);
-    assert!(certified_residuals["eps_gauge"].is_null());
+    for adapter in [
+        "floquet_airbox_cpu_schur_slepc",
+        "floquet_airbox_gpu_augmented_cudss",
+    ] {
+        let certified_residuals = super::eigen_native_artifacts::native_modal_block_residuals(
+            &certified_modes[0],
+            Some(adapter),
+        );
+        assert_eq!(
+            certified_residuals["scope"],
+            "full_projected_weak_form_and_periodic_seams"
+        );
+        assert_eq!(certified_residuals["full_descriptor_certified"], true);
+        assert_eq!(certified_residuals["certified"], true);
+        assert!(
+            (certified_residuals["eps_full"].as_f64().unwrap() - 2.0e-12).abs() < 1.0e-24
+        );
+        assert!(
+            (certified_residuals["eps_reduced"].as_f64().unwrap() - 4.0e-12).abs() < 1.0e-24
+        );
+        assert!(certified_residuals["eps_gauge"].is_null());
+    }
 
     let mut invalid_mode = mode;
     invalid_mode["floquet_descriptor_certified"] = serde_json::json!(true);

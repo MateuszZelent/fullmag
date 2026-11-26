@@ -4958,13 +4958,14 @@ int fullmag_fem_modal_eigen_solve_v20_with_runtime_scope(
             }
         }
 
-        // The augmented Robin adapter supplies typed native measurements.
+        // Both augmented cuDSS adapters supply typed native measurements.
         // Only this boundary can bind them to the validated input and runtime
         // digests before making the result visible to the caller.
         bool measured = false;
         const char *augmented_robin_failure = nullptr;
         if (out_result->scientific_result_v18.status == FULLMAG_FEM_FD_OK &&
-            gpu_snapshot.operator_kind == FULLMAG_FEM_MODAL_OPERATOR_AUGMENTED_ROBIN_CUDSS_CUDA) {
+            (gpu_snapshot.operator_kind == FULLMAG_FEM_MODAL_OPERATOR_AUGMENTED_ROBIN_CUDSS_CUDA ||
+             gpu_snapshot.operator_kind == FULLMAG_FEM_MODAL_OPERATOR_AUGMENTED_FLOQUET_CUDSS_CUDA)) {
             augmented_robin_failure =
                 fullmag::fem::frequency_domain::augmented_robin_attestation_failure(gpu_snapshot);
             measured = augmented_robin_failure == nullptr;

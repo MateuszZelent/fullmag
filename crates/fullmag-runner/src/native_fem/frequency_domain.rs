@@ -1036,16 +1036,27 @@ pub(crate) fn solve_native_modal_eigen(
         })
         && request.shared_domain_problem.is_some()
         && request.mfem_operator_problem.is_some();
+    let nonzero_k_floquet_gpu_shared_domain_provider = matches!(
+        request.execution_target,
+        NativeModalExecutionTarget::ProductionGpu
+    ) && request.include_demag
+        && request.spin_wave_bc_kind == "floquet"
+        && request.k_vector_rad_m.is_some_and(|values| {
+            values
+                .iter()
+                .any(|value| value.abs() > GAMMA_POINT_K_COMPONENT_ABS_TOLERANCE_RAD_PER_M)
+        });
     let production_shared_domain_required = matches!(
         request.execution_target,
         NativeModalExecutionTarget::ProductionCpu | NativeModalExecutionTarget::ProductionGpu
     ) && request.include_demag
-        && request.spin_wave_bc_kind == "periodic"
-        && request.k_vector_rad_m.is_none_or(|values| {
-            values
-                .iter()
-                .all(|value| value.abs() <= GAMMA_POINT_K_COMPONENT_ABS_TOLERANCE_RAD_PER_M)
-        });
+        && ((request.spin_wave_bc_kind == "periodic"
+            && request.k_vector_rad_m.is_none_or(|values| {
+                values
+                    .iter()
+                    .all(|value| value.abs() <= GAMMA_POINT_K_COMPONENT_ABS_TOLERANCE_RAD_PER_M)
+            }))
+            || nonzero_k_floquet_gpu_shared_domain_provider);
     validate_native_modal_request_payload_ownership_with_provider(
         request.execution_target,
         production_shared_domain_required,
@@ -1156,6 +1167,7 @@ pub(crate) fn validate_planned_modal_execution_attestation(
                 "gpu_modal_device_krylov",
                 "k0_poisson_airbox_gpu_petsc_slepc",
                 "k0_poisson_airbox_gpu_augmented_cudss",
+                FLOQUET_GPU_CUDSS_ENGINE_ID,
             ],
         ),
     };
@@ -2666,40 +2678,57 @@ fn solve_native_modal_eigen_impl(
                 "native FEM modal_eigen v20 boundary rejected caller envelope with status {status}"
             ));
         }
-        let attestation = match unsafe {
-            validate_modal_gpu_attestation_v1(result_v20.gpu_attestation)
-        } {
-            Ok(attestation)
-                if runtime_identity.as_ref().ok() == Some(&attestation.runtime_manifest_sha256)
-                    && session_identity.as_ref() == Some(&attestation.session_context_sha256) =>
-            {
-                attestation
-            }
-            Ok(_) => {
-                unsafe { ffi::fullmag_fem_frequency_domain_result_v20_destroy(&mut result_v20) };
-                return Err("k0_poisson_airbox_gpu_attestation_runtime_or_stage_scope_mismatch".into());
-            }
-            Err(mut error) => {
-                if let Err(reason) = runtime_identity {
-                    error.push_str(&format!("; runtime manifest: {reason}"));
+        let native_interrupted = map_contract_status(result_v20.scientific_result_v18.status)
+            == NativeFrequencyDomainStatus::Interrupted;
+        let attestation = if native_interrupted {
+            // A canceled cuDSS solve has no successful device execution to
+            // attest. Preserve the native cancellation result without
+            // publishing partial GPU capability or stage-scope claims.
+            None
+        } else {
+            Some(match unsafe {
+                validate_modal_gpu_attestation_v1(result_v20.gpu_attestation)
+            } {
+                Ok(attestation)
+                    if runtime_identity.as_ref().ok()
+                        == Some(&attestation.runtime_manifest_sha256)
+                        && session_identity.as_ref()
+                            == Some(&attestation.session_context_sha256) =>
+                {
+                    attestation
                 }
-                let native = &result_v20.scientific_result_v18;
-                append_modal_gpu_failure_context(
-                    &mut error,
-                    map_contract_status(native.status),
-                    &ffi_string(native.error_message),
-                    &ffi_string(native.diagnostics_json),
-                );
-                unsafe { ffi::fullmag_fem_frequency_domain_result_v20_destroy(&mut result_v20) };
-                return Err(error);
-            }
+                Ok(_) => {
+                    unsafe {
+                        ffi::fullmag_fem_frequency_domain_result_v20_destroy(&mut result_v20)
+                    };
+                    return Err(
+                        "k0_poisson_airbox_gpu_attestation_runtime_or_stage_scope_mismatch".into(),
+                    );
+                }
+                Err(mut error) => {
+                    if let Err(reason) = runtime_identity {
+                        error.push_str(&format!("; runtime manifest: {reason}"));
+                    }
+                    let native = &result_v20.scientific_result_v18;
+                    append_modal_gpu_failure_context(
+                        &mut error,
+                        map_contract_status(native.status),
+                        &ffi_string(native.error_message),
+                        &ffi_string(native.diagnostics_json),
+                    );
+                    unsafe {
+                        ffi::fullmag_fem_frequency_domain_result_v20_destroy(&mut result_v20)
+                    };
+                    return Err(error);
+                }
+            })
         };
         let inner = result_v20.scientific_result_v18;
         result_v20.scientific_result_v18 = NativeFrequencyDomainContractFfiResult::default().inner;
         unsafe { ffi::fullmag_fem_frequency_domain_result_v20_destroy(&mut result_v20) };
         (
             NativeFrequencyDomainContractFfiResult { inner },
-            Some(attestation),
+            attestation,
         )
     } else {
         (
@@ -3013,6 +3042,9 @@ const MODAL_GPU_FALLBACK_NONE: u32 = 1;
 #[cfg_attr(not(any(feature = "fem-native", feature = "fem-gpu", test)), expect(dead_code, reason = "native FEM validates these stable GPU attestation ABI values"))]
 const MODAL_GPU_OPERATOR_MATRIX_FREE_SCHUR_CUDA: u32 = 1;
 const MODAL_GPU_OPERATOR_AUGMENTED_ROBIN_CUDSS_CUDA: u32 = 3;
+const FLOQUET_GPU_CUDSS_ENGINE_ID: &str = "native_fem.frequency_domain.floquet_airbox_gpu_augmented_cudss.v1";
+#[cfg_attr(not(any(feature = "fem-native", feature = "fem-gpu", test)), expect(dead_code, reason = "native FEM validates this stable Floquet cuDSS attestation ABI value"))]
+const MODAL_GPU_OPERATOR_AUGMENTED_FLOQUET_CUDSS_CUDA: u32 = 4;
 #[cfg_attr(not(any(feature = "fem-native", feature = "fem-gpu", test)), expect(dead_code, reason = "native FEM validates these stable GPU attestation ABI values"))]
 const MODAL_GPU_HYPRE_MEMORY_DEVICE: u32 = 2;
 #[cfg_attr(not(any(feature = "fem-native", feature = "fem-gpu", test)), expect(dead_code, reason = "native FEM validates these stable GPU attestation ABI values"))]
@@ -3047,10 +3079,10 @@ pub(crate) enum NativeModalGpuFallbackState {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[cfg_attr(not(any(feature = "fem-native", feature = "fem-gpu", test)), expect(dead_code, reason = "native FEM constructs this state while validating GPU attestation"))]
 pub(crate) enum NativeModalGpuOperatorKind {
     MatrixFreeSchurCuda,
     AugmentedRobinCudssCuda,
+    AugmentedFloquetCudssCuda,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -3267,6 +3299,16 @@ impl NativeModalGpuAttestation {
             ),
             NativeModalGpuOperatorKind::AugmentedRobinCudssCuda => (
                 "augmented_robin_cudss_cuda",
+                serde_json::json!({ "mfem_version": self.mfem_version }),
+                serde_json::json!({
+                    "factorization": "cudss",
+                    "sparse_application": "cusparse",
+                    "projection": "complex_block_rayleigh_ritz",
+                    "sha256": prefixed_hex(&self.object_graph_sha256),
+                }),
+            ),
+            NativeModalGpuOperatorKind::AugmentedFloquetCudssCuda => (
+                "augmented_floquet_cudss_cuda",
                 serde_json::json!({ "mfem_version": self.mfem_version }),
                 serde_json::json!({
                     "factorization": "cudss",
@@ -3555,6 +3597,21 @@ fn parse_modal_gpu_attestation_snapshot(
             }
             (
                 NativeModalGpuOperatorKind::AugmentedRobinCudssCuda,
+                NativeModalGpuHypreMemoryLocation::NotUsed,
+                NativeModalGpuHypreExecutionPolicy::NotUsed,
+            )
+        }
+        MODAL_GPU_OPERATOR_AUGMENTED_FLOQUET_CUDSS_CUDA => {
+            if snapshot.hypre_memory_location != 0
+                || snapshot.hypre_execution_policy != 0
+                || petsc_identity.iter().any(|value| !value.is_empty())
+            {
+                return Err(
+                    "k0_poisson_airbox_gpu_attestation_cudss_has_petsc_identity".to_string()
+                );
+            }
+            (
+                NativeModalGpuOperatorKind::AugmentedFloquetCudssCuda,
                 NativeModalGpuHypreMemoryLocation::NotUsed,
                 NativeModalGpuHypreExecutionPolicy::NotUsed,
             )
@@ -4968,11 +5025,12 @@ mod tests {
     }
 
     #[test]
-    fn planned_gpu_modal_attestation_accepts_only_canonical_or_adapter_engine_id() {
+    fn planned_gpu_modal_attestation_accepts_canonical_and_exact_native_engine_ids() {
         for engine_id in [
             "gpu_modal_device_krylov",
             "k0_poisson_airbox_gpu_petsc_slepc",
             "k0_poisson_airbox_gpu_augmented_cudss",
+            FLOQUET_GPU_CUDSS_ENGINE_ID,
         ] {
             validate_planned_modal_execution_attestation(
                 fullmag_ir::FemEigenEngineIR::GpuModalDeviceKrylov,
@@ -4981,18 +5039,20 @@ mod tests {
                 0,
                 engine_id,
             )
-            .expect("canonical GPU engine and its explicit native adapter alias are accepted");
+            .expect("canonical and exact native GPU engine identifiers are accepted");
         }
 
-        let error = validate_planned_modal_execution_attestation(
-            fullmag_ir::FemEigenEngineIR::GpuModalDeviceKrylov,
-            NativeModalExecutionTarget::ProductionGpu,
-            Some(2),
-            0,
-            "fem_eigen_native_gpu",
-        )
-        .expect_err("broad legacy engine id must not attest the exact GPU lane");
-        assert!(error.contains("native_modal_engine_mismatch"));
+        for engine_id in ["fem_eigen_native_gpu", "floquet_airbox_gpu_augmented_cudss"] {
+            let error = validate_planned_modal_execution_attestation(
+                fullmag_ir::FemEigenEngineIR::GpuModalDeviceKrylov,
+                NativeModalExecutionTarget::ProductionGpu,
+                Some(2),
+                0,
+                engine_id,
+            )
+            .expect_err("broad or unversioned adapter IDs must not attest the exact GPU lane");
+            assert!(error.contains("native_modal_engine_mismatch"));
+        }
     }
 
     #[test]

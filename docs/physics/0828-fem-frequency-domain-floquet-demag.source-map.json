@@ -11,7 +11,8 @@
     {
       "solver": "FEM",
       "device": "GPU",
-      "status": "source_visible / unvalidated"
+      "status": "unsupported; narrow Single-k cuDSS slice specified only",
+      "reason": "The explicit-GPU FloquetAirbox modal adapter is a planned contract only; planner and runner remain CPU-only, and managed GPU qualification is absent."
     },
     {
       "solver": "FDM",
@@ -218,6 +219,49 @@
       "sources": [
         "source-n0-projection-contract",
         "source-n0-projection"
+      ]
+    },
+    {
+      "id": "eq-0828-floquet-gpu-cudss-augmented-shift",
+      "symbols": [
+        "wave_vector",
+        "Aqq",
+        "Bqq",
+        "Aqphi",
+        "Aphiq",
+        "poisson",
+        "mu0",
+        "operator_scale",
+        "shift_coefficient",
+        "shift_frequency",
+        "shift_frequency_cyclic",
+        "shift_blocks",
+        "complex_operators"
+      ],
+      "sources": [
+        "source-floquet-gpu-cudss-contract",
+        "source-floquet-cudss-native-adapter",
+        "source-floquet-cudss-factorization",
+        "source-dynamic-pencil",
+        "source-native-sparse-floquet-modal"
+      ]
+    },
+    {
+      "id": "eq-0828-floquet-gpu-cudss-block-identities",
+      "symbols": [
+        "Aqq",
+        "Bqq",
+        "Aqphi",
+        "Aphiq",
+        "poisson",
+        "mu0",
+        "complex_operators"
+      ],
+      "sources": [
+        "source-floquet-gpu-cudss-contract",
+        "source-floquet-cudss-native-adapter",
+        "source-native-sparse-floquet-modal",
+        "source-floquet-descriptor-certification"
       ]
     }
   ],
@@ -449,6 +493,54 @@
       "latex": "$\\operatorname{Re}$, $\\exp$, $\\mathrm{i}$, $\\pi$, $(\\cdot)^\\mathsf{T}$, $(\\cdot)^\\mathsf{H}$, $(\\cdot)^\\ast$, $\\cdot$, $\\max$",
       "meaning": "real part, exponential, imaginary unit, circle constant, transpose, Hermitian transpose, conjugation, contraction and maximum",
       "si_unit": "$1$"
+    },
+    {
+      "id": "Aqq",
+      "latex": "$A_{qq}$",
+      "meaning": "Hermitian magnetic stiffness block in the volume-tested dynamic weak form",
+      "si_unit": "$\\mathrm{m^3\\,s^{-1}}$"
+    },
+    {
+      "id": "Bqq",
+      "latex": "$B_{qq}$",
+      "meaning": "undamped gyrotropic block of the generalized magnetic pencil",
+      "si_unit": "$\\mathrm{m^3}$"
+    },
+    {
+      "id": "mu0",
+      "latex": "$\\mu_0$",
+      "meaning": "vacuum permeability",
+      "si_unit": "$\\mathrm{T\\,m\\,A^{-1}}$"
+    },
+    {
+      "id": "operator_scale",
+      "latex": "$s$",
+      "meaning": "operator normalization scale from `operator_scale`",
+      "si_unit": "$\\mathrm{s\\,m^{-3}}$"
+    },
+    {
+      "id": "shift_coefficient",
+      "latex": "$c_\\sigma$",
+      "meaning": "real shift coefficient $s\\omega_\\sigma$ for the gyrotropic block",
+      "si_unit": "$\\mathrm{m^{-3}}$"
+    },
+    {
+      "id": "shift_frequency",
+      "latex": "$\\omega_\\sigma$",
+      "meaning": "real shift angular frequency",
+      "si_unit": "$\\mathrm{rad\\,s^{-1}}$"
+    },
+    {
+      "id": "shift_frequency_cyclic",
+      "latex": "$f_\\sigma$",
+      "meaning": "real shift cyclic frequency",
+      "si_unit": "$\\mathrm{Hz}$"
+    },
+    {
+      "id": "shift_blocks",
+      "latex": "$H_{\\sigma,qq}$, $H_{\\sigma,q\\phi}$, $H_{\\sigma,\\phi q}$, $H_{\\sigma,\\phi\\phi}$",
+      "meaning": "scaled augmented shift blocks in the order of {eq}`eq-0828-floquet-gpu-cudss-augmented-shift`",
+      "si_unit": "$1$, $\\mathrm{A^{-1}}$, $\\mathrm{T\\,s\\,m^{-1}}$, $\\mathrm{T\\,s\\,A^{-1}\\,m^{-1}}$"
     },
     {
       "id": "n0_volume",
@@ -736,6 +828,68 @@
       "symbol": "test_zero_error_and_declared_verified_proof_still_cannot_qualify",
       "responsibility": "Zero-error and forged pass claims cannot substitute external operator/equilibrium/phase proof.",
       "evidence_status": "source_prepared_ci_pending"
+    },
+    {
+      "id": "source-floquet-gpu-cudss-contract",
+      "path": "docs/physics/0828-fem-frequency-domain-floquet-demag.md",
+      "symbol": "DOC-ANCHOR:floquet-gpu-cudss-modal-scope",
+      "responsibility": "Specify the narrow Hermitian augmented-shift GPU modal slice and preserve unsupported status until managed qualification.",
+      "evidence_status": "planned_contract"
+    },
+    {
+      "id": "source-floquet-cudss-native-adapter",
+      "path": "backends/fem/src/frequency_domain/modal_eigen_solver.cpp",
+      "symbol": "solve_gpu_floquet_shared_domain",
+      "responsibility": "Consume original complex shared-domain Floquet blocks and emit typed physical-complex modes with original magnetic, Poisson and seam certificates.",
+      "evidence_status": "source_visible;managed_compile_runtime_pending"
+    },
+    {
+      "id": "source-floquet-cudss-factorization",
+      "path": "backends/fem/gpu/frequency_domain/modal_augmented_ritz.cu",
+      "symbol": "solve_floquet_airbox_augmented_ritz",
+      "responsibility": "Factor the Hermitian augmented shifted operator with cuDSS while retaining the gyrotropic mass as a separate projected generalized-eigenproblem block.",
+      "evidence_status": "managed_native_contract_pass;end_to_end_pending"
+    },
+    {
+      "id": "source-floquet-cudss-memory-admission",
+      "path": "docs/physics/0830-fem-poisson-airbox-modal-eigen.md",
+      "symbol": "DOC-ANCHOR:k0-cudss-memory-budget",
+      "responsibility": "Specify the shared post-analysis cuDSS peak-memory budget and its known limits for K0 and Floquet shifts.",
+      "evidence_status": "planned_contract"
+    },
+    {
+      "id": "source-floquet-cudss-inertia-cache",
+      "path": "backends/fem/gpu/frequency_domain/modal_augmented_window_count.cpp",
+      "symbol": "count_airbox_augmented_window",
+      "responsibility": "Reuse successful inertia by exact scaled shift within one window solve, without claiming timing improvement or reusing the Ritz numeric factor.",
+      "evidence_status": "managed_native_contract_pass"
+    },
+    {
+      "id": "source-floquet-modal-python-ir",
+      "path": "packages/fullmag-py/src/fullmag/model/study.py",
+      "symbol": "class Eigenmodes",
+      "responsibility": "Retain existing modal Python-to-IR intent for signed single-k Floquet requests; no public field is added."
+    },
+    {
+      "id": "source-floquet-current-planner-gate",
+      "path": "crates/fullmag-plan/src/fem.rs",
+      "symbol": "floquet_airbox_dynamic_demag_gpu_plan_supported",
+      "responsibility": "Admit the narrow signed single-k configuration and reject unsupported GPU requests.",
+      "evidence_status": "source_visible_runtime_not_verified"
+    },
+    {
+      "id": "source-floquet-current-execution-resolution",
+      "path": "crates/fullmag-plan/src/fem.rs",
+      "symbol": "resolve_floquet_airbox_dynamic_demag_execution",
+      "responsibility": "Current execution resolution fails closed for explicit GPU on the CPU-only FloquetAirbox lane.",
+      "evidence_status": "source_visible_runtime_not_verified"
+    },
+    {
+      "id": "source-floquet-current-runner-gate",
+      "path": "crates/fullmag-runner/src/fem/eigen_capability.rs",
+      "symbol": "native_gpu_modal_window_has_floquet_dynamic_demag_path",
+      "responsibility": "Require the matching Floquet mesh, phase and GPU capability.",
+      "evidence_status": "source_visible_runtime_not_verified"
     }
   ],
   "public_api": {
@@ -819,6 +973,86 @@
         "meaning": "Gilbert-damping participation in the pencil.",
         "backend_support": "FEM CPU/GPU authoring; runtime gated",
         "problem_ir": "study.damping_policy."
+      },
+      {
+        "python": "add_eigenmodes.target",
+        "type": "str",
+        "default": "lowest",
+        "si_unit": "$1$",
+        "validation": "nearest requires a finite positive target_frequency; other target values raise ValueError.",
+        "meaning": "Select modes nearest one requested frequency.",
+        "backend_support": "Existing authoring; the narrow GPU implementation requires managed end-to-end qualification.",
+        "problem_ir": "study.target.kind"
+      },
+      {
+        "python": "add_eigenmodes.target_frequency",
+        "type": "float | None",
+        "default": "None",
+        "si_unit": "$\\mathrm{Hz}$",
+        "validation": "Required and positive for target=\"nearest\".",
+        "meaning": "Requested cyclic frequency for nearest selection.",
+        "backend_support": "Existing authoring; the narrow GPU implementation requires managed end-to-end qualification.",
+        "problem_ir": "study.target.frequency_hz"
+      },
+      {
+        "python": "add_eigenmodes.operator",
+        "type": "str",
+        "default": "linearized_llg",
+        "si_unit": "$1$",
+        "validation": "full_2x2 is the required operator for this slice.",
+        "meaning": "Full magnetic/scalar-potential modal operator.",
+        "backend_support": "Existing authoring; the narrow GPU implementation requires managed end-to-end qualification.",
+        "problem_ir": "study.operator.kind"
+      },
+      {
+        "python": "add_eigenmodes.include_demag",
+        "type": "bool",
+        "default": "True",
+        "si_unit": "$1$",
+        "validation": "Must remain true for this coupled airbox slice.",
+        "meaning": "Include the dynamic demagnetization derivative.",
+        "backend_support": "Existing authoring; the narrow GPU implementation requires managed end-to-end qualification.",
+        "problem_ir": "study.operator.include_demag"
+      },
+      {
+        "python": "add_eigenmodes.damping_policy",
+        "type": "str",
+        "default": "ignore",
+        "si_unit": "$1$",
+        "validation": "ignore is required; include is outside this Hermitian slice.",
+        "meaning": "Exclude Gilbert damping from the modal pencil.",
+        "backend_support": "Existing authoring; the narrow GPU implementation requires managed end-to-end qualification.",
+        "problem_ir": "study.damping_policy"
+      },
+      {
+        "python": "add_eigenmodes.k_sampling",
+        "type": "object | None",
+        "default": "None",
+        "si_unit": "$1$",
+        "validation": "KPoint or one finite 3-vector is one sample; KPath is rejected by this GPU slice.",
+        "meaning": "Preserve the requested signed Bloch vector.",
+        "backend_support": "Existing authoring; GPU Floquet slice is KSamplingIR::Single only.",
+        "problem_ir": "study.k_sampling"
+      },
+      {
+        "python": "add_eigenmodes.bc",
+        "type": "str | PeriodicBC | FloquetBC | dict",
+        "default": "free",
+        "si_unit": "$1$",
+        "validation": "Explicit pair IDs must match the complete certified mesh pair sets.",
+        "meaning": "Magnetic seam and phase constraints.",
+        "backend_support": "Existing authoring; the narrow GPU implementation requires managed end-to-end qualification.",
+        "problem_ir": "study.spin_wave_bc"
+      },
+      {
+        "python": "add_eigenmodes.magnetostatic_bc",
+        "type": "str",
+        "default": "open",
+        "si_unit": "$1$",
+        "validation": "Must be floquet_airbox; non-paired open faces use the existing CPU lane's boundary condition.",
+        "meaning": "Shared-domain complex scalar-potential boundary model.",
+        "backend_support": "Existing authoring; the narrow GPU implementation requires managed end-to-end qualification.",
+        "problem_ir": "study.magnetostatic_bc"
       },
       {
         "python": "study.pbc(x, y, z, demag, images)",

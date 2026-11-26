@@ -109,7 +109,7 @@ pub(crate) fn native_cpu_modal_window_has_floquet_dynamic_demag_path(
             .demag_realization
             .is_some_and(|realization| realization.is_poisson())
         || !native_shared_domain_mesh_metadata_valid(plan)
-        || !native_floquet_pair_sets_match(plan)
+        || !native_floquet_pair_sets_match(plan, false)
     {
         return false;
     }
@@ -137,17 +137,117 @@ pub(crate) fn native_cpu_modal_window_has_floquet_dynamic_demag_path(
     }
 }
 
-fn native_floquet_pair_sets_match(plan: &FemEigenPlanIR) -> bool {
+/// Explicit-GPU Floquet admission for the first cuDSS modal slice. Unlike the
+/// CPU provider this accepts only one signed nonzero k point and nearest-
+/// frequency selection; path expansion and window search remain unsupported.
+pub(crate) fn native_gpu_modal_window_has_floquet_dynamic_demag_path(
+    plan: &FemEigenPlanIR,
+) -> bool {
+    let Some(fullmag_ir::KSamplingIR::Single { k_vector }) = plan.k_sampling.as_ref() else {
+        return false;
+    };
+    if !plan.enable_demag
+        || !plan.operator.include_demag
+        || !matches!(plan.operator.kind, fullmag_ir::EigenOperatorIR::Full2x2)
+        || !matches!(plan.damping_policy, EigenDampingPolicyIR::Ignore)
+        || plan.precision != fullmag_ir::ExecutionPrecision::Double
+        || !matches!(plan.target, fullmag_ir::EigenTargetIR::Nearest { frequency_hz }
+            if frequency_hz.is_finite() && frequency_hz > 0.0)
+        || !matches!(plan.spin_wave_bc.kind(), SpinWaveBoundaryKindIR::Floquet)
+        || plan.magnetostatic_bc
+            != fullmag_ir::MagnetostaticBoundaryConditionIR::FloquetAirbox
+        || plan.domain_mesh_mode != fullmag_ir::FemDomainMeshModeIR::SharedDomainMeshWithAir
+        || plan.fe_order != 1
+        || plan.air_box_config.is_none()
+        || !plan.demag_realization.is_some_and(|realization| realization.is_poisson())
+        || !native_shared_domain_mesh_metadata_valid(plan)
+        || !native_floquet_pair_sets_match(plan, true)
+        || !k_vector.iter().all(|value| value.is_finite())
+        || !k_vector
+            .iter()
+            .any(|value| value.abs() > GAMMA_K_TOLERANCE_RAD_PER_M)
+        || !native_gpu_floquet_material_is_reciprocal(plan)
+        || !native_gpu_floquet_has_nontrivial_phase(plan, *k_vector)
+    {
+        return false;
+    }
+    true
+}
+
+fn native_gpu_floquet_material_is_reciprocal(plan: &FemEigenPlanIR) -> bool {
+    let material = &plan.material;
+    material.damping.is_finite()
+        && material.damping == 0.0
+        && material.alpha_field.as_ref().is_none_or(|values| {
+            !values.is_empty() && values.iter().all(|value| value.is_finite() && *value == 0.0)
+        })
+        && [
+            material.uniaxial_anisotropy,
+            material.uniaxial_anisotropy_k2,
+            material.cubic_anisotropy_kc1,
+            material.cubic_anisotropy_kc2,
+            material.cubic_anisotropy_kc3,
+        ]
+        .into_iter()
+        .flatten()
+        .all(|value| value.is_finite() && value == 0.0)
+        && [
+            &material.ku_field,
+            &material.ku2_field,
+            &material.kc1_field,
+            &material.kc2_field,
+            &material.kc3_field,
+        ]
+        .into_iter()
+        .flatten()
+        .all(|values| values.iter().all(|value| value.is_finite() && *value == 0.0))
+        && material.a_field.is_none()
+        && material.dind_field.is_none()
+        && material.dbulk_field.is_none()
+        && plan
+            .interfacial_dmi
+            .is_none_or(|coefficient| coefficient.is_finite() && coefficient == 0.0)
+        && plan
+            .bulk_dmi
+            .is_none_or(|coefficient| coefficient.is_finite() && coefficient == 0.0)
+        && plan.spin_wave_bc.surface_anisotropy_ks().is_none()
+}
+
+fn native_gpu_floquet_has_nontrivial_phase(
+    plan: &FemEigenPlanIR,
+    k_vector: [f64; 3],
+) -> bool {
+    let requested = plan.spin_wave_bc.boundary_pair_ids();
+    plan.mesh.periodic_boundary_pairs.iter().any(|pair| {
+        (requested.is_empty() || requested.contains(&pair.pair_id.as_str()))
+            && pair.translation.is_some_and(|translation| {
+                if !translation.iter().all(|value| value.is_finite()) {
+                    return false;
+                }
+                let angle = -k_vector
+                    .iter()
+                    .zip(translation)
+                    .map(|(k, distance)| k * distance)
+                    .sum::<f64>();
+                let wrapped = (angle + std::f64::consts::PI)
+                    .rem_euclid(std::f64::consts::TAU)
+                    - std::f64::consts::PI;
+                wrapped.abs() > 1.0e-12
+            })
+    })
+}
+
+fn native_floquet_pair_sets_match(plan: &FemEigenPlanIR, allow_implicit_all: bool) -> bool {
     let requested = plan.spin_wave_bc.boundary_pair_ids();
     let requested_set = requested.iter().copied().collect::<BTreeSet<_>>();
     let node_set = plan.mesh.periodic_node_pairs.iter()
         .map(|pair| pair.pair_id.as_str()).collect::<BTreeSet<_>>();
     let boundary_set = plan.mesh.periodic_boundary_pairs.iter()
         .map(|pair| pair.pair_id.as_str()).collect::<BTreeSet<_>>();
-    !requested_set.is_empty()
+    !node_set.is_empty()
+        && node_set == boundary_set
         && requested_set.len() == requested.len()
-        && requested_set == node_set
-        && requested_set == boundary_set
+        && ((allow_implicit_all && requested_set.is_empty()) || requested_set == node_set)
 }
 
 /// The native Floquet Schur operator supports two spectral selection modes:
