@@ -764,8 +764,11 @@ void vector_potential_nanometer_scale_equilibration()
 
 void vector_potential_coarse_mesh_zero_interior_h1_and_cap_rejection()
 {
+    // A 2x1x1 tetrahedral cube has all 12 vertices on y,z in {0,1} (n_{H1,int} == 0)
+    // and interior ND edges, while giving the periodic charge solve a genuine free
+    // x = 0.5 plane with O(1) right-hand side.
     auto mesh = mfem::Mesh::MakeCartesian3D(
-        1, 1, 1, mfem::Element::TETRAHEDRON, 1.0, 1.0, 1.0);
+        2, 1, 1, mfem::Element::TETRAHEDRON, 1.0, 1.0, 1.0);
     const auto current = make_uniform_current_view(mesh);
 
     std::vector<SparseCpuBackendPolicy> policies{
@@ -783,9 +786,9 @@ void vector_potential_coarse_mesh_zero_interior_h1_and_cap_rejection()
         const VectorPotentialResult result =
             VectorPotentialSolver::Evaluate(*current, options);
         require(result.diagnostics.h1_dofs == result.diagnostics.essential_h1_dof_count,
-            "1x1x1 coarse mesh fixture must have zero interior H1 DOFs");
+            "2x1x1 coarse mesh fixture must have zero interior H1 DOFs");
         require(result.diagnostics.nd_dofs > result.diagnostics.essential_nd_dof_count,
-            "1x1x1 coarse mesh fixture must have at least one interior ND DOF");
+            "2x1x1 coarse mesh fixture must have at least one interior ND DOF");
         for (double p_val : result.gauge_dofs_apm) {
             require(p_val == 0.0,
                 "OE-F2 zero-interior-H1 SPD path produced nonzero gauge DOF");
@@ -795,9 +798,9 @@ void vector_potential_coarse_mesh_zero_interior_h1_and_cap_rejection()
                 result.diagnostics.constraint_residual <= 1.0e-10 * scale &&
                 result.diagnostics.compatible_divergence_residual <= 1.0e-10 * scale &&
                 result.diagnostics.nodal_projection_residual <= 1.0e-10,
-            "OE-F2 1x1x1 SPD path residuals exceeded tolerance");
+            "OE-F2 2x1x1 SPD path residuals exceeded tolerance");
         require(!result.diagnostics.resolved_linear_solver.empty(),
-            "OE-F2 1x1x1 SPD path did not report resolved_linear_solver");
+            "OE-F2 2x1x1 SPD path did not report resolved_linear_solver");
     }
 
     auto require_invalid_arg = [&](const VectorPotentialOptions &bad_opts, const char *label) {
