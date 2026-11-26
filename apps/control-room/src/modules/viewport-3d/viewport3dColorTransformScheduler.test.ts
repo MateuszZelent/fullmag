@@ -1,10 +1,13 @@
 import { readFileSync } from "node:fs";
 
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { DecodedFieldVector } from "@/kernel/api/codecs";
 
-import { buildVertexScalarColorsOffMainThread } from "./viewport3dColorTransformScheduler";
+import {
+  buildVertexScalarColorsOffMainThread,
+  disposeViewport3DColorTransformWorker,
+} from "./viewport3dColorTransformScheduler";
 import type { Viewport3DBuildDiagnosticRecord } from "./build-engine/viewport3dBuildEngineTypes";
 
 function fieldVectorFixture(): DecodedFieldVector {
@@ -23,6 +26,11 @@ function fieldVectorFixture(): DecodedFieldVector {
 }
 
 describe("viewport3dColorTransformScheduler", () => {
+  afterEach(() => {
+    disposeViewport3DColorTransformWorker();
+    vi.unstubAllGlobals();
+  });
+
   it("delegates field-color runtime builds to the pure build model", () => {
     const source = readFileSync(
       new URL("./viewport3dColorTransformScheduler.ts", import.meta.url),
@@ -98,5 +106,25 @@ describe("viewport3dColorTransformScheduler", () => {
         state: "ready",
       }),
     );
+  });
+
+  it("does not use a main-thread fallback when an FDM color worker is required", async () => {
+    vi.stubGlobal("Worker", undefined);
+
+    await expect(
+      buildVertexScalarColorsOffMainThread(fieldVectorFixture(), {
+        buildKey: "field-color:fdm-worker-required",
+        colorMode: "magnitude",
+        colorPalette: "viridis",
+        target: {
+          cellOrdinals: new Uint32Array([0, 1]),
+          diagnosticsCacheKey: "field-buffer:m:r1",
+          domainCellCount: 2,
+          domainGridShape: [2, 1, 1],
+          kind: "fdm-sampled",
+        },
+        workerRequired: true,
+      }),
+    ).rejects.toThrow("field-color worker is required");
   });
 });

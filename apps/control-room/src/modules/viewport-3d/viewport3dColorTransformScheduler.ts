@@ -1,7 +1,5 @@
 "use client";
 
-import type { DecodedFieldVector } from "@/kernel/api/codecs";
-
 import type { Viewport3DBuildDiagnosticRecord } from "./build-engine/viewport3dBuildEngineTypes";
 import { recordViewport3DBuildDiagnostic } from "./build-engine/viewport3dBuildDiagnostics";
 import { createViewport3DBuildScheduler } from "./build-engine/viewport3dBuildScheduler";
@@ -29,6 +27,8 @@ export interface Viewport3DColorTransformBuildOptions
   onDiagnosticRecord?: (record: Viewport3DBuildDiagnosticRecord) => void;
   revisionSummary?: string;
   target?: Viewport3DFieldColorBuildTarget;
+  /** Reject instead of doing a potentially expensive synchronous fallback. */
+  workerRequired?: boolean;
 }
 
 interface PendingColorTransform {
@@ -97,7 +97,7 @@ async function executeVertexScalarColorBuild(
 ): Promise<ScalarColorBuffer> {
   throwIfAborted(options.signal);
   const client = getColorTransformWorkerClient();
-  if (client && isFloat64FieldVector(fieldVector)) {
+  if (client && isWorkerTransferableFieldVector(fieldVector)) {
     try {
       return await client.transform(fieldVector, options);
     } catch (error) {
@@ -109,6 +109,12 @@ async function executeVertexScalarColorBuild(
   } else if (!client) {
     options.recordFallback?.(
       colorTransformWorkerFallbackReason ?? "worker-unavailable",
+    );
+  }
+
+  if (options.workerRequired) {
+    throw new Error(
+      `Viewport 3D field-color worker is required (${colorTransformWorkerFallbackReason ?? "unsupported-field-vector"}).`,
     );
   }
 
@@ -206,10 +212,13 @@ function defaultFieldColorTarget(
   };
 }
 
-function isFloat64FieldVector(
+function isWorkerTransferableFieldVector(
   fieldVector: Viewport3DFieldVector,
-): fieldVector is DecodedFieldVector {
-  return fieldVector.dtype === "float64" && fieldVector.values instanceof Float64Array;
+): boolean {
+  return (
+    (fieldVector.dtype === "float32" && fieldVector.values instanceof Float32Array) ||
+    (fieldVector.dtype === "float64" && fieldVector.values instanceof Float64Array)
+  );
 }
 
 function cloneFieldColorBuildTargetForWorker(
@@ -237,6 +246,16 @@ function cloneFieldColorBuildTargetForWorker(
           pointIndices,
         },
         transferables: [pointIndices.buffer],
+      };
+    }
+    case "fdm-sampled": {
+      const cellOrdinals = new Uint32Array(target.cellOrdinals);
+      return {
+        target: {
+          ...target,
+          cellOrdinals,
+        },
+        transferables: [cellOrdinals.buffer],
       };
     }
     case "surface-faces": {
@@ -305,7 +324,7 @@ class ColorTransformWorkerClient {
   }
 
   transform(
-    fieldVector: DecodedFieldVector,
+    fieldVector: Viewport3DFieldVector,
     options: Viewport3DColorTransformBuildOptions,
   ): Promise<ScalarColorBuffer> {
     if (this.disposed) {
@@ -316,7 +335,10 @@ class ColorTransformWorkerClient {
     throwIfAborted(options.signal);
     this.clearIdleDisposeTimer();
     const id = this.nextId++;
-    const values = new Float64Array(fieldVector.values);
+    const values =
+      fieldVector.values instanceof Float32Array
+        ? new Float32Array(fieldVector.values)
+        : new Float64Array(fieldVector.values);
     const target = cloneFieldColorBuildTargetForWorker(
       options.target ?? defaultFieldColorTarget(fieldVector),
     );

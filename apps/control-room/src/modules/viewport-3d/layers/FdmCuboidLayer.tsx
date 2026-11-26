@@ -894,6 +894,9 @@ export const FdmCuboidLayer = memo(function FdmCuboidLayer({
 }) {
   const surfaceRef = useRef<InstancedMesh>(null);
   const wireframeRef = useRef<InstancedMesh>(null);
+  const inspectTargetId = carrierId?.startsWith("object:") || carrierId?.startsWith("region:")
+    ? carrierId
+    : undefined;
   const { camera, gl } = useThree();
   const inspectRaycastState = useMemo(
     () => ({
@@ -1014,6 +1017,7 @@ export const FdmCuboidLayer = memo(function FdmCuboidLayer({
           instanceId: sourceInstance,
           model,
           quantityId: inspectQuantityId,
+          targetId: inspectTargetId,
           worldPosition,
         }),
         {
@@ -1039,7 +1043,7 @@ export const FdmCuboidLayer = memo(function FdmCuboidLayer({
 
     let stationaryHoverNeedsClear = false;
     const stationaryHover = stationaryInspectHoverEnabled
-      ? createFdmCuboidInspectHoverDebouncer((event) => {
+      ? createFdmCuboidInspectHoverDebouncer<PointerEvent>((event) => {
           processInspectPointerMove(event, cachedRect);
           stationaryHoverNeedsClear = false;
         })
@@ -1137,6 +1141,7 @@ export const FdmCuboidLayer = memo(function FdmCuboidLayer({
             : null,
         model,
         quantityId: inspectQuantityId,
+        targetId: inspectTargetId,
         worldPosition: [event.point.x, event.point.y, event.point.z],
       }),
       {
@@ -1144,7 +1149,7 @@ export const FdmCuboidLayer = memo(function FdmCuboidLayer({
         y: event.nativeEvent.offsetY,
       },
     );
-  }, [fieldVector, inspectEnabled, inspectQuantityId, model, onInspectSample, preparedInstances]);
+  }, [fieldVector, inspectEnabled, inspectQuantityId, inspectTargetId, model, onInspectSample, preparedInstances]);
   const handlePointerOut = useCallback(() => {
     if (!inspectEnabled) return;
     onInspectClear?.();

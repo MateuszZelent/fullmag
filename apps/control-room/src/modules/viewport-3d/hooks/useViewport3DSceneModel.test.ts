@@ -6264,16 +6264,12 @@ describe("useViewport3DSceneModel", () => {
   it("passes the FDM target Surface scope and lift settings to the vector builder", () => {
     const source = readFileSync(sceneModelSourceUrl, "utf8");
     const targetBlock = source.slice(
-      source.indexOf("const fdmTargetViews:"),
+      source.indexOf("const fdmTargetRenderState ="),
       source.indexOf("const fdmMultilayerVoxelFillRatio"),
     );
     expect(targetBlock).toContain("geometryScope: settings.geometryScope");
-    expect(targetBlock).toContain(
-      "surfaceOffsetEnabled:\n                          settings.vectorSurfaceOffsetEnabled",
-    );
-    expect(targetBlock).toContain(
-      "surfaceOffsetScale:\n                          settings.vectorSurfaceOffsetScale",
-    );
+    expect(targetBlock).toMatch(/surfaceOffsetEnabled:\s*settings.vectorSurfaceOffsetEnabled/);
+    expect(targetBlock).toMatch(/surfaceOffsetScale:\s*settings.vectorSurfaceOffsetScale/);
 
     const airboxBuildBlock = source.slice(
       source.indexOf("const fdmAirboxBuildState ="),

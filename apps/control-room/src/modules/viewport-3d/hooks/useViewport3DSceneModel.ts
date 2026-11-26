@@ -243,7 +243,6 @@ import {
   buildViewport3DFdmTargetDefinitions,
   buildViewport3DFdmTargetViews,
   memoizeViewport3DFdmTargetRenderView,
-  memoizeViewport3DFdmTargetSurfaceColors,
   memoizeViewport3DFdmSurfaceColors,
   memoizeViewport3DFdmVectorGlyphColors,
   resolveFdmConductorRegionIds,
@@ -302,6 +301,10 @@ import {
   type ScalarRange,
   type Viewport3DFieldVector,
 } from "../viewport3dFieldMapping";
+import {
+  useViewport3DFdmSampledScalarColors,
+  type Viewport3DFdmSampledScalarColorRequest,
+} from "./useViewport3DFdmSampledScalarColors";
 import { buildViewport3DResourceFrameKey } from "../viewport3dInvalidation";
 import type { Viewport3DResourceFrameState } from "../viewport3dInvalidation";
 import {
@@ -4871,7 +4874,7 @@ export function useViewport3DSceneModel({
   const fdmObjectFieldsActive = fdmLiveObjectFields &&
     !commandState.widgets.fdmTopographyEnabled && visualProfile.voxelMagnitudeThreshold === 0;
   const fdmTargetSettingsForPlanning = useMemo(() => {
-    const conductorIds = new Set(fdmConductorTargets.map(({ target }) => target.id));
+    const conductorIds = new Set<string>(fdmConductorTargets.map(({ target }) => target.id));
     const magneticTargets = fdmTargetDefinitionsResult.status === "ready"
       ? fdmTargetDefinitionsResult.definitions
           .filter(({ target }) => !conductorIds.has(target.id))
@@ -6545,8 +6548,13 @@ export function useViewport3DSceneModel({
     fdmAirboxBuildState?.result?.vectorSegments ?? null;
   const fdmAirboxVectorCellIndices =
     fdmAirboxBuildState?.result?.vectorCellIndices ?? null;
-  const fdmTargetViews: readonly Viewport3DFdmTargetRenderView[] = useMemo(
-    () =>
+  const fdmTargetRenderState = useMemo(() => {
+    const colorRequests: Viewport3DFdmSampledScalarColorRequest[] = [];
+    const colorBuildKeysByTarget = new Map<
+      string,
+      { surface: string | null; vector: string | null; vectorGlyph: string | null }
+    >();
+    const views: readonly Viewport3DFdmTargetRenderView[] =
       fdmTargetViewsResult.status === "ready"
         ? fdmTargetViewsResult.views.flatMap((view) => {
           const settings = fdmTargetSettingsById.get(view.target.id);
@@ -6630,6 +6638,7 @@ export function useViewport3DSceneModel({
               : null;
           const targetSourceFieldBufferId =
             targetFieldBufferSource?.bufferId ?? "none";
+          const diagnosticsCacheKey = `${targetFieldResourceKey ?? targetSourceFieldBufferId}|${targetFieldRevision ?? "none"}|${targetFieldVector?.quantityId ?? "none"}:${targetFieldVector?.pointCount ?? 0}:${targetFieldVector?.values.byteLength ?? 0}`;
           const fieldCompatible = Boolean(
             targetFieldBuffer?.requestIdentityCompatible &&
               targetFieldVector &&
@@ -6658,6 +6667,9 @@ export function useViewport3DSceneModel({
             targetSourceFieldBufferId,
             targetFieldRevision ?? "none",
             targetFieldResourceKey ?? "none",
+            fdmDomainGenerationId ?? "none",
+            fdmBuildTopologyRevision ?? "none",
+            view.sourceModel.membershipRevision,
             settings.geometryScope,
             settings.surfaceColorSource,
             surfaceMode ?? "none",
@@ -6667,33 +6679,55 @@ export function useViewport3DSceneModel({
             view.instanceOrdinals.length,
             view.surfaceInstanceOrdinals.length,
           ].join("|");
-          const surfaceColors = memoizeViewport3DFdmTargetSurfaceColors({
-            build: () => {
-              if (!targetFieldVector || !fdmDomain || !surfaceMode) return null;
-              const colors = buildFdmSampledScalarColors(
-                targetFieldVector,
-                settings.geometryScope === "surface"
-                  ? buildViewport3DFdmTargetSurfaceCellIndices(view)
-                  : view.cellIndices,
-                fdmDomain.totalCells,
-                surfaceMode,
-                settings.scalarColorPalette,
-                surfaceRange,
-                fdmDomain.shape,
-              );
-              return colors
-                ? {
-                    ...colors,
-                    buildKey: surfaceColorKey,
-                    rangeSource: surfaceRange ? "manual" : "raw_nodal",
-                    sourceFieldBufferId: targetSourceFieldBufferId,
-                    sourceResourceKey: targetFieldResourceKey,
-                  }
-                : null;
-            },
-            colorKey: surfaceColorKey,
-            view,
-          });
+          const surfaceColorBuildKey = `fdm-target-surface:${surfaceColorKey}`;
+          const canBuildSurfaceColors = Boolean(
+            settings.visible &&
+              settings.shaderVisible &&
+              targetFieldVector &&
+              fdmDomain &&
+              surfaceMode &&
+              fieldCompatible,
+          );
+          const surfaceCellOrdinals = canBuildSurfaceColors
+            ? settings.geometryScope === "surface"
+              ? buildViewport3DFdmTargetSurfaceCellIndices(view)
+              : view.cellIndices
+            : view.cellIndices;
+          const surfaceCompatibilityKey = JSON.stringify([
+            "fdm-target-surface",
+            fdmDomainGenerationId ?? "none",
+            fdmBuildTopologyRevision ?? "none",
+            view.target.id,
+            view.sourceModel.membershipRevision,
+            settings.geometryScope,
+            settings.activeQuantityId,
+            settings.surfaceColorSource,
+            surfaceMode ?? "none",
+            settings.scalarColorPalette,
+            surfaceRange?.min ?? "auto",
+            surfaceRange?.max ?? "auto",
+          ]);
+          if (canBuildSurfaceColors && targetFieldVector && fdmDomain && surfaceMode) {
+            colorRequests.push({
+              buildKey: surfaceColorBuildKey,
+              cellOrdinals: surfaceCellOrdinals,
+              colorMode: surfaceMode,
+              colorPalette: settings.scalarColorPalette,
+              compatibilityKey: surfaceCompatibilityKey,
+              diagnosticsCacheKey,
+              domainCellCount: fdmDomain.totalCells,
+              domainGridShape: fdmDomain.shape,
+              fieldVector: targetFieldVector,
+              groupKey: `fdm-target-color:${view.target.id}:surface`,
+              rangeSource: surfaceRange ? "manual" : "raw_nodal",
+              revisionSummary: surfaceColorBuildKey,
+              scalarRange: surfaceRange,
+              sourceFieldBufferId: targetSourceFieldBufferId,
+              sourceResourceKey: targetFieldResourceKey,
+              targetRevision: `${view.target.id}:${view.sourceModel.membershipRevision}`,
+              topologyRevision: fdmBuildTopologyRevision ?? "none",
+            });
+          }
           const requestedMaxVectors = clampViewport3DInteractiveVectorBudget(
             settings.vectorBudget,
             maxInteractiveVectorGlyphs,
@@ -6705,6 +6739,134 @@ export function useViewport3DSceneModel({
             settings.geometryScope === "surface"
               ? view.surfaceInstanceOrdinals
               : view.instanceOrdinals;
+          const vectorsVisible = Boolean(
+            targetFieldVector &&
+              fdmDomain &&
+              settings.visible &&
+              settings.vectorsVisible &&
+              fieldCompatible,
+          );
+          const vectorRange = targetFieldVector
+            ? resolveViewport3DTargetScalarRange({
+                colorMode: settings.vectorColorMode,
+                fallbackRange: null,
+                fieldQuantityId: targetFieldVector.quantityId,
+                targetPlan: targetRenderPlan,
+              })
+            : null;
+          const vectorCellIndices =
+            vectorsVisible && targetFieldVector
+              ? buildFdmVectorSampledCellIndices(
+                  view.sourceModel,
+                  targetFieldVector,
+                  maxVectors,
+                  vectorInstanceOrdinals,
+                  settings.geometryScope,
+                )
+              : null;
+          const vectorColorBuildKey =
+            vectorsVisible && fdmDomain && targetFieldVector
+              ? `fdm-target-vector:${JSON.stringify([
+                  targetSourceFieldBufferId,
+                  targetFieldRevision ?? "none",
+                  targetFieldResourceKey ?? "none",
+                  fdmDomainGenerationId ?? "none",
+                  fdmBuildTopologyRevision ?? "none",
+                  view.target.id,
+                  view.sourceModel.membershipRevision,
+                  settings.vectorColorMode,
+                  settings.scalarColorPalette,
+                  settings.geometryScope,
+                  maxVectors,
+                  vectorRange?.min ?? "auto",
+                  vectorRange?.max ?? "auto",
+                  view.cellIndices.length,
+                ])}`
+              : null;
+          if (vectorColorBuildKey && fdmDomain && targetFieldVector) {
+            colorRequests.push({
+              buildKey: vectorColorBuildKey,
+              cellOrdinals: view.cellIndices,
+              colorMode: settings.vectorColorMode,
+              colorPalette: settings.scalarColorPalette,
+              compatibilityKey: JSON.stringify([
+                "fdm-target-vector",
+                fdmDomainGenerationId ?? "none",
+                fdmBuildTopologyRevision ?? "none",
+                view.target.id,
+                view.sourceModel.membershipRevision,
+                settings.geometryScope,
+                maxVectors,
+                settings.activeQuantityId,
+                settings.vectorColorMode,
+                settings.scalarColorPalette,
+                vectorRange?.min ?? "auto",
+                vectorRange?.max ?? "auto",
+                view.cellIndices.length,
+              ]),
+              diagnosticsCacheKey,
+              domainCellCount: fdmDomain.totalCells,
+              domainGridShape: fdmDomain.shape,
+              fieldVector: targetFieldVector,
+              groupKey: `fdm-target-color:${view.target.id}:vector`,
+              rangeSource: vectorRange ? "manual" : "raw_nodal",
+              revisionSummary: vectorColorBuildKey,
+              scalarRange: vectorRange,
+              sourceFieldBufferId: targetSourceFieldBufferId,
+              sourceResourceKey: targetFieldResourceKey,
+              targetRevision: `${view.target.id}:${view.sourceModel.membershipRevision}`,
+              topologyRevision: fdmBuildTopologyRevision ?? "none",
+            });
+          }
+          const vectorGlyphColorBuildKey =
+            vectorColorBuildKey && vectorCellIndices
+              ? `${vectorColorBuildKey}:glyphs:${vectorCellIndices.length}`
+              : null;
+          if (
+            vectorGlyphColorBuildKey &&
+            fdmDomain &&
+            targetFieldVector &&
+            vectorCellIndices
+          ) {
+            colorRequests.push({
+              buildKey: vectorGlyphColorBuildKey,
+              cellOrdinals: vectorCellIndices,
+              colorMode: settings.vectorColorMode,
+              colorPalette: settings.scalarColorPalette,
+              compatibilityKey: JSON.stringify([
+                "fdm-target-vector-glyph",
+                fdmDomainGenerationId ?? "none",
+                fdmBuildTopologyRevision ?? "none",
+                view.target.id,
+                view.sourceModel.membershipRevision,
+                settings.geometryScope,
+                maxVectors,
+                settings.activeQuantityId,
+                settings.vectorColorMode,
+                settings.scalarColorPalette,
+                vectorRange?.min ?? "auto",
+                vectorRange?.max ?? "auto",
+                vectorCellIndices.length,
+              ]),
+              diagnosticsCacheKey,
+              domainCellCount: fdmDomain.totalCells,
+              domainGridShape: fdmDomain.shape,
+              fieldVector: targetFieldVector,
+              groupKey: `fdm-target-color:${view.target.id}:vector-glyph`,
+              rangeSource: vectorRange ? "manual" : "raw_nodal",
+              revisionSummary: vectorGlyphColorBuildKey,
+              scalarRange: vectorRange,
+              sourceFieldBufferId: targetSourceFieldBufferId,
+              sourceResourceKey: targetFieldResourceKey,
+              targetRevision: `${view.target.id}:${view.sourceModel.membershipRevision}`,
+              topologyRevision: fdmBuildTopologyRevision ?? "none",
+            });
+          }
+          colorBuildKeysByTarget.set(view.target.id, {
+            surface: canBuildSurfaceColors ? surfaceColorBuildKey : null,
+            vector: vectorColorBuildKey,
+            vectorGlyph: vectorGlyphColorBuildKey,
+          });
           const renderKey = [
             targetSourceFieldBufferId,
             targetFieldRevision ?? "none",
@@ -6730,64 +6892,6 @@ export function useViewport3DSceneModel({
                     vectorSegments: null,
                   };
                 }
-                const vectorsVisible =
-                  settings.visible && settings.vectorsVisible && fieldCompatible;
-                const vectorRange = resolveViewport3DTargetScalarRange({
-                  colorMode: settings.vectorColorMode,
-                  fallbackRange: null,
-                  fieldQuantityId: targetFieldVector.quantityId,
-                  targetPlan: targetRenderPlan,
-                });
-                const vectorColors = vectorsVisible
-                  ? buildFdmSampledScalarColors(
-                      targetFieldVector,
-                      view.cellIndices,
-                      fdmDomain.totalCells,
-                      settings.vectorColorMode,
-                      settings.scalarColorPalette,
-                      vectorRange,
-                      fdmDomain.shape,
-                    )
-                  : null;
-                if (vectorColors) {
-                  vectorColors.rangeSource = vectorRange
-                    ? "manual"
-                    : "raw_nodal";
-                }
-                const vectorCellIndices = vectorsVisible
-                  ? buildFdmVectorSampledCellIndices(
-                      view.sourceModel,
-                      targetFieldVector,
-                      maxVectors,
-                      vectorInstanceOrdinals,
-                      settings.geometryScope,
-                    )
-                  : null;
-                const vectorGlyphColors =
-                  vectorColors && vectorCellIndices
-                    ? (() => {
-                        const colors = buildFdmSampledScalarColors(
-                          targetFieldVector,
-                          vectorCellIndices,
-                          fdmDomain.totalCells,
-                          vectorColors.colorMode,
-                          vectorColors.colorPalette,
-                          vectorColors.range,
-                          fdmDomain.shape,
-                        );
-                        return colors
-                          ? { ...colors, rangeSource: vectorColors.rangeSource }
-                          : null;
-                      })()
-                    : null;
-                const withSource = (colors: typeof surfaceColors) =>
-                  colors
-                    ? {
-                        ...colors,
-                        sourceFieldBufferId: targetSourceFieldBufferId,
-                        sourceResourceKey: targetFieldResourceKey,
-                      }
-                    : null;
                 const vectorSegments = vectorsVisible
                   ? buildFdmVectorSegments(
                       view.sourceModel,
@@ -6829,9 +6933,9 @@ export function useViewport3DSceneModel({
                   fieldBuffer: targetFieldBufferSource,
                   fieldVector: targetFieldVector,
                   settings,
-                  surfaceColors,
-                  vectorColors: withSource(vectorColors),
-                  vectorGlyphColors: withSource(vectorGlyphColors),
+                  surfaceColors: null,
+                  vectorColors: null,
+                  vectorGlyphColors: null,
                   vectorBuildReference,
                   vectorSegments,
                 };
@@ -6842,26 +6946,51 @@ export function useViewport3DSceneModel({
             }),
           ];
         })
-        : [],
-    [
-      fdmBuildTopologyRevision,
-      fdmDomain,
-      fdmFieldDomainIdentity,
-      fdmObjectFieldsActive,
-      fdmPrimaryFieldVector,
-      fdmTargetSettingsById,
-      fdmTargetViewsResult,
-      fdmTargetVectorAllocations,
-      fieldVector,
-      fieldVectorResourceKey,
-      maxInteractiveVectorGlyphs,
-      primaryFieldQuantityId,
-      primaryFieldRequest,
-      sessionIdentity,
-      targetQuantityFieldRequests,
-      targetQuantityFieldVectors,
-      vectorScale,
-    ],
+        : [];
+    return { colorBuildKeysByTarget, colorRequests, views };
+  }, [
+    fdmBuildTopologyRevision,
+    fdmDomain,
+    fdmDomainGenerationId,
+    fdmFieldDomainIdentity,
+    fdmObjectFieldsActive,
+    fdmPrimaryFieldVector,
+    fdmTargetSettingsById,
+    fdmTargetViewsResult,
+    fdmTargetVectorAllocations,
+    fieldVector,
+    fieldVectorResourceKey,
+    maxInteractiveVectorGlyphs,
+    primaryFieldQuantityId,
+    primaryFieldRequest,
+    sessionIdentity,
+    targetQuantityFieldRequests,
+    targetQuantityFieldVectors,
+    vectorScale,
+  ]);
+  const fdmTargetColorBuffers = useViewport3DFdmSampledScalarColors(
+    fdmTargetRenderState.colorRequests,
+  );
+  const fdmTargetViews: readonly Viewport3DFdmTargetRenderView[] = useMemo(
+    () =>
+      fdmTargetRenderState.views.map((view) => {
+        const keys = fdmTargetRenderState.colorBuildKeysByTarget.get(
+          view.target.id,
+        );
+        return {
+          ...view,
+          surfaceColors: keys?.surface
+            ? fdmTargetColorBuffers.get(keys.surface) ?? null
+            : null,
+          vectorColors: keys?.vector
+            ? fdmTargetColorBuffers.get(keys.vector) ?? null
+            : null,
+          vectorGlyphColors: keys?.vectorGlyph
+            ? fdmTargetColorBuffers.get(keys.vectorGlyph) ?? null
+            : null,
+        };
+      }),
+    [fdmTargetColorBuffers, fdmTargetRenderState],
   );
   const fdmMultilayerVoxelFillRatio = useMemo(
     () => getViewport3DVisualProfile(resolveViewport3DQualityProfileId(commandState.visualProfileId, commandState.captureReturnProfileId)).voxelFillRatio,

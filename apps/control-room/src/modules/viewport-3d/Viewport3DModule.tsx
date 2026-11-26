@@ -1839,10 +1839,18 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
     },
     [inspectRevision, setInspectHover],
   );
+  const inspectSample = inspectHover?.sample;
+  const activeInspectTarget = inspectSample?.targetId
+    ? sceneProps.fdmTargetViews.find((view) =>
+        view.target.id === inspectSample.targetId && view.settings.visible,
+      )
+    : null;
   const visibleInspectHover =
     sceneProps.inspectEnabled &&
     inspectHover?.inspectRevision === inspectRevision &&
-    inspectHover.sample.quantityId === quantityId
+    (inspectSample?.targetId
+      ? activeInspectTarget?.settings.activeQuantityId === inspectSample.quantityId
+      : inspectSample?.quantityId === quantityId)
       ? inspectHover
       : null;
   const visibleInspectProvenance = resolveViewport3DInspectSelectionProvenance({
