@@ -1451,7 +1451,7 @@ jest najpierw zgodność Neumanna
 \quad\text{dla każdego komponentu bez voltage datum}.
 ```
 
-W implementacji `label_reference_components_kernel` buduje graf wyłącznie z
+W implementacji `label_reference_components_coop_kernel` buduje graf wyłącznie z
 dodatnich przewodności ścian wewnętrznych, oznacza komponenty zakotwiczone
 przez voltage BC i sprawdza `|sum b| <= 64 eps ||b||_1` dla każdego wolnego
 komponentu. Niespełnienie zgodności kończy solve statusem
@@ -1463,10 +1463,10 @@ układ $PAP\,V=Pb$ bez sztucznego usuwania jednego węzła; komponenty z voltage
 datum zachowują ich wartość referencyjną. `BOUNDARY_REFERENCE_PER_COMPONENT`
 pozostaje osobną polityką i odrzuca wolny komponent.
 
-To jest obecnie bounded, device-side realization: identyfikacja grafu i
-projekcja są deterministyczne, lecz celowo serializowane w jednym bloku CUDA.
-Nie jest to jeszcze dowód skalowalności dla dużych rozłącznych domen ani
-kwalifikacja publicznego runnera. Test uniform zawiera trzy nowe kontrakty:
+Identyfikacja komponentów przewodzących i projekcja do zerowej średniej
+korzystają z kooperacji wielu bloków CUDA. Zgodność warunków dla wybranej
+polityki sprawdza `evaluate_gauge_policy_kernel`. Poniższy test uniform
+sprawdza trzy przypadki:
 niezerowy, zbilansowany pure-Neumann solve z odczytem średniej $V$,
 niezbilansowany strumień, który musi zakończyć się `BALANCE_FAILURE`, oraz
 typed mixed anchored/free fixture z wewnętrznym charge-insulating interfejsem,
@@ -4035,7 +4035,7 @@ a qualified workload without the validation gates above.
 | FDM GPU M1 append-only ABI | backends/fdm/include/fullmag/fdm/transport/gpu_abi_v1.h | fullmag_fdm_gpu_transport_solve_charge_v1 | declare typed/versioned charge payloads, opaque handles, artifact and checkpoint records | layout/C11/Rust contract gates |
 | FDM GPU M1 typed-view validation | backends/fdm/gpu/cuda/transport/context.cu | validate_host_view | reject malformed host records before static ownership transfer or publication | managed actual-device charge gates |
 | FDM GPU M1 charge operator | backends/fdm/gpu/cuda/transport/charge/device_solver.cu | solve_device | assemble conservative harmonic-FV charge and execute fixed-tree FP64 CG with linear-cost geometric `2 x 2 x 2` aggregation and exact device RAP | uniform/layered/scalability actual-device gates |
-| FDM GPU M1 component gauge | backends/fdm/gpu/cuda/transport/charge/device_solver.cu | label_reference_components_kernel; project_free_component_means; charge_pcg_device_amg_kernel | label conductive components, enforce Neumann compatibility, and project free components to zero mean without CPU fallback | managed actual-device proof in `fdm-gpu-m1-charge-uniform-v1` evidence; public path and scalability remain open |
+| FDM GPU M1 component gauge | backends/fdm/gpu/cuda/transport/charge/device_solver.cu | label_reference_components_coop_kernel; evaluate_gauge_policy_kernel; charge_pcg_device_amg_kernel | label conductive components, enforce Neumann compatibility, and project free components to zero mean without CPU fallback | managed actual-device proof in `fdm-gpu-m1-charge-uniform-v1` and PR #561 charge A/B |
 | FDM GPU M1 checkpoint codec | backends/fdm/gpu/cuda/transport/charge/checkpoint_codec.cpp | build_checkpoint; parse_checkpoint | encode and decode canonical charge-only FMGPUTR1 sections 1--9/18/20 | frozen codec oracle plus runtime identity A/B gate |
 | FDM GPU M1 Rust ABI mirror | crates/fullmag-fdm-sys/src/gpu_transport_abi_v1.rs | fullmag_fdm_gpu_transport_solve_charge_v1 | mirror append-only C layouts and symbols without adding a public runner | Rust layout tests |
 | FDM GPU M1 uniform regression | backends/fdm/tests/gpu_m1_charge_uniform_v1_contract.cpp | main | check analytic FP64 field/current, AMG/cache audit, transfer bounds and zero fallback on a physical GPU | `just verify-fdm-gpu-m1-charge-native-contract` |
