@@ -9736,9 +9736,8 @@ mod tests {
             "runtime_selection".to_string(),
             json!({"device": "gpu", "precision": "double"}),
         );
-        problem
-            .energy_terms
-            .push(fullmag_ir::EnergyTermIR::BulkDmi { d: 1.0 });
+        problem.current_density = Some([1.0e11, 0.0, 0.0]);
+        problem.stt_degree = Some(0.5);
         let BackendPlanIR::Fem(fem) = &mut plan.backend_plan else {
             unreachable!()
         };
@@ -9754,6 +9753,7 @@ mod tests {
             .message
             .contains("fem_mixed_p1_runtime_scope_rejected"));
         assert!(error.message.contains("requested_device=gpu"));
+        assert!(error.message.contains("current_density_present"));
         assert!(error.message.contains("fallback=none"));
     }
 

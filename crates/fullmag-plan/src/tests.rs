@@ -17715,25 +17715,34 @@ fn fem_planner_accepts_gpu_dmi_on_certified_mixed_p1() {
         "runtime_selection".to_string(),
         serde_json::json!({"device": "gpu", "precision": "double"}),
     );
+    let mut rotated_ir = ir.clone();
     ir.energy_terms.extend([
         fullmag_ir::EnergyTermIR::InterfacialDmi {
             d: 2.0e-3,
             interface_normal: None,
         },
-        fullmag_ir::EnergyTermIR::RotatedInterfacialDmi {
-            d: 1.5e-3,
-            object_ids: None,
-        },
         fullmag_ir::EnergyTermIR::BulkDmi { d: 3.0e-3 },
     ]);
 
-    let planned = plan(&ir).expect("mixed P1 GPU DMI must plan via unified CSR DMI");
+    let planned = plan(&ir).expect("mixed P1 GPU interfacial+bulk DMI must plan via unified CSR DMI");
     let BackendPlanIR::Fem(fem) = planned.backend_plan else {
         panic!("mixed P1 GPU DMI must resolve to FEM")
     };
     assert_eq!(fem.interfacial_dmi, Some(2.0e-3));
-    assert_eq!(fem.rotated_interfacial_dmi, Some(1.5e-3));
     assert_eq!(fem.bulk_dmi, Some(3.0e-3));
+
+    rotated_ir
+        .energy_terms
+        .push(fullmag_ir::EnergyTermIR::RotatedInterfacialDmi {
+            d: 1.5e-3,
+            object_ids: None,
+        });
+    let rotated_planned =
+        plan(&rotated_ir).expect("mixed P1 GPU rotated interfacial DMI must plan via unified CSR DMI");
+    let BackendPlanIR::Fem(rotated_fem) = rotated_planned.backend_plan else {
+        panic!("mixed P1 GPU rotated DMI must resolve to FEM")
+    };
+    assert_eq!(rotated_fem.rotated_interfacial_dmi, Some(1.5e-3));
 }
 
 fn valid_pure_prism_certificate_asset_for_layers(
@@ -18045,17 +18054,6 @@ fn fem_planner_accepts_certified_pure_prism_p2_cpu_and_gpu_with_dmi_and_rebinds_
                 "runtime_selection".to_string(),
                 serde_json::json!({"device": device, "precision": "double"}),
             );
-            ir.energy_terms.extend([
-                fullmag_ir::EnergyTermIR::InterfacialDmi {
-                    d: 2.0e-3,
-                    interface_normal: None,
-                },
-                fullmag_ir::EnergyTermIR::RotatedInterfacialDmi {
-            d: 1.5e-3,
-            object_ids: None,
-        },
-                fullmag_ir::EnergyTermIR::BulkDmi { d: 3.0e-3 },
-            ]);
             let asset = valid_pure_prism_certificate_asset_for_layers(layer_count);
             asset
                 .validate()
@@ -18064,15 +18062,25 @@ fn fem_planner_accepts_certified_pure_prism_p2_cpu_and_gpu_with_dmi_and_rebinds_
                 .as_mut()
                 .expect("geometry assets")
                 .fem_domain_mesh_asset = Some(asset);
+            let mut rotated_ir = ir.clone();
+            ir.energy_terms.extend([
+                fullmag_ir::EnergyTermIR::InterfacialDmi {
+                    d: 2.0e-3,
+                    interface_normal: None,
+                },
+                fullmag_ir::EnergyTermIR::BulkDmi { d: 3.0e-3 },
+            ]);
 
             let planned = plan(&ir).unwrap_or_else(|error| {
                 panic!(
-                    "pure_prism_p2 {device} L={layer_count} with DMI must plan: {error:?}"
+                    "pure_prism_p2 {device} L={layer_count} with interfacial+bulk DMI must plan: {error:?}"
                 )
             });
             let BackendPlanIR::Fem(fem) = planned.backend_plan else {
                 panic!("pure_prism_p2 must resolve to FEM");
             };
+            assert_eq!(fem.interfacial_dmi, Some(2.0e-3));
+            assert_eq!(fem.bulk_dmi, Some(3.0e-3));
             let report = fem
                 .mesh_build_report
                 .as_ref()
@@ -18106,6 +18114,35 @@ fn fem_planner_accepts_certified_pure_prism_p2_cpu_and_gpu_with_dmi_and_rebinds_
             assert_eq!(
                 provenance.capability_status,
                 fullmag_ir::FemMixedTopologyCapabilityStatusIR::Implemented
+            );
+
+            rotated_ir
+                .energy_terms
+                .push(fullmag_ir::EnergyTermIR::RotatedInterfacialDmi {
+                    d: 1.5e-3,
+                    object_ids: None,
+                });
+            let rotated_planned = plan(&rotated_ir).unwrap_or_else(|error| {
+                panic!(
+                    "pure_prism_p2 {device} L={layer_count} with rotated DMI must plan: {error:?}"
+                )
+            });
+            let BackendPlanIR::Fem(rotated_fem) = rotated_planned.backend_plan else {
+                panic!("pure_prism_p2 rotated DMI must resolve to FEM");
+            };
+            assert_eq!(rotated_fem.rotated_interfacial_dmi, Some(1.5e-3));
+            let rotated_provenance = rotated_fem
+                .mesh_build_report
+                .as_ref()
+                .and_then(|report| report.mixed_topology_provenance.as_ref())
+                .expect("pure_prism_p2 rotated DMI plan must bind provenance");
+            assert_eq!(
+                rotated_provenance.requested_topology,
+                fullmag_ir::FemMeshTopologyFamilyIR::PurePrismP2
+            );
+            assert_eq!(
+                rotated_provenance.resolved_topology,
+                fullmag_ir::FemMeshTopologyFamilyIR::PurePrismP2
             );
         }
     }

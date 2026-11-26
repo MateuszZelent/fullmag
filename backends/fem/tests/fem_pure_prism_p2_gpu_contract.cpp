@@ -439,6 +439,11 @@ CpuReferenceData compute_cpu_reference(
     }
 
     {
+        // Match GPU PGBB's default unpreconditioned raw tangent-gradient direction
+        // policy inside this isolated CPU reference child process.
+        check(
+            setenv("FULLMAG_FEM_DIRECT_MINIMIZER_DIRECTION_POLICY", "raw_tangent_gradient", 1) == 0,
+            "setenv FULLMAG_FEM_DIRECT_MINIMIZER_DIRECTION_POLICY failed");
         ScopedBackend cpu_pgbb{};
         error.clear();
         check(fullmag::fem::initialize_backend_runtime(
