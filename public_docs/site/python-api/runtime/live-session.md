@@ -83,23 +83,24 @@ plotting in `fullmag.live.jupyter`.
 
 | Python | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| `fm.connect(url)` | `str \| None` | `$FULLMAG_URL`, else `http://127.0.0.1:3197` | $1$ | `http(s)://host[:port]` without query | Origin of the DEV group frontend | FEM/FDM CPU/GPU; runtime capability checks remain authoritative | none (transport) |
-| `fm.connect(new_session=...)` | `bool` | `False` | $1$ | boolean | Replace the current session instead of attaching | FEM/FDM CPU/GPU | none |
-| `fm.connect(events=...)` | `bool` | `True` | $1$ | boolean | Start the realtime event stream | FEM/FDM CPU/GPU | none |
-| `fm.connect(retry_budget_s=...)` | `float` | `60.0` | $\mathrm{s}$ | `>= 0` | Retry budget for requests that provably did not apply | FEM/FDM CPU/GPU | none |
-| `fm.disconnect()` | function | — | $1$ | safe when disconnected | Leave client presence, close the WebSocket stream, and return DSL to eager mode | FEM/FDM CPU/GPU | none (transport) |
-| `fm.sync(reconcile=...)` | function (`bool`) | `False` | $1$ | live session required | Commit pending DSL changes; reconcile merges disjoint Control Room edits after conflict | FEM/FDM CPU/GPU | scene revision |
-| `fm.transaction()` | context manager | — | $1$ | live session required | Group several DSL calls into one transaction | FEM/FDM CPU/GPU | scene revision |
-| `fm.paused()` | context manager | — | $1$ | live session required | Pause, apply edits, resume (interactive host only) | Not in Docker accepted mode | scene revision |
-| `fm.relax(...) / fm.run(...)` | runtime commands | `required` stage timing | $\mathrm{s}$ | explicit timestep (`fix_dt`, `dt`, or adaptive `dt_max`) required | Append a live stage and execute with `stage_index` target | FEM/FDM CPU/GPU | `study.stages` stage entry |
-| `fm.run_until(predicate, chunk_time=...)` | callable, `float` | `required` | $\mathrm{s}$ | `chunk_time > 0`; one guard of `max_time`/`max_chunks` | Run in chunks until the predicate holds | FEM/FDM CPU/GPU | `study.stages` run stage |
-| `fm.pause() / fm.resume() / fm.stop() / fm.skip()` | runtime commands | — | $1$ | live session required | Submit session control commands (`stop`/`resume`/`pause`/`skip`) | `stop` supported across modes; `pause` and `skip` rejected in Docker accepted mode | none (command) |
-| `fm.field(quantity)` | `str` | `required` | field SI unit | quantity id of the session catalog | Fetch FMVP binary field vector (`.to_numpy()`, `.as_grid()`, `.as_complex()`) | FEM/FDM CPU/GPU | none (read) |
-| `fm.table(table_id)` | `str` | `required` | table column SI units | valid table id (`scalars` default) | Fetch FMTB binary rows (`.to_numpy()`, `.column()`, `.to_pandas()`) | FEM/FDM CPU/GPU | none (read) |
-| `fm.on(event_type, callback)` | `str`, callable | `required` | $1$ | live session with `events=True` | Subscribe to WebSocket `LiveEvent` stream (`scalar.sample`, `resource.batch_changed`, `*`) | FEM/FDM CPU/GPU | none (stream) |
-| `fm.export_script()` | function | — | $1$ | live session required | Sync and render canonical editable Python script from the server model | FEM/FDM CPU/GPU | round-trip script |
-| `fm.sweep(function, groups=[...], **lists)` | callable, `list[str]` | `required` | $1$ | distinct group URLs; equal-length lists | Run points across several DEV groups | FEM/FDM CPU/GPU | one session per group |
-| `fullmag.live.jupyter.monitor(...)` | helper | `columns=('mx', 'my', 'mz')` | $1$ | live session with event stream | Stream scalar samples into a live notebook plot or `.samples` buffer | FEM/FDM CPU/GPU | none (read) |
+| `fm.connect.url` | `str \| None` | `$FULLMAG_URL`, else `http://127.0.0.1:3197` | $1$ | `http(s)://host[:port]` without query | Origin of the DEV group frontend | FEM/FDM CPU/GPU; runtime capability checks remain authoritative | none (transport) |
+| `fm.connect.new_session` | `bool` | `False` | $1$ | boolean | Replace the current session instead of attaching | FEM/FDM CPU/GPU | none |
+| `fm.connect.events` | `bool` | `True` | $1$ | boolean | Start the realtime event stream | FEM/FDM CPU/GPU | none |
+| `fm.connect.retry_budget_s` | `float` | `60.0` | $\mathrm{s}$ | `>= 0` | Retry budget for requests that provably did not apply | FEM/FDM CPU/GPU | none |
+| `fm.disconnect` | function | — | $1$ | safe when disconnected | Leave client presence, close the WebSocket stream, and return DSL to eager mode | FEM/FDM CPU/GPU | none (transport) |
+| `fm.sync.reconcile` | `bool` | `False` | $1$ | live session required | Commit pending DSL changes; reconcile merges disjoint Control Room edits after conflict | FEM/FDM CPU/GPU | scene revision |
+| `fm.transaction` | context manager | — | $1$ | live session required | Group several DSL calls into one transaction | FEM/FDM CPU/GPU | scene revision |
+| `fm.paused` | context manager | — | $1$ | live session required | Pause, apply edits, resume (interactive host only) | Not in Docker accepted mode | scene revision |
+| `fm.relax` | runtime command | `required` stage timing | $\mathrm{s}$ | explicit timestep (`fix_dt`, `dt`, or adaptive `dt_max`) required | Append a live relaxation stage and execute with `stage_index` target | FEM/FDM CPU/GPU | `study.stages` relax stage |
+| `fm.run` | runtime command | `required` stage timing | $\mathrm{s}$ | explicit timestep (`fix_dt`, `dt`, or adaptive `dt_max`) required | Append a live time-evolution stage and execute with `stage_index` target | FEM/FDM CPU/GPU | `study.stages` run stage |
+| `fm.run_until.chunk_time` | `float` | `required` | $\mathrm{s}$ | `chunk_time > 0`; one guard of `max_time`/`max_chunks` | Run in chunks until the predicate holds | FEM/FDM CPU/GPU | `study.stages` run stage |
+| `fm.stop` | runtime command | — | $1$ | live session required | Submit session stop command (`fm.pause`, `fm.resume`, `fm.skip` follow the same command channel) | `stop` supported across modes; `pause` and `skip` rejected in Docker accepted mode | none (command) |
+| `fm.field.quantity_id` | `str` | `required` | field SI unit | quantity id of the session catalog | Fetch FMVP binary field vector (`.to_numpy()`, `.as_grid()`, `.as_complex()`) | FEM/FDM CPU/GPU | none (read) |
+| `fm.table.table_id` | `str` | `required` | table column SI units | valid table id (`scalars` default) | Fetch FMTB binary rows (`.to_numpy()`, `.column()`, `.to_pandas()`) | FEM/FDM CPU/GPU | none (read) |
+| `fm.on.event_type` | `str` | `required` | $1$ | live session with `events=True` | Subscribe to WebSocket `LiveEvent` stream (`scalar.sample`, `resource.batch_changed`, `*`) | FEM/FDM CPU/GPU | none (stream) |
+| `fm.export_script` | function | — | $1$ | live session required | Sync and render canonical editable Python script from the server model | FEM/FDM CPU/GPU | round-trip script |
+| `fm.sweep.groups` | `Sequence[str]` | `required` | $1$ | distinct group URLs; equal-length parameter lists | Run sweep points across several DEV groups | FEM/FDM CPU/GPU | one session per group |
+| `fullmag.live.jupyter.monitor.columns` | `Sequence[str]` | `('mx', 'my', 'mz')` | $1$ | live session with event stream | Stream scalar samples into a live notebook plot or `.samples` buffer | FEM/FDM CPU/GPU | none (read) |
 
 ### Full signature notes
 
@@ -336,10 +337,10 @@ Frontend source owners: `apps/control-room/src/modules/start/home/ActiveSessions
 
 | Claim | Path | Stable symbol | Responsibility | Evidence |
 |---|---|---|---|---|
-| Live connection | [`packages/fullmag-py/src/fullmag/live/__init__.py`](https://github.com/MateuszZelent/fullmag/blob/4c9424ca0/packages/fullmag-py/src/fullmag/live/__init__.py) | `connect` | Switch the DSL to live mode | `test_live_dsl_mode.py` |
-| Session, presence & IO | [`packages/fullmag-py/src/fullmag/live/_session.py`](https://github.com/MateuszZelent/fullmag/blob/4c9424ca0/packages/fullmag-py/src/fullmag/live/_session.py) | `class LiveSession` | Manage live session sync, heartbeats, commands, fields, tables, and script export | `test_live_dsl_mode.py`, `test_live_client_data.py` |
-| Synchronisation | [`packages/fullmag-py/src/fullmag/live/_scene.py`](https://github.com/MateuszZelent/fullmag/blob/4c9424ca0/packages/fullmag-py/src/fullmag/live/_scene.py) | `plan_transactions` | Plan atomic scene transactions between the local DSL state and server revision | `test_live_dsl_mode.py` |
-| Events | [`packages/fullmag-py/src/fullmag/client/events.py`](https://github.com/MateuszZelent/fullmag/blob/4c9424ca0/packages/fullmag-py/src/fullmag/client/events.py) | `class EventStream` | Maintain WebSocket realtime subscriptions with cursor resume | `test_live_events.py` |
-| Sweeps | [`packages/fullmag-py/src/fullmag/live/sweep.py`](https://github.com/MateuszZelent/fullmag/blob/4c9424ca0/packages/fullmag-py/src/fullmag/live/sweep.py) | `sweep` | Dispatch parameter sweep points concurrently across running groups | `test_live_sweep.py` |
-| Jupyter monitor | [`packages/fullmag-py/src/fullmag/live/jupyter.py`](https://github.com/MateuszZelent/fullmag/blob/4c9424ca0/packages/fullmag-py/src/fullmag/live/jupyter.py) | `monitor` | Stream scalar telemetry for live notebook plots and headless capture | `test_live_client_data.py` |
-| Server presence store | `crates/fullmag-api/src/router_v2/handlers/sessions/clients.rs` | `SESSION_CLIENT_TTL_MS` | Track live client heartbeats within 30 s TTL and emit `"session-clients"` invalidations | `live` presence API handler |
+| Live connection | [`packages/fullmag-py/src/fullmag/live/__init__.py`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/live/__init__.py) | `connect` | Switch the DSL to live mode | `test_live_dsl_mode.py` |
+| Session, presence & IO | [`packages/fullmag-py/src/fullmag/live/_session.py`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/live/_session.py) | `class LiveSession` | Manage live session sync, heartbeats, commands, fields, tables, and script export | `test_live_dsl_mode.py`, `test_live_client_data.py` |
+| Synchronisation | [`packages/fullmag-py/src/fullmag/live/_scene.py`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/live/_scene.py) | `plan_transactions` | Plan atomic scene transactions between the local DSL state and server revision | `test_live_dsl_mode.py` |
+| Events | [`packages/fullmag-py/src/fullmag/client/events.py`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/client/events.py) | `class EventStream` | Maintain WebSocket realtime subscriptions with cursor resume | `test_live_events.py` |
+| Sweeps | [`packages/fullmag-py/src/fullmag/live/sweep.py`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/live/sweep.py) | `sweep` | Dispatch parameter sweep points concurrently across running groups | `test_live_sweep.py` |
+| Jupyter monitor | [`packages/fullmag-py/src/fullmag/live/jupyter.py`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/live/jupyter.py) | `monitor` | Stream scalar telemetry for live notebook plots and headless capture | `test_live_client_data.py` |
+| Server presence store | [`crates/fullmag-api/src/router_v2/handlers/sessions/clients.rs`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-api/src/router_v2/handlers/sessions/clients.rs) | `SESSION_CLIENT_TTL_MS` | Track live client heartbeats within 30 s TTL and emit `"session-clients"` invalidations | `live` presence API handler |

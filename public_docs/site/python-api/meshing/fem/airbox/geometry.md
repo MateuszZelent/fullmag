@@ -75,7 +75,7 @@ film.mesh(minimum_element_size=2.5 * nm, maximum_element_size=5 * nm)
 study.exchange()
 study.demag(model="airbox", variant="robin")
 study.build_domain_mesh()
-study.stages.add_relax(stage_id="equilibrium", tolT=1.0e-6)
+study.stages.add_relax(stage_id="equilibrium", algorithm="projected_gradient_bb", tolT=1.0e-6)
 ```
 
 (python-api-meshing-fem-airbox-geometry-python-api)=
@@ -85,12 +85,13 @@ study.stages.add_relax(stage_id="equilibrium", tolT=1.0e-6)
 
 | Python | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| `mode` | `str` | required | $1$ | e.g. `"manual"` | universe definition mode | FEM CPU/GPU; FDM not applicable to this mesh policy | `mesh_workflow` |
-| `size` | `Sequence[float]` | required in manual | $\mathrm{m}$ | three positive values | dimensions $(L_x, L_y, L_z)$ | FEM CPU/GPU; FDM not applicable to this mesh policy | `mesh_workflow` |
-| `padding` / `center` / shape options | advanced resource policy | resource-specific | $\mathrm{m}$ / $1$ | resource validation | additional generation options (Control Room/API) | FEM CPU/GPU; FDM not applicable to this mesh policy | `mesh_workflow` |
+| `mode` | `str \| None` | `None` | $1$ | `"auto"` or `"manual"` | universe definition mode | FEM CPU/GPU; FDM not applicable to this mesh policy | `mesh_workflow` |
+| `size` | `Sequence[float] \| None` | `None` (required in manual) | $\mathrm{m}$ | three positive values | dimensions $(L_x, L_y, L_z)$ | FEM CPU/GPU; FDM not applicable to this mesh policy | `mesh_workflow` |
+| `padding` | `Sequence[float] \| None` | `None` | $\mathrm{m}$ | three non-negative values | exterior clearance vector | FEM CPU/GPU; FDM not applicable to this mesh policy | `mesh_workflow` |
+| `center` | `Sequence[float] \| None` | `None` | $\mathrm{m}$ | three finite coordinates | explicit exterior box center | FEM CPU/GPU; FDM not applicable to this mesh policy | `mesh_workflow` |
 
-Failure behavior: an invalid size vector → `ValueError`. Realized clearances and
-shape are recorded in the build report.
+Failure behavior: an invalid size vector → `ValueError`; passing FEM mesh-sizing kwargs (`airbox_hmax`, `maximum_element_size`, etc.) to `study.universe(...)` raises a migration `ValueError` directing callers to `study.universe.mesh(...)`. Realized clearances and
+shape are recorded in the build report. For FEM GPU demagnetization solver performance on airbox domains see {ref}`numerical-methods-performance-fem-gpu-demag`.
 
 ProblemIR mapping: universe policy in mesh workflow metadata; realization in the
 report/provenance.
@@ -114,7 +115,7 @@ Model Explorer
 └── Universe / Airbox      → selection kinds: airbox.*
 ```
 
-Exterior geometry (`mode`, `size`, `padding`, `center`) is editable in the universe geometry panels (`AirboxMeshParametersPanel`); air sizing and **Apply & Build Shared-Domain Mesh** (`mesh.build-shared-domain`) live in **Airbox Mesh Parameters** ({doc}`../../../../frontend/meshing/airbox-mesh`). Full panel overview: {doc}`../../../../frontend/meshing/index`.
+Exterior geometry (`mode`, `size`, `padding`, `center`) is editable in `apps/control-room/src/modules/inspector/inspectors/universe/UniverseAndAirboxSpec.tsx` (`AirboxRootInspectorSpecPanel`) and `apps/control-room/src/modules/inspector/inspectors/universe/AirboxMeshOverviewSpec.tsx` (`AirboxMeshInspectorSpecPanel`); air sizing and **Apply & Build Shared-Domain Mesh** (`mesh.build-shared-domain`) live in **Airbox Mesh Parameters** (`apps/control-room/src/modules/inspector/inspectors/universe/AirboxMeshSizingSpecs.tsx`, {doc}`../../../../frontend/meshing/airbox-mesh`). Full panel overview: {doc}`../../../../frontend/meshing/index`.
 
 ```{image} /_static/images/ui/viewport-3d-fem-mesh-airbox.png
 :alt: 3D Viewport rendering the FEM exterior airbox domain framing the magnetic geometry
@@ -151,6 +152,6 @@ Focused constructor, lowering, and mesh-report tests are the evidence boundary f
 
 | Claim | Path | Symbol | Evidence |
 |---|---|---|---|
-| airbox option schema and validation | [`packages/fullmag-py/src/fullmag/meshing/_gmsh_types.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/meshing/_gmsh_types.py#L655) | [`class AirboxOptions`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/meshing/_gmsh_types.py#L655) | option schema and API tests |
-| universe facade | `packages/fullmag-py/src/fullmag/world.py` | `StudyBuilder.universe` | method signature |
+| airbox option schema and validation | [`packages/fullmag-py/src/fullmag/meshing/_gmsh_types.py`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/meshing/_gmsh_types.py#L927) | [`class AirboxOptions`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/meshing/_gmsh_types.py#L927) | option schema and API tests |
+| universe facade | [`packages/fullmag-py/src/fullmag/world.py`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/world.py#L5693) | [`class StudyUniverseHandle`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/world.py#L5693) | method signature |
 | airbox configuration | `packages/fullmag-py/src/fullmag/world.py` | `_configure_study_universe` | implementation |

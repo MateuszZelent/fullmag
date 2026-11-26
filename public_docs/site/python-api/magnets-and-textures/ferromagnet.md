@@ -53,6 +53,42 @@ validation owns mesh, region, material-field, and constraint realization.
 | `Ferromagnet.absorbing_boundary` | `AbsorbingBoundaryLayer \| AbsorbingBoundaryLayers \| None` | `None` | mixed | valid geometry, widths, taper and region references | object-scoped damping layers | capability-gated | `magnets[].absorbing_boundary` |
 | `Ferromagnet._magnetization_constraints` | `list[object]` | empty list factory | $1$ | populated by typed helpers such as `freeze_spins`; direct mutation is not public workflow | object-scoped constraint accumulator | collected by problem/study lowering | canonical magnetization constraints |
 
+### Absorbing boundary layers
+
+Damping ramps that suppress spin-wave reflections at boundaries are configured on a magnet via `film.alpha.absorbing_boundary(...)` or constructed explicitly with `fm.AbsorbingBoundaryLayer`, `fm.AbsorbingGeometry`, and `fm.SpatialAbsorbingLayer` (`packages/fullmag-py/src/fullmag/model/absorbing_boundary.py`).
+
+#### `fm.AbsorbingBoundaryLayer` (single-layer box-face shortcut)
+
+| Field | Type | Default | SI unit | Validation | Meaning |
+|---|---|---|---|---|---|
+| `total_width_m` | `float` | required | $\mathrm{m}$ | finite and $> 0$ | total absorbing zone depth measured inward from each selected face |
+| `ramp_width_m` | `float` | required | $\mathrm{m}$ | finite, $> 0$, and $\le \text{total\_width\_m}$ | tapered transition width before the constant-damping plateau |
+| `max_damping` | `float` | required | $1$ | finite and $\ge 0$ | peak Gilbert damping added inside the absorbing zone |
+| `faces` | `Sequence[str]` | `("x+",)` | $1$ | non-empty unique subset of `"x+"`, `"x-"`, `"y+"`, `"y-"`, `"z+"`, `"z-"` | bounding-box faces carrying the absorbing layer |
+| `profile` | `str` | `"smootherstep"` | $1$ | `"linear"`, `"quadratic"`, `"smootherstep"`, `"logarithmic"`, `"tanh"`, or `"custom"` | monotonic damping ramp shape $p(u) \in [0, 1]$ |
+| `frame` | `str` | `"object"` | $1$ | `"object"` or `"universe"` | reference bounding box for face distances |
+| `expression` | `str \| None` | `None` | $1$ | required when `profile="custom"`, $\le 256$ printable ASCII chars, $p(0)=0$, $p(1)=1$, $p(u)\in[0,1]$ | custom scalar profile expression in normalized depth $u$ |
+
+#### `fm.SpatialAbsorbingLayer` and `fm.AbsorbingGeometry` (multi-layer general geometry)
+
+Multiple independent layers are combined with `fm.AbsorbingBoundaryLayers(layers)` or passed directly to `film.alpha.absorbing_boundary(layers=[...])`. Each `fm.SpatialAbsorbingLayer` accepts keyword-only fields:
+
+| Field | Type | Default | SI unit | Validation | Meaning |
+|---|---|---|---|---|---|
+| `layer_id` | `str` | required | $1$ | non-empty unique string | stable layer identifier |
+| `name` | `str` | required | $1$ | non-empty string | human-readable layer label |
+| `geometry` | `AbsorbingGeometry` | required | mixed | constructed via `.faces(...)`, `.plane(...)`, `.cylinder(...)`, `.sphere(...)`, `.region_boundary(...)`, or `.expression(...)` | spatial support defining distance to the absorbing boundary |
+| `total_width_m` | `float` | required | $\mathrm{m}$ | finite and $> 0$; for outward cylinder/sphere, $\le r$ | total absorbing zone thickness |
+| `ramp_width_m` | `float` | required | $\mathrm{m}$ | finite, $> 0$, and $\le \text{total\_width\_m}$ | taper width across which damping ramps to `max_damping` |
+| `max_damping` | `float` | required | $1$ | finite and $\ge 0$ | peak added Gilbert damping |
+| `region_id` | `str \| None` | `None` | $1$ | optional existing object region ID | restricts the absorbing layer to a named object region |
+| `enabled` | `bool` | `True` | $1$ | boolean | toggles whether the layer contributes during planning |
+| `profile` | `str` | `"smootherstep"` | $1$ | `"linear"`, `"quadratic"`, `"smootherstep"`, `"logarithmic"`, `"tanh"`, or `"custom"` | ramp profile shape |
+| `expression` | `str \| None` | `None` | $1$ | required when `profile="custom"` | custom ramp expression in normalized coordinate $u$ |
+| `frame` | `str` | `"object"` | $1$ | `"object"` or `"universe"` | coordinate frame for geometric predicates |
+
+`fm.AbsorbingGeometry` exposes six classmethod constructors: `.faces(faces)`, `.plane(origin, normal)`, `.cylinder(center, axis, radius_m, direction="outward")`, `.sphere(center, radius_m, direction="outward")`, `.region_boundary(region_id)`, and `.expression(expression)`. The fluent helper `film.alpha.absorbing_boundary(parameters=None, *, layers=None, total_width=None, ramp_width=None, max_damping=None, faces=None, profile=None, frame=None, expression=None)` lowers directly onto `magnets[].absorbing_boundary`.
+
 ### Complete stage-first scenario
 
 ```python
@@ -69,6 +105,13 @@ film = study.geometry(fm.Box(100 * nm, 20 * nm, 5 * nm), name="film")
 film.Ms = 800.0e3
 film.Aex = 13.0e-12
 film.alpha = 0.02
+film.alpha.absorbing_boundary(
+    total_width=20 * nm,
+    ramp_width=15 * nm,
+    max_damping=0.5,
+    faces=("x-", "x+"),
+    profile="smootherstep",
+)
 film.m = fm.texture.uniform(1.0, 0.0, 0.0)
 study.exchange()
 study.stages.add_run(stage_id="run", until=1.0e-12)
@@ -93,6 +136,13 @@ malformed data. Unsupported combinations fail closed and are not silently omitte
 (python-api-magnets-and-textures-ferromagnet-discrete-realization)=
 ## Discrete realization
 
+| Solver | Device | Realization | Qualification status |
+|---|---|---|---|
+| FDM | CPU | planner realizes the magnet as active cells with resolved material, region, initial-state, and ABL masks | authoring and IR documented; runtime qualification separate |
+| FDM | GPU | consumes the shared planner-materialized cell masks, material arrays, and initial vectors | authoring and IR documented; GPU runtime qualification separate |
+| FEM | CPU | planner realizes the magnet as marked magnetic tetrahedral elements and P1 nodes | authoring and IR documented; runtime qualification separate |
+| FEM | GPU | consumes the shared planner-materialized magnetic mesh and nodal arrays | authoring and IR documented; GPU runtime qualification separate |
+
 FDM realizes the object as active cells; FEM realizes it as marked magnetic elements/nodes. The
 constructor does not prove either mesh or device lane executable.
 
@@ -101,6 +151,9 @@ constructor does not prove either mesh or device lane executable.
 
 `packages/fullmag-py/src/fullmag/model/structure.py`, `class Ferromagnet`, owns construction,
 default state, object identity, constraint accumulation, and magnet-record lowering.
+`packages/fullmag-py/src/fullmag/model/absorbing_boundary.py` (`AbsorbingBoundaryLayer`,
+`AbsorbingGeometry`, `SpatialAbsorbingLayer`, and `AbsorbingBoundaryLayers`) owns absorbing-layer
+validation and serialization.
 
 (python-api-magnets-and-textures-ferromagnet-validation)=
 ## Validation
@@ -120,16 +173,16 @@ No new physical model is introduced; references belong to the interactions consu
 
 ## Control Room support
 
-Status: Scalar object material fields (`ObjectMaterialPanel`), region overrides (`ObjectRegionsPanel` / `ObjectRegionMagneticParametersPanel`), and the `16` built-in `MAGNETIZATION_TEXTURE_PRESETS` in `ObjectMagneticTexturePanel` are `partial`; unlisted presets and spatial callbacks remain Python-only.
+Status: Scalar object material fields (`ObjectMaterialSpec`), region overrides (`RegionsRootSpec` / `RegionDetailSpec` / `RegionMagneticParametersSpec`), and the `20` built-in `MAGNETIZATION_TEXTURE_PRESETS` in `MagneticTextureInspectorPanel` are `partial`; custom spatial callbacks and unlisted Python options remain Python-only.
 
 | Python/API surface | Control Room path | Status | Transaction |
 |---|---|---|---|
 | Initial magnetization presets | `Model Explorer -> Objects -> <object> -> Magnetization` | `partial` | Apply magnetization draft (`commitMagneticTextureApply`); authored object state is revised |
 | Parameters without a named UI field | `Model Explorer -> Objects -> <object> -> Magnetization` | `Python-only` | Authored in Python |
 
-Open **Physics → Add ABL** on a magnetic object to configure independently placed damping layers. Their geometry, target region, widths and profiles round-trip through `film.alpha.absorbing_boundary(...)`. See {doc}`/frontend/inspectors/absorbing-boundaries` for complete examples and the effective damping field.
+Open **Physics -> Add ABL** on a magnetic object to configure independently placed damping layers. Their geometry, target region, widths, and profiles round-trip through `film.alpha.absorbing_boundary(...)`. See {doc}`/frontend/inspectors/absorbing-boundaries` for complete examples and the effective damping field.
 See {doc}`/frontend/inspectors/objects-and-materials` and [Control Room capability register](/frontend/capability-register) for the UI support matrix.
-Frontend source owner: `apps/control-room/src/modules/inspector/panels/ObjectMagneticTexturePanel.tsx` (`ObjectMagneticTexturePanel`).
+Frontend source owner: `apps/control-room/src/modules/inspector/panels/magnetic-texture/MagneticTextureInspectorPanel.tsx` (`MagneticTextureInspectorPanel`).
 
 ```{image} /_static/images/ui/inspector-magnetic-texture.png
 :alt: Semantic Inspector Magnetic Texture panel configuring a ferromagnet initial magnetization
@@ -141,6 +194,8 @@ Frontend source owner: `apps/control-room/src/modules/inspector/panels/ObjectMag
 
 | Claim | Path | Stable symbol | Responsibility | Evidence |
 |---|---|---|---|---|
-| constructor and lowering | [`packages/fullmag-py/src/fullmag/model/structure.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/structure.py#L745) | [`class Ferromagnet`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/structure.py#L745) | canonical object API | signature and API contract tests |
-| independent absorbing layers | [`absorbing_boundary.py`](https://github.com/MateuszZelent/fullmag/blob/71974540caabd305716d6e86ccc668b97cd8281b/packages/fullmag-py/src/fullmag/model/absorbing_boundary.py#L236) | `SpatialAbsorbingLayer` | geometry, region target and taper | Python validation and scene export/import tests |
+| constructor and lowering | [`packages/fullmag-py/src/fullmag/model/structure.py`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/model/structure.py#L825) | [`class Ferromagnet`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/model/structure.py#L825) | canonical object API | signature and API contract tests |
+| box-face absorbing layer | [`packages/fullmag-py/src/fullmag/model/absorbing_boundary.py`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/model/absorbing_boundary.py#L149) | [`class AbsorbingBoundaryLayer`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/model/absorbing_boundary.py#L149) | box-face damping layer validation and IR | Python validation tests |
+| absorbing geometry predicates | [`packages/fullmag-py/src/fullmag/model/absorbing_boundary.py`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/model/absorbing_boundary.py#L268) | [`class AbsorbingGeometry`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/model/absorbing_boundary.py#L268) | faces, plane, cylinder, sphere, region, and expression ABL geometry | Python validation tests |
+| independent absorbing layers | [`packages/fullmag-py/src/fullmag/model/absorbing_boundary.py`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/model/absorbing_boundary.py#L317) | [`class SpatialAbsorbingLayer`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/model/absorbing_boundary.py#L317) | geometry, region target and taper | Python validation and scene export/import tests |
 | stage-first facade | `packages/fullmag-py/src/fullmag/world.py` | `study.geometry` / magnetic handle | fluent object authoring | builder tests |

@@ -68,16 +68,17 @@ study.stages.add_relax(stage_id="relax", algorithm="llg_overdamped", dt=5e-13, m
 
 | Python | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| `study.objects.mesh.defaults(cell_size=...)` | `Sequence[float] \| None` | `None` | $\mathrm{m}$ | exactly three positive values | stage-first default cell | FDM CPU/GPU; FEM not applicable to Cartesian grid authoring | `mesh_workflow.build` |
+| `fullmag.world.StudyObjectsMeshDefaultsHandle.__call__` | `Sequence[float] \| None` (`cell_size`) | `None` | $\mathrm{m}$ | exactly three positive values | stage-first default cell (`study.objects.mesh.defaults(cell_size=...)`) | FDM CPU/GPU; FEM not applicable to Cartesian grid authoring | `backend_policy.discretization_hints.fdm.default_cell` |
 | `FDM.default_cell` | `Sequence[float] \| None` | `None` | $\mathrm{m}$ | exactly three positive values | low-level default cell | FDM CPU/GPU; FEM not applicable to Cartesian grid authoring | `backend_policy.discretization_hints.fdm.default_cell` |
 | `FDM.cell` | `Sequence[float] \| None` | `None` | $\mathrm{m}$ | legacy alias; cannot coexist with `default_cell` | compatibility spelling | FDM CPU/GPU; FEM not applicable to Cartesian grid authoring | `backend_policy.discretization_hints.fdm.cell` |
 
 Invalid length or non-positive values raise during authoring. The selected
-values lower to `backend_policy.discretization_hints.fdm`.
+values lower to `backend_policy.discretization_hints.fdm`. For FDM CPU/CUDA
+acceleration details see {ref}`numerical-methods-performance-fdm-core`.
 
 (python-api-meshing-fdm-grid-problem-ir)=
 ## ProblemIR
-The request lowers to the mesh-workflow or discretization subtree; requested intent remains distinct from the resolved mesh asset and provenance report.
+The request lowers to `backend_policy.discretization_hints.fdm`; requested intent remains distinct from the resolved grid descriptor and provenance report.
 
 (python-api-meshing-fdm-grid-round-trip-and-failure-semantics)=
 ## Round-trip and failure semantics
@@ -85,11 +86,11 @@ Requested intent is the Python policy; resolved execution is the realized mesh r
 
 (python-api-meshing-fdm-grid-discrete-realization)=
 ## Discrete realization
-The backend consumes the realized Cartesian or finite-element asset, including topology, markers, quality, and provenance where available.
+The backend consumes the realized Cartesian grid asset, including origin, spacing, active mask, and provenance where available.
 
 ## 5. How to set it in Control Room
 
-Route: `Model Explorer -> Objects -> <object> -> Mesh` (`FdmObjectMeshPolicySection` in `ObjectMeshPolicyPanel.tsx`, backed by `resolveFdmObjectMeshInspectorModel` in `fdmMeshInspectorModel.ts`). Under the FDM lane, Control Room exposes grid origin, spacing, integer shape, active cell count, participation, and grid fingerprint as a **read-only** resource while `FdmCuboidLayer` renders structured cells and region masks (`FMRM` / `FMBM`) in the 3D viewport. FEM mesh-build controls are withheld, and authoring `dx`, `dy`, and `dz` remains Python-only. See {doc}`/frontend/meshing/fdm-grid-view` and [Control Room capability register](/frontend/capability-register).
+Route: `Model Explorer -> Mesh` (`apps/control-room/src/modules/inspector/inspectors/mesh/MeshRootSpec.tsx`, `MeshRootInspectorSpecPanel`) provides interactive FDM default grid sizing: switch between cell size ($\Delta x, \Delta y, \Delta z$) and cell count ($N_x, N_y, N_z$), toggle Single 3-D vs Multilayer Z-slices, review live $l_{\mathrm{ex}}$ resolution guards and quick-fix actions, snap counts to 7-smooth FFT dimensions, and execute **Save & Build Grid**. Detailed realized grid properties and region cell masks remain inspectable via `apps/control-room/src/modules/inspector/inspectors/mesh/fdm/FdmGridSpec.tsx` (`FdmGridInspectorSpecPanel`) while `FdmCuboidLayer` renders structured cells and region masks (`FMRM` / `FMBM`) in the 3D viewport. See {doc}`/frontend/meshing/fdm-grid-view` and [Control Room capability register](/frontend/capability-register).
 
 ```{image} /_static/images/ui/viewport-3d-interactive.png
 :alt: 3D Viewport rendering FDM structured grid cells, vector glyphs, and domain frame
@@ -103,7 +104,7 @@ Route: `Model Explorer -> Objects -> <object> -> Mesh` (`FdmObjectMeshPolicySect
 |---|---|---|
 | FDM CPU/GPU | authoring implemented | Planner and runtime still gate execution. |
 | FEM CPU/GPU | not applicable | FEM uses element-size policies. |
-| Control Room | inspection-only | `FdmObjectMeshPolicySection` and `FdmCuboidLayer` display realized grid metadata and cells; grid dimensions are authored in Python. |
+| Control Room | interactive default sizing | `MeshRootInspectorSpecPanel` edits default FDM cell size/count and builds the grid; `FdmGridInspectorSpecPanel` and `FdmCuboidLayer` inspect realized grid metadata and cells. |
 
 (python-api-meshing-fdm-grid-validation)=
 ## Validation
@@ -128,6 +129,7 @@ Focused constructor, lowering, and mesh-report tests are the evidence boundary f
 
 | Claim | Repository path | Stable symbol | Evidence |
 |---|---|---|---|
-| per-magnet Cartesian grid contract | [`packages/fullmag-py/src/fullmag/model/discretization.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/discretization.py#L19) | [`class FDMGrid`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/discretization.py#L19) | constructor and API tests |
-| stage-first default cell | `packages/fullmag-py/src/fullmag/world.py` | `StudyObjectsMeshDefaultsBuilder.defaults` | builder implementation |
-| low-level aliases and validation | `packages/fullmag-py/src/fullmag/model/discretization.py` | `FDM.__init__` | constructor and IR implementation |
+| FDM default grid policy and lowering | [`packages/fullmag-py/src/fullmag/model/discretization.py`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/model/discretization.py#L220) | [`class FDM`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/model/discretization.py#L220) | constructor and IR tests |
+| per-magnet Cartesian grid contract | [`packages/fullmag-py/src/fullmag/model/discretization.py`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/model/discretization.py#L19) | [`class FDMGrid`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/model/discretization.py#L19) | constructor and API tests |
+| stage-first default cell | [`packages/fullmag-py/src/fullmag/world.py`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/world.py#L5799) | [`class StudyObjectsMeshDefaultsHandle`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/world.py#L5799) | builder implementation |
+| Control Room interactive FDM sizing | [`apps/control-room/src/modules/inspector/inspectors/mesh/MeshRootSpec.tsx`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/apps/control-room/src/modules/inspector/inspectors/mesh/MeshRootSpec.tsx#L52) | [`MeshRootInspectorSpecPanel`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/apps/control-room/src/modules/inspector/inspectors/mesh/MeshRootSpec.tsx#L52) | Control Room mesh inspector tests |

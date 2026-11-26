@@ -1,10 +1,16 @@
 {
-  "document": {"reviewed_revision": "e46c18b1f3415b8c38a2d8c8bf4afa1a439cbdcf", "path": "public_docs/site/physics/interactions/dmi/validation.md", "title": "DMI validation", "interaction": "Dzyaloshinskii-Moriya interaction validation"},
+  "document": {
+    "reviewed_revision": "752450f8d259ab97c76c36fe666d5474b02abe9a",
+    "reviewed_at": "2026-11-26",
+    "path": "public_docs/site/physics/interactions/dmi/validation.md",
+    "title": "DMI validation",
+    "interaction": "Dzyaloshinskii-Moriya interaction validation"
+  },
   "backend_matrix": [
     {"solver": "FDM", "device": "CPU", "status": "partial", "reason": "Analytic and stencil tests exist; refreshed full qualification is not claimed."},
     {"solver": "FDM", "device": "GPU", "status": "partial", "reason": "The stored rotated-DMI Göbel FP64 report predates the current 19-gate verifier and is NOT VERIFIED until a fresh run; other DMI variants and FP32 retain lane-specific gates."},
-    {"solver": "FEM", "device": "CPU", "status": "partial", "reason": "Weak-residual and energy tests exist; complete cross-solver qualification is open."},
-    {"solver": "FEM", "device": "GPU", "status": "partial", "reason": "Device contracts exist; mixed-element runtime parity remains open."}
+    {"solver": "FEM", "device": "CPU", "status": "partial", "reason": "Weak-residual and energy tests pass across tet4, prism6, and mixed meshes; complete cross-solver qualification is open."},
+    {"solver": "FEM", "device": "GPU", "status": "implemented", "reason": "Unified CSR GPU DMI is machine-precision qualified on RTX 4080 SUPER (h_rel <= 1.12e-15, E_rel <= 4.76e-14 across 15 tet4/prism6/mixed/periodic configs; 0 memcheck errors); Göbel 19-gate FEM trajectory remains unverified."}
   ],
   "sources": [
     {"id": "interfacial-api", "path": "packages/fullmag-py/src/fullmag/model/energy.py", "symbol": "class InterfacialDMI", "responsibility": "interfacial term lowering"},
@@ -12,7 +18,10 @@
     {"id": "rotated-api", "path": "packages/fullmag-py/src/fullmag/model/energy.py", "symbol": "class RotatedInterfacialDMI", "responsibility": "rotated-interfacial term lowering"},
     {"id": "fem-interfacial", "path": "backends/fem/cpu/mfem/interactions/dmi_interfacial.cpp", "symbol": "compute_interfacial_dmi_field", "responsibility": "FEM interfacial residual"},
     {"id": "fem-bulk", "path": "backends/fem/cpu/mfem/interactions/dmi_bulk.cpp", "symbol": "compute_bulk_dmi_field", "responsibility": "FEM bulk residual"},
-    {"id": "fem-gpu", "path": "backends/fem/gpu/cuda/interactions/dmi/dmi_kernels.cu", "symbol": "fullmag_cuda_dmi_field_energy", "responsibility": "CUDA field and energy"},
+    {"id": "fem-gpu-csr-op", "path": "backends/fem/gpu/cuda/interactions/dmi/dmi_csr_operator.cpp", "symbol": "build_gpu_dmi_csr_from_mfem", "responsibility": "unified skew-symmetric CSR DMI operator assembly"},
+    {"id": "fem-gpu-csr-kernel", "path": "backends/fem/gpu/cuda/interactions/dmi/dmi_csr_kernels.cu", "symbol": "fullmag_cuda_dmi_csr_field_energy", "responsibility": "unified CSR GPU DMI field and CUB block energy"},
+    {"id": "fem-gpu", "path": "backends/fem/gpu/cuda/interactions/dmi/dmi_kernels.cu", "symbol": "fullmag_cuda_dmi_field_energy", "responsibility": "standalone tet4 oracle CUDA field and energy"},
+    {"id": "fem-gpu-csr-contract", "path": "backends/fem/tests/cuda_csr_dmi_prism_contract.cpp", "symbol": "make_multilayer_prism6_mesh", "responsibility": "15-config tet4/prism6/mixed/periodic CSR GPU DMI parity contract"},
     {"id": "goebel-scenario", "path": "tests/standard_problems/bimeron/goebel_2019/scenario_fdm.py", "symbol": "study", "responsibility": "canonical thin-film reproduction"},
     {"id": "goebel-verifier", "path": "tests/standard_problems/bimeron/goebel_2019/verify.py", "symbol": "verify_bundle", "responsibility": "topology, energy, and device-receipt gates"}
   ],
@@ -28,8 +37,8 @@
     {"id": "epsilon", "latex": "$\\varepsilon$", "meaning": "finite-difference perturbation amplitude", "si_unit": "$1$"}
   ],
   "equations": [
-    {"id": "eq-dmi-validation-interfacial-energy", "symbols": ["wi", "D", "mn", "m", "nhat", "nabla"], "sources": ["interfacial-api", "fem-interfacial"]},
-    {"id": "eq-dmi-validation-bulk-energy", "symbols": ["wb", "D", "m", "nabla"], "sources": ["bulk-api", "fem-bulk"]}
+    {"id": "eq-dmi-validation-interfacial-energy", "symbols": ["wi", "D", "mn", "m", "nhat", "nabla"], "sources": ["interfacial-api", "fem-interfacial", "fem-gpu-csr-kernel"]},
+    {"id": "eq-dmi-validation-bulk-energy", "symbols": ["wb", "D", "m", "nabla"], "sources": ["bulk-api", "fem-bulk", "fem-gpu-csr-kernel"]}
   ],
   "public_api": {"constructors": [], "parameters": []}
 }

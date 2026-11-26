@@ -1,6 +1,6 @@
 ---
 title: Preset Textures
-status: partial
+status: implemented
 doc_kind: reference
 audience: user
 owner: fullmag-public-docs
@@ -34,6 +34,10 @@ $\mathbf m=\mathbf M/M_\mathrm s$. Fullmag currently exposes the following publi
 | `fm.texture.two_domain(...)` | `two_domain` | sharp or smooth two-domain initializer |
 | `fm.texture.helical(...)` | `helical` | planar spin spiral with a physical wavevector |
 | `fm.texture.conical(...)` | `conical` | conical spin spiral with a physical wavevector |
+| `fm.texture.skyrmion_lattice(...)` | `skyrmion_lattice` | hexagonal or square Wigner-Seitz lattice of Bloch or Neel skyrmions |
+| `fm.texture.spiral(...)` | `spiral` | cycloidal, proper-screw, or custom-plane spin spiral parameterized by wavelength |
+| `fm.texture.bloch_point(...)` | `bloch_point` | three-dimensional radial, circulating, or hyperbolic Bloch-point hedgehog |
+| `fm.texture.artificial_spin_ice(...)` | `artificial_spin_ice` | square or kagome artificial spin-ice bond texture (`type_i_ground`, `type_ii_polarized`, `monopole_pair`) |
 
 The descriptor is sampled only when the final FDM grid or FEM mesh is known. It does not add an
 energy, torque, boundary condition, frozen-spin constraint, or guarantee that the authored state is
@@ -57,8 +61,10 @@ preset.
 
 ### Coordinate, mapping, plane, and transform pipeline
 
-For each active sample, the planner first selects $\mathbf x_\mathrm s$ from the object-space or
-world-space point according to `mapping.space`. Version 2 then applies the inverse texture transform:
+For each active sample, the planner first selects $\mathbf x_\mathrm s$ from object space,
+region space (falling back to object space when region coordinates are absent), or world space
+according to `mapping.space` (`"object"`, `"region"`, or `"world"`). Version 2 then applies the
+inverse texture transform:
 
 ```{math}
 :label: preset-texture-local-coordinate
@@ -79,9 +85,36 @@ quaternion is normalized before use. Every scale component and the quaternion no
 $10^{-14}$ in the canonical Rust v2 evaluator. The planner validates the descriptor once and
 materializes a prepared transform containing the normalized forward/inverse quaternion and
 reciprocal scale. FDM cells and FEM nodes therefore use the same affine map without repeating
-normalization for every sample. After the local profile has been evaluated, the magnetization
-vector is embedded in the selected plane and rotated forward by $\mathcal R_q$. Translation,
-pivot, and scale affect coordinates; only the quaternion rotates spin components.
+normalization for every sample.
+
+Before evaluating the local analytic formula, version 2 optionally applies two mapping stages in
+texture-local coordinates relative to the pivot $\mathbf x_{\mathrm p}$:
+
+1. **Axis thickness clipping (`axis_extent_mode="thickness"`):** When `axis_extent_mode` is set to
+   `"thickness"`, a finite positive `axis_thickness_m` ($t_{\mathrm{axis}} > 0$) is required.
+   Active samples with $|z_{\mathrm{normal}}| > \tfrac{1}{2} t_{\mathrm{axis}} (1 + 10^{-12})$
+   along the plane normal (or local $z$ for non-metric presets) immediately return the resolved
+   slab background vector (explicit normalized `mapping.background_vector` if supplied, else the
+   preset's far-field background).
+2. **Boundary clamp and tiling (`mapping.clamp_mode`):** Canonical Rust v2 (`apply_clamp_mode_v2`)
+   implements all five modes:
+   - `"none"` (default in Python): pass $\mathbf x_{\mathrm{loc}}$ through unchanged;
+   - `"clamp"`: clamp each axis offset $\mathbf r = \mathbf x_{\mathrm{loc}} - \mathbf x_{\mathrm p}$ to $[-\tfrac{1}{2} P_i, +\tfrac{1}{2} P_i]$;
+   - `"repeat"`: wrap periodically into $[-\tfrac{1}{2} P_i, +\tfrac{1}{2} P_i)$ via $((r_i + P_i/2) \bmod P_i) - P_i/2$;
+   - `"mirror"`: triangle-wave reflection fold on period $P_i$;
+   - `"background"`: if any $|r_i| > \tfrac{1}{2} P_i$, return normalized `mapping.background_vector` (or default $[0, 0, 1]$ embedded in the plane frame for metric presets).
+
+   For any mode other than `"none"`, `resolve_default_tile_period` resolves the positive period
+   vector $[P_x, P_y, P_z]$ in order: (1) explicit `mapping.tile_period` if provided, (2) explicit
+   `target_bounds_extent` in source space before `texture_transform`, or (3) the AABB extent over
+   active sample points in source space before `texture_transform` (replacing any degenerate axis
+   $\le 10^{-14}\,\mathrm{m}$ with the maximum positive axis extent).
+
+After the local profile has been evaluated, the magnetization vector is embedded in the selected
+plane and, when `TextureTransform3D.rotate_vectors` is `True` (the default), rotated forward by
+$\mathcal R_q$. Setting `rotate_vectors=False` via `.with_rotate_vectors(False)` rotates sample
+coordinates without rotating spin components. Translation, pivot, and scale affect coordinates
+only.
 
 The implemented right-handed frames are:
 
@@ -106,10 +139,12 @@ r=\sqrt{u^2+v^2},
 ```
 
 An explicit preset `plane` and a planar mapping projection must identify the same plane; version 2
-rejects a conflict. In the canonical Rust v2 sampler, planar projection is currently applied only to
-`vortex`, `antivortex`, the skyrmion family, `skyrmionium`, `bimeron`, `domain_wall`, and
-`two_domain`. `uniform`, `random`, `helical`, and `conical` retain transformed Cartesian
-coordinates. `hopfion` is intrinsically three-dimensional and rejects planar projection.
+rejects a conflict. In the canonical Rust v2 sampler, planar projection is applied to the metric
+presets: `vortex`, `antivortex`, `vortex_wall`, `bloch_skyrmion`, `neel_skyrmion`, `antiskyrmion`,
+`skyrmionium`, `bimeron`, `domain_wall`, `two_domain`, `skyrmion_lattice`, and
+`artificial_spin_ice`. `uniform`, `random`, `helical`, `conical`, and `spiral` retain transformed
+Cartesian coordinates. `hopfion`, `hopfion_compact_support`, and `bloch_point` are intrinsically
+three-dimensional and reject planar projection.
 
 Inactive FDM cells are written as `[0, 0, 0]`. Version-2 parameters and transforms are validated
 before iterating over samples, so malformed input is rejected even for an empty or entirely inactive
@@ -198,7 +233,7 @@ The overflow-resistant version-2 radial profile is equivalent to
 \frac{\sinh(R/\Delta)}{\sinh(r/\Delta)}
 \right],
 \qquad
-\psi=\phi+c\gamma,
+\psi=\phi+\gamma(c),
 \qquad
 \mathbf m_{\mathrm{local}}
 =
@@ -211,8 +246,8 @@ The overflow-resistant version-2 radial profile is equivalent to
 
 The implementation returns $\theta=\pi$ directly for $r\le 10^{-14}\,\mathrm{m}$, evaluates the
 hyperbolic-sine ratio in logarithmic form elsewhere, and saturates the logarithmic ratio outside
-$[-40,40]$. The chirality convention is now explicit: Bloch walls use
-$\gamma=c\pi/2$, while Neel walls use $\gamma=0$ for $c=+1$ and $\gamma=\pi$ for $c=-1$.
+$[-40,40]$. The chirality convention is now explicit via `wall_helicity(wall_type, chirality)`:
+Bloch walls use $\gamma(c)=c\pi/2$, while Neel walls use $\gamma(+1)=0$ and $\gamma(-1)=\pi$.
 Consequently `chirality` reverses the radial Neel-wall direction instead of being a no-op. In
 version 2, `core_polarity=p` is the actual sign of the normal component at $r=0$.
 
@@ -527,6 +562,97 @@ quaternion transform.
 | `texture.hopfion.phase_rad` | global target-space phase in radians |
 | `texture.hopfion.preset_version` | must be 2 |
 
+### Skyrmion lattice
+
+`fm.texture.skyrmion_lattice(...)` folds the local planar coordinates $(u, v)$ into the nearest
+Wigner-Seitz cell of a periodic lattice with spacing `lattice_constant` $a > 2R$, then evaluates
+the version-2 Bloch or Neel skyrmion profile at the folded offset $(u_{\mathrm{ws}}, v_{\mathrm{ws}})$:
+
+- **`lattice="square"`:** wraps $u$ and $v$ independently onto $[-a/2, a/2)$.
+- **`lattice="hexagonal"`:** searches the $3 \times 3$ Bravais neighborhood around primitive basis
+  vectors $\mathbf a_1 = (a, 0)$ and $\mathbf a_2 = (\tfrac{1}{2}a, \tfrac{\sqrt{3}}{2}a)$ to select
+  the nearest lattice site.
+
+| Parameter | Type | Default | SI unit | Validation | Meaning |
+|---|---|---|---|---|---|
+| `lattice_constant` | `float` | required | $\mathrm{m}$ | finite, $> 0$, and $> 2 \times \text{radius}$ | Bravais lattice constant $a$ |
+| `radius` | `float` | required | $\mathrm{m}$ | finite and $> 0$ | individual skyrmion radial scale $R$ |
+| `wall_width` | `float` | required | $\mathrm{m}$ | finite and $> 0$ | individual skyrmion wall width $\Delta$ |
+| `lattice` | `str` | `"hexagonal"` | $1$ | `"hexagonal"` or `"square"` | 2D lattice symmetry |
+| `kind` | `str` | `"bloch"` | $1$ | `"bloch"` or `"neel"` | skyrmion wall helicity family |
+| `chirality` | `int` | `1` | $1$ | `-1` or `+1` | skyrmion chirality sign |
+| `core_polarity` | `int` | `-1` | $1$ | `-1` or `+1` | normal core sign at each lattice site |
+| `plane` | `str` | `"xy"` | $1$ | `"xy"`, `"xz"`, or `"yz"` | right-handed local texture plane |
+| `preset_version` | `int` | `2` | $1$ | exactly `2` | version-2 contract |
+
+### Spiral
+
+`fm.texture.spiral(...)` constructs a cycloidal, proper-screw, or custom-plane spin spiral directly
+from wavelength $\lambda$ and unit propagation direction $\hat{\mathbf q}$:
+
+$$
+\varphi = c\,\frac{2\pi}{\lambda}\,(\hat{\mathbf q}\cdot\mathbf x_{\mathrm{loc}}) + \varphi_0,
+\qquad
+\mathbf m = \operatorname{normalize}\!\left(\mathbf e_1\cos\varphi + \mathbf e_2\sin\varphi\right).
+$$
+
+For `spiral_kind="proper_screw"`, $(\mathbf e_1, \mathbf e_2)$ form an orthonormal basis orthogonal
+to $\hat{\mathbf q}$. For `spiral_kind="cycloidal"`, `spin_plane_normal` must not be parallel to
+$\hat{\mathbf q}$ ($|\hat{\mathbf n}_{\mathrm s}\cdot\hat{\mathbf q}| \le 1 - 10^{-6}$); the spin
+plane is spanned by $\mathbf e_1 = \hat{\mathbf q}$ and
+$\mathbf e_2 = \operatorname{normalize}(\hat{\mathbf n}_{\mathrm s,\perp}\times\hat{\mathbf q})$.
+For `spiral_kind="custom_plane"`, $(\mathbf e_1, \mathbf e_2)$ span the plane orthogonal to
+`spin_plane_normal`.
+
+| Parameter | Type | Default | SI unit | Validation | Meaning |
+|---|---|---|---|---|---|
+| `wavelength` | `float` | required | $\mathrm{m}$ | finite and $> 0$ | spatial spiral period $\lambda$ |
+| `spiral_kind` | `str` | `"cycloidal"` | $1$ | `"cycloidal"`, `"proper_screw"`, or `"custom_plane"` | spiral rotation plane convention |
+| `propagation_axis` | `Sequence[float]` | `(1, 0, 0)` | $1$ | finite nonzero 3-vector (normalized) | unit propagation direction $\hat{\mathbf q}$ |
+| `spin_plane_normal` | `Sequence[float] \| None` | `None` | $1$ | finite nonzero 3-vector; not parallel to `propagation_axis` for `cycloidal` | normal to the spin rotation plane |
+| `chirality` | `int` | `1` | $1$ | `-1` or `+1` | phase winding sign $c$ |
+| `phase_rad` | `float` | `0.0` | $\mathrm{rad}$ | finite | phase offset $\varphi_0$ |
+| `preset_version` | `int` | `2` | $1$ | exactly `2` | version-2 contract |
+
+### Bloch point
+
+`fm.texture.bloch_point(...)` initializes a scale-invariant three-dimensional Bloch-point hedgehog.
+For $\hat{\mathbf u} = \mathbf x_{\mathrm{loc}} / \lVert\mathbf x_{\mathrm{loc}}\rVert$ (with
+regular origin limit $\hat{\mathbf u} = (0, 0, 1)$ for $r \le 10^{-15}\,\mathrm{m}$),
+$s_z = -1$ for `"hyperbolic"` and $+1$ otherwise, and $\mathbf v = (u_x, u_y, s_z u_z)$,
+
+$$
+\mathbf m = p\,\mathcal R_z(\gamma_{\mathrm{twist}})\,\mathbf v.
+$$
+
+`core_radius` is validated finite and positive as the physical indicator/preview marker scale. Like
+`hopfion` and `hopfion_compact_support`, `bloch_point` is intrinsically three-dimensional and
+requires `mapping.projection="object_local"`.
+
+| Parameter | Type | Default | SI unit | Validation | Meaning |
+|---|---|---|---|---|---|
+| `bp_kind` | `str` | `"circulating"` | $1$ | `"radial"`, `"circulating"`, or `"hyperbolic"` | Bloch-point hedgehog topology |
+| `polarity` | `int` | `1` | $1$ | `-1` or `+1` | global polarity sign $p$ |
+| `twist_rad` | `float \| None` | `None` ($\pi/2$ for `circulating`, `0.0` otherwise) | $\mathrm{rad}$ | finite when supplied | azimuthal twist angle $\gamma_{\mathrm{twist}}$ about local $z$ |
+| `core_radius` | `float` | `1e-9` | $\mathrm{m}$ | finite and $> 0$ | physical core indicator and preview-proxy radius |
+| `preset_version` | `int` | `2` | $1$ | exactly `2` | version-2 contract |
+
+### Artificial spin ice
+
+`fm.texture.artificial_spin_ice(...)` assigns each planar sample point $(u, v)$ to the nearest
+island midpoint of a `square` or `kagome` lattice with spacing `pitch` $a$, orienting
+$\mathbf m_{\mathrm{local}}$ along that island's bond axis with a sign determined by
+`vertex_state` (`"type_i_ground"`, `"type_ii_polarized"`, or `"monopole_pair"`, which flips the
+central $(0, 0)$ bond relative to the ground state to seed a vertex-monopole pair).
+
+| Parameter | Type | Default | SI unit | Validation | Meaning |
+|---|---|---|---|---|---|
+| `pitch` | `float` | required | $\mathrm{m}$ | finite and $> 0$ | lattice island spacing $a$ |
+| `lattice` | `str` | `"square"` | $1$ | `"square"` or `"kagome"` | artificial spin-ice lattice geometry |
+| `vertex_state` | `str` | `"type_i_ground"` | $1$ | `"type_i_ground"`, `"type_ii_polarized"`, or `"monopole_pair"` | vertex ice-rule ordering |
+| `plane` | `str` | `"xy"` | $1$ | `"xy"`, `"xz"`, or `"yz"` | right-handed local texture plane |
+| `preset_version` | `int` | `2` | $1$ | exactly `2` | version-2 contract |
+
 ### Version 1 compatibility
 
 Version 1 remains executable only to reproduce historical studies. It is not a less strict spelling
@@ -537,12 +663,12 @@ of version 2.
 | Python default | opt-in | default for all public factories |
 | Missing `preset_version` in serialized IR | selected by the IR default | never inferred |
 | Validation | permissive legacy coercions and fallbacks | finite, sign, plane, basis, and transform checks |
-| Texture rotation | transforms sample coordinates but does not consistently rotate output spin vectors | transforms coordinates and forward-rotates output vectors |
+| Texture rotation | transforms sample coordinates but does not consistently rotate output spin vectors | transforms coordinates and forward-rotates output vectors when `rotate_vectors=True` |
 | Vortex/antivortex | circulation and winding are partially conflated | winding is fixed by preset kind and circulation is an independent sign |
 | Skyrmion polarity | historical sign convention | `core_polarity` is the actual normal core sign |
 | Helical/conical wavevector | magnitude is normalized away in the legacy evaluator | physical $\mathrm{m^{-1}}$ magnitude sets the period |
 | Domain wall | legacy interpolation with an ad hoc Bloch tangent contribution | antiparallel-domain contract with explicit or derived wall-centre direction |
-| Mapping clamp | clamp/repeat/mirror is applied by the legacy sampler | canonical Rust v2 currently does not apply `clamp_mode` |
+| Mapping clamp and slab thickness | clamp/repeat/mirror applied by the legacy sampler | canonical Rust v2 applies `none`, `clamp`, `repeat`, `mirror`, and `background` with explicit or AABB-derived `tile_period`, plus `axis_extent_mode="thickness"` slab clipping |
 | Bimeron | same radial ansatz, legacy transform and validation semantics | strict signs/plane/transform semantics and right-handed output embedding |
 
 (python-api-magnets-and-textures-preset-textures-symbols-and-si-units)=
@@ -575,7 +701,7 @@ of version 2.
 | $\theta$ | radial polar profile angle | $\mathrm{rad}$ |
 | $R$ | nominal radial profile scale | $\mathrm{m}$ |
 | $\Delta$ | radial transition width | $\mathrm{m}$ |
-| $\gamma$ | fixed skyrmion helicity: 0 for Neel and pi/2 for Bloch | $\mathrm{rad}$ |
+| $\gamma$ | skyrmion helicity: 0 or pi for Neel, +-pi/2 for Bloch | $\mathrm{rad}$ |
 | $\chi$ | bimeron azimuthal phase | $\mathrm{rad}$ |
 | $\eta$ | bimeron helicity | $\mathrm{rad}$ |
 | $s_{\mathrm{bg}}$ | bimeron background-orientation sign | $1$ |
@@ -622,9 +748,10 @@ of version 2.
 6. The specific bimeron ansatz is a Fullmag initializer consistent with the documented topology and
    meron-pair interpretation. It is not asserted to solve the Euler-Lagrange equations of every
    easy-plane, frustrated, or DMI Hamiltonian.
-7. `mapping.clamp_mode` is serialized by the public API, but the canonical Rust version-2 analytic
-   sampler currently ignores it. The fresh Python default is `none`; omitted legacy IR defaults to
-   `clamp`.
+7. `mapping.clamp_mode` is applied by canonical Rust version 2 (`apply_clamp_mode_v2`) for
+   `"clamp"`, `"repeat"`, `"mirror"`, and `"background"` using explicit `mapping.tile_period`,
+   `target_bounds_extent`, or the pre-transform active sample AABB extent. The fresh Python default
+   is `"none"`; omitted legacy IR defaults to `"clamp"`.
 8. The full Python pre-sampling helper is a secondary path with different implementation thresholds
    and partial clamp behavior. Planner execution should be treated as canonical for FDM/FEM studies.
 
@@ -660,7 +787,7 @@ factory has a separate canonical parameter table on the [Uniform Texture](unifor
 | `texture.bloch_skyrmion.preset_version` | `int` | `2` | $1$ | exactly 1 or 2; bool rejected | selects the serialized evaluator contract | FDM/FEM; CPU/GPU via planner materialization | `initial_magnetization.preset_version` |
 | `texture.neel_skyrmion.radius` | `float` | `required` | $\mathrm{m}$ | finite and positive in v2 | radial profile scale R | FDM/FEM; CPU/GPU via planner materialization | `initial_magnetization.preset_params.radius` |
 | `texture.neel_skyrmion.wall_width` | `float` | `required` | $\mathrm{m}$ | finite and positive in v2 | radial transition width Delta | FDM/FEM; CPU/GPU via planner materialization | `initial_magnetization.preset_params.wall_width` |
-| `texture.neel_skyrmion.chirality` | `int` | `1` | $1$ | -1 or +1 in v2 | multiplies the fixed helicity 0 | FDM/FEM; CPU/GPU via planner materialization | `initial_magnetization.preset_params.chirality` |
+| `texture.neel_skyrmion.chirality` | `int` | `1` | $1$ | -1 or +1 in v2 | selects radial Neel-wall helicity: 0 for +1, pi for -1 | FDM/FEM; CPU/GPU via planner materialization | `initial_magnetization.preset_params.chirality` |
 | `texture.neel_skyrmion.core_polarity` | `int` | `-1` | $1$ | -1 or +1 in v2 | actual normal-axis sign at r=0 in v2 | FDM/FEM; CPU/GPU via planner materialization | `initial_magnetization.preset_params.core_polarity` |
 | `texture.neel_skyrmion.plane` | `str` | `"xy"` | $1$ | "xy", "xz", or "yz" | right-handed local texture plane | FDM/FEM; CPU/GPU via planner materialization | `initial_magnetization.preset_params.plane` |
 | `texture.neel_skyrmion.preset_version` | `int` | `2` | $1$ | exactly 1 or 2; bool rejected | selects the serialized evaluator contract | FDM/FEM; CPU/GPU via planner materialization | `initial_magnetization.preset_version` |
@@ -728,16 +855,21 @@ These rows complete the canonical Python-to-`ProblemIR` contract for the antisky
 
 | Public method or field | Default / operation | Exact implemented behavior |
 |---|---|---|
-| `TextureMapping.space` | `object` | public type admits `object` or `world`; v2 chooses object coordinates only for case-insensitive `object` |
-| `TextureMapping.projection` | `object_local` | accepted IR values are `object_local`, `planar_xy`, `planar_xz`, and `planar_yz`; conflicts with an explicit preset plane are rejected |
-| `TextureMapping.clamp_mode` | `none` in fresh Python descriptors | serializes `clamp`, `repeat`, `mirror`, or `none`; canonical Rust v2 does not currently apply it |
-| `PresetTexture.with_mapping(...)` | preserves omitted fields | its public `clamp_mode` argument exposes `clamp`, `repeat`, or `mirror`; it cannot explicitly reset an already changed value to `none` |
+| `TextureMapping.space` | `"object"` | accepts `"object"`, `"region"` (falls back to object coordinates when region coordinates are absent), or `"world"` |
+| `TextureMapping.projection` | `"object_local"` | accepted IR values are `"object_local"`, `"planar_xy"`, `"planar_xz"`, and `"planar_yz"`; conflicts with an explicit preset plane or 3D presets (`hopfion`, `hopfion_compact_support`, `bloch_point`) are rejected |
+| `TextureMapping.clamp_mode` | `"none"` in fresh Python descriptors | accepts `"none"`, `"clamp"`, `"repeat"`, `"mirror"`, or `"background"`; applied in canonical Rust v2 (`apply_clamp_mode_v2`) |
+| `TextureMapping.tile_period` | `None` | optional positive 3-vector `[Px, Py, Pz]` (m) overriding the AABB-derived period for non-`"none"` clamp modes |
+| `TextureMapping.background_vector` | `None` | optional finite nonzero 3-vector returned outside the clamp box (`clamp_mode="background"`) or outside the slab (`axis_extent_mode="thickness"`) |
+| `TextureMapping.axis_extent_mode` / `axis_thickness_m` | `"uniform"` / `None` | `"thickness"` requires finite positive `axis_thickness_m` (m) and clips samples with $\|z_{\mathrm{normal}}\| > \tfrac{1}{2}t_{\mathrm{axis}}$ to the resolved slab background |
+| `PresetTexture.with_mapping(...)` | preserves omitted fields | updates `space`, `projection`, `clamp_mode` (including `"none"` and `"background"`), `tile_period`, `background_vector`, `axis_extent_mode`, and `axis_thickness_m` |
+| `PresetTexture.with_thickness(axis_thickness_m)` | convenience wrapper | sets `axis_extent_mode="thickness"` and `axis_thickness_m` |
 | `PresetTexture.translate(dx, dy, dz)` | additive | adds to the stored translation |
 | `PresetTexture.rotate_x/y/z(angle_rad)` | quaternion left multiplication | composes an active rotation and normalizes the accumulated quaternion |
 | `PresetTexture.rotate_x/y/z_deg(angle_deg)` | degree convenience | converts degrees to radians, then uses the corresponding quaternion operation |
 | `PresetTexture.scale(sx, sy, sz)` | component-wise multiplication | multiplies the existing coordinate scale; v2 planner rejection occurs if any final component has magnitude at most $10^{-14}$ |
 | `PresetTexture.with_pivot(pivot)` | replacement | stores a three-component texture-transform pivot |
-| `PresetTexture.to_ir()` | serialization | emits kind, preset kind/version/params, mapping, transform, UI label, and preview proxy |
+| `PresetTexture.with_rotate_vectors(rotate_vectors)` | boolean toggle (`True` default) | sets `TextureTransform3D.rotate_vectors`; when `False`, rotates coordinates only without rotating output spin components |
+| `PresetTexture.to_ir()` | serialization | emits kind, preset kind/version/params, mapping, transform (including `rotate_vectors`), UI label, and preview proxy |
 
 The Python transform helpers use a $10^{-30}$ fallback when constructing degenerate quaternions,
 whereas the canonical Rust v2 evaluator rejects a final quaternion norm at or below $10^{-14}$.
@@ -842,7 +974,8 @@ The object-level result of the preceding construction has this canonical shape:
     "translation": [0.0, 0.0, 0.0],
     "rotation_quat": [0.0, 0.0, 0.0, 1.0],
     "scale": [1.0, 1.0, 1.0],
-    "pivot": [0.0, 0.0, 0.0]
+    "pivot": [0.0, 0.0, 0.0],
+    "rotate_vectors": true
   },
   "ui_label": null,
   "preview_proxy": "disc"
@@ -879,10 +1012,12 @@ combinations.
 **Unsupported combinations** are not silently converted to a different preset. Important current
 boundaries are:
 
-- canonical Rust v2 ignores `clamp_mode`;
-- planar projection does not remap `uniform`, `random`, `helical`, or `conical`;
+- planar projection does not remap `uniform`, `random`, `helical`, `conical`, or `spiral`, and is
+  rejected for intrinsically 3D presets (`hopfion`, `hopfion_compact_support`, `bloch_point`);
+- non-`"none"` `clamp_mode` requires a positive finite `tile_period` (explicit, from
+  `target_bounds_extent`, or from a non-degenerate active sample AABB); degenerate single-point
+  samples without an explicit `tile_period` fail closed;
 - `two_domain` has no centre offset;
-- public `with_mapping` cannot explicitly select `none` after another clamp value;
 - Python reference/pre-sampling helpers do not expose the entire canonical Rust mapping and active
   mask contract through one native call;
 - texture sampling evidence is not a device-runtime qualification of the subsequent CPU or GPU
@@ -987,8 +1122,8 @@ discretization study.
 - Presets are initial states, not constraints. Use a separate frozen-spin or region constraint
   mechanism when selected spins must remain fixed.
 - Version 1 and version 2 are intentionally not numerically interchangeable.
-- The canonical version-2 analytic sampler does not implement clamp/repeat/mirror behavior.
-- Projection support is narrower than the public mapping enum suggests.
+- Planar projection applies only to metric presets; 3D presets (`hopfion`,
+  `hopfion_compact_support`, `bloch_point`) require `mapping.projection="object_local"`.
 - `random` is coordinate-hashed rather than mesh-index-hashed.
 - FDM and FEM object coordinates use the same validated owner-translation convention;
   texture-local rotation, pivot, and scale are handled by the shared prepared sampler.
@@ -1027,16 +1162,16 @@ implementation contracts and are sourced from the repository.
 
 ## Control Room support
 
-Status: The `16` built-in `MAGNETIZATION_TEXTURE_PRESETS` exposed by `ObjectMagneticTexturePanel` are `partial`; custom spatial callbacks and unlisted options remain Python-only.
+Status: The `20` built-in `MAGNETIZATION_TEXTURE_PRESETS` (plus the `random_seeded` alias) exposed by `MagneticTextureInspectorPanel` are `partial`; custom spatial callbacks and unlisted Python options remain Python-only.
 
 | Python/API surface | Control Room path | Status | Transaction |
 |---|---|---|---|
 | Parameters documented on this page | `Model Explorer -> Objects -> <object> -> Magnetization` | `partial` | Apply magnetization draft via `commitMagneticTextureApply`; authored object state is revised |
 | Parameters without a named UI field | `Model Explorer -> Objects -> <object> -> Magnetization` | `Python-only` | Authored in Python |
 
-Texture presets, `TextureTransform3D` chaining options, and arguments outside `ObjectMagneticTexturePanel` remain Python-only.
+Texture presets, `TextureTransform3D` chaining options, and arguments outside `MagneticTextureInspectorPanel` remain Python-only.
 See {doc}`/frontend/inspectors/objects-and-materials` and [Control Room capability register](/frontend/capability-register) for the UI support matrix.
-Frontend source owner: `apps/control-room/src/modules/inspector/panels/ObjectMagneticTexturePanel.tsx` (`ObjectMagneticTexturePanel`).
+Frontend source owner: `apps/control-room/src/modules/inspector/panels/magnetic-texture/MagneticTextureInspectorPanel.tsx` (`MagneticTextureInspectorPanel`).
 
 ```{image} /_static/images/ui/inspector-magnetic-texture.png
 :alt: Semantic Inspector Magnetic Texture panel showing preset family selector and parameter controls
@@ -1048,39 +1183,50 @@ Frontend source owner: `apps/control-room/src/modules/inspector/panels/ObjectMag
 
 | Claim | Path | Stable symbol | Responsibility | Evidence / lane |
 |---|---|---|---|---|
-| public factories and validation | [`packages/fullmag-py/src/fullmag/init/textures.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/init/textures.py#L260) | [`class texture`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/init/textures.py#L260) | public analytic preset factories and factory-level validation | Python authoring |
-| descriptor and ProblemIR lowering | [`packages/fullmag-py/src/fullmag/init/textures.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/init/textures.py#L189) | [`class PresetTexture`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/init/textures.py#L189) | versioned preset descriptor, immutable transform chaining, and ProblemIR serialization | Python authoring / IR |
-| mapping descriptor | [`packages/fullmag-py/src/fullmag/init/textures.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/init/textures.py#L175) | [`class TextureMapping`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/init/textures.py#L175) | public object/world, projection, and clamp descriptor | Python authoring / IR |
-| transform authoring | [`packages/fullmag-py/src/fullmag/init/textures.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/init/textures.py#L126) | [`class TextureTransform3D`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/init/textures.py#L126) | public translation, quaternion rotation, component scale, and pivot descriptor | Python authoring / IR |
-| v1/v2 dispatch | `crates/fullmag-plan/src/magnetization_textures_v2.rs` | `sample_preset_texture_versioned` | canonical v1/v2 dispatch used by planners | FDM/FEM planner |
-| Mumax3 vortex wall factory | `packages/fullmag-py/src/fullmag/init/textures.py` | `vortex_wall` | Mumax3-compatible asymmetric vortex wall factory | Python authoring |
-| Mumax3 compact hopfion factory | `packages/fullmag-py/src/fullmag/init/textures.py` | `hopfion_compact_support` | Mumax3-compatible compact-support hopfion factory | Python authoring |
-| skyrmionium profile | `crates/fullmag-plan/src/magnetization_textures_v2.rs` | `skyrmionium` | axisymmetric $2\pi$ skyrmionium radial evaluation | FDM/FEM planner |
-| hopfion profile | `crates/fullmag-plan/src/magnetization_textures_v2.rs` | `hopfion` | 3D hopfion vector field evaluation | FDM/FEM planner |
-| object-space sample points | `crates/fullmag-plan/src/mesh.rs` | `object_space_sample_points` | FEM object-space coordinate transforms for sampling | FEM planner |
-| canonical v2 sampling pipeline | [`crates/fullmag-plan/src/magnetization_textures_v2.rs`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-plan/src/magnetization_textures_v2.rs#L831) | [`sample_v2`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-plan/src/magnetization_textures_v2.rs#L831) | v2 mapping, active-point handling, local evaluation, frame embedding, and output-vector rotation | FDM/FEM planner |
-| coordinate transform | [`crates/fullmag-plan/src/magnetization_textures_v2.rs`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-plan/src/magnetization_textures_v2.rs#L295) | [`prepare`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-plan/src/magnetization_textures_v2.rs#L295) | one-time validation plus shared forward/inverse texture transform | FDM/FEM planner |
-| region ownership and clipping | `crates/fullmag-plan/src/region_textures.rs` | `sample_region_initial_on_mask` | priority-resolved owner masks and strict clipping of regional textures | FDM/FEM planner |
-| plane coordinates | [`crates/fullmag-plan/src/magnetization_textures_v2.rs`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-plan/src/magnetization_textures_v2.rs#L376) | [`metric_point`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-plan/src/magnetization_textures_v2.rs#L376) | right-handed planar coordinate projection for metric presets | FDM/FEM planner |
-| plane-vector embedding | [`crates/fullmag-plan/src/magnetization_textures_v2.rs`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-plan/src/magnetization_textures_v2.rs#L380) | [`metric_vector`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-plan/src/magnetization_textures_v2.rs#L380) | embedding of local texture vectors into the world frame | FDM/FEM planner |
-| preset dispatch and uniform | [`crates/fullmag-plan/src/magnetization_textures_v2.rs`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-plan/src/magnetization_textures_v2.rs#L778) | [`local_evaluate`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-plan/src/magnetization_textures_v2.rs#L778) | canonical v2 preset-kind dispatch and uniform evaluation | FDM/FEM planner |
-| random texture | [`crates/fullmag-plan/src/magnetization_textures_v2.rs`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-plan/src/magnetization_textures_v2.rs#L363) | [`random_unit_vector`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-plan/src/magnetization_textures_v2.rs#L363) | SplitMix64 coordinate-hashed random unit-vector realization | FDM/FEM planner |
-| vortex and antivortex | [`crates/fullmag-plan/src/magnetization_textures_v2.rs`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-plan/src/magnetization_textures_v2.rs#L396) | [`vortex`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-plan/src/magnetization_textures_v2.rs#L396) | regularized vortex and antivortex profile | FDM/FEM planner |
-| Bloch and Neel skyrmions | [`crates/fullmag-plan/src/magnetization_textures_v2.rs`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-plan/src/magnetization_textures_v2.rs#L450) | [`skyrmion`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-plan/src/magnetization_textures_v2.rs#L450) | Bloch and Neel skyrmion vector profile | FDM/FEM planner |
-| stable skyrmion radial profile | [`crates/fullmag-plan/src/magnetization_textures_v2.rs`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-plan/src/magnetization_textures_v2.rs#L417) | [`skyrmion_theta`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-plan/src/magnetization_textures_v2.rs#L417) | overflow-resistant radial skyrmion profile | FDM/FEM planner |
-| bimeron profile and derived invariants | [`crates/fullmag-plan/src/magnetization_textures_v2.rs`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-plan/src/magnetization_textures_v2.rs#L761) | [`bimeron`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-plan/src/magnetization_textures_v2.rs#L761) | bimeron profile, winding, helicity, and background convention | FDM/FEM planner |
-| domain wall | [`crates/fullmag-plan/src/magnetization_textures_v2.rs`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-plan/src/magnetization_textures_v2.rs#L636) | [`domain_wall`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-plan/src/magnetization_textures_v2.rs#L636) | validated Bloch or Neel one-dimensional wall | FDM/FEM planner |
-| two-domain texture | [`crates/fullmag-plan/src/magnetization_textures_v2.rs`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-plan/src/magnetization_textures_v2.rs#L677) | [`two_domain`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-plan/src/magnetization_textures_v2.rs#L677) | sharp or smooth two-domain profile | FDM/FEM planner |
-| helical texture | [`crates/fullmag-plan/src/magnetization_textures_v2.rs`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-plan/src/magnetization_textures_v2.rs#L717) | [`helical`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-plan/src/magnetization_textures_v2.rs#L717) | physical-wavevector helical profile | FDM/FEM planner |
-| conical texture | [`crates/fullmag-plan/src/magnetization_textures_v2.rs`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-plan/src/magnetization_textures_v2.rs#L730) | [`conical`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-plan/src/magnetization_textures_v2.rs#L730) | physical-wavevector conical profile and deterministic transverse basis | FDM/FEM planner |
-| serialized compatibility default | [`crates/fullmag-ir/src/model.rs`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-ir/src/model.rs#L729) | [`default_preset_version`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-ir/src/model.rs#L729) | legacy-safe preset_version default for serialized ProblemIR | ProblemIR |
-| FDM point ordering | [`crates/fullmag-plan/src/fdm.rs`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-plan/src/fdm.rs#L394) | [`grid_sample_points`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-plan/src/fdm.rs#L394) | FDM cell-centre world/object coordinates and active mask | FDM CPU/GPU shared plan |
-| FDM materialization and overrides | [`crates/fullmag-plan/src/fdm.rs`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-plan/src/fdm.rs#L2385) | [`plan_fdm`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-plan/src/fdm.rs#L2385) | FDM initial-state materialization and region texture overrides | FDM CPU/GPU shared plan |
-| FEM materialization | [`crates/fullmag-plan/src/mesh.rs`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-plan/src/mesh.rs#L317) | [`initial_vectors_for_magnet`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-plan/src/mesh.rs#L317) | FEM magnetic-node initial-state materialization | FEM CPU/GPU shared plan |
-| Python reference evaluator | [`packages/fullmag-py/src/fullmag/init/preset_eval_v2.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/init/preset_eval_v2.py#L536) | [`evaluate_preset_texture_v2`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/init/preset_eval_v2.py#L536) | Python reference evaluator and optional native parity route | reference / fallback |
-| secondary Python pre-sampling | [`packages/fullmag-py/src/fullmag/runtime/initial_state.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/runtime/initial_state.py#L158) | [`prepare_initial_magnetization`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/runtime/initial_state.py#L158) | secondary Python runtime pre-sampling path and sampled-field normalization | secondary runtime helper |
-| native Python/Rust bridge | [`crates/fullmag-py-core/src/lib.rs`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-py-core/src/lib.rs#L307) | [`sample_preset_texture_v2_json`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-py-core/src/lib.rs#L307) | PyO3 bridge to the canonical Rust v2 evaluator | native reference bridge |
-| all-preset v2 parity | [`crates/fullmag-plan/tests/magnetization_textures_v2_parity.rs`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-plan/tests/magnetization_textures_v2_parity.rs#L314) | [`v2_matches_shared_python_parity_fixture_for_all_presets`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-plan/tests/magnetization_textures_v2_parity.rs#L314) | shared Rust/Python parity fixture for all v2 presets | automated test |
-| rotation contract | [`crates/fullmag-plan/tests/magnetization_textures_v2_contract.rs`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-plan/tests/magnetization_textures_v2_contract.rs#L78) | [`v2_texture_rotation_rotates_the_output_vector`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-plan/tests/magnetization_textures_v2_contract.rs#L78) | contract test for output-vector rotation | automated test |
-| bimeron regression evidence | [`packages/fullmag-py/tests/test_bimeron_textures.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/tests/test_bimeron_textures.py#L142) | [`test_bimeron_matches_shared_rust_python_parity_fixture`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/tests/test_bimeron_textures.py#L142) | Python bimeron serialization, validation, profile, and parity evidence | automated test |
-| exact bimeron meron-core geometry | [`crates/fullmag-plan/tests/magnetization_textures_v2_contract.rs`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-plan/tests/magnetization_textures_v2_contract.rs#L244) | [`v2_bimeron_uses_exact_meron_core_radius`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-plan/tests/magnetization_textures_v2_contract.rs#L244) | regression test for the analytic core-radius relation and opposite normal cores | automated test |
+| public factories and validation | [`packages/fullmag-py/src/fullmag/init/textures.py`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/init/textures.py#L338) | [`class texture`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/init/textures.py#L338) | public analytic preset factories and factory-level validation | Python authoring |
+| descriptor and ProblemIR lowering | [`packages/fullmag-py/src/fullmag/init/textures.py`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/init/textures.py#L230) | [`class PresetTexture`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/init/textures.py#L230) | versioned preset descriptor, immutable transform chaining, and ProblemIR serialization | Python authoring / IR |
+| mapping descriptor | [`packages/fullmag-py/src/fullmag/init/textures.py`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/init/textures.py#L182) | [`class TextureMapping`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/init/textures.py#L182) | public object/region/world, projection, clamp/tiling, and slab-thickness descriptor | Python authoring / IR |
+| transform authoring | [`packages/fullmag-py/src/fullmag/init/textures.py`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/init/textures.py#L126) | [`class TextureTransform3D`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/init/textures.py#L126) | public translation, quaternion rotation, component scale, pivot, and `rotate_vectors` descriptor | Python authoring / IR |
+| v1/v2 dispatch | [`crates/fullmag-plan/src/magnetization_textures_v2.rs`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-plan/src/magnetization_textures_v2.rs#L1485) | [`sample_preset_texture_versioned`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-plan/src/magnetization_textures_v2.rs#L1485) | canonical v1/v2 dispatch used by planners | FDM/FEM planner |
+| Mumax3 vortex wall factory | [`packages/fullmag-py/src/fullmag/init/textures.py`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/init/textures.py#L657) | [`vortex_wall`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/init/textures.py#L657) | Mumax3-compatible asymmetric vortex wall factory | Python authoring |
+| Mumax3 compact hopfion factory | [`packages/fullmag-py/src/fullmag/init/textures.py`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/init/textures.py#L701) | [`hopfion_compact_support`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/init/textures.py#L701) | Mumax3-compatible compact-support hopfion factory | Python authoring |
+| skyrmion lattice factory | [`packages/fullmag-py/src/fullmag/init/textures.py`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/init/textures.py#L979) | [`skyrmion_lattice`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/init/textures.py#L979) | public hexagonal/square skyrmion-lattice factory | Python authoring |
+| spiral factory | [`packages/fullmag-py/src/fullmag/init/textures.py`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/init/textures.py#L1021) | [`spiral`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/init/textures.py#L1021) | public cycloidal/proper-screw/custom-plane spiral factory | Python authoring |
+| Bloch point factory | [`packages/fullmag-py/src/fullmag/init/textures.py`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/init/textures.py#L1067) | [`bloch_point`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/init/textures.py#L1067) | public 3D Bloch-point hedgehog factory | Python authoring |
+| artificial spin-ice factory | [`packages/fullmag-py/src/fullmag/init/textures.py`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/init/textures.py#L1106) | [`artificial_spin_ice`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/init/textures.py#L1106) | public square/kagome artificial spin-ice factory | Python authoring |
+| skyrmionium profile | [`crates/fullmag-plan/src/magnetization_textures_v2.rs`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-plan/src/magnetization_textures_v2.rs#L479) | [`skyrmionium`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-plan/src/magnetization_textures_v2.rs#L479) | axisymmetric $2\pi$ skyrmionium radial evaluation | FDM/FEM planner |
+| hopfion profile | [`crates/fullmag-plan/src/magnetization_textures_v2.rs`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-plan/src/magnetization_textures_v2.rs#L510) | [`hopfion`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-plan/src/magnetization_textures_v2.rs#L510) | 3D hopfion vector field evaluation | FDM/FEM planner |
+| skyrmion lattice profile | [`crates/fullmag-plan/src/magnetization_textures_v2.rs`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-plan/src/magnetization_textures_v2.rs#L949) | [`skyrmion_lattice`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-plan/src/magnetization_textures_v2.rs#L949) | Wigner-Seitz skyrmion-lattice evaluation | FDM/FEM planner |
+| spiral profile | [`crates/fullmag-plan/src/magnetization_textures_v2.rs`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-plan/src/magnetization_textures_v2.rs#L1012) | [`spiral`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-plan/src/magnetization_textures_v2.rs#L1012) | cycloidal, proper-screw, and custom-plane spiral evaluation | FDM/FEM planner |
+| Bloch point profile | [`crates/fullmag-plan/src/magnetization_textures_v2.rs`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-plan/src/magnetization_textures_v2.rs#L1070) | [`bloch_point`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-plan/src/magnetization_textures_v2.rs#L1070) | 3D Bloch-point hedgehog evaluation | FDM/FEM planner |
+| artificial spin-ice profile | [`crates/fullmag-plan/src/magnetization_textures_v2.rs`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-plan/src/magnetization_textures_v2.rs#L1108) | [`artificial_spin_ice`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-plan/src/magnetization_textures_v2.rs#L1108) | square and kagome artificial spin-ice bond evaluation | FDM/FEM planner |
+| v2 clamp/tiling mode | [`crates/fullmag-plan/src/magnetization_textures_v2.rs`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-plan/src/magnetization_textures_v2.rs#L869) | [`apply_clamp_mode_v2`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-plan/src/magnetization_textures_v2.rs#L869) | `none`, `clamp`, `repeat`, `mirror`, and `background` coordinate handling | FDM/FEM planner |
+| v2 slab axis thickness | [`crates/fullmag-plan/src/magnetization_textures_v2.rs`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-plan/src/magnetization_textures_v2.rs#L811) | [`validate_axis_extent_v2`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-plan/src/magnetization_textures_v2.rs#L811) | slab-thickness mode validation and clipping | FDM/FEM planner |
+| default tile period resolution | [`crates/fullmag-plan/src/magnetization_textures_v2.rs`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-plan/src/magnetization_textures_v2.rs#L1301) | [`resolve_default_tile_period`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-plan/src/magnetization_textures_v2.rs#L1301) | explicit, bounds-extent, and active-sample AABB period resolution | FDM/FEM planner |
+| object-space sample points | [`crates/fullmag-plan/src/mesh.rs`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-plan/src/mesh.rs#L360) | [`object_space_sample_points`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-plan/src/mesh.rs#L360) | FEM object-space coordinate transforms for sampling | FEM planner |
+| canonical v2 sampling pipeline | [`crates/fullmag-plan/src/magnetization_textures_v2.rs`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-plan/src/magnetization_textures_v2.rs#L1349) | [`sample_v2`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-plan/src/magnetization_textures_v2.rs#L1349) | v2 mapping, active-point handling, clamp/slab clipping, local evaluation, frame embedding, and output-vector rotation | FDM/FEM planner |
+| coordinate transform | [`crates/fullmag-plan/src/magnetization_textures_v2.rs`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-plan/src/magnetization_textures_v2.rs#L296) | [`prepare`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-plan/src/magnetization_textures_v2.rs#L296) | one-time validation plus shared forward/inverse texture transform | FDM/FEM planner |
+| region ownership and clipping | [`crates/fullmag-plan/src/region_textures.rs`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-plan/src/region_textures.rs#L225) | [`sample_region_initial_on_mask`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-plan/src/region_textures.rs#L225) | priority-resolved owner masks and strict clipping of regional textures | FDM/FEM planner |
+| plane coordinates | [`crates/fullmag-plan/src/magnetization_textures_v2.rs`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-plan/src/magnetization_textures_v2.rs#L383) | [`metric_point`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-plan/src/magnetization_textures_v2.rs#L383) | right-handed planar coordinate projection for metric presets | FDM/FEM planner |
+| plane-vector embedding | [`crates/fullmag-plan/src/magnetization_textures_v2.rs`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-plan/src/magnetization_textures_v2.rs#L387) | [`metric_vector`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-plan/src/magnetization_textures_v2.rs#L387) | embedding of local texture vectors into the world frame | FDM/FEM planner |
+| preset dispatch and uniform | [`crates/fullmag-plan/src/magnetization_textures_v2.rs`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-plan/src/magnetization_textures_v2.rs#L1222) | [`local_evaluate`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-plan/src/magnetization_textures_v2.rs#L1222) | canonical v2 preset-kind dispatch and uniform evaluation | FDM/FEM planner |
+| random texture | [`crates/fullmag-plan/src/magnetization_textures_v2.rs`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-plan/src/magnetization_textures_v2.rs#L370) | [`random_unit_vector`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-plan/src/magnetization_textures_v2.rs#L370) | SplitMix64 coordinate-hashed random unit-vector realization | FDM/FEM planner |
+| vortex and antivortex | [`crates/fullmag-plan/src/magnetization_textures_v2.rs`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-plan/src/magnetization_textures_v2.rs#L403) | [`vortex`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-plan/src/magnetization_textures_v2.rs#L403) | regularized vortex and antivortex profile | FDM/FEM planner |
+| Bloch and Neel skyrmions | [`crates/fullmag-plan/src/magnetization_textures_v2.rs`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-plan/src/magnetization_textures_v2.rs#L457) | [`skyrmion`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-plan/src/magnetization_textures_v2.rs#L457) | Bloch and Neel skyrmion vector profile | FDM/FEM planner |
+| stable skyrmion radial profile | [`crates/fullmag-plan/src/magnetization_textures_v2.rs`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-plan/src/magnetization_textures_v2.rs#L424) | [`skyrmion_theta`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-plan/src/magnetization_textures_v2.rs#L424) | overflow-resistant radial skyrmion profile | FDM/FEM planner |
+| bimeron profile and derived invariants | [`crates/fullmag-plan/src/magnetization_textures_v2.rs`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-plan/src/magnetization_textures_v2.rs#L774) | [`bimeron`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-plan/src/magnetization_textures_v2.rs#L774) | bimeron profile, winding, helicity, and background convention | FDM/FEM planner |
+| domain wall | [`crates/fullmag-plan/src/magnetization_textures_v2.rs`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-plan/src/magnetization_textures_v2.rs#L649) | [`domain_wall`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-plan/src/magnetization_textures_v2.rs#L649) | validated Bloch or Neel one-dimensional wall | FDM/FEM planner |
+| two-domain texture | [`crates/fullmag-plan/src/magnetization_textures_v2.rs`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-plan/src/magnetization_textures_v2.rs#L690) | [`two_domain`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-plan/src/magnetization_textures_v2.rs#L690) | sharp or smooth two-domain profile | FDM/FEM planner |
+| helical texture | [`crates/fullmag-plan/src/magnetization_textures_v2.rs`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-plan/src/magnetization_textures_v2.rs#L730) | [`helical`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-plan/src/magnetization_textures_v2.rs#L730) | physical-wavevector helical profile | FDM/FEM planner |
+| conical texture | [`crates/fullmag-plan/src/magnetization_textures_v2.rs`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-plan/src/magnetization_textures_v2.rs#L743) | [`conical`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-plan/src/magnetization_textures_v2.rs#L743) | physical-wavevector conical profile and deterministic transverse basis | FDM/FEM planner |
+| serialized compatibility default | [`crates/fullmag-ir/src/model.rs`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-ir/src/model.rs#L1079) | [`default_preset_version`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-ir/src/model.rs#L1079) | legacy-safe preset_version default for serialized ProblemIR | ProblemIR |
+| FDM point ordering | [`crates/fullmag-plan/src/fdm.rs`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-plan/src/fdm.rs#L401) | [`grid_sample_points`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-plan/src/fdm.rs#L401) | FDM cell-centre world/object coordinates and active mask | FDM CPU/GPU shared plan |
+| FDM materialization and overrides | [`crates/fullmag-plan/src/fdm.rs`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-plan/src/fdm.rs#L2513) | [`plan_fdm`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-plan/src/fdm.rs#L2513) | FDM initial-state materialization and region texture overrides | FDM CPU/GPU shared plan |
+| FEM materialization | [`crates/fullmag-plan/src/mesh.rs`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-plan/src/mesh.rs#L388) | [`initial_vectors_for_magnet`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-plan/src/mesh.rs#L388) | FEM magnetic-node initial-state materialization | FEM CPU/GPU shared plan |
+| Python reference evaluator | [`packages/fullmag-py/src/fullmag/init/preset_eval_v2.py`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/init/preset_eval_v2.py#L967) | [`evaluate_preset_texture_v2`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/init/preset_eval_v2.py#L967) | Python reference evaluator and optional native parity route | reference / fallback |
+| secondary Python pre-sampling | [`packages/fullmag-py/src/fullmag/runtime/initial_state.py`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/runtime/initial_state.py#L180) | [`prepare_initial_magnetization`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/runtime/initial_state.py#L180) | secondary Python runtime pre-sampling path and sampled-field normalization | secondary runtime helper |
+| native Python/Rust bridge | [`crates/fullmag-py-core/src/lib.rs`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-py-core/src/lib.rs#L307) | [`sample_preset_texture_v2_json`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-py-core/src/lib.rs#L307) | PyO3 bridge to the canonical Rust v2 evaluator | native reference bridge |
+| all-preset v2 parity | [`crates/fullmag-plan/tests/magnetization_textures_v2_parity.rs`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-plan/tests/magnetization_textures_v2_parity.rs#L409) | [`v2_matches_shared_python_parity_fixture_for_all_presets`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-plan/tests/magnetization_textures_v2_parity.rs#L409) | shared Rust/Python parity fixture for all v2 presets | automated test |
+| rotation contract | [`crates/fullmag-plan/tests/magnetization_textures_v2_contract.rs`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-plan/tests/magnetization_textures_v2_contract.rs#L84) | [`v2_texture_rotation_rotates_the_output_vector`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-plan/tests/magnetization_textures_v2_contract.rs#L84) | contract test for output-vector rotation | automated test |
+| bimeron regression evidence | [`packages/fullmag-py/tests/test_bimeron_textures.py`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/tests/test_bimeron_textures.py#L144) | [`test_bimeron_matches_shared_rust_python_parity_fixture`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/tests/test_bimeron_textures.py#L144) | Python bimeron serialization, validation, profile, and parity evidence | automated test |
+| exact bimeron meron-core geometry | [`crates/fullmag-plan/tests/magnetization_textures_v2_contract.rs`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-plan/tests/magnetization_textures_v2_contract.rs#L251) | [`v2_bimeron_uses_exact_meron_core_radius`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-plan/tests/magnetization_textures_v2_contract.rs#L251) | regression test for the analytic core-radius relation and opposite normal cores | automated test |

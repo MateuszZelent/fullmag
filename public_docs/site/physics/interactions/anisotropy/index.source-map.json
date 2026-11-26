@@ -1,6 +1,7 @@
 {
   "document": {
-    "reviewed_revision": "ab3c8802a691a535063102c12f9a79bb0043b367",
+    "reviewed_revision": "752450f8d259ab97c76c36fe666d5474b02abe9a",
+    "reviewed_at": "2026-11-26",
     "path": "public_docs/site/physics/interactions/anisotropy/index.md",
     "title": "Anisotropy",
     "interaction": "anisotropy"
@@ -9,39 +10,80 @@
     {
       "solver": "FDM",
       "device": "CPU",
-      "status": "partial",
-      "reason": "Authoring, planning, runtime, and scientific qualification are reported separately on the page."
+      "status": "reference",
+      "reason": "Double-precision cell-local uniaxial and cubic field and energy reference in crates/fullmag-engine/src/fdm/cpu/fields/anisotropy.rs."
     },
     {
       "solver": "FDM",
       "device": "GPU",
-      "status": "partial",
-      "reason": "Device source presence does not replace executed-device evidence and precision-specific qualification."
+      "status": "implemented",
+      "reason": "FP64 and FP32 local and multilayer CUDA kernels are implemented; executed-device parity is precision-specific."
     },
     {
       "solver": "FEM",
       "device": "CPU",
-      "status": "partial",
-      "reason": "The exact weak/discrete realization and bounded capability envelope remain lane-specific."
+      "status": "implemented",
+      "reason": "MFEM nodal/lumped and element-quadrature realizations with strict orthonormal cubic-axis validation."
     },
     {
       "solver": "FEM",
       "device": "GPU",
-      "status": "partial",
-      "reason": "Strict device residency and executed-device qualification remain separate evidence gates."
+      "status": "implemented",
+      "reason": "Template-gated ComputeEnergy CUDA block kernels with non-contracted cubic FP64 parity and fused H_eff accumulation qualified on RTX 4080 SUPER."
     }
   ],
   "sources": [
-    {
-      "id": "python-owner",
-      "path": "packages/fullmag-py/src/fullmag/model/energy.py",
-      "symbol": "class UniaxialAnisotropy",
-      "responsibility": "Own the public interaction constructor, validation, or canonical IR lowering boundary."
-    }
+    {"id": "python-uniaxial", "path": "packages/fullmag-py/src/fullmag/model/energy.py", "symbol": "class UniaxialAnisotropy", "responsibility": "Compatibility uniaxial anisotropy constructor and IR lowering."},
+    {"id": "python-cubic", "path": "packages/fullmag-py/src/fullmag/model/energy.py", "symbol": "class CubicAnisotropy", "responsibility": "Compatibility cubic anisotropy constructor and IR lowering."},
+    {"id": "python-material", "path": "packages/fullmag-py/src/fullmag/model/structure.py", "symbol": "class Material", "responsibility": "Canonical material-owned uniaxial and cubic constants, axes, and spatial fields."},
+    {"id": "python-handle", "path": "packages/fullmag-py/src/fullmag/world.py", "symbol": "class MagnetHandle", "responsibility": "Stage-first direct authoring for Ku1, Ku2, anisU, Kc1, Kc2, Kc3, anisC1, and anisC2."},
+    {"id": "planner-fdm", "path": "crates/fullmag-plan/src/fdm.rs", "symbol": "plan_fdm", "responsibility": "FDM anisotropy coefficient and mask resolution."},
+    {"id": "planner-fem-cubic", "path": "crates/fullmag-plan/src/fem.rs", "symbol": "validate_cubic_anisotropy_axes", "responsibility": "FEM crystal-frame orthogonality validation."},
+    {"id": "fdm-cpu-field", "path": "crates/fullmag-engine/src/fdm/cpu/fields/anisotropy.rs", "symbol": "anisotropy_field", "responsibility": "FDM CPU uniaxial and cubic field evaluation."},
+    {"id": "fdm-cpu-energy", "path": "crates/fullmag-engine/src/fdm/cpu/fields/energy.rs", "symbol": "anisotropy_energy_density_from_vectors", "responsibility": "FDM CPU uniaxial and cubic energy density."},
+    {"id": "fdm-gpu-field", "path": "backends/fdm/gpu/cuda/interactions/demag_fp64.cu", "symbol": "anisotropy_field_fp64_kernel", "responsibility": "FDM GPU FP64 local anisotropy field kernel."},
+    {"id": "fem-cpu-uniaxial", "path": "backends/fem/cpu/mfem/interactions/anisotropy_uniaxial.cpp", "symbol": "compute_uniaxial_anisotropy_field", "responsibility": "FEM CPU uniaxial field and energy."},
+    {"id": "fem-cpu-cubic", "path": "backends/fem/cpu/mfem/interactions/anisotropy_cubic.cpp", "symbol": "compute_cubic_anisotropy_field", "responsibility": "FEM CPU cubic field and energy."},
+    {"id": "fem-gpu-uniaxial", "path": "backends/fem/gpu/cuda/interactions/anisotropy/anisotropy_kernels.cu", "symbol": "uniaxial_anisotropy_field_energy_blocks_kernel", "responsibility": "FEM GPU template-gated uniaxial field/energy block kernel."},
+    {"id": "fem-gpu-cubic", "path": "backends/fem/gpu/cuda/interactions/anisotropy/anisotropy_kernels.cu", "symbol": "cubic_anisotropy_field_energy_blocks_kernel", "responsibility": "FEM GPU template-gated cubic field/energy block kernel with non-contracted FP64 parity."},
+    {"id": "fem-gpu-fused-heff", "path": "backends/fem/gpu/cuda/fields/vector_field_kernels.hpp", "symbol": "fullmag_cuda_accumulate_heff_fused_xyz", "responsibility": "Single-launch fused H_eff accumulation on FEM GPU."}
   ],
-  "symbols": [],
-  "equations": [],
+  "symbols": [
+    {"id": "Ku1", "latex": "$K_{u1}$", "meaning": "first-order uniaxial anisotropy constant", "si_unit": "$\\mathrm{J\\,m^{-3}}$"},
+    {"id": "Ku2", "latex": "$K_{u2}$", "meaning": "second-order uniaxial anisotropy constant", "si_unit": "$\\mathrm{J\\,m^{-3}}$"},
+    {"id": "Kc1", "latex": "$K_{c1}$", "meaning": "first-order cubic anisotropy constant", "si_unit": "$\\mathrm{J\\,m^{-3}}$"},
+    {"id": "Kc2", "latex": "$K_{c2}$", "meaning": "second-order cubic anisotropy constant", "si_unit": "$\\mathrm{J\\,m^{-3}}$"},
+    {"id": "Kc3", "latex": "$K_{c3}$", "meaning": "third-order cubic anisotropy constant", "si_unit": "$\\mathrm{J\\,m^{-3}}$"},
+    {"id": "u", "latex": "$\\hat{\\mathbf u}$", "meaning": "normalized uniaxial easy axis", "si_unit": "$1$"},
+    {"id": "ci", "latex": "$\\hat{\\mathbf c}_i$", "meaning": "orthonormal crystal axes", "si_unit": "$1$"},
+    {"id": "m", "latex": "$\\mathbf m$", "meaning": "reduced magnetization", "si_unit": "$1$"},
+    {"id": "q", "latex": "$q$", "meaning": "uniaxial direction cosine $\\mathbf m\\cdot\\hat{\\mathbf u}$", "si_unit": "$1$"},
+    {"id": "alpha", "latex": "$\\alpha_i$", "meaning": "cubic direction cosine $\\mathbf m\\cdot\\hat{\\mathbf c}_i$", "si_unit": "$1$"},
+    {"id": "P", "latex": "$P$", "meaning": "fourth-order cubic invariant", "si_unit": "$1$"},
+    {"id": "Ms", "latex": "$M_s$", "meaning": "saturation magnetization", "si_unit": "$\\mathrm{A\\,m^{-1}}$"},
+    {"id": "mu0", "latex": "$\\mu_0$", "meaning": "vacuum permeability", "si_unit": "$\\mathrm{N\\,A^{-2}}$"},
+    {"id": "wu", "latex": "$w_{\\mathrm u}$", "meaning": "uniaxial anisotropy energy density", "si_unit": "$\\mathrm{J\\,m^{-3}}$"},
+    {"id": "wc", "latex": "$w_{\\mathrm c}$", "meaning": "cubic anisotropy energy density", "si_unit": "$\\mathrm{J\\,m^{-3}}$"},
+    {"id": "Hu", "latex": "$\\mathbf H_{\\mathrm u}$", "meaning": "uniaxial anisotropy effective field", "si_unit": "$\\mathrm{A\\,m^{-1}}$"},
+    {"id": "Hc", "latex": "$\\mathbf H_{\\mathrm c}$", "meaning": "cubic anisotropy effective field", "si_unit": "$\\mathrm{A\\,m^{-1}}$"}
+  ],
+  "equations": [
+    {"id": "eq-public-anisotropy-anisotropy-uniaxial-energy", "symbols": ["wu", "Ku1", "Ku2", "q"], "sources": ["fdm-cpu-energy", "fem-cpu-uniaxial", "fem-gpu-uniaxial"]},
+    {"id": "eq-public-anisotropy-anisotropy-uniaxial-field", "symbols": ["Hu", "Ku1", "Ku2", "q", "mu0", "Ms", "u"], "sources": ["fdm-cpu-field", "fdm-gpu-field", "fem-cpu-uniaxial", "fem-gpu-uniaxial"]},
+    {"id": "eq-public-anisotropy-anisotropy-cubic-invariant", "symbols": ["P", "alpha"], "sources": ["fdm-cpu-field", "fem-cpu-cubic", "fem-gpu-cubic"]},
+    {"id": "eq-public-anisotropy-anisotropy-cubic-energy", "symbols": ["wc", "Kc1", "Kc2", "Kc3", "P", "alpha"], "sources": ["fdm-cpu-energy", "fem-cpu-cubic", "fem-gpu-cubic"]}
+  ],
   "public_api": {
-    "parameters": []
+    "constructors": ["fullmag.Material", "fullmag.UniaxialAnisotropy", "fullmag.CubicAnisotropy"],
+    "parameters": [
+      {"python": "Material.Ku1", "type": "float | None", "default": "None", "si_unit": "$\\mathrm{J\\,m^{-3}}$", "validation": "finite when supplied", "meaning": "first-order uniaxial constant", "backend_support": "FDM/FEM CPU/GPU", "problem_ir": "materials[].uniaxial_anisotropy"},
+      {"python": "Material.Ku2", "type": "float | None", "default": "None", "si_unit": "$\\mathrm{J\\,m^{-3}}$", "validation": "finite when supplied", "meaning": "second-order uniaxial constant", "backend_support": "FDM/FEM CPU/GPU", "problem_ir": "materials[].uniaxial_anisotropy_k2"},
+      {"python": "Material.anisU", "type": "tuple[float,float,float] | None", "default": "None", "si_unit": "$1$", "validation": "length 3; finite; non-zero when active", "meaning": "uniaxial easy axis", "backend_support": "FDM/FEM CPU/GPU", "problem_ir": "materials[].anisotropy_axis"},
+      {"python": "Material.Kc1", "type": "float | None", "default": "None", "si_unit": "$\\mathrm{J\\,m^{-3}}$", "validation": "finite when supplied", "meaning": "first cubic constant", "backend_support": "FDM/FEM CPU/GPU", "problem_ir": "materials[].cubic_anisotropy_kc1"},
+      {"python": "Material.Kc2", "type": "float | None", "default": "None", "si_unit": "$\\mathrm{J\\,m^{-3}}$", "validation": "finite when supplied", "meaning": "second cubic constant", "backend_support": "FDM/FEM CPU/GPU", "problem_ir": "materials[].cubic_anisotropy_kc2"},
+      {"python": "Material.Kc3", "type": "float | None", "default": "None", "si_unit": "$\\mathrm{J\\,m^{-3}}$", "validation": "finite when supplied", "meaning": "third cubic constant", "backend_support": "FDM/FEM CPU/GPU", "problem_ir": "materials[].cubic_anisotropy_kc3"},
+      {"python": "Material.anisC1", "type": "tuple[float,float,float] | None", "default": "None", "si_unit": "$1$", "validation": "length 3; finite; orthonormal with `anisC2`", "meaning": "first cubic crystal axis", "backend_support": "FDM/FEM CPU/GPU", "problem_ir": "materials[].cubic_anisotropy_axis1"},
+      {"python": "Material.anisC2", "type": "tuple[float,float,float] | None", "default": "None", "si_unit": "$1$", "validation": "length 3; finite; orthonormal with `anisC1`", "meaning": "second cubic crystal axis", "backend_support": "FDM/FEM CPU/GPU", "problem_ir": "materials[].cubic_anisotropy_axis2"}
+    ]
   }
 }

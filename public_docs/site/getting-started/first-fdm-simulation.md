@@ -135,8 +135,13 @@ Inspecting relaxed 3D magnetization glyphs ($\mathbf{m}$ colored by $m_z$ / comp
 This is an onboarding run, not a scientific qualification benchmark. It uses a small cell grid so it is
 practical to run; exchange and demagnetization validation regimes are documented on the canonical
 {ref}`interaction pages <public-docs-physics-interactions-root>`. The FDM CPU lane shown here has
-scoped published evidence; do not infer executed CUDA parity from this snippet. Authoring and
-`ProblemIR` validation alone do not establish mesh convergence, solver execution, or GPU parity.
+scoped published evidence; to request CUDA acceleration (batched `D2Z`/`Z2D` or `R2C`/`C2R` cuFFT
+demagnetization with exact workspace preflight and device-resident single-layer PG-BB
+`native_cuda_pgbb`), switch to `study.device("gpu", precision="double")` inside a GPU-enabled
+Docker DEV group and inspect the recorded device identity and realization provenance. See
+{ref}`numerical-methods-performance-fdm-core` and {ref}`numerical-methods-performance` for verified
+speedup regimes, VRAM budgets, and parity bounds. Authoring and `ProblemIR` validation alone do not
+establish mesh convergence, solver execution, or GPU parity.
 
 ## Source-code index
 

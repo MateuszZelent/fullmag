@@ -7,12 +7,12 @@ owner: fullmag-public-docs
 ---
 
 (public-docs-python-api-studies-time-evolution)=
-# `TimeEvolution` Study and `add_time` Stage Contract
+# `TimeEvolution` Study and `add_run` Stage Contract
 
 (python-api-studies-time-evolution-problem-statement)=
 ## 1. Physical problem and overview
 
-`fm.TimeEvolution` (and the stage-workflow builder `study.stages.add_time(...)` / `world.time_stage(...)`) defines a physical time-domain integration study or stage that evolves the magnetization field $\mathbf{m}(\mathbf{x}, t)$ over a finite time interval $[t_0, t_0 + T]$ under the Landau–Lifshitz–Gilbert (LLG) equation with precession enabled ($s_{\mathrm{prec}} = 1$). It owns the `LLG` dynamics policy, field/scalar output schedules (`outputs`), optional tabular autosave (`table_autosave`), and stage-applicable `FrozenSpins` constraints.
+`fm.TimeEvolution` (and the stage-workflow builder `study.stages.add_run(until=..., stage_id=...)`, plus live helpers `fm.run(...)` and `fm.run_while(...)` / `fm.RunWhile`) defines a physical time-domain integration study or stage that evolves the magnetization field $\mathbf{m}(\mathbf{x}, t)$ over a finite time interval $[t_0, t_0 + T]$ under the Landau–Lifshitz–Gilbert (LLG) equation with precession enabled ($s_{\mathrm{prec}} = 1$). It owns the `LLG` dynamics policy, field/scalar output schedules (`outputs`), optional tabular autosave (`table_autosave`), and stage-applicable `FrozenSpins` constraints.
 
 (python-api-studies-time-evolution-governing-equations)=
 ## 2. Governing equations
@@ -48,14 +48,14 @@ subject to $\|\mathbf{m}_i(t)\|_2 = 1$ and $\dot{\mathbf{m}}_j(t) = \mathbf{0}$ 
 | $\alpha_i$ | Dimensionless Gilbert damping parameter | $1$ |
 | $\boldsymbol{\tau}_{\mathrm{direct},i}$ | Direct current-induced spin-torque rate | $\mathrm{s^{-1}}$ |
 | $t_0$ | Stage initial physical time | $\mathrm{s}$ |
-| $T$ | Stage physical duration (`duration`) | $\mathrm{s}$ |
+| $T$ | Stage physical duration (`until`) | $\mathrm{s}$ |
 | $t$ | Physical simulation time | $\mathrm{s}$ |
 
 (python-api-studies-time-evolution-assumptions-and-validity)=
 ## 4. Assumptions and limits of validity
 
 - **Full precessional dynamics**: Unlike `Relaxation(algorithm="llg_overdamped")`, `TimeEvolution` always retains the conservative precessional torque $-\gamma_0(1+\alpha^2)^{-1}\mathbf{m}\times\mathbf{H}_{\mathrm{eff}}$.
-- **Output horizon requirement**: Standalone `TimeEvolution` studies require either a non-empty `outputs` sequence with positive time horizon or a valid `table_autosave` schedule so that the integration interval is well-defined; in stage workflows (`study.stages.add_time(duration=...)`), the explicit `duration` parameter sets $T > 0$.
+- **Output horizon requirement**: Standalone `TimeEvolution` studies accept explicit field/scalar/snapshot `outputs` and optional `table_autosave`; in stage workflows (`study.stages.add_run(until=...)`), the explicit `until` horizon sets $T > 0$ and `.autosave(fm.StageAutosave(...))` configures stage-scoped table and field persistence.
 
 (python-api-studies-time-evolution-python-api)=
 ## 5. Python API and parameter contract
@@ -64,25 +64,17 @@ subject to $\|\mathbf{m}_i(t)\|_2 = 1$ and $\dot{\mathbf{m}}_j(t) = \mathbf{0}$ 
 
 ```text
 fm.TimeEvolution(
-    *,
     dynamics: LLG,
     outputs: Sequence[TimeOutputSpec],
     constraints: Sequence[FrozenSpins] = (),
     table_autosave: TableAutosave | None = None,
 )
 
-study.stages.add_time(
+study.stages.add_run(
+    until: float | None = None,
     *,
-    name: str | None = None,
-    duration: float,
-    Bx: float | None = None,
-    By: float | None = None,
-    Bz: float | None = None,
-    save_m_every: float | None = None,
-    save_table_every: float | None = None,
-    outputs: Sequence[TimeOutputSpec] = (),
-    constraints: Sequence[FrozenSpins] = (),
-)
+    stage_id: str | None = None,
+) -> RunStageBuilder  # chain .autosave(StageAutosave(...))
 ```
 
 ### Parameter reference
@@ -97,27 +89,26 @@ study.stages.add_time(
 ### Executable Python example
 
 ```python
-# %%
+# %% Stage-first time evolution with adaptive RK45 and autosave
 import fullmag as fm
 
-world = fm.World(
-    dx=5e-9,
-    dy=5e-9,
-    dz=5e-9,
-    nx=20,
-    ny=5,
-    nz=1,
-    boundaries=fm.BoundaryConfig.open(method="fft"),
-)
-world.add_box(
-    "strip",
-    size=(100e-9, 25e-9, 5e-9),
-    material=fm.Material.permalloy(Ms=8.0e5, Aex=1.3e-11, alpha=0.02),
-    m_init=fm.VectorFieldSpec.uniform((1.0, 0.05, 0.0)),
-    demag=True,
-)
+nm = 1.0e-9
 
-study = fm.study(world, target="fdm", device="cpu", precision="fp64")
+study = fm.study("time_evolution_api_example")
+study.engine("fdm")
+study.device("cpu", precision="double")
+study.mode("strict")
+study.objects.mesh.defaults(cell_size=(5 * nm, 5 * nm, 5 * nm))
+
+strip = study.geometry(fm.Box(size=(100 * nm, 25 * nm, 5 * nm)), name="strip")
+strip.Ms = 800.0e3
+strip.Aex = 13.0e-12
+strip.alpha = 0.02
+strip.m = fm.texture.uniform(1.0, 0.05, 0.0)
+
+study.exchange()
+study.demag()
+study.b_ext(20.0e-3, 3.0e-3, 0.0)
 study.solver(
     integrator="rk45",
     gamma=2.211e5,
@@ -129,20 +120,25 @@ study.solver(
         dt_max=2e-12,
     ),
 )
-study.stages.add_time(
-    name="rf_pulse",
-    duration=0.5e-9,
-    Bx=20e-3,
-    By=3e-3,
-    Bz=0.0,
-    save_m_every=50e-12,
-    save_table_every=10e-12,
+study.stages.add_run(until=0.5e-9, stage_id="rf_pulse").autosave(
+    fm.StageAutosave(
+        table=fm.TableAutosave(t_sampl=10.0e-12),
+        fields=[fm.FieldAutosave("m", every=50.0e-12)],
+    )
 )
 
-ir = study.to_problem_ir()
-assert ir["study"]["kind"] == "stage_workflow"
-assert ir["study"]["stages"][0]["kind"] == "time"
-assert ir["study"]["stages"][0]["duration"] == 0.5e-9
+te = fm.TimeEvolution(
+    dynamics=fm.LLG(
+        gamma=2.211e5,
+        integrator="rk45",
+        adaptive_timestep=fm.AdaptiveTimestep(atol=1e-6, rtol=1e-4, dt_initial=1e-13, dt_min=1e-15, dt_max=2e-12),
+    ),
+    outputs=[fm.SaveField("m", every=50.0e-12)],
+    table_autosave=fm.TableAutosave(t_sampl=10.0e-12),
+)
+ir = te.to_ir()
+assert ir["kind"] == "time_evolution"
+assert ir["dynamics"]["integrator"] == "rk45"
 ```
 
 (python-api-studies-time-evolution-problem-ir)=
@@ -150,34 +146,37 @@ assert ir["study"]["stages"][0]["duration"] == 0.5e-9
 
 ```json
 {
-  "study": {
-    "kind": "stage_workflow",
-    "dynamics": {
-      "equation": "llg",
-      "gyromagnetic_ratio": 221100.0,
-      "integrator": "rk45",
-      "fixed_timestep": null,
-      "adaptive_timestep": {
-        "atol": 1e-06,
-        "rtol": 0.0001,
-        "dt_initial": 1e-13,
-        "dt_min": 1e-15,
-        "dt_max": 2e-12,
-        "safety": 0.9,
-        "growth_limit": 2.0,
-        "shrink_limit": 0.2,
-        "max_spin_rotation": null,
-        "norm_tolerance": null
-      },
-      "field_refresh": null
-    },
-    "stages": [
+  "kind": "time_evolution",
+  "dynamics": {
+    "kind": "llg",
+    "gyromagnetic_ratio": 221100.0,
+    "integrator": "rk45",
+    "fixed_timestep": null,
+    "adaptive_timestep": {
+      "tolerance_mode": "advanced",
+      "atol": 1e-06,
+      "rtol": 0.0001,
+      "dt_initial": 1e-13,
+      "dt_min": 1e-15,
+      "safety": 0.9,
+      "growth_limit": 2.0,
+      "shrink_limit": 0.2,
+      "dt_max": 2e-12
+    }
+  },
+  "sampling": {
+    "outputs": [
       {
-        "kind": "time",
-        "name": "rf_pulse",
-        "duration": 5e-10
+        "kind": "field",
+        "name": "m",
+        "every_seconds": 5e-11
       }
-    ]
+    ],
+    "table_autosave": {
+      "sample_period_s": 1e-11,
+      "quantities": ["step", "t", "mx", "my", "mz", "e_total", "max_torque"],
+      "table_id": "default"
+    }
   }
 }
 ```
@@ -185,15 +184,15 @@ assert ir["study"]["stages"][0]["duration"] == 0.5e-9
 (python-api-studies-time-evolution-round-trip-and-failure-semantics)=
 ## 7. Round-trip, provenance, and failure semantics
 
-- **Requested intent vs. resolved execution**: `TimeEvolution` and `add_time` stages preserve the user's `dynamics`, `outputs`, `constraints`, and `table_autosave` in `ProblemIR` (`requested intent`) while recording resolved stepper decisions and sample counts in the execution receipt (`resolved execution`).
-- **Validation errors**: Non-`LLG` dynamics, invalid `TimeOutputSpec` or `FrozenSpins` items, or non-positive stage `duration` raise immediate `TypeError` / `ValueError` validation errors in Python.
+- **Requested intent vs. resolved execution**: `TimeEvolution` and `add_run` stages preserve the user's `dynamics`, `outputs`, `constraints`, and `table_autosave` in `ProblemIR` (`requested intent`) while recording resolved stepper decisions and sample counts in the execution receipt (`resolved execution`).
+- **Validation errors**: Non-`LLG` dynamics, invalid `TimeOutputSpec` or `FrozenSpins` items, or non-positive stage `until` horizon raise immediate `TypeError` / `ValueError` validation errors in Python.
 - **Unsupported combinations**: Combining `FrozenSpins` or coupled elastodynamics with an unqualified backend/integrator lane is rejected as an unsupported combination by the planner.
 
 (python-api-studies-time-evolution-discrete-realization)=
 ## 8. Discrete realization and numerical operators
 
-- **FEM CPU & GPU**: Advances nodal magnetization via `context_step_explicit_rk_mfem` (CPU) or `gpu_rk_device_resident_step` (GPU) and records scheduled field/scalar snapshots at accepted step boundaries.
-- **FDM CPU & GPU**: Advances Cartesian SoA/AoS magnetization via explicit RK, `abm3`, or `coupled_imex_ark2` in `crates/fullmag-runner/src/solvers/fdm/workflows/time_domain/`.
+- **FEM CPU & GPU**: Advances nodal magnetization via `context_step_explicit_rk_mfem` (CPU) or `gpu_rk_device_resident_step` (GPU) and records scheduled field/scalar snapshots at accepted step boundaries. See {ref}`numerical-methods-performance-fem-gpu-demag` and {ref}`numerical-methods-performance-fem-gpu-kernels` for FEM GPU `cuDSS` demagnetization, RK FSAL `k0` reuse, and fused short-range kernels.
+- **FDM CPU & GPU**: Advances Cartesian SoA/AoS magnetization via explicit RK, `abm3`, or `coupled_imex_ark2` in `crates/fullmag-runner/src/solvers/fdm/workflows/time_domain/`. See {ref}`numerical-methods-performance-fdm-core` for batched Hermitian cuFFT and FSAL stepping.
 
 (python-api-studies-time-evolution-implementation-mapping)=
 ## 9. Backend and device implementation mapping
@@ -201,9 +200,9 @@ assert ir["study"]["stages"][0]["duration"] == 0.5e-9
 | Solver | Device | Status | Notes |
 | --- | --- | --- | --- |
 | FEM | CPU | `documented` | Native MFEM explicit RK time-domain loop and snapshot emission. |
-| FEM | GPU | `documented` | Device-resident CUDA RK loop (`rk_step.cu`) and device observable reductions. |
+| FEM | GPU | `documented` | Device-resident CUDA RK loop (`rk_step.cu`), `cuDSS` / AMG demag, and device observable reductions. |
 | FDM | CPU | `documented` | Cartesian SoA time-domain workflow (`crates/fullmag-runner/src/solvers/fdm/workflows/time_domain/`). |
-| FDM | GPU | `documented` | CUDA time-domain workflow and FFT demagnetization. |
+| FDM | GPU | `documented` | CUDA time-domain workflow, batched Hermitian cuFFT demagnetization, and fused FP64 RK45 spin torques. |
 
 (python-api-studies-time-evolution-validation)=
 ## 10. Validation and benchmark gates
@@ -226,9 +225,9 @@ Status: Time-evolution stage authoring, live scalar time-series charts, and inte
 
 | Python/API surface | Control Room path | Status | Transaction |
 | --- | --- | --- | --- |
-| Stage duration, timestep / integrator policy, & `StageInitialStateSelector` | `Model Explorer -> Stages -> Add stage -> Run` (`RunStageInspector`, `StudyStageDraftEditor`) | `partial` | `executeStageAfterApply` (`scene_revision`-pinned draft commit + stage Compute) |
+| Stage duration, timestep / integrator policy, & initial-state handoff | `Model Explorer -> Stages -> Add stage -> Run` (`RunStageSpec`, `StudyStagesSpec`) | `partial` | Commit stage draft and trigger stage compute (`scene_revision`-pinned) |
 | Live magnetization, energy & torque traces | `Live Charts` (`LiveChartsModule`, `LiveChartControls`) | `inspection-only` | Binary FMTB stream + WebSocket `scalar.sample` follow window & CSV export |
-| Per-stage texture overrides (`StageTextureAssignmentsEditor`) | `Model Explorer -> Stages -> <stage> -> Initial State / Textures` | `partial` | Staged draft mutation on `scene_revision` |
+| Per-stage texture overrides | `Model Explorer -> Stages -> <stage> -> Initial State / Textures` | `partial` | Staged draft mutation on `scene_revision` |
 | Python-only constraints or programmatic callbacks | `Model Explorer -> Stages -> <stage>` | `Python-only` | Authored via Python script or live `fm.run()` / `fm.run_until()` |
 
 ```{image} /_static/images/ui/inspector-study-stages-and-rerun.png
@@ -244,14 +243,14 @@ Status: Time-evolution stage authoring, live scalar time-series charts, and inte
 ```
 
 See {doc}`/frontend/capability-register` and {doc}`/frontend/inspectors/studies-and-stages`.
-Frontend source owners: `apps/control-room/src/modules/inspector/panels/stages/RunStageInspector.tsx`, `apps/control-room/src/modules/inspector/panels/studyStageApplyAndRun.ts`, and `apps/control-room/src/modules/live-charts/LiveChartsView.tsx`.
+Frontend source owners: `apps/control-room/src/modules/inspector/inspectors/study/stages/RunStageSpec.tsx`, `apps/control-room/src/modules/inspector/inspectors/study/StudyStagesSpec.tsx`, and `apps/control-room/src/modules/live-charts/LiveChartsView.tsx`.
 
 (python-api-studies-time-evolution-source-code-index)=
 ## 13. Source-code index
 
 | Layer | File | Symbol / entrypoint | Responsibility |
 | --- | --- | --- | --- |
-| Python DSL | [`packages/fullmag-py/src/fullmag/model/study.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/study.py#L695) | [`class TimeEvolution`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/study.py#L695) | Owns dynamics, outputs, frozen-spin constraints, autosave, and lowering |
-| Python DSL | [`packages/fullmag-py/src/fullmag/world.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/world.py#L5064) | [`class StudyBuilder`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/world.py#L5064) | Stage-workflow `.stages.add_time(...)` and `.solver(...)` authoring |
-| Native FEM CPU | [`backends/fem/cpu/mfem/integrators/rk_explicit_step.cpp`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/backends/fem/cpu/mfem/integrators/rk_explicit_step.cpp#L126) | [`context_step_explicit_rk_mfem`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/backends/fem/cpu/mfem/integrators/rk_explicit_step.cpp#L126) | Native FEM CPU explicit RK step execution |
-| Native FEM GPU | [`backends/fem/gpu/cuda/integrators/rk/rk_step.cu`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/backends/fem/gpu/cuda/integrators/rk/rk_step.cu#L24) | [`gpu_rk_device_resident_step`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/backends/fem/gpu/cuda/integrators/rk/rk_step.cu#L24) | Native FEM GPU device-resident explicit RK step execution |
+| Python DSL | [`packages/fullmag-py/src/fullmag/model/study.py`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/model/study.py#L761) | [`class TimeEvolution`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/model/study.py#L761) | Owns dynamics, outputs, frozen-spin constraints, autosave, and lowering |
+| Python DSL | [`packages/fullmag-py/src/fullmag/world.py`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/world.py#L6439) | [`class StudyBuilder`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/world.py#L6439) | Stage-workflow `.stages.add_run(...)` and `.solver(...)` authoring |
+| Native FEM CPU | [`backends/fem/cpu/mfem/integrators/rk_explicit_step.cpp`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/backends/fem/cpu/mfem/integrators/rk_explicit_step.cpp#L126) | [`context_step_explicit_rk_mfem`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/backends/fem/cpu/mfem/integrators/rk_explicit_step.cpp#L126) | Native FEM CPU explicit RK step execution |
+| Native FEM GPU | [`backends/fem/gpu/cuda/integrators/rk/rk_step.cu`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/backends/fem/gpu/cuda/integrators/rk/rk_step.cu#L24) | [`gpu_rk_device_resident_step`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/backends/fem/gpu/cuda/integrators/rk/rk_step.cu#L24) | Native FEM GPU device-resident explicit RK step execution |

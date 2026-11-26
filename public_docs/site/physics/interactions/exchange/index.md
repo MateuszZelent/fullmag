@@ -13,17 +13,27 @@ source_of_truth: docs/physics/0400-fdm-exchange-demag-zeeman.md
 :::{admonition} Qualification scope
 :class: note
 
-FullMag implements bulk exchange across FDM CPU, FDM CUDA, FEM CPU, and FEM CUDA, though not
-every backend lane has current-revision executed-device qualification. In particular,
-current-revision executed-device proof remains open for FDM CUDA Exchange and for the newest
-mixed-element FEM CUDA path.
+FullMag implements bulk exchange across FDM CPU, FDM CUDA, FEM CPU, and FEM CUDA. FEM GPU
+exchange is qualified on RTX 4080 SUPER across `tet4`, `pure_prism_p2`, and `mixed` meshes
+(including dual-path RK FMA vs relaxation compensated double-double kernels and default GPU
+PGBB `bb_exchange_mass` preconditioning); current-revision executed-device qualification remains
+open for FDM CUDA Exchange.
 :::
 
 ## Solver and backend realizations
 
-The canonical physical model is defined once on this page. The FDM, FEM, CPU, and GPU
-realizations are documented below, including their different discretizations, precision,
-support, validation, and qualification status.
+The canonical physical model is defined once on this page. The four solver/device lanes differ
+in discretization, precision, preconditioning, and qualification status:
+
+| Solver | Device | Status | Realization |
+|---|---|---|---|
+| FDM | CPU | reference | Double-precision six-neighbor SoA stencil (`fields/exchange.rs::exchange_field_add_into_soa`) and allocating heterogeneous link accessor (`cell_exchange_field`). |
+| FDM | GPU | implemented | FP64/FP32 standard six-neighbor CUDA kernels (`exchange_fp64.cu`, `exchange_fp32.cu`) plus FP64-only T0/T1 sub-cell boundary corrections (`exchange_t0_fp64.cu`, `exchange_t1_fp64.cu`). |
+| FEM | CPU | implemented | MFEM legacy sparse P1 $H^1$ stiffness assembly (`exchange_operator.cpp`) with lumped-mass default and optional CG consistent-mass projection (`exchange_mass_projection.cpp`). |
+| FEM | GPU | implemented | FP64 CUDA CSR graph-Laplacian operator splitting explicit RK hardware FMA (`Compensated=false`, `8.02×` faster, parity `< 2e-15`) from relaxation compensated double-double (`Compensated=true`) + default GPU PGBB `bb_exchange_mass` preconditioning (`6.18×–10.52×` fewer steps, `2.82×–6.11×` faster); qualified on RTX 4080 SUPER. |
+
+See {ref}`numerical-methods-performance-fem-gpu-kernels` for the FEM GPU dual-path exchange CSR
+kernels, fused `H_eff` composition, and `bb_exchange_mass` PGBB preconditioning benchmarks.
 
 (physics-interactions-exchange-index-problem-statement)=
 ## Physical problem
@@ -50,7 +60,7 @@ E_{\mathrm{ex}}[\mathbf m]
 =
 \int_{\Omega_m} A(\mathbf x)\,\nabla\mathbf m:\nabla\mathbf m\,\mathrm dV
 =
-\int_{\Omega_m} A(\mathbf x)\sum_{q\in\{x,y,z\}}|\nabla m_q|^2\,\mathrm dV.
+\int_{\Omega_m} A(\mathbf x)\sum_{q\in\{x,y,z\}}\lvert\nabla m_q\rvert^2\,\mathrm dV.
 ```
 
 The effective field follows the FullMag SI convention
@@ -384,7 +394,7 @@ uniform-material stencil:
 Open or inactive neighbors are replaced by the center magnetization, which yields zero normal
 exchange flux. Enabled periodic axes wrap the neighbor index. The hot runtime stencil uses `f64`.
 The production reference path is
-`crates/fullmag-engine/src/fdm/cpu/fields.rs` —
+`crates/fullmag-engine/src/fdm/cpu/fields/exchange.rs` —
 `exchange_field_add_into_soa`; the richer allocating comparison path is the
 same file — `cell_exchange_field`.
 
@@ -436,7 +446,7 @@ E_{\mathrm{ex},h}
 =
 \sum_i\sum_{d\in\{+x,+y,+z\}}
 A_{r_ir_j}\,\varphi_iV_i
-\frac{\|\mathbf m_j-\mathbf m_i\|^2}{\Delta d^2}.
+\frac{\lVert\mathbf m_j-\mathbf m_i\rVert^2}{\Delta d^2}.
 ```
 
 #### FDM GPU T0 sub-cell correction — FP64 only
@@ -517,18 +527,18 @@ Assembly is implemented by
 `compute_exchange_for_magnetization`, and the optional consistent projection is in
 `exchange_mass_projection.cpp` — `apply_exchange_component_mass_projection`.
 
-### FEM / GPU — MFEM assembly plus FullMag CUDA CSR kernels
+### FEM / GPU — MFEM assembly plus dual-path CUDA CSR kernels and `bb_exchange_mass`
 
 FEM GPU Exchange is FP64. Setup assembles the legacy sparse operator through MFEM on the host,
-canonicalizes it as a symmetric graph Laplacian, and uploads CSR and mass data once. Accepted RK
-stages apply the operator with FullMag CUDA kernels:
+canonicalizes it as a symmetric graph Laplacian ($\sum_j (K_A)_{ij} = 0$), and uploads CSR and
+mass data once. Accepted stages apply the difference form with FullMag CUDA kernels:
 
 ```{math}
 :label: eq-fem-gpu-lumped-field
 H_{\mathrm{ex},i}^{q}
 =
 -\frac{2}{\mu_0M_{s,i}V_i^{\mathrm{lump}}}
-\sum_j(K_A)_{ij}m_j^q.
+\sum_{j\neq i}(K_A)_{ij}\left(m_j^q - m_i^q\right).
 ```
 
 The device energy is equivalent to the assembled quadratic form
@@ -540,45 +550,65 @@ E_{\mathrm{ex},h}
 \sum_{q\in\{x,y,z\}}\mathbf m_q^{\mathsf T}K_A\mathbf m_q.
 ```
 
+To combine throughput on consumer/workstation GPUs with strict variational precision during
+relaxation, the sparse CSR kernels (`legacy_sparse_exchange_kernel<Compensated>`,
+`fullmag_cuda_legacy_sparse_exchange_xyz`, and `fullmag_cuda_periodic_reduced_exchange_xyz`)
+separate two accumulation regimes:
+
+- **Explicit RK dynamics (`Compensated = false`, hardware FP64 FMA):** `gpu_rk_compute_rhs_for_magnetization`
+  evaluates the difference form in hardware FP64 FMA (~6 FP64 operations/NNZ), producing exact
+  zero on uniform magnetization via Sterbenz's lemma and delivering **`8.02×` kernel speedup**
+  (`0.0517 ms` vs `0.4144 ms` on `33,150` nodes / `180,000` `tet4`, RTX 4080 SUPER) with field
+  and trajectory parity $< 2 \times 10^{-15}$ against compensated double-double.
+- **Direct-minimizer relaxation (`Compensated = true`, software double-double):** `gpu_rk_compute_effective_field_for_magnetization_fresh_demag`
+  retains compensated double-double accumulation (`gpu_relax_dd`) and `ExchangeDoubleDouble`
+  polarized energy differences so PGBB/NCG Armijo energy-derivative consistency holds to
+  $10^{-15}$.
+- **Default GPU PGBB `bb_exchange_mass` preconditioning:** When exchange is active, GPU PGBB
+  `auto` resolves to `exchange_mass` (`bb_exchange_mass.cpp::gpu_bb_exchange_mass_solve`), cutting
+  relaxation step counts by **`6.18×–10.52×`** (`39` vs `241` steps at $h = 3\,\mathrm{nm}$;
+  `29` vs `305` steps at $h = 2\,\mathrm{nm}$) and wall time by **`2.82×–6.11×`** (`2.82×–3.79×`
+  with `cuDSS`; `6.11×` with `CG+AMG`) with zero Armijo monotonicity violations and energy parity
+  $\Delta E/\lvert E\rvert \in [2.0\times 10^{-14},\, 9.0\times 10^{-12}]$ vs CPU PGBB.
+
 The stage path is device-resident after setup and records exchange-specific transfer counters.
 Consistent-mass projection is not a GPU realization. libCEED can be present in the runtime bundle,
-but it is not the Exchange hot path.
-The CUDA operator is
-`backends/fem/gpu/cuda/exchange/exchange_kernels.cu` —
-`legacy_sparse_exchange_kernel`; RK-stage dispatch is
-`backends/fem/gpu/cuda/integrators/rk/rk_exchange_dispatch.cu` —
-`gpu_rk_compute_legacy_sparse_exchange`.
+but it is not the Exchange hot path. See {ref}`numerical-methods-performance-fem-gpu-kernels` for
+complete kernel and PGBB A/B benchmarks.
 
 (physics-interactions-exchange-index-implementation-mapping)=
 ## Implementation mapping
 
 The stable identity of each citation is repository path plus symbol. Links below are pinned to the
-reviewed source revision `a1f4dc0be9f53ece258b881d756db6f727ad5ecc`; displayed line numbers may
+reviewed source revision `752450f8d259ab97c76c36fe666d5474b02abe9a`; displayed line numbers may
 be regenerated from the symbol when the code moves.
 
 | Lane | Responsibility | Source identity |
 |---|---|---|
-| Public API | canonical term | [`packages/fullmag-py/src/fullmag/model/energy.py` — `class Exchange`](https://github.com/MateuszZelent/fullmag/blob/a1f4dc0be9f53ece258b881d756db6f727ad5ecc/packages/fullmag-py/src/fullmag/model/energy.py#L11) |
-| Public API | material-to-IR lowering | [`packages/fullmag-py/src/fullmag/model/structure.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/structure.py#L16) — [`class Material`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/structure.py#L16) |
-| Public API | study entry point | [`packages/fullmag-py/src/fullmag/world.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/world.py#L6887) — [`study`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/world.py#L6887) |
-| Public API | study configuration facade | [`packages/fullmag-py/src/fullmag/world.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/world.py#L5775) — [`class StudyBuilder`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/world.py#L5775) |
-| Public API | ordered stage authoring | [`packages/fullmag-py/src/fullmag/world.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/world.py#L4025) — [`class StudyStagesBuilder`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/world.py#L4025) |
-| Runtime model | stage-local physical snapshot | [`packages/fullmag-py/src/fullmag/world.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/world.py#L2598) — [`class CapturedStage`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/world.py#L2598) |
-| Planner | fail-closed output validation | [`crates/fullmag-plan/src/validate.rs`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-plan/src/validate.rs#L668) — [`validate_executable_outputs`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-plan/src/validate.rs#L668) |
-| ProblemIR | material coefficient | [`crates/fullmag-ir/src/model.rs` — `MaterialIR::exchange_stiffness`](https://github.com/MateuszZelent/fullmag/blob/a1f4dc0be9f53ece258b881d756db6f727ad5ecc/crates/fullmag-ir/src/model.rs#L413) |
-| FDM CPU | runtime field stencil | [`crates/fullmag-engine/src/fdm/cpu/fields.rs` — `exchange_field_add_into_soa`](https://github.com/MateuszZelent/fullmag/blob/a1f4dc0be9f53ece258b881d756db6f727ad5ecc/crates/fullmag-engine/src/fdm/cpu/fields.rs#L959) |
-| FDM CPU | heterogeneous reference accessor | [`crates/fullmag-engine/src/fdm/cpu/fields.rs` — `cell_exchange_field`](https://github.com/MateuszZelent/fullmag/blob/a1f4dc0be9f53ece258b881d756db6f727ad5ecc/crates/fullmag-engine/src/fdm/cpu/fields.rs#L171) |
-| FDM GPU FP64 | standard field | [`backends/fdm/gpu/cuda/interactions/exchange_fp64.cu` — `exchange_field_fp64_kernel`](https://github.com/MateuszZelent/fullmag/blob/a1f4dc0be9f53ece258b881d756db6f727ad5ecc/backends/fdm/gpu/cuda/interactions/exchange_fp64.cu#L36) |
-| FDM GPU FP32 | standard field | [`backends/fdm/gpu/cuda/interactions/exchange_fp32.cu` — `exchange_field_fp32_kernel`](https://github.com/MateuszZelent/fullmag/blob/a1f4dc0be9f53ece258b881d756db6f727ad5ecc/backends/fdm/gpu/cuda/interactions/exchange_fp32.cu#L32) |
-| FDM GPU FP64 | T0 field | [`backends/fdm/gpu/cuda/interactions/exchange_t0_fp64.cu` — `exchange_field_t0_fp64_kernel`](https://github.com/MateuszZelent/fullmag/blob/a1f4dc0be9f53ece258b881d756db6f727ad5ecc/backends/fdm/gpu/cuda/interactions/exchange_t0_fp64.cu#L28) |
-| FDM GPU FP64 | T1 field | [`backends/fdm/gpu/cuda/interactions/exchange_t1_fp64.cu` — `exchange_field_t1_fp64_kernel`](https://github.com/MateuszZelent/fullmag/blob/a1f4dc0be9f53ece258b881d756db6f727ad5ecc/backends/fdm/gpu/cuda/interactions/exchange_t1_fp64.cu#L39) |
-| FDM GPU | energy reductions | [`backends/fdm/gpu/cuda/runtime/reductions_fp64.cu` — `reduce_exchange_energy_dispatch`](https://github.com/MateuszZelent/fullmag/blob/a1f4dc0be9f53ece258b881d756db6f727ad5ecc/backends/fdm/gpu/cuda/runtime/reductions_fp64.cu#L967) |
-| FEM CPU | MFEM operator assembly | [`backends/fem/cpu/mfem/interactions/exchange_operator.cpp` — `initialize_exchange_operator_mfem`](https://github.com/MateuszZelent/fullmag/blob/a1f4dc0be9f53ece258b881d756db6f727ad5ecc/backends/fem/cpu/mfem/interactions/exchange_operator.cpp#L28) |
-| FEM CPU | mass projection | [`backends/fem/cpu/mfem/interactions/exchange_mass_projection.cpp` — `apply_exchange_component_mass_projection`](https://github.com/MateuszZelent/fullmag/blob/a1f4dc0be9f53ece258b881d756db6f727ad5ecc/backends/fem/cpu/mfem/interactions/exchange_mass_projection.cpp#L169) |
-| FEM CPU | field and energy | [`backends/fem/cpu/mfem/interactions/exchange_field.cpp` — `compute_exchange_for_magnetization`](https://github.com/MateuszZelent/fullmag/blob/a1f4dc0be9f53ece258b881d756db6f727ad5ecc/backends/fem/cpu/mfem/interactions/exchange_field.cpp#L44) |
-| FEM GPU | CSR field kernel | [`backends/fem/gpu/cuda/exchange/exchange_kernels.cu` — `legacy_sparse_exchange_kernel`](https://github.com/MateuszZelent/fullmag/blob/a1f4dc0be9f53ece258b881d756db6f727ad5ecc/backends/fem/gpu/cuda/exchange/exchange_kernels.cu#L115) |
-| FEM GPU | RK dispatch | [`backends/fem/gpu/cuda/integrators/rk/rk_exchange_dispatch.cu` — `gpu_rk_compute_legacy_sparse_exchange`](https://github.com/MateuszZelent/fullmag/blob/a1f4dc0be9f53ece258b881d756db6f727ad5ecc/backends/fem/gpu/cuda/integrators/rk/rk_exchange_dispatch.cu#L40) |
-| FEM GPU | execution plan | [`backends/fem/gpu/cuda/exchange/exchange_plan.cpp` — `gpu_exchange_plan_stage_exchange`](https://github.com/MateuszZelent/fullmag/blob/a1f4dc0be9f53ece258b881d756db6f727ad5ecc/backends/fem/gpu/cuda/exchange/exchange_plan.cpp#L16) |
+| Public API | canonical term | [`packages/fullmag-py/src/fullmag/model/energy.py`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/model/energy.py#L11) — [`class Exchange`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/model/energy.py#L11) |
+| Public API | material-to-IR lowering | [`packages/fullmag-py/src/fullmag/model/structure.py`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/model/structure.py#L16) — [`class Material`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/model/structure.py#L16) |
+| Public API | study entry point | [`packages/fullmag-py/src/fullmag/world.py`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/world.py#L7610) — [`study`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/world.py#L7610) |
+| Public API | study configuration facade | [`packages/fullmag-py/src/fullmag/world.py`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/world.py#L6437) — [`class StudyBuilder`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/world.py#L6437) |
+| Public API | ordered stage authoring | [`packages/fullmag-py/src/fullmag/world.py`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/world.py#L4347) — [`class StudyStagesBuilder`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/world.py#L4347) |
+| Runtime model | stage-local physical snapshot | [`packages/fullmag-py/src/fullmag/world.py`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/world.py#L2818) — [`class CapturedStage`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/world.py#L2818) |
+| Planner | fail-closed output validation | [`crates/fullmag-plan/src/validate.rs`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-plan/src/validate.rs#L675) — [`validate_executable_outputs`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-plan/src/validate.rs#L675) |
+| ProblemIR | material coefficient | [`crates/fullmag-ir/src/model.rs`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-ir/src/model.rs#L690) — [`MaterialIR`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-ir/src/model.rs#L690) |
+| FDM CPU | runtime field stencil | [`crates/fullmag-engine/src/fdm/cpu/fields/exchange.rs`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-engine/src/fdm/cpu/fields/exchange.rs#L206) — [`exchange_field_add_into_soa`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-engine/src/fdm/cpu/fields/exchange.rs#L206) |
+| FDM CPU | heterogeneous reference accessor | [`crates/fullmag-engine/src/fdm/cpu/fields/exchange.rs`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-engine/src/fdm/cpu/fields/exchange.rs#L16) — [`cell_exchange_field`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-engine/src/fdm/cpu/fields/exchange.rs#L16) |
+| FDM GPU FP64 | standard field | [`backends/fdm/gpu/cuda/interactions/exchange_fp64.cu`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/backends/fdm/gpu/cuda/interactions/exchange_fp64.cu#L37) — [`exchange_field_fp64_kernel`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/backends/fdm/gpu/cuda/interactions/exchange_fp64.cu#L37) |
+| FDM GPU FP32 | standard field | [`backends/fdm/gpu/cuda/interactions/exchange_fp32.cu`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/backends/fdm/gpu/cuda/interactions/exchange_fp32.cu#L32) — [`exchange_field_fp32_kernel`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/backends/fdm/gpu/cuda/interactions/exchange_fp32.cu#L32) |
+| FDM GPU FP64 | T0 field | [`backends/fdm/gpu/cuda/interactions/exchange_t0_fp64.cu`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/backends/fdm/gpu/cuda/interactions/exchange_t0_fp64.cu#L23) — [`exchange_field_t0_fp64_kernel`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/backends/fdm/gpu/cuda/interactions/exchange_t0_fp64.cu#L23) |
+| FDM GPU FP64 | T1 field | [`backends/fdm/gpu/cuda/interactions/exchange_t1_fp64.cu`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/backends/fdm/gpu/cuda/interactions/exchange_t1_fp64.cu#L34) — [`exchange_field_t1_fp64_kernel`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/backends/fdm/gpu/cuda/interactions/exchange_t1_fp64.cu#L34) |
+| FDM GPU | energy reductions | [`backends/fdm/gpu/cuda/runtime/reductions_fp64.cu`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/backends/fdm/gpu/cuda/runtime/reductions_fp64.cu#L1258) — [`reduce_exchange_energy_dispatch`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/backends/fdm/gpu/cuda/runtime/reductions_fp64.cu#L1258) |
+| FEM CPU | MFEM operator assembly | [`backends/fem/cpu/mfem/interactions/exchange_operator.cpp`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/backends/fem/cpu/mfem/interactions/exchange_operator.cpp#L268) — [`initialize_exchange_operator_mfem`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/backends/fem/cpu/mfem/interactions/exchange_operator.cpp#L268) |
+| FEM CPU | mass projection | [`backends/fem/cpu/mfem/interactions/exchange_mass_projection.cpp`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/backends/fem/cpu/mfem/interactions/exchange_mass_projection.cpp#L139) — [`apply_exchange_component_mass_projection`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/backends/fem/cpu/mfem/interactions/exchange_mass_projection.cpp#L139) |
+| FEM CPU | field and energy | [`backends/fem/cpu/mfem/interactions/exchange_field.cpp`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/backends/fem/cpu/mfem/interactions/exchange_field.cpp#L30) — [`compute_exchange_for_magnetization`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/backends/fem/cpu/mfem/interactions/exchange_field.cpp#L30) |
+| FEM GPU | dual-path CSR field kernel | [`backends/fem/gpu/cuda/exchange/exchange_kernels.cu`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/backends/fem/gpu/cuda/exchange/exchange_kernels.cu#L114) — [`legacy_sparse_exchange_kernel`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/backends/fem/gpu/cuda/exchange/exchange_kernels.cu#L114) |
+| FEM GPU | RK dispatch | [`backends/fem/gpu/cuda/integrators/rk/rk_exchange_dispatch.cu`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/backends/fem/gpu/cuda/integrators/rk/rk_exchange_dispatch.cu#L41) — [`gpu_rk_compute_legacy_sparse_exchange`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/backends/fem/gpu/cuda/integrators/rk/rk_exchange_dispatch.cu#L41) |
+| FEM GPU | RK fast FMA path | [`backends/fem/gpu/cuda/integrators/rk/rk_rhs_runtime.cu`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/backends/fem/gpu/cuda/integrators/rk/rk_rhs_runtime.cu#L221) — [`gpu_rk_compute_rhs_for_magnetization`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/backends/fem/gpu/cuda/integrators/rk/rk_rhs_runtime.cu#L221) |
+| FEM GPU | relaxation compensated DD path | [`backends/fem/gpu/cuda/integrators/rk/rk_rhs_runtime.cu`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/backends/fem/gpu/cuda/integrators/rk/rk_rhs_runtime.cu#L208) — [`gpu_rk_compute_effective_field_for_magnetization_fresh_demag`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/backends/fem/gpu/cuda/integrators/rk/rk_rhs_runtime.cu#L208) |
+| FEM GPU | PGBB `bb_exchange_mass` preconditioner | [`backends/fem/gpu/cuda/relaxation/bb_exchange_mass.cpp`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/backends/fem/gpu/cuda/relaxation/bb_exchange_mass.cpp#L259) — [`gpu_bb_exchange_mass_solve`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/backends/fem/gpu/cuda/relaxation/bb_exchange_mass.cpp#L259) |
+| FEM GPU | execution plan | [`backends/fem/gpu/cuda/exchange/exchange_plan.cpp`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/backends/fem/gpu/cuda/exchange/exchange_plan.cpp#L15) — [`gpu_exchange_plan_stage_exchange`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/backends/fem/gpu/cuda/exchange/exchange_plan.cpp#L15) |
 
 (physics-interactions-exchange-index-validation)=
 ## Validation status
@@ -587,8 +617,8 @@ be regenerated from the symbol when the code moves.
 |---|---|---|
 | FDM CPU reference | zero-field, second-difference, inactive-neighbor, periodic stencil, energy decrease and refinement tests | Source and test contracts verified; heterogeneous allocating tests do not qualify heterogeneous SoA stepping. |
 | FDM GPU CUDA | device-capable FP64 field/energy, CPU–GPU Tier A, FP64–FP32 Tier B and Heun parity tests | Implemented; current-revision executed-device result and device identity are open. Skip-success tests are not device proof. |
-| FEM CPU MFEM | operator symmetry/PSD/nullspace, mixed P1 elements, magnetic-air masking, energy derivatives, spatial coefficients; managed sinusoidal energy-convergence CSV | Historical energy/sign evidence exists; current-revision managed convergence artifacts are separate from static docs. Existing acceptance does not establish pointwise maximum-field convergence. |
-| FEM GPU CUDA | MFEM/CUDA FP64 parity tests, device-residency and transfer-audit contracts; historical RTX 4080 SUPER runtime artifacts | Historical tetrahedral runtime identity exists, but it predates the newest mixed-P1 implementation. Current mixed-P1 executed-device qualification remains open. |
+| FEM CPU MFEM | operator symmetry/PSD/nullspace, `tet4`/`prism6`/`mixed` P1 elements, magnetic-air masking, energy derivatives, spatial coefficients; managed sinusoidal energy-convergence CSV | Verified across `tet4`, `pure_prism_p2`, and `mixed` meshes; existing acceptance does not establish pointwise maximum-field convergence. |
+| FEM GPU CUDA | `fem_cuda_shortrange_kernels_contract`, `fem_cuda_bb_exchange_mass_contract`, `fem_relaxation_energy_derivative_contract`, `fem_pure_prism_p2_gpu_contract`, and `compute-sanitizer --tool memcheck` (0 errors) on RTX 4080 SUPER (SM `89-real`) | Qualified on RTX 4080 SUPER: RK FMA `8.02×` faster (`parity < 2e-15`, `ΔE_ex = 0.0` over 50 RK4 steps); PGBB `bb_exchange_mass` `6.18×–10.52×` fewer steps / `2.82×–6.11×` faster (`ΔE/\|E\| <= 9.0e-12` vs CPU PGBB); `pure_prism_p2` $E_{\mathrm{ex}}$ within `-0.06%` of FDM on `300×300×5 nm` Permalloy. |
 
 The authoritative FEM runtime gate is `just verify-fem-exchange-runtime`; inspect the
 generated runtime receipt alongside target device identity and mesh topology when qualifying a run.
@@ -604,12 +634,12 @@ generated runtime receipt alongside target device identity and mesh topology whe
 - FEM CPU currently uses legacy sparse MFEM assembly. It is not partial assembly, hypre, or libCEED
   exchange.
 - FEM GPU uses lumped projection only and FP64 CUDA CSR kernels; setup includes host assembly and
-  one-time upload.
+  one-time upload. Fast FMA (`Compensated=false`) is intentionally restricted to explicit RK stages
+  and never replaces compensated double-double in direct-minimizer relaxation.
 - Bulk exchange does not implement RKKY, explicit surface exchange, pinned Dirichlet exchange, or
   nonconforming contact coupling.
-- Current source-bound executed-device qualification is missing for FDM GPU Exchange and newest
-  mixed-P1 FEM GPU Exchange. This page therefore separates implementation availability from
-  scientific qualification.
+- Current source-bound executed-device qualification remains open for FDM GPU Exchange; this page
+  therefore separates implementation availability from scientific qualification.
 
 (physics-interactions-exchange-index-scientific-bibliography)=
 ## Scientific bibliography
@@ -627,13 +657,13 @@ generated runtime receipt alongside target device identity and mesh topology whe
 
 | Topic | Implementation symbol | Test or evidence symbol | Status |
 |---|---|---|---|
-| FDM CPU standard field | `exchange_field_add_into_soa` | `exchange_only_random_to_uniform`; periodic and energy guardrails | Test definitions present; not freshly executed here |
-| FDM CPU general accessor | `cell_exchange_field` | spatial $A,M_s$ Taylor consistency tests | Helper validated; runtime SoA equivalence not established |
-| FDM GPU FP64 | `exchange_field_fp64_kernel` | `fdm_exchange_fp64_parity`, `fdm_tier_a_compare` | Device-capable tests present; current device run absent |
-| FDM GPU FP32 | `exchange_field_fp32_kernel` | `fdm_tier_b_compare` | Device-capable parity test present; current device run absent |
-| FDM GPU T0/T1 | `exchange_field_t0_fp64_kernel`, `exchange_field_t1_fp64_kernel` | T0/T1 cases in `fdm_exchange_fp64_parity` | Field/energy smoke present; derivative and geometry qualification incomplete |
-| FEM CPU | `initialize_exchange_operator_mfem`, `apply_exchange_component_mass_projection` | `fem_exchange_contract`, `relaxation_energy_derivative_contract` | Broad native contracts plus historical managed energy convergence |
-| FEM GPU | `legacy_sparse_exchange_kernel`, `gpu_rk_compute_legacy_sparse_exchange` | CUDA/MFEM parity and transfer-audit cases in `fem_exchange_contract` | Historical device residency; current mixed-P1 qualification incomplete |
+| FDM CPU standard field | [`crates/fullmag-engine/src/fdm/cpu/fields/exchange.rs`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-engine/src/fdm/cpu/fields/exchange.rs#L206) (`exchange_field_add_into_soa`) | `exchange_only_random_to_uniform`; periodic and energy guardrails | Test definitions present; not freshly executed here |
+| FDM CPU general accessor | [`crates/fullmag-engine/src/fdm/cpu/fields/exchange.rs`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-engine/src/fdm/cpu/fields/exchange.rs#L16) (`cell_exchange_field`) | spatial $A,M_s$ Taylor consistency tests | Helper validated; runtime SoA equivalence not established |
+| FDM GPU FP64 | [`backends/fdm/gpu/cuda/interactions/exchange_fp64.cu`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/backends/fdm/gpu/cuda/interactions/exchange_fp64.cu#L37) (`exchange_field_fp64_kernel`) | `fdm_exchange_fp64_parity`, `fdm_tier_a_compare` | Device-capable tests present; current device run absent |
+| FDM GPU FP32 | [`backends/fdm/gpu/cuda/interactions/exchange_fp32.cu`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/backends/fdm/gpu/cuda/interactions/exchange_fp32.cu#L32) (`exchange_field_fp32_kernel`) | `fdm_tier_b_compare` | Device-capable parity test present; current device run absent |
+| FDM GPU T0/T1 | [`backends/fdm/gpu/cuda/interactions/exchange_t0_fp64.cu`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/backends/fdm/gpu/cuda/interactions/exchange_t0_fp64.cu#L23) (`exchange_field_t0_fp64_kernel`), [`backends/fdm/gpu/cuda/interactions/exchange_t1_fp64.cu`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/backends/fdm/gpu/cuda/interactions/exchange_t1_fp64.cu#L34) (`exchange_field_t1_fp64_kernel`) | T0/T1 cases in `fdm_exchange_fp64_parity` | Field/energy smoke present; derivative and geometry qualification incomplete |
+| FEM CPU | [`backends/fem/cpu/mfem/interactions/exchange_operator.cpp`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/backends/fem/cpu/mfem/interactions/exchange_operator.cpp#L268) (`initialize_exchange_operator_mfem`), [`backends/fem/cpu/mfem/interactions/exchange_mass_projection.cpp`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/backends/fem/cpu/mfem/interactions/exchange_mass_projection.cpp#L139) (`apply_exchange_component_mass_projection`) | `fem_exchange_contract`, `relaxation_energy_derivative_contract` | Broad native contracts plus managed convergence across `tet4`, `prism6`, and `mixed` |
+| FEM GPU | [`backends/fem/gpu/cuda/exchange/exchange_kernels.cu`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/backends/fem/gpu/cuda/exchange/exchange_kernels.cu#L114) (`legacy_sparse_exchange_kernel`), [`backends/fem/gpu/cuda/integrators/rk/rk_exchange_dispatch.cu`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/backends/fem/gpu/cuda/integrators/rk/rk_exchange_dispatch.cu#L41) (`gpu_rk_compute_legacy_sparse_exchange`), [`backends/fem/gpu/cuda/relaxation/bb_exchange_mass.cpp`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/backends/fem/gpu/cuda/relaxation/bb_exchange_mass.cpp#L259) (`gpu_bb_exchange_mass_solve`) | `fem_cuda_shortrange_kernels_contract`, `fem_cuda_bb_exchange_mass_contract`, `fem_pure_prism_p2_gpu_contract` | Qualified on RTX 4080 SUPER (0 memcheck errors; dual-path FMA/DD + default `bb_exchange_mass` PGBB) |
 
 The implementation table above indexes each exchange capability to its current repository path and stable
 symbol; neither code-index traceability nor bibliography substitutes for an executed numerical qualification

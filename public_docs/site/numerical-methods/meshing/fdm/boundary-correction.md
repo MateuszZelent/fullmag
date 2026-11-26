@@ -6,8 +6,8 @@ status: implemented
 doc_kind: reference
 audience: user
 owner: fullmag-public-docs
-last_updated: 2026-08-31
-reviewed_revision: 5db00ccf0113b9756fec2d46feb36ade762b12c2
+last_updated: 2026-11-26
+reviewed_revision: 752450f8d259ab97c76c36fe666d5474b02abe9a
 source_of_truth: "FDM schema and planner tests"
 ---
 
@@ -89,7 +89,14 @@ Requested intent is preserved in `FDM.to_ir()`. Resolved execution is the accept
 (fdm-boundary-correction-discrete-realization)=
 ## Discrete realization
 
-The planner carries the requested fields and builds boundary geometry only when supported; corrected and uncorrected grids are different discrete models.
+The planner carries the requested fields and builds boundary geometry only when supported; corrected and uncorrected grids are different discrete models. Cellwise $M_s$ or $\alpha$ fields are explicitly rejected in combination with boundary correction on both runner and native CUDA paths.
+
+| Solver | Device | Status | Reason / Limit |
+| --- | --- | --- | --- |
+| FDM | CPU | implemented (SDF-gated) | Single-grid cut-cell boundary geometry when a supported SDF is present; rejects multilayer and periodic corrected combinations |
+| FDM | GPU | capability-gated | Single-grid capability-gated; rejects cellwise $M_s$/$\alpha$ combined with boundary correction |
+| FEM | CPU | not applicable | FEM conforms geometrically to curved boundaries via unstructured meshes |
+| FEM | GPU | not applicable | FEM conforms geometrically to curved boundaries via unstructured meshes |
 
 (fdm-boundary-correction-implementation-mapping)=
 ## Implementation mapping
@@ -117,7 +124,7 @@ No universal CPU/GPU parity or accuracy order is established. The displayed ener
 
 | Source | Stable symbol | Evidence |
 | --- | --- | --- |
-| [`packages/fullmag-py/src/fullmag/world.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/world.py#L5775) | [`class StudyBuilder`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/world.py#L5775) | public `fdm(...)` route used by the example |
-| [`packages/fullmag-py/src/fullmag/model/discretization.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/discretization.py#L19) | [`class FDM`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/discretization.py#L19) | validates and lowers fields; it does not implement the conceptual energy equation |
-| [`crates/fullmag-plan/src/tests.rs`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-plan/src/tests.rs#L15372) | [`fdm_boundary_params_passthrough_phi_floor_and_delta_min`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-plan/src/tests.rs#L15372) | planner passthrough |
-| [`crates/fullmag-plan/src/tests.rs`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-plan/src/tests.rs#L15445) | [`fdm_boundary_correction_rejects_geometry_without_supported_sdf`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-plan/src/tests.rs#L15445) | fail-closed geometry |
+| [`packages/fullmag-py/src/fullmag/world.py`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/world.py#L6437) | [`class StudyBuilder`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/world.py#L6437) | public `fdm(...)` route used by the example |
+| [`packages/fullmag-py/src/fullmag/model/discretization.py`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/model/discretization.py#L19) | [`class FDM`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/model/discretization.py#L19) | validates and lowers fields; it does not implement the conceptual energy equation |
+| [`crates/fullmag-plan/src/tests.rs`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-plan/src/tests.rs#L15792) | [`fdm_boundary_params_passthrough_phi_floor_and_delta_min`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-plan/src/tests.rs#L15792) | planner passthrough |
+| [`crates/fullmag-plan/src/tests.rs`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-plan/src/tests.rs#L15865) | [`fdm_boundary_correction_rejects_geometry_without_supported_sdf`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-plan/src/tests.rs#L15865) | fail-closed geometry |

@@ -1,18 +1,18 @@
 {
   "document": {
     "path": "public_docs/site/numerical-methods/frequency-domain/floquet-response.md",
-    "reviewed_revision": "5e99782acbb7fb3f65d0cad872e102bf67733103",
+    "reviewed_revision": "752450f8d259ab97c76c36fe666d5474b02abe9a",
     "source_of_truth": "/physics/interactions/demagnetization/periodic-demag, /physics/foundations/llg-equation"
   },
   "backend_matrix": [
     {"solver": "FEM", "device": "CPU", "status": "partial", "reason": "Projected Floquet response is source-visible; dynamic demag at nonzero k is capability-gated."},
-    {"solver": "FEM", "device": "GPU", "status": "partial", "reason": "Separate projected response qualification is required."},
+    {"solver": "FEM", "device": "GPU", "status": "partial", "reason": "gpu_sparse_direct is rejected on nonzero-k Floquet driven response (auto falls back to gpu_operator_host_krylov); narrow single-k GPU Floquet cuDSS slice is modal-only."},
     {"solver": "FDM", "device": "CPU", "status": "unsupported", "reason": "No native FDM Floquet response lane."},
     {"solver": "FDM", "device": "GPU", "status": "unsupported", "reason": "No public FDM CUDA Floquet response lane."}
   ],
   "equations": [
     {"id": "eq-numerical-floquet-phase", "symbols": ["mhat", "phihat", "r", "dr", "k", "Ck"], "sources": ["bc", "planner_floquet", "floquet_mag_op"]},
-    {"id": "eq-numerical-floquet-response", "symbols": ["K", "k", "omega", "G", "qhat", "bhat", "Dk"], "sources": ["validate", "response", "floquet_demag_k", "waveguide_demag_k"]}
+    {"id": "eq-numerical-floquet-response", "symbols": ["K", "k", "omega", "G", "qhat", "bhat", "Dk"], "sources": ["validate", "runtime_gate", "response", "floquet_demag_k", "waveguide_demag_k", "gpu_modal_floquet"]}
   ],
   "symbols": [
     {"id": "mhat", "latex": "$\\widehat{\\mathbf m}$", "meaning": "complex dynamic reduced-magnetization amplitude", "si_unit": "$1$"},
@@ -31,11 +31,13 @@
   "sources": [
     {"id": "bc", "path": "packages/fullmag-py/src/fullmag/model/study.py", "symbol": "class FloquetBC", "responsibility": "Floquet pair and phase schema."},
     {"id": "planner_floquet", "path": "crates/fullmag-plan/src/fem.rs", "symbol": "frequency_response_periodic_constraint_sets", "responsibility": "Lowers Floquet pair IDs and Bloch phase into planner constraint sets."},
+    {"id": "runtime_gate", "path": "crates/fullmag-runner/src/frequency_response.rs", "symbol": "frequency_response_solver_method_rejection_reason", "responsibility": "Rejects gpu_sparse_direct fail-closed on nonzero-k Floquet boundaries."},
     {"id": "floquet_mag_op", "path": "backends/fem/cpu/frequency_domain/operators/floquet_magnetic_operator.hpp", "symbol": "class FloquetReducedMagneticOperator", "responsibility": "Applies complex Bloch prolongation C(k) to tangent magnetic blocks."},
     {"id": "floquet_demag_k", "path": "backends/fem/include/frequency_domain/floquet_dynamic_demag_k.hpp", "symbol": "build_floquet_dynamic_demag_k_real_split", "responsibility": "3D Floquet k-dependent dynamic demagnetization operator."},
     {"id": "waveguide_demag_k", "path": "backends/fem/include/frequency_domain/floquet_waveguide_demag_k.hpp", "symbol": "build_floquet_waveguide_demag_k_real_split", "responsibility": "2.5D waveguide shifted-gradient dynamic demagnetization operator."},
     {"id": "validate", "path": "backends/fem/src/frequency_domain/operator_contract.cpp", "symbol": "validate_driven_frequency_response_request", "responsibility": "Floquet legality and dynamic-demag gate."},
-    {"id": "response", "path": "backends/fem/src/frequency_domain/modal_eigen_solver.cpp", "symbol": "solve_driven_response_contract", "responsibility": "Projected response contract and diagnostics."}
+    {"id": "response", "path": "backends/fem/src/frequency_domain/modal_eigen_solver.cpp", "symbol": "solve_driven_response_contract", "responsibility": "Projected response contract and diagnostics."},
+    {"id": "gpu_modal_floquet", "path": "backends/fem/src/frequency_domain/modal_eigen_solver.cpp", "symbol": "solve_gpu_floquet_shared_domain", "responsibility": "Modal-only narrow single-k GPU Floquet cuDSS slice (augmented_floquet_cudss_cuda)."}
   ],
   "public_api": {
     "parameters": [

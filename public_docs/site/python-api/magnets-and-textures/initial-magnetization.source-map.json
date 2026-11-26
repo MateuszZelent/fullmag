@@ -1,7 +1,7 @@
 {
   "document": {
     "path": "public_docs/site/python-api/magnets-and-textures/initial-magnetization.md",
-    "reviewed_revision": "ab3c8802a691a535063102c12f9a79bb0043b367"
+    "reviewed_revision": "752450f8d259ab97c76c36fe666d5474b02abe9a"
   },
   "backend_matrix": [
     {
@@ -14,7 +14,7 @@
       "solver": "FEM",
       "device": "GPU",
       "status": "documented",
-      "reason": "authoring and IR documented; runtime qualification separate"
+      "reason": "authoring and IR documented; GPU runtime qualification separate"
     },
     {
       "solver": "FDM",
@@ -26,61 +26,133 @@
       "solver": "FDM",
       "device": "GPU",
       "status": "documented",
-      "reason": "authoring and IR documented; runtime qualification separate"
+      "reason": "authoring and IR documented; GPU runtime qualification separate"
     }
   ],
   "equations": [],
   "symbols": [],
   "sources": [
     {
-      "id": "source_initial_magnetization",
+      "id": "source_uniform_magnetization",
       "path": "packages/fullmag-py/src/fullmag/init/magnetization.py",
       "symbol": "class UniformMagnetization",
-      "responsibility": "public constructor and IR lowering"
+      "responsibility": "uniform initializer constructor and to_ir() lowering"
+    },
+    {
+      "id": "source_random_magnetization",
+      "path": "packages/fullmag-py/src/fullmag/init/magnetization.py",
+      "symbol": "class RandomMagnetization",
+      "responsibility": "deterministic seeded random initializer and to_ir() lowering"
+    },
+    {
+      "id": "source_sampled_magnetization",
+      "path": "packages/fullmag-py/src/fullmag/init/magnetization.py",
+      "symbol": "class SampledMagnetization",
+      "responsibility": "sampled magnetization container, provenance attributes, and sampled_field IR lowering"
+    },
+    {
+      "id": "source_field_state",
+      "path": "packages/fullmag-py/src/fullmag/init/state_io.py",
+      "symbol": "class FieldState",
+      "responsibility": "general vector-field state payload with grid and provenance metadata"
+    },
+    {
+      "id": "source_load_magnetization",
+      "path": "packages/fullmag-py/src/fullmag/init/state_io.py",
+      "symbol": "load_magnetization",
+      "responsibility": "multi-format magnetization loader"
+    },
+    {
+      "id": "source_save_magnetization",
+      "path": "packages/fullmag-py/src/fullmag/init/state_io.py",
+      "symbol": "save_magnetization",
+      "responsibility": "multi-format magnetization writer"
+    },
+    {
+      "id": "source_load_field_state",
+      "path": "packages/fullmag-py/src/fullmag/init/state_io.py",
+      "symbol": "load_field_state",
+      "responsibility": "multi-format general vector-field state loader"
+    },
+    {
+      "id": "source_save_field_state",
+      "path": "packages/fullmag-py/src/fullmag/init/state_io.py",
+      "symbol": "save_field_state",
+      "responsibility": "multi-format general vector-field state writer"
     }
   ],
   "public_api": {
     "owner": "fm.init.UniformMagnetization, fm.init.RandomMagnetization, fm.init.SampledMagnetization",
     "parameters": [
       {
-        "python": "UniformMagnetization.value",
+        "python": "init.UniformMagnetization.value",
         "type": "Sequence[float]",
         "default": "required",
         "si_unit": "$1$",
         "validation": "finite three-vector",
         "meaning": "uniform direction/value",
-        "backend_support": "FEM/FDM CPU/GPU: IR; resolver-specific",
+        "backend_support": "FEM/FDM CPU/GPU: IR; planner materializes",
         "problem_ir": "value"
       },
       {
-        "python": "RandomMagnetization.seed",
+        "python": "init.RandomMagnetization.seed",
         "type": "int",
         "default": "required",
         "si_unit": "$1$",
-        "validation": "integer",
+        "validation": "non-negative integer; `bool` rejected",
         "meaning": "reproducible random seed",
-        "backend_support": "FEM/FDM CPU/GPU: IR; resolver-specific",
+        "backend_support": "FEM/FDM CPU/GPU: IR; planner materializes",
         "problem_ir": "seed"
       },
       {
-        "python": "SampledMagnetization.values",
+        "python": "init.SampledMagnetization.values",
         "type": "Sequence[Sequence[float]]",
         "default": "required",
         "si_unit": "$1$",
-        "validation": "typed sampled vectors",
+        "validation": "non-empty sequence of finite three-vectors",
         "meaning": "sampled initial field",
-        "backend_support": "FEM/FDM CPU/GPU: IR; resolver-specific",
+        "backend_support": "FEM/FDM CPU/GPU: IR; planner validates DOF count",
         "problem_ir": "values"
       },
       {
-        "python": "SampledMagnetization.source_path/source_format/dataset/sample_index",
-        "type": "optional",
+        "python": "init.SampledMagnetization.source_path",
+        "type": "str | None",
         "default": "None",
         "si_unit": "$1$",
-        "validation": "typed when supplied",
-        "meaning": "sample provenance and selection",
-        "backend_support": "FEM/FDM CPU/GPU: IR; resolver-specific",
-        "problem_ir": "source metadata"
+        "validation": "optional string provenance",
+        "meaning": "origin path of loaded state artifact",
+        "backend_support": "Python provenance metadata (not emitted by `to_ir()`)",
+        "problem_ir": "Python provenance only"
+      },
+      {
+        "python": "init.SampledMagnetization.source_format",
+        "type": "str | None",
+        "default": "None",
+        "si_unit": "$1$",
+        "validation": "optional format tag (`json`, `zarr`, `h5`, `ovf`, `npz`, `npy`)",
+        "meaning": "source serialization format",
+        "backend_support": "Python provenance metadata (not emitted by `to_ir()`)",
+        "problem_ir": "Python provenance only"
+      },
+      {
+        "python": "init.SampledMagnetization.dataset",
+        "type": "str | None",
+        "default": "None",
+        "si_unit": "$1$",
+        "validation": "optional dataset key",
+        "meaning": "dataset name selected from container file",
+        "backend_support": "Python provenance metadata (not emitted by `to_ir()`)",
+        "problem_ir": "Python provenance only"
+      },
+      {
+        "python": "init.SampledMagnetization.sample_index",
+        "type": "int | None",
+        "default": "None",
+        "si_unit": "$1$",
+        "validation": "optional integer sample index",
+        "meaning": "frame index selected from multi-sample archive",
+        "backend_support": "Python provenance metadata (not emitted by `to_ir()`)",
+        "problem_ir": "Python provenance only"
       }
     ],
     "returns": "typed ProblemIR record at to_ir()"

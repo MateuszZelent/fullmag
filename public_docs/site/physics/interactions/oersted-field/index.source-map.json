@@ -1,6 +1,7 @@
 {
   "document": {
-    "reviewed_revision": "ab3c8802a691a535063102c12f9a79bb0043b367",
+    "reviewed_revision": "752450f8d259ab97c76c36fe666d5474b02abe9a",
+    "reviewed_at": "2026-11-26",
     "path": "public_docs/site/physics/interactions/oersted-field/index.md",
     "title": "Oersted field",
     "interaction": "oersted field"
@@ -10,38 +11,247 @@
       "solver": "FDM",
       "device": "CPU",
       "status": "partial",
-      "reason": "Authoring, planning, runtime, and scientific qualification are reported separately on the page."
+      "reason": "Supports OerstedCylinder (Constant/Sinusoidal/Pulse) and OerstedField(source) via cylindrical lowering, static midpoint Biot-Savart (up to 4096 source cells), and OhmicPoisson/MagnetoresistivePoisson solved-current coupling."
     },
     {
       "solver": "FDM",
       "device": "GPU",
       "status": "partial",
-      "reason": "Device source presence does not replace executed-device evidence and precision-specific qualification."
+      "reason": "Supports +z Constant-envelope OerstedCylinder and lowered static fields; non-+z axes, time-varying cylinder envelopes, and general dynamic solved-current CUDA paths fail closed."
     },
     {
       "solver": "FEM",
       "device": "CPU",
       "status": "partial",
-      "reason": "The exact weak/discrete realization and bounded capability envelope remain lane-specific."
+      "reason": "Supports OerstedCylinder and bounded steady/charge-only OerstedField(source) via OE-T0 RT0 projection, multi-threaded OE-F1 DirectTetraQuadrature, and sparse equilibrated OE-F2 VectorPotentialSolver (up to 2M ND / 1M H1 DOFs)."
     },
     {
       "solver": "FEM",
       "device": "GPU",
       "status": "partial",
-      "reason": "Strict device residency and executed-device qualification remain separate evidence gates."
+      "reason": "Supports device-resident OerstedCylinder field scaling and opt-in OE-F1 CUDA 106-bit double-double GpuHybridFarField; standalone device-resident OE-F2 assembly/solve is not yet a strict GPU lane."
     }
   ],
   "sources": [
     {
-      "id": "python-owner",
+      "id": "python-oersted-cylinder",
+      "path": "packages/fullmag-py/src/fullmag/model/energy.py",
+      "symbol": "class OerstedCylinder",
+      "responsibility": "Analytic cylindrical conductor constructor and canonical IR lowering."
+    },
+    {
+      "id": "python-oersted-field",
       "path": "packages/fullmag-py/src/fullmag/model/energy.py",
       "symbol": "class OerstedField",
-      "responsibility": "Own the public interaction constructor, validation, or canonical IR lowering boundary."
+      "responsibility": "Named current-source Oersted constructor and canonical IR lowering."
+    },
+    {
+      "id": "python-current-transport",
+      "path": "packages/fullmag-py/src/fullmag/model/current_transport.py",
+      "symbol": "class CurrentTransport",
+      "responsibility": "Prescribed-density and solved charge-transport source with closure contracts."
+    },
+    {
+      "id": "ir-vp-max-nd-dofs",
+      "path": "crates/fullmag-ir/src/antenna.rs",
+      "symbol": "ANTENNA_VECTOR_POTENTIAL_MAX_ND_DOFS",
+      "responsibility": "Canonical ND DOF cap (2,000,000) for sparse OE-F2 vector-potential solves."
+    },
+    {
+      "id": "ir-vp-max-h1-dofs",
+      "path": "crates/fullmag-ir/src/antenna.rs",
+      "symbol": "ANTENNA_VECTOR_POTENTIAL_MAX_H1_DOFS",
+      "responsibility": "Canonical H1 gauge-multiplier DOF cap (1,000,000) for sparse OE-F2 solves."
+    },
+    {
+      "id": "plan-fdm-oersted",
+      "path": "crates/fullmag-plan/src/oersted.rs",
+      "symbol": "resolve_fdm_oersted_term",
+      "responsibility": "FDM cylinder lowering, static midpoint Biot-Savart, and solved-current resolution."
+    },
+    {
+      "id": "plan-fem-oersted",
+      "path": "crates/fullmag-plan/src/oersted.rs",
+      "symbol": "resolve_fem_oersted_term",
+      "responsibility": "FEM Oersted capability validation and OE-F1/OE-F2 realization selection."
+    },
+    {
+      "id": "plan-solved-current",
+      "path": "crates/fullmag-plan/src/oersted.rs",
+      "symbol": "resolve_solved_current_source",
+      "responsibility": "OhmicPoisson and MagnetoresistivePoisson solved-current source binding."
+    },
+    {
+      "id": "fem-cpu-cylinder",
+      "path": "backends/fem/cpu/mfem/interactions/oersted_cylinder.cpp",
+      "symbol": "initialize_oersted_cylinder_field",
+      "responsibility": "FEM CPU analytic cylindrical conductor nodal evaluation."
+    },
+    {
+      "id": "fem-cpu-rt0-projection",
+      "path": "backends/fem/cpu/mfem/transport/terminal_constrained_rt0_projection.hpp",
+      "symbol": "class TerminalConstrainedRt0Projection",
+      "responsibility": "OE-T0 conservative RT0 KKT current projection."
+    },
+    {
+      "id": "fem-cpu-direct-tetra",
+      "path": "backends/fem/cpu/mfem/interactions/oersted/direct_tetra_quadrature.hpp",
+      "symbol": "class DirectTetraQuadrature",
+      "responsibility": "OE-F1 parallel CPU and hybrid-GPU tetrahedral Biot-Savart quadrature."
+    },
+    {
+      "id": "fem-cpu-vector-potential",
+      "path": "backends/fem/cpu/mfem/interactions/oersted/vector_potential.hpp",
+      "symbol": "class VectorPotentialSolver",
+      "responsibility": "OE-F2 H(curl) x H1_0 sparse equilibrated vector-potential solver."
+    },
+    {
+      "id": "fem-cpu-sparse-solver",
+      "path": "backends/fem/cpu/mfem/common/sparse_linear_solver.hpp",
+      "symbol": "class SparseLinearSolver",
+      "responsibility": "Shared sparse MUMPS direct and Hypre AMS/BoomerAMG iterative linear solver."
+    },
+    {
+      "id": "fem-cpu-equilibration",
+      "path": "backends/fem/cpu/mfem/common/sparse_linear_solver.cpp",
+      "symbol": "compute_saddle_point_equilibration_beta",
+      "responsibility": "Saddle-point block scaling balancing H(curl) and H1_0 blocks."
+    },
+    {
+      "id": "fem-gpu-farfield",
+      "path": "backends/fem/gpu/cuda/interactions/oersted/direct_tetra_farfield_kernels.cu",
+      "symbol": "fullmag_cuda_direct_tetra_evaluate_root_farfield",
+      "responsibility": "OE-F1 CUDA 106-bit double-double GpuHybridFarField kernel."
+    },
+    {
+      "id": "fem-gpu-scaled-add",
+      "path": "backends/fem/gpu/cuda/interactions/oersted/oersted_kernels.cu",
+      "symbol": "fullmag_cuda_add_scaled_field_inplace",
+      "responsibility": "FEM GPU time-envelope scaled Oersted field accumulation kernel."
     }
   ],
-  "symbols": [],
-  "equations": [],
+  "symbols": [
+    {"id": "I", "latex": "$I$", "meaning": "signed conductor current", "si_unit": "$\\mathrm{A}$"},
+    {"id": "R", "latex": "$R$", "meaning": "analytic cylinder radius", "si_unit": "$\\mathrm{m}$"},
+    {"id": "rho", "latex": "$\\rho$", "meaning": "distance from the cylinder axis", "si_unit": "$\\mathrm{m}$"},
+    {"id": "Jc", "latex": "$\\mathbf J_c$", "meaning": "conventional current-density field", "si_unit": "$\\mathrm{A\\,m^{-2}}$"},
+    {"id": "Hoe", "latex": "$\\mathbf H_{\\mathrm{oe}}$", "meaning": "Oersted magnetic field", "si_unit": "$\\mathrm{A\\,m^{-1}}$"},
+    {"id": "Boe", "latex": "$\\mathbf B_{\\mathrm{oe}}$", "meaning": "Oersted flux density", "si_unit": "$\\mathrm{T}$"},
+    {"id": "A", "latex": "$\\mathbf A$", "meaning": "magnetic vector potential", "si_unit": "$\\mathrm{T\\,m}$"},
+    {"id": "p", "latex": "$p$", "meaning": "Coulomb-gauge saddle-point multiplier", "si_unit": "$\\mathrm{A\\,m^{-1}}$"},
+    {"id": "Omega_c", "latex": "$\\Omega_c$", "meaning": "conducting domain", "si_unit": "$\\mathrm{m^3}$"},
+    {"id": "dVp", "latex": "$\\mathrm dV'$", "meaning": "source volume measure", "si_unit": "$\\mathrm{m^3}$"}
+  ],
+  "equations": [
+    {
+      "id": "eq-public-oersted-field-oersted-cylinder",
+      "symbols": ["Hoe", "I", "R", "rho"],
+      "sources": ["python-oersted-cylinder", "plan-fdm-oersted", "fem-cpu-cylinder", "fem-gpu-scaled-add"]
+    },
+    {
+      "id": "eq-public-oersted-field-oersted-biot-savart",
+      "symbols": ["Hoe", "Jc", "Omega_c", "dVp"],
+      "sources": ["python-oersted-field", "plan-fdm-oersted", "plan-solved-current", "fem-cpu-direct-tetra", "fem-gpu-farfield"]
+    },
+    {
+      "id": "eq-public-oersted-field-oersted-vector-potential",
+      "symbols": ["A", "p", "Jc", "Hoe"],
+      "sources": ["plan-fem-oersted", "fem-cpu-vector-potential", "fem-cpu-sparse-solver", "fem-cpu-equilibration", "ir-vp-max-nd-dofs", "ir-vp-max-h1-dofs"]
+    }
+  ],
   "public_api": {
-    "parameters": []
+    "constructors": ["fullmag.OerstedCylinder", "fullmag.OerstedField", "fullmag.CurrentTransport"],
+    "parameters": [
+      {
+        "python": "fm.OerstedCylinder.current",
+        "type": "float",
+        "default": "required",
+        "si_unit": "$\\mathrm{A}$",
+        "validation": "finite float at IR/planner boundary",
+        "meaning": "signed axial conductor current $I$",
+        "backend_support": "FDM CPU/GPU, FEM CPU/GPU",
+        "problem_ir": "energy_terms[].current"
+      },
+      {
+        "python": "fm.OerstedCylinder.radius",
+        "type": "float",
+        "default": "required",
+        "si_unit": "$\\mathrm{m}$",
+        "validation": "strictly positive finite float at IR/planner boundary",
+        "meaning": "conductor cylinder radius $R$",
+        "backend_support": "FDM CPU/GPU, FEM CPU/GPU",
+        "problem_ir": "energy_terms[].radius"
+      },
+      {
+        "python": "fm.OerstedCylinder.center",
+        "type": "Sequence[float]",
+        "default": "(0.0, 0.0, 0.0)",
+        "si_unit": "$\\mathrm{m}$",
+        "validation": "3-vector float conversion; finite at IR boundary",
+        "meaning": "reference point on the cylinder axis",
+        "backend_support": "FDM CPU/GPU, FEM CPU/GPU",
+        "problem_ir": "energy_terms[].center"
+      },
+      {
+        "python": "fm.OerstedCylinder.axis",
+        "type": "Sequence[float]",
+        "default": "(0.0, 0.0, 1.0)",
+        "si_unit": "$1$",
+        "validation": "non-zero 3-vector normalized at planner boundary",
+        "meaning": "unit cylinder axis $\\hat{\\mathbf a}$ (`+z` required on FDM CUDA)",
+        "backend_support": "FDM CPU/GPU (`+z`), FEM CPU/GPU",
+        "problem_ir": "energy_terms[].axis"
+      },
+      {
+        "python": "fm.OerstedCylinder.time_dependence",
+        "type": "TimeDependence | None",
+        "default": "None",
+        "si_unit": "—",
+        "validation": "optional `Constant`, `Sinusoidal`, or `Pulse` envelope",
+        "meaning": "scalar envelope multiplying $\\mathbf H_{\\mathrm{oe}}$ (`Constant` only on FDM CUDA)",
+        "backend_support": "FDM CPU, FDM GPU (`Constant`), FEM CPU/GPU",
+        "problem_ir": "energy_terms[].time_dependence"
+      },
+      {
+        "python": "fm.OerstedCylinder.id",
+        "type": "str",
+        "default": "\"oersted:cylinder\"",
+        "si_unit": "—",
+        "validation": "non-empty stable identifier",
+        "meaning": "stable energy-term identifier for provenance and observables",
+        "backend_support": "FDM CPU/GPU, FEM CPU/GPU",
+        "problem_ir": "energy_terms[].id"
+      },
+      {
+        "python": "fm.OerstedField.source",
+        "type": "str",
+        "default": "required",
+        "si_unit": "—",
+        "validation": "non-empty named `CurrentTransport` reference",
+        "meaning": "named current-transport source driving $\\mathbf H_{\\mathrm{oe}}$",
+        "backend_support": "FDM CPU/GPU (bounded), FEM CPU (`OE-F1`/`OE-F2`), FEM GPU (partial)",
+        "problem_ir": "energy_terms[].source"
+      },
+      {
+        "python": "fm.OerstedField.model",
+        "type": "str",
+        "default": "\"from_current_solution\"",
+        "si_unit": "—",
+        "validation": "canonical enum checked at IR/planner boundary",
+        "meaning": "current-derived Oersted model selector",
+        "backend_support": "FDM CPU/GPU (bounded), FEM CPU, FEM GPU (partial)",
+        "problem_ir": "energy_terms[].model"
+      },
+      {
+        "python": "fm.OerstedField.id",
+        "type": "str | None",
+        "default": "None",
+        "si_unit": "—",
+        "validation": "defaults to `f\"oersted:{source}\"` when omitted",
+        "meaning": "stable energy-term identifier",
+        "backend_support": "FDM CPU/GPU (bounded), FEM CPU, FEM GPU (partial)",
+        "problem_ir": "energy_terms[].id"
+      }
+    ]
   }
 }

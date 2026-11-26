@@ -1,21 +1,21 @@
 {
   "document": {
     "path": "public_docs/site/numerical-methods/eigensolvers/modal-validation.md",
-    "reviewed_revision": "5e99782acbb7fb3f65d0cad872e102bf67733103",
+    "reviewed_revision": "752450f8d259ab97c76c36fe666d5474b02abe9a",
     "source_of_truth": "/physics/foundations/llg-equation, /physics/interactions/demagnetization/validation"
   },
   "backend_matrix": [
-    {"solver": "FEM", "device": "CPU", "status": "source-backed"},
-    {"solver": "FEM", "device": "GPU", "status": "partial", "reason": "Validation requires independently proven GPU execution identity."},
+    {"solver": "FEM", "device": "CPU", "status": "implemented"},
+    {"solver": "FEM", "device": "GPU", "status": "partial", "reason": "Open-airbox K0 GPU parity is RTX 4080 SUPER verified on archived sphere checkpoints; GPU Floquet physical parity and full window campaigns remain open."},
     {"solver": "FDM", "device": "CPU", "status": "unsupported", "reason": "No native FDM modal lane is claimed."},
-    {"solver": "FDM", "device": "GPU", "status": "unsupported", "reason": "No native CUDA modal lane is claimed."}
+    {"solver": "FDM", "device": "GPU", "status": "unsupported", "reason": "No native CUDA FDM modal lane is claimed."}
   ],
   "equations": [
-    {"id": "eq-numerical-modal-validation-relative-error", "symbols": ["fnum", "fref", "eps", "epsmax", "j"], "sources": ["dispersion", "kittel", "native"]},
+    {"id": "eq-numerical-modal-validation-relative-error", "symbols": ["fnum", "fref", "eps", "epsmax", "j"], "sources": ["dispersion", "kittel", "native", "comsol_bench"]},
     {"id": "eq-numerical-modal-validation-kittel", "symbols": ["fnum", "fkit", "H", "df", "j"], "sources": ["kittel", "runner_kittel_artifacts", "runner_sweep_exec"]},
     {"id": "eq-numerical-modal-validation-kittel-models", "symbols": ["fLarmor", "ffilm", "fdemag", "H0", "Meff", "Ms", "gamma0", "Nxyz"], "sources": ["kittel", "runner_kittel_synth", "runner_periodic_k0", "runner_sweep_oracle"]},
     {"id": "eq-numerical-modal-validation-kalinikos-slavin", "symbols": ["fks", "P00", "gamma0", "H0", "Ms", "d", "lex", "k", "phik"], "sources": ["dispersion", "dispersion_scenario", "planner_fem_eigen"]},
-    {"id": "eq-numerical-modal-validation-overlap", "symbols": ["epseig", "rq", "rphi", "Aqq", "Aqphi", "Aphiq", "Pmat", "Bqq", "qvec", "phivec", "lambda", "Mmass", "Oab"], "sources": ["coupled_residuals", "residual_cert", "floquet_cert_mode", "runner_tracking", "runner_mass_metric"]}
+    {"id": "eq-numerical-modal-validation-overlap", "symbols": ["epseig", "rq", "rphi", "Aqq", "Aqphi", "Aphiq", "Pmat", "Bqq", "qvec", "phivec", "lambda", "Mmass", "Oab"], "sources": ["coupled_residuals", "residual_cert", "floquet_cert_mode", "runner_tracking", "runner_mass_metric", "gpu_cudss_budget", "gpu_window_count"]}
   ],
   "symbols": [
     {"id": "fnum", "latex": "$f_j^{\\mathrm{num}}$", "meaning": "computed modal eigenfrequency at validation sample $j$", "si_unit": "$\\mathrm{Hz}$"},
@@ -59,6 +59,7 @@
     {"id": "dispersion", "path": "packages/fullmag-py/src/fullmag/model/eigen.py", "symbol": "class ThinFilmDEBVDispersionValidation", "responsibility": "Dispersion validation schema."},
     {"id": "kittel_sample", "path": "packages/fullmag-py/src/fullmag/model/eigen.py", "symbol": "class K0KittelFieldSample", "responsibility": "Bias-field sweep sample schema."},
     {"id": "kittel", "path": "packages/fullmag-py/src/fullmag/model/eigen.py", "symbol": "class K0KittelFieldSweepValidation", "responsibility": "Kittel field-sweep validation schema."},
+    {"id": "comsol_bench", "path": "tests/standard_problems/mumag/comsol_nonzero_k_dispersion/config.py", "symbol": "BENCHMARK_ID", "responsibility": "Canonical SI configuration for COMSOL-aligned nonzero-k antidot benchmark."},
     {"id": "planner_fem_eigen", "path": "crates/fullmag-plan/src/fem.rs", "symbol": "plan_fem_eigen", "responsibility": "Resolves FemEigenPlanIR and validation metadata."},
     {"id": "runner_kittel_artifacts", "path": "crates/fullmag-runner/src/fem/eigen_path.rs", "symbol": "append_eigen_path_k0_kittel_validation_artifacts", "responsibility": "Appends k=0 Kittel validation comparison artifacts."},
     {"id": "runner_periodic_k0", "path": "crates/fullmag-runner/src/fem/eigen_path.rs", "symbol": "eigen_path_periodic_airbox_k0_metrics_from_single_k_artifacts", "responsibility": "Computes periodic-airbox k=0 thin-film Kittel metrics."},
@@ -72,7 +73,9 @@
     {"id": "coupled_residuals", "path": "backends/fem/cpu/frequency_domain/poisson_airbox_modal_eigen.hpp", "symbol": "evaluate_poisson_airbox_modal_residuals", "responsibility": "Evaluates coupled magnetic and Poisson block residuals."},
     {"id": "residual_cert", "path": "backends/fem/cpu/frequency_domain/poisson_airbox_modal_eigen.hpp", "symbol": "apply_poisson_airbox_modal_residual_certification", "responsibility": "Enforces coupled residual acceptance criteria."},
     {"id": "floquet_cert_mode", "path": "backends/fem/include/frequency_domain/floquet_dynamic_demag_k.hpp", "symbol": "certify_floquet_realified_mode", "responsibility": "Certifies complex Floquet modes reconstructed from real-split pencils."},
-    {"id": "shifted_ksp_conv", "path": "backends/fem/cpu/frequency_domain/modal/shifted_ksp_true_convergence.hpp", "symbol": "floquet_shifted_true_convergence_test", "responsibility": "Enforces true unpreconditioned KSP residual convergence."}
+    {"id": "shifted_ksp_conv", "path": "backends/fem/cpu/frequency_domain/modal/shifted_ksp_true_convergence.hpp", "symbol": "floquet_shifted_true_convergence_test", "responsibility": "Enforces true unpreconditioned KSP residual convergence."},
+    {"id": "gpu_cudss_budget", "path": "backends/fem/gpu/frequency_domain/modal_cudss_shift.cpp", "symbol": "check_device_memory_budget", "responsibility": "Enforces fail-closed GPU cuDSS VRAM admission before factorization."},
+    {"id": "gpu_window_count", "path": "backends/fem/gpu/frequency_domain/modal_augmented_window_count.cpp", "symbol": "count_airbox_augmented_window", "responsibility": "Exact-shift inertia cache and window mode counting for GPU K0 and Floquet."}
   ],
   "public_api": {
     "parameters": [

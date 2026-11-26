@@ -9,10 +9,19 @@ owner: fullmag-public-docs
 (public-docs-frontend-meshing-fdm-grid-view)=
 # FDM Grid Inspector
 
-FDM meshing is planner-owned structured-grid execution, not an interactive tetrahedral build. The
-Control Room therefore exposes FDM object and region grids as read-only resources.
+FDM meshing separates **global grid sizing and build authoring** from **realized grid/cell
+inspection**. Selecting the study **Mesh** root (`Discretization & Mesh`, implemented by
+`MeshRootInspectorSpecPanel`) provides interactive structured-grid configuration:
 
-Displayed evidence includes:
+- **Z-stack mode**: switch between `Single 3D grid` (`single_3d`) and `Multilayer Z-slices` (`multilayer`);
+- **Sizing definition**: author either voxel cell spacing (`Cell size Δ`) in SI units or integer counts (`Cell count N`: $N_x, N_y, N_z$);
+- **Exchange-length guard**: automatically evaluates $l_{\mathrm{ex}}$ against the assigned magnetic material and warns when $\max \Delta > l_{\mathrm{ex}}$ (with a one-click quick fix setting $\Delta x, \Delta y \le 0.8\,l_{\mathrm{ex}}$);
+- **7-smooth FFT snap**: optional toggle (`fftSmoothSnap`) snapping $N_x, N_y$ to 7-smooth FFT sizes for fast demagnetization convolution;
+- **Save & Build Grid**: commits the updated discretization policy and runs `grid.build-fdm` (prompting via `MeshRebuildConfirmDialog` when re-voxelizing an already built grid).
+
+Once built, the realized grid, per-layer, and single-cell inspector nodes (`FdmGridInspectorSpecPanel`,
+`FdmGridLayerInspectorSpecPanel`, `FdmCellInspectorSpecPanel`) remain read-only evidence views
+exposing:
 
 - grid origin and cell-centre convention;
 - spacing and integer shape;
@@ -21,8 +30,7 @@ Displayed evidence includes:
 - canonical mask status;
 - grid fingerprint.
 
-FEM policy writes and FEM mesh-build commands are withheld in the FDM lane. To change resolution,
-edit the canonical Python/ProblemIR cell-size policy and re-plan or rerun the study. In the
+FEM-only policy writes and tetrahedral mesh-build commands remain withheld in the FDM lane. In the
 unified 3D canvas, `FdmCuboidLayer` renders active structured cells and region masks (`FMRM` /
 `FMBM`) cleanly without generating tetrahedral overlays.
 
@@ -36,5 +44,8 @@ unified 3D canvas, `FdmCuboidLayer` renders active structured cells and region m
 
 | Repository path | Stable symbol | Responsibility |
 |---|---|---|
+| `apps/control-room/src/modules/inspector/inspectors/mesh/MeshRootSpec.tsx` | `MeshRootInspectorSpecPanel` | Interactive FDM grid sizing, $l_{\mathrm{ex}}$ guard, 7-smooth FFT snap, and `grid.build-fdm` |
+| `apps/control-room/src/modules/inspector/inspectors/mesh/fdm/FdmGridSpec.tsx` | `FdmGridInspectorSpecPanel` | Read-only realized structured-grid inspector |
+| `apps/control-room/src/modules/inspector/inspectors/mesh/fdm/FdmGridLayerSpec.tsx` | `FdmGridLayerInspectorSpecPanel` | Read-only multilayer FDM grid-layer inspector |
+| `apps/control-room/src/modules/inspector/inspectors/mesh/fdm/FdmCellSpec.tsx` | `FdmCellInspectorSpecPanel` | Read-only single FDM cell inspection |
 | `apps/control-room/src/modules/inspector/panels/fdmMeshInspectorModel.ts` | `resolveFdmObjectMeshInspectorModel` | Grid identity and participation semantics |
-| `apps/control-room/src/modules/inspector/panels/ObjectMeshPolicyPanel.tsx` | `FdmObjectMeshPolicySection` | Read-only structured grid presentation |

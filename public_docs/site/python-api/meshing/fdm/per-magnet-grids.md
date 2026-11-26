@@ -82,15 +82,16 @@ study.stages.add_relax(stage_id="relax", algorithm="llg_overdamped", dt=5e-13, m
 | `FDMGrid.cell` | `Sequence[float]` | required | $\mathrm{m}$ | exactly three positive values | one native object grid | FDM CPU/GPU; FEM not applicable to Cartesian grid authoring | `backend_policy.discretization_hints.fdm.per_magnet[].cell` |
 | `FDM.per_magnet` | `dict[str, FDMGrid] \| None` | `None` | $1$ | non-empty string keys and `FDMGrid` values | object-name keyed overrides | FDM CPU/GPU; FEM not applicable to Cartesian grid authoring | `backend_policy.discretization_hints.fdm.per_magnet` |
 | `FDM.default_cell` | `Sequence[float] \| None` | `None` | $\mathrm{m}$ | required when the map is incomplete | fallback grid | FDM CPU/GPU; FEM not applicable to Cartesian grid authoring | `backend_policy.discretization_hints.fdm.default_cell` |
-| `FDMDemag` | `FDMDemag \| None` | `None` | $1$ | planner validates strategy/mode/grid policy | nonlocal coupling policy | FDM CPU/GPU; FEM not applicable to Cartesian grid authoring | `mesh_workflow` |
+| `FDM.demag` | `FDMDemag \| None` | `None` | $1$ | planner validates strategy/mode/grid policy | nonlocal coupling policy | FDM CPU/GPU; FEM not applicable to Cartesian grid authoring | `backend_policy.discretization_hints.fdm.demag` |
 
 `FDMGrid.__init__(cell)` rejects malformed or non-positive triples. `FDM.__init__`
 rejects empty names, non-`FDMGrid` values, and a missing default when no
-per-magnet grid can cover the authored objects.
+per-magnet grid can cover the authored objects. For FDM CPU and CUDA FFT acceleration
+details see {ref}`numerical-methods-performance-fdm-core`.
 
 (python-api-meshing-fdm-per-magnet-grids-problem-ir)=
 ## ProblemIR
-The request lowers to the mesh-workflow or discretization subtree; requested intent remains distinct from the resolved mesh asset and provenance report.
+The request lowers to `backend_policy.discretization_hints.fdm.*`; requested intent remains distinct from the resolved grid plan and provenance report.
 
 (python-api-meshing-fdm-per-magnet-grids-round-trip-and-failure-semantics)=
 ## Round-trip and failure semantics
@@ -98,11 +99,11 @@ Requested intent is the Python policy; resolved execution is the realized mesh r
 
 (python-api-meshing-fdm-per-magnet-grids-discrete-realization)=
 ## Discrete realization
-The backend consumes the realized Cartesian or finite-element asset, including topology, markers, quality, and provenance where available.
+The backend consumes the realized per-magnet Cartesian grid assets, including origins, masks, transfers, and provenance where available.
 
 ## 5. How to set it in Control Room
 
-Route: `Model Explorer -> Objects -> <object> -> Mesh` (`FdmObjectMeshPolicySection` in `ObjectMeshPolicyPanel.tsx`) and `Model Explorer -> Objects -> <object> -> Regions -> <region> -> Mesh` (`ObjectRegionMeshPanel.tsx`). Under FDM, Control Room displays per-object structured grid spacing, origin, shape, fingerprint, and region cell membership as `inspection-only` resources; authoring per-magnet `FDMGrid` mappings remains Python-only. See {doc}`/frontend/meshing/fdm-grid-view`, {doc}`/frontend/meshing/region-mesh`, and [Control Room capability register](/frontend/capability-register).
+Route: `Model Explorer -> Mesh` (`apps/control-room/src/modules/inspector/inspectors/mesh/MeshRootSpec.tsx`, `MeshRootInspectorSpecPanel`) provides interactive default FDM grid sizing and Z-slice mode, while `apps/control-room/src/modules/inspector/inspectors/mesh/fdm/FdmGridSpec.tsx` (`FdmGridInspectorSpecPanel`) and `Model Explorer -> Objects -> <object> -> Regions -> <region> -> Mesh` (`apps/control-room/src/modules/inspector/inspectors/objects/regions/RegionMeshSpec.tsx`, `ObjectRegionMeshInspectorPanel`) inspect per-object structured grid spacing, origin, shape, fingerprint, and region cell membership as `inspection-only` resources. Authoring explicit per-magnet `FDMGrid` mappings remains Python-only. See {doc}`/frontend/meshing/fdm-grid-view`, {doc}`/frontend/meshing/region-mesh`, and [Control Room capability register](/frontend/capability-register).
 
 (python-api-meshing-fdm-per-magnet-grids-implementation-mapping)=
 ## 6. Backend and frontend support
@@ -111,7 +112,7 @@ Route: `Model Explorer -> Objects -> <object> -> Mesh` (`FdmObjectMeshPolicySect
 |---|---|---|
 | FDM CPU/GPU | planner-gated | Native grids are representable; multilayer coupling needs capability evidence. |
 | FEM CPU/GPU | not applicable | This is an FDM grid contract. |
-| Control Room | inspection-only | Per-object grid and region membership views are read-only; authoring per-magnet grids remains Python-only. |
+| Control Room | partial / inspection-only | Default FDM sizing is interactive in `MeshRootSpec.tsx`; per-magnet `FDMGrid` mappings are authored in Python and inspected read-only. |
 
 (python-api-meshing-fdm-per-magnet-grids-validation)=
 ## Validation
@@ -136,7 +137,7 @@ Focused constructor, lowering, and mesh-report tests are the evidence boundary f
 
 | Claim | Repository path | Stable symbol | Evidence |
 |---|---|---|---|
-| per-magnet grid policy and lowering | [`packages/fullmag-py/src/fullmag/model/discretization.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/discretization.py#L19) | [`class FDM`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/discretization.py#L19) | constructor and API tests |
-| per-magnet cell-size validation | [`packages/fullmag-py/src/fullmag/model/discretization.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/discretization.py#L19) | [`class FDMGrid`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/discretization.py#L19) | constructor and API tests |
+| per-magnet grid policy and lowering | [`packages/fullmag-py/src/fullmag/model/discretization.py`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/model/discretization.py#L220) | [`class FDM`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/model/discretization.py#L220) | constructor and API tests |
+| per-magnet cell-size validation | [`packages/fullmag-py/src/fullmag/model/discretization.py`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/model/discretization.py#L19) | [`class FDMGrid`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/model/discretization.py#L19) | constructor and API tests |
 | per-magnet validation | `packages/fullmag-py/src/fullmag/model/discretization.py` | `FDMGrid.__init__` | constructor implementation |
 | map lowering | `packages/fullmag-py/src/fullmag/model/discretization.py` | `FDM.__init__`, `FDM.to_ir` | source-backed IR contract |

@@ -1,7 +1,7 @@
 {
   "document": {
     "path": "public_docs/site/python-api/meshing/fem/airbox/geometry.md",
-    "reviewed_revision": "ab3c8802a691a535063102c12f9a79bb0043b367"
+    "reviewed_revision": "752450f8d259ab97c76c36fe666d5474b02abe9a"
   },
   "backend_matrix": [
     {
@@ -35,25 +35,31 @@
       "path": "packages/fullmag-py/src/fullmag/meshing/_gmsh_types.py",
       "symbol": "class AirboxOptions",
       "responsibility": "Airbox option schema and validation."
+    },
+    {
+      "id": "source-2",
+      "path": "packages/fullmag-py/src/fullmag/world.py",
+      "symbol": "class StudyUniverseHandle",
+      "responsibility": "Stage-first universe geometry and airbox mesh facade."
     }
   ],
   "public_api": {
     "parameters": [
       {
         "python": "mode",
-        "type": "`str`",
-        "default": "required",
-        "si_unit": "1",
-        "validation": "e.g. `\"manual\"`",
+        "type": "`str | None`",
+        "default": "`None`",
+        "si_unit": "$1$",
+        "validation": "`\"auto\"` or `\"manual\"`",
         "meaning": "universe definition mode",
         "backend_support": "FEM CPU/GPU; FDM not applicable to this mesh policy",
         "problem_ir": "`mesh_workflow`"
       },
       {
         "python": "size",
-        "type": "`Sequence[float]`",
-        "default": "required in manual",
-        "si_unit": "\\mathrm{m}",
+        "type": "`Sequence[float] | None`",
+        "default": "`None` (required in manual)",
+        "si_unit": "$\\mathrm{m}$",
         "validation": "three positive values",
         "meaning": "dimensions $(L_x, L_y, L_z)$",
         "backend_support": "FEM CPU/GPU; FDM not applicable to this mesh policy",
@@ -61,31 +67,21 @@
       },
       {
         "python": "padding",
-        "type": "advanced resource policy",
-        "default": "resource-specific",
-        "si_unit": "\\mathrm{m}$ / $1",
-        "validation": "resource validation",
-        "meaning": "additional generation options (Control Room/API)",
+        "type": "`Sequence[float] | None`",
+        "default": "`None`",
+        "si_unit": "$\\mathrm{m}$",
+        "validation": "three non-negative values",
+        "meaning": "exterior clearance vector",
         "backend_support": "FEM CPU/GPU; FDM not applicable to this mesh policy",
         "problem_ir": "`mesh_workflow`"
       },
       {
         "python": "center",
-        "type": "advanced resource policy",
-        "default": "resource-specific",
-        "si_unit": "\\mathrm{m}$ / $1",
-        "validation": "resource validation",
-        "meaning": "additional generation options (Control Room/API)",
-        "backend_support": "FEM CPU/GPU; FDM not applicable to this mesh policy",
-        "problem_ir": "`mesh_workflow`"
-      },
-      {
-        "python": "shape options",
-        "type": "advanced resource policy",
-        "default": "resource-specific",
-        "si_unit": "\\mathrm{m}$ / $1",
-        "validation": "resource validation",
-        "meaning": "additional generation options (Control Room/API)",
+        "type": "`Sequence[float] | None`",
+        "default": "`None`",
+        "si_unit": "$\\mathrm{m}$",
+        "validation": "three finite coordinates",
+        "meaning": "explicit exterior box center",
         "backend_support": "FEM CPU/GPU; FDM not applicable to this mesh policy",
         "problem_ir": "`mesh_workflow`"
       }

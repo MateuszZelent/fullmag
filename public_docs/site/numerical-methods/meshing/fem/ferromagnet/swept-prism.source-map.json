@@ -1,44 +1,387 @@
 {
-  "document":{"path":"public_docs/site/numerical-methods/meshing/fem/ferromagnet/swept-prism.md","reviewed_revision":"969efa0941905825ac569d525f4bdaefc059e2af"},
-  "backend_matrix":[
-    {"solver":"FEM","device":"CPU","status":"source-backed-capability-gated"},
-    {"solver":"FEM","device":"GPU","status":"source-backed-capability-gated"},
-    {"solver":"FDM","device":"CPU","status":"not-applicable","reason":"This page documents FEM meshing."},
-    {"solver":"FDM","device":"GPU","status":"not-applicable","reason":"This page documents FEM meshing."}],
-  "sources":[
-    {"id":"authoring","path":"packages/fullmag-py/src/fullmag/world.py","symbol":"thin_film","responsibility":"Public strict prismatic authoring and lowering."},
-    {"id":"recipe","path":"packages/fullmag-py/src/fullmag/model/discretization.py","symbol":"class PerObjectMeshRecipe","responsibility":"Stores and validates mesh policy fields."},
-    {"id":"generator","path":"packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py","symbol":"generate_swept_mesh","responsibility":"Dispatches native swept meshing."},
-    {"id":"capability","path":"apps/control-room/src/modules/inspector/panels/ObjectMeshPolicyPanelModel.ts","symbol":"resolveObjectMeshTopologyCapabilities","responsibility":"Gates exact layered prism authoring."},
-    {"id":"prism_test","path":"packages/fullmag-py/tests/test_mixed_element_meshing.py","symbol":"test_body_only_box_prism_mesh_has_exact_requested_layers","responsibility":"Checks native prism layers and planes."}],
-  "symbols":[
-    {"id":"layers","latex":"$n$","meaning":"Requested element-layer count","si_unit":"$1$"},
-    {"id":"planes","latex":"$N_{\\mathrm{planes}}$","meaning":"Resolved node-plane count","si_unit":"$1$"},
-    {"id":"family","latex":"$t_c$","meaning":"Swept-body cell family","si_unit":"$1$"},
-    {"id":"cell","latex":"$c$","meaning":"Volume-cell ordinal","si_unit":"$1$"}],
-  "equations":[{"id":"eq-swept-prism-layer-planes","symbols":["layers","planes","family"],"sources":["generator","prism_test"]}],
-  "public_api":{"parameters":[
-    {"python":"hmax","type":"float | str | None","default":"None","si_unit":"$\\mathrm{m}$","validation":"positive finite number or `auto`; overridden by `maximum_element_size`","meaning":"Compatibility maximum-size alias","backend_support":"FEM capability-gated; FDM N/A","problem_ir":"maximum_element_size"},
-    {"python":"hmin","type":"float | None","default":"None","si_unit":"$\\mathrm{m}$","validation":"positive; overridden by `minimum_element_size`; resolved minimum must not exceed numeric maximum","meaning":"Compatibility minimum-size alias","backend_support":"FEM capability-gated; FDM N/A","problem_ir":"minimum_element_size"},
-    {"python":"maximum_element_size","type":"float | str | None","default":"None","si_unit":"$\\mathrm{m}$","validation":"positive finite number or `auto`; takes precedence over `hmax`","meaning":"In-plane size ceiling","backend_support":"FEM capability-gated; FDM N/A","problem_ir":"maximum_element_size"},
-    {"python":"minimum_element_size","type":"float | None","default":"None","si_unit":"$\\mathrm{m}$","validation":"positive; takes precedence over `hmin`; must not exceed numeric maximum","meaning":"Lower size bound","backend_support":"FEM capability-gated; FDM N/A","problem_ir":"minimum_element_size"},
-    {"python":"curvature_factor","type":"float | None","default":"None","si_unit":"$1$","validation":"float-convertible; downstream recipe requires a positive value when set","meaning":"Curvature-refinement strength","backend_support":"FEM capability-gated; FDM N/A","problem_ir":"curvature_factor"},
-    {"python":"narrow_region_resolution","type":"float | None","default":"None","si_unit":"$1$","validation":"float-convertible; downstream recipe requires a positive value when set","meaning":"Narrow-region refinement strength","backend_support":"FEM capability-gated; FDM N/A","problem_ir":"narrow_region_resolution"},
-    {"python":"layers","type":"int","default":"1","si_unit":"$1$","validation":"bool rejected; integer at least 1","meaning":"Requested element-layer count","backend_support":"FEM capability-gated; FDM N/A","problem_ir":"through_thickness_elements"},
-    {"python":"topology","type":"Literal[\"tetrahedral\", \"prismatic\"] | None","default":"None","si_unit":"$1$","validation":"one of `None`, `tetrahedral`, `prismatic`","meaning":"Thin-film topology","backend_support":"FEM capability-gated; FDM N/A","problem_ir":"topology"},
-    {"python":"exact_layers","type":"bool | None","default":"None","si_unit":"$1$","validation":"Boolean; only valid with prismatic topology; strict prismatic rejects `False` outside extended mode","meaning":"Strict layer-count intent","backend_support":"FEM capability-gated; FDM N/A","problem_ir":"exact_layer_count"},
-    {"python":"transition","type":"Literal[\"pyramid_to_tetrahedra\", \"reject\"] | None","default":"None","si_unit":"$1$","validation":"only valid with prismatic topology; prismatic resolves or requires `pyramid_to_tetrahedra`","meaning":"Shared-domain transition","backend_support":"FEM capability-gated; FDM N/A","problem_ir":"transition_policy"},
-    {"python":"order","type":"int | None","default":"None","si_unit":"$1$","validation":"prismatic topology accepts only `None` or `1` and lowers to P1","meaning":"FEM polynomial order","backend_support":"FEM capability-gated; FDM N/A","problem_ir":"order"},
-    {"python":"interface_maximum_element_size","type":"float | None","default":"None","si_unit":"$\\mathrm{m}$","validation":"positive; used unless `surface_maximum_element_size` is set","meaning":"Interface size ceiling","backend_support":"FEM capability-gated; FDM N/A","problem_ir":"interface_hmax"},
-    {"python":"surface_maximum_element_size","type":"float | None","default":"None","si_unit":"$\\mathrm{m}$","validation":"positive; takes precedence over `interface_maximum_element_size`","meaning":"Surface alias for interface size","backend_support":"FEM capability-gated; FDM N/A","problem_ir":"interface_hmax"},
-    {"python":"interface_thickness","type":"float | None","default":"None","si_unit":"$\\mathrm{m}$","validation":"positive; used unless `surface_thickness` is set","meaning":"Interface refinement-shell thickness","backend_support":"FEM capability-gated; FDM N/A","problem_ir":"interface_thickness"},
-    {"python":"surface_thickness","type":"float | None","default":"None","si_unit":"$\\mathrm{m}$","validation":"positive; takes precedence over `interface_thickness`","meaning":"Surface alias for interface shell","backend_support":"FEM capability-gated; FDM N/A","problem_ir":"interface_thickness"},
-    {"python":"transition_distance","type":"float | str | None","default":"None","si_unit":"$\\mathrm{m}$","validation":"number at least 0 or `airbox_boundary`, `airbox-boundary`, `auto_boundary`; sentinels normalize to `airbox_boundary`; used unless surface alias is set","meaning":"Interface-to-core transition distance","backend_support":"FEM capability-gated; FDM N/A","problem_ir":"transition_distance"},
-    {"python":"surface_transition_distance","type":"float | str | None","default":"None","si_unit":"$\\mathrm{m}$","validation":"number at least 0 or `airbox_boundary`, `airbox-boundary`, `auto_boundary`; sentinels normalize to `airbox_boundary`; takes precedence over `transition_distance`","meaning":"Surface alias for transition distance","backend_support":"FEM capability-gated; FDM N/A","problem_ir":"transition_distance"},
-    {"python":"edge_maximum_element_size","type":"float | None","default":"None","si_unit":"$\\mathrm{m}$","validation":"positive; must be paired with `edge_thickness`","meaning":"Edge size ceiling","backend_support":"FEM capability-gated; FDM N/A","problem_ir":"edge_hmax"},
-    {"python":"edge_thickness","type":"float | None","default":"None","si_unit":"$\\mathrm{m}$","validation":"positive; paired with `edge_maximum_element_size`; for Box geometry smaller than half the shorter in-plane dimension","meaning":"Edge refinement-shell thickness","backend_support":"FEM capability-gated; FDM N/A","problem_ir":"edge_thickness"},
-    {"python":"edge_transition_distance","type":"float | str | None","default":"None","si_unit":"$\\mathrm{m}$","validation":"positive number or `airbox_boundary`, `airbox-boundary`, `auto_boundary`; sentinels normalize to `airbox_boundary`; requires the edge pair","meaning":"Edge-to-core transition distance","backend_support":"FEM capability-gated; FDM N/A","problem_ir":"edge_transition_distance"},
-    {"python":"corner_maximum_element_size","type":"float | None","default":"None","si_unit":"$\\mathrm{m}$","validation":"positive; paired with `corner_extent`; when edge size is set must not exceed `edge_maximum_element_size`","meaning":"Corner size ceiling","backend_support":"FEM capability-gated; FDM N/A","problem_ir":"corner_hmax"},
-    {"python":"corner_extent","type":"float | None","default":"None","si_unit":"$\\mathrm{m}$","validation":"positive; paired with `corner_maximum_element_size`; for Box geometry smaller than half the shorter in-plane dimension","meaning":"Corner refinement extent","backend_support":"FEM capability-gated; FDM N/A","problem_ir":"corner_extent"},
-    {"python":"corner_transition_distance","type":"float | str | None","default":"None","si_unit":"$\\mathrm{m}$","validation":"positive number or `airbox_boundary`, `airbox-boundary`, `auto_boundary`; sentinels normalize to `airbox_boundary`; requires the corner pair","meaning":"Corner-to-core transition distance","backend_support":"FEM capability-gated; FDM N/A","problem_ir":"corner_transition_distance"}]}
+  "document": {
+    "path": "public_docs/site/numerical-methods/meshing/fem/ferromagnet/swept-prism.md",
+    "reviewed_revision": "752450f8d259ab97c76c36fe666d5474b02abe9a"
+  },
+  "backend_matrix": [
+    {
+      "solver": "FEM",
+      "device": "CPU",
+      "status": "implemented",
+      "reason": "Verified pure_prism_p2 (automatic P2 H1_WedgeElement(2) demag + P1 m) and mixed_p1 (layers=1,2,3)"
+    },
+    {
+      "solver": "FEM",
+      "device": "GPU",
+      "status": "implemented",
+      "reason": "RTX 4080 SUPER verified pure_prism_p2 (cg_amg and cuDSS), mixed_p1, and unified CSR GPU DMI (0 memcheck errors)"
+    },
+    {
+      "solver": "FDM",
+      "device": "CPU",
+      "status": "not-applicable",
+      "reason": "This page documents FEM swept-prism meshing."
+    },
+    {
+      "solver": "FDM",
+      "device": "GPU",
+      "status": "not-applicable",
+      "reason": "This page documents FEM swept-prism meshing."
+    }
+  ],
+  "sources": [
+    {
+      "id": "authoring",
+      "path": "packages/fullmag-py/src/fullmag/world.py",
+      "symbol": "thin_film",
+      "responsibility": "Public strict prismatic authoring and lowering."
+    },
+    {
+      "id": "recipe",
+      "path": "packages/fullmag-py/src/fullmag/model/discretization.py",
+      "symbol": "class PerObjectMeshRecipe",
+      "responsibility": "Stores and validates mesh policy fields."
+    },
+    {
+      "id": "generator",
+      "path": "packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py",
+      "symbol": "generate_swept_mesh",
+      "responsibility": "Dispatches native swept meshing."
+    },
+    {
+      "id": "capability",
+      "path": "apps/control-room/src/modules/inspector/panels/ObjectMeshPolicyPanelModel.ts",
+      "symbol": "resolveObjectMeshTopologyCapabilities",
+      "responsibility": "Gates exact layered prism authoring."
+    },
+    {
+      "id": "prism_test",
+      "path": "packages/fullmag-py/tests/test_mixed_element_meshing.py",
+      "symbol": "test_body_only_box_prism_mesh_has_exact_requested_layers",
+      "responsibility": "Checks native prism layers and planes."
+    },
+    {
+      "id": "pure_prism_mesher",
+      "path": "packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py",
+      "symbol": "generate_pure_prism_box_airbox_mesh",
+      "responsibility": "3-stage extruded 100% prism6 shared-domain generator and certificate emitter",
+      "evidence_status": "verified"
+    },
+    {
+      "id": "pure_prism_cert_schema",
+      "path": "crates/fullmag-ir/src/mesh_assets.rs",
+      "symbol": "PurePrismTopologyCertificateV1IR",
+      "responsibility": "44-field pure-prism certificate schema",
+      "evidence_status": "verified"
+    },
+    {
+      "id": "pure_prism_cert_validator",
+      "path": "crates/fullmag-ir/src/mixed_certificate.rs",
+      "symbol": "validate_pure_prism_topology_certificate_against_mesh",
+      "responsibility": "Post-packing v3 fingerprint, Jacobian, and conformity re-verification",
+      "evidence_status": "verified"
+    },
+    {
+      "id": "planner_mixed_guard",
+      "path": "crates/fullmag-plan/src/mesh.rs",
+      "symbol": "reject_unsupported_mixed_topology",
+      "responsibility": "Planner scope and pure_prism_p2 eigen certificate guard",
+      "evidence_status": "verified"
+    },
+    {
+      "id": "native_topology_gate",
+      "path": "backends/fem/core/fem_mesh.cpp",
+      "symbol": "validate_supported_physics_topology",
+      "responsibility": "Native CPU/CUDA admission of pure_prism_p2 and mixed_p1 with CSR DMI",
+      "evidence_status": "verified"
+    },
+    {
+      "id": "dmi_csr_assembler",
+      "path": "backends/fem/gpu/cuda/interactions/dmi/dmi_csr_operator.cpp",
+      "symbol": "build_gpu_dmi_csr_from_mfem",
+      "responsibility": "Skew-symmetric edge-vector CSR DMI assembly across prism6, tet4, and mixed meshes",
+      "evidence_status": "verified"
+    },
+    {
+      "id": "dmi_csr_kernels",
+      "path": "backends/fem/gpu/cuda/interactions/dmi/dmi_csr_kernels.cu",
+      "symbol": "fullmag_cuda_dmi_csr_field_energy",
+      "responsibility": "Deterministic zero-atomic CSR GPU DMI field and energy kernel",
+      "evidence_status": "verified"
+    }
+  ],
+  "symbols": [
+    {
+      "id": "layers",
+      "latex": "$n$",
+      "meaning": "Requested element-layer count",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "planes",
+      "latex": "$N_{\\mathrm{planes}}$",
+      "meaning": "Resolved node-plane count",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "family",
+      "latex": "$t_c$",
+      "meaning": "Swept-body cell family",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "cell",
+      "latex": "$c$",
+      "meaning": "Volume-cell ordinal",
+      "si_unit": "$1$"
+    }
+  ],
+  "equations": [
+    {
+      "id": "eq-swept-prism-layer-planes",
+      "symbols": [
+        "layers",
+        "planes",
+        "family"
+      ],
+      "sources": [
+        "generator",
+        "prism_test"
+      ]
+    }
+  ],
+  "public_api": {
+    "parameters": [
+      {
+        "python": "hmax",
+        "type": "float | str | None",
+        "default": "None",
+        "si_unit": "$\\mathrm{m}$",
+        "validation": "positive finite number or `auto`; overridden by `maximum_element_size`",
+        "meaning": "Compatibility maximum-size alias",
+        "backend_support": "FEM CPU/GPU verified (`pure_prism_p2`, `mixed_p1`); FDM N/A",
+        "problem_ir": "maximum_element_size"
+      },
+      {
+        "python": "hmin",
+        "type": "float | None",
+        "default": "None",
+        "si_unit": "$\\mathrm{m}$",
+        "validation": "positive; overridden by `minimum_element_size`; resolved minimum must not exceed numeric maximum",
+        "meaning": "Compatibility minimum-size alias",
+        "backend_support": "FEM CPU/GPU verified (`pure_prism_p2`, `mixed_p1`); FDM N/A",
+        "problem_ir": "minimum_element_size"
+      },
+      {
+        "python": "maximum_element_size",
+        "type": "float | str | None",
+        "default": "None",
+        "si_unit": "$\\mathrm{m}$",
+        "validation": "positive finite number or `auto`; takes precedence over `hmax`",
+        "meaning": "In-plane size ceiling",
+        "backend_support": "FEM CPU/GPU verified (`pure_prism_p2`, `mixed_p1`); FDM N/A",
+        "problem_ir": "maximum_element_size"
+      },
+      {
+        "python": "minimum_element_size",
+        "type": "float | None",
+        "default": "None",
+        "si_unit": "$\\mathrm{m}$",
+        "validation": "positive; takes precedence over `hmin`; must not exceed numeric maximum",
+        "meaning": "Lower size bound",
+        "backend_support": "FEM CPU/GPU verified (`pure_prism_p2`, `mixed_p1`); FDM N/A",
+        "problem_ir": "minimum_element_size"
+      },
+      {
+        "python": "curvature_factor",
+        "type": "float | None",
+        "default": "None",
+        "si_unit": "$1$",
+        "validation": "float-convertible; downstream recipe requires a positive value when set",
+        "meaning": "Curvature-refinement strength",
+        "backend_support": "FEM CPU/GPU capability-gated; FDM N/A",
+        "problem_ir": "curvature_factor"
+      },
+      {
+        "python": "narrow_region_resolution",
+        "type": "float | None",
+        "default": "None",
+        "si_unit": "$1$",
+        "validation": "float-convertible; downstream recipe requires a positive value when set",
+        "meaning": "Narrow-region refinement strength",
+        "backend_support": "FEM CPU/GPU capability-gated; FDM N/A",
+        "problem_ir": "narrow_region_resolution"
+      },
+      {
+        "python": "layers",
+        "type": "int",
+        "default": "1",
+        "si_unit": "$1$",
+        "validation": "bool rejected; integer `>= 1` (`>= 1` for `pure_prism`, `1..=3` for `mixed_p1`)",
+        "meaning": "Requested element-layer count",
+        "backend_support": "FEM CPU/GPU verified (`pure_prism_p2`, `mixed_p1`); FDM N/A",
+        "problem_ir": "through_thickness_elements"
+      },
+      {
+        "python": "topology",
+        "type": "Literal[\"tetrahedral\", \"prismatic\"] | None",
+        "default": "None",
+        "si_unit": "$1$",
+        "validation": "one of `None`, `tetrahedral`, `prismatic`",
+        "meaning": "Thin-film topology",
+        "backend_support": "FEM CPU/GPU verified (`pure_prism_p2`, `mixed_p1`); FDM N/A",
+        "problem_ir": "topology"
+      },
+      {
+        "python": "exact_layers",
+        "type": "bool | None",
+        "default": "None",
+        "si_unit": "$1$",
+        "validation": "Boolean; only valid with prismatic topology; strict prismatic rejects `False` outside extended mode",
+        "meaning": "Strict layer-count intent",
+        "backend_support": "FEM CPU/GPU verified (`pure_prism_p2`, `mixed_p1`); FDM N/A",
+        "problem_ir": "exact_layer_count"
+      },
+      {
+        "python": "transition",
+        "type": "Literal[\"pyramid_to_tetrahedra\", \"pure_prism\", \"reject\"] | None",
+        "default": "None",
+        "si_unit": "$1$",
+        "validation": "only valid with prismatic topology; resolves to `pyramid_to_tetrahedra` when omitted or accepts `pure_prism`",
+        "meaning": "Shared-domain transition (`mixed_p1` vs pyramid-free `pure_prism_p2`)",
+        "backend_support": "FEM CPU/GPU verified (`pure_prism_p2`, `mixed_p1`); FDM N/A",
+        "problem_ir": "transition_policy"
+      },
+      {
+        "python": "order",
+        "type": "int | None",
+        "default": "None",
+        "si_unit": "$1$",
+        "validation": "prismatic topology accepts only `None` or `1` and lowers to P1 magnetization (`pure_prism_p2` auto-resolves P2 demag potential)",
+        "meaning": "FEM magnetization polynomial order",
+        "backend_support": "FEM CPU/GPU verified (`pure_prism_p2`, `mixed_p1`); FDM N/A",
+        "problem_ir": "order"
+      },
+      {
+        "python": "interface_maximum_element_size",
+        "type": "float | None",
+        "default": "None",
+        "si_unit": "$\\mathrm{m}$",
+        "validation": "positive; used unless `surface_maximum_element_size` is set",
+        "meaning": "Interface size ceiling",
+        "backend_support": "FEM CPU/GPU capability-gated; FDM N/A",
+        "problem_ir": "interface_hmax"
+      },
+      {
+        "python": "surface_maximum_element_size",
+        "type": "float | None",
+        "default": "None",
+        "si_unit": "$\\mathrm{m}$",
+        "validation": "positive; takes precedence over `interface_maximum_element_size`",
+        "meaning": "Surface alias for interface size",
+        "backend_support": "FEM CPU/GPU capability-gated; FDM N/A",
+        "problem_ir": "interface_hmax"
+      },
+      {
+        "python": "interface_thickness",
+        "type": "float | None",
+        "default": "None",
+        "si_unit": "$\\mathrm{m}$",
+        "validation": "positive; used unless `surface_thickness` is set",
+        "meaning": "Interface refinement-shell thickness",
+        "backend_support": "FEM CPU/GPU capability-gated; FDM N/A",
+        "problem_ir": "interface_thickness"
+      },
+      {
+        "python": "surface_thickness",
+        "type": "float | None",
+        "default": "None",
+        "si_unit": "$\\mathrm{m}$",
+        "validation": "positive; takes precedence over `interface_thickness`",
+        "meaning": "Surface alias for interface shell",
+        "backend_support": "FEM CPU/GPU capability-gated; FDM N/A",
+        "problem_ir": "interface_thickness"
+      },
+      {
+        "python": "transition_distance",
+        "type": "float | str | None",
+        "default": "None",
+        "si_unit": "$\\mathrm{m}$",
+        "validation": "number at least 0 or `airbox_boundary`, `airbox-boundary`, `auto_boundary`; sentinels normalize to `airbox_boundary`; used unless surface alias is set",
+        "meaning": "Interface-to-core transition distance",
+        "backend_support": "FEM CPU/GPU capability-gated; FDM N/A",
+        "problem_ir": "transition_distance"
+      },
+      {
+        "python": "surface_transition_distance",
+        "type": "float | str | None",
+        "default": "None",
+        "si_unit": "$\\mathrm{m}$",
+        "validation": "number at least 0 or `airbox_boundary`, `airbox-boundary`, `auto_boundary`; sentinels normalize to `airbox_boundary`; takes precedence over `transition_distance`",
+        "meaning": "Surface alias for transition distance",
+        "backend_support": "FEM CPU/GPU capability-gated; FDM N/A",
+        "problem_ir": "transition_distance"
+      },
+      {
+        "python": "edge_maximum_element_size",
+        "type": "float | None",
+        "default": "None",
+        "si_unit": "$\\mathrm{m}$",
+        "validation": "positive; must be paired with `edge_thickness`",
+        "meaning": "Edge size ceiling",
+        "backend_support": "FEM CPU/GPU capability-gated; FDM N/A",
+        "problem_ir": "edge_hmax"
+      },
+      {
+        "python": "edge_thickness",
+        "type": "float | None",
+        "default": "None",
+        "si_unit": "$\\mathrm{m}$",
+        "validation": "positive; paired with `edge_maximum_element_size`; for Box geometry smaller than half the shorter in-plane dimension",
+        "meaning": "Edge refinement-shell thickness",
+        "backend_support": "FEM CPU/GPU capability-gated; FDM N/A",
+        "problem_ir": "edge_thickness"
+      },
+      {
+        "python": "edge_transition_distance",
+        "type": "float | str | None",
+        "default": "None",
+        "si_unit": "$\\mathrm{m}$",
+        "validation": "positive number or `airbox_boundary`, `airbox-boundary`, `auto_boundary`; sentinels normalize to `airbox_boundary`; requires the edge pair",
+        "meaning": "Edge-to-core transition distance",
+        "backend_support": "FEM CPU/GPU capability-gated; FDM N/A",
+        "problem_ir": "edge_transition_distance"
+      },
+      {
+        "python": "corner_maximum_element_size",
+        "type": "float | None",
+        "default": "None",
+        "si_unit": "$\\mathrm{m}$",
+        "validation": "positive; paired with `corner_extent`; when edge size is set must not exceed `edge_maximum_element_size`",
+        "meaning": "Corner size ceiling",
+        "backend_support": "FEM CPU/GPU capability-gated; FDM N/A",
+        "problem_ir": "corner_hmax"
+      },
+      {
+        "python": "corner_extent",
+        "type": "float | None",
+        "default": "None",
+        "si_unit": "$\\mathrm{m}$",
+        "validation": "positive; paired with `corner_maximum_element_size`; for Box geometry smaller than half the shorter in-plane dimension",
+        "meaning": "Corner refinement extent",
+        "backend_support": "FEM CPU/GPU capability-gated; FDM N/A",
+        "problem_ir": "corner_extent"
+      },
+      {
+        "python": "corner_transition_distance",
+        "type": "float | str | None",
+        "default": "None",
+        "si_unit": "$\\mathrm{m}$",
+        "validation": "positive number or `airbox_boundary`, `airbox-boundary`, `auto_boundary`; sentinels normalize to `airbox_boundary`; requires the corner pair",
+        "meaning": "Corner-to-core transition distance",
+        "backend_support": "FEM CPU/GPU capability-gated; FDM N/A",
+        "problem_ir": "corner_transition_distance"
+      }
+    ]
+  }
 }

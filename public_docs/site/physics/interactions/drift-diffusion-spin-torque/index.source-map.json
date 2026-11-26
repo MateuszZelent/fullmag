@@ -1,15 +1,16 @@
 {
   "document": {
-    "reviewed_revision": "532e99c042049140e7ed1eec1a407f3c2672deed",
+    "reviewed_revision": "752450f8d259ab97c76c36fe666d5474b02abe9a",
+    "reviewed_at": "2026-11-26",
     "path": "public_docs/site/physics/interactions/drift-diffusion-spin-torque/index.md",
     "title": "Spin Hall drift-diffusion transport",
     "interaction": "drift diffusion spin torque"
   },
   "backend_matrix": [
-    {"solver": "FDM", "device": "CPU", "status": "partial", "reason": "Executable M1 and bounded M2 CPU-double slices exist; M3 remains schema-only and scientific and production qualification is absent."},
-    {"solver": "FDM", "device": "GPU", "status": "partial", "reason": "Bounded CUDA contracts exist; aggregate public capability remains semantic-only and unvalidated with no fallback."},
-    {"solver": "FEM", "device": "CPU", "status": "partial", "reason": "Strict steady conforming H1/P1 M1 and bounded M2 reference slices exist; torque restrictions remain unqualified."},
-    {"solver": "FEM", "device": "GPU", "status": "unsupported", "reason": "No qualified native FEM GPU transport realization exists; strict requests fail without CPU rebinding."}
+    {"solver": "FDM", "device": "CPU", "status": "partial", "reason": "Executable M1 reference and native paths, bounded CPU-double M2, and coupled M3 IMEX exist; broad scientific and production qualification remains separate."},
+    {"solver": "FDM", "device": "GPU", "status": "partial", "reason": "Bounded public steady M1 (fdm_gpu_double) executes with CUDA AMG-PCG/cuDSS charge, parallel spin lookup/closure, and deferred observations; M2/M3 fail closed with no CPU fallback."},
+    {"solver": "FEM", "device": "CPU", "status": "partial", "reason": "Strict steady conforming H1/P1 M1 and bounded reciprocal M2 execute with factor-once charge, MUMPS/HYPRE sparse solvers, and Gilbert-to-explicit RHS conversion; broad qualification remains separate."},
+    {"solver": "FEM", "device": "GPU", "status": "unsupported", "reason": "Optional cuda_cudss_spd/cuda_cudss_lu linear solves exist inside the FEM transport stack, but no standalone GPU-resident coupled FEM LLG+transport lane is qualified; strict requests fail closed without CPU rebinding."}
   ],
   "sources": [
     {"id": "python-spin", "path": "packages/fullmag-py/src/fullmag/model/spin_transport.py", "symbol": "class SpinDriftDiffusion", "responsibility": "Own public spin-transport authoring, validation, defaults, and IR lowering."},
@@ -17,39 +18,41 @@
     {"id": "python-current", "path": "packages/fullmag-py/src/fullmag/model/current_transport.py", "symbol": "class CurrentTransport", "responsibility": "Own prescribed and solved charge-transport authoring."},
     {"id": "python-sot", "path": "packages/fullmag-py/src/fullmag/model/spin_torque.py", "symbol": "class PrescribedSpinOrbitTorque", "responsibility": "Own the separate local prescribed spin-orbit torque model."},
     {"id": "planner", "path": "crates/fullmag-plan/src/spin_transport.rs", "symbol": "resolve_m1_fem_spin_transport", "responsibility": "Resolve fail-closed capability and bounded FEM restrictions."},
+    {"id": "planner-fdm-gpu", "path": "crates/fullmag-plan/src/spin_transport.rs", "symbol": "bounded_public_fdm_gpu_m1_scope_reasons", "responsibility": "Gate the bounded public FDM GPU M1 steady-spin execution scope."},
     {"id": "fdm-reference", "path": "crates/fullmag-runner/src/fdm/cpu/spin_transport.rs", "symbol": "solve_coupled_module", "responsibility": "Execute the FDM CPU coupled reference module."},
     {"id": "fdm-native", "path": "backends/fdm/cpu/transport/spin_transport_v1.cpp", "symbol": "solve", "responsibility": "Solve native steady M1 spin balance from an accepted charge snapshot."},
     {"id": "fdm-validation", "path": "backends/fdm/cpu/transport/spin_transport_validation_v1.cpp", "symbol": "evaluate_local_residual_gate", "responsibility": "Evaluate local FV balance and direct-SHE validation quantities."},
     {"id": "fem-m1", "path": "backends/fem/cpu/mfem/transport/steady_transport.cpp", "symbol": "SteadyTransportOracle::solve_spin", "responsibility": "Assemble and solve bounded conforming H1/P1 M1 transport."},
     {"id": "fem-m2", "path": "backends/fem/cpu/mfem/transport/steady_transport.cpp", "symbol": "SteadyTransportOracle::solve_reciprocal", "responsibility": "Assemble and solve the bounded reciprocal FEM block."},
-    {"id": "fdm-gpu", "path": "backends/fdm/gpu/cuda/transport/spin/device_solver.cu", "symbol": "solve_device", "responsibility": "Solve the bounded FP64 steady-spin device operator."}
+    {"id": "fem-stage-rhs", "path": "backends/fem/cpu/mfem/interactions/transport_stage.cpp", "symbol": "add_transport_stage_rhs", "responsibility": "Convert Gilbert transport torque to explicit LLG RHS on magnetic nodes."},
+    {"id": "fdm-gpu", "path": "backends/fdm/gpu/cuda/transport/spin/device_solver.cu", "symbol": "solve_device", "responsibility": "Solve the bounded FP64 steady-spin device operator with parallel lookup and closure diagnostics."}
   ],
   "symbols": [
-    {"id": "V", "latex": "V", "meaning": "charge electrochemical potential", "si_unit": "V"},
-    {"id": "mu_s", "latex": "mu_s", "meaning": "full spin-channel splitting", "si_unit": "V"},
-    {"id": "E", "latex": "E_i", "meaning": "electric field", "si_unit": "V/m"},
-    {"id": "G", "latex": "G_{ia}", "meaning": "negative half-gradient of spin voltage", "si_unit": "V/m"},
-    {"id": "J_c", "latex": "J_{c,i}", "meaning": "conventional charge-current density", "si_unit": "A/m^2"},
-    {"id": "Q", "latex": "Q_{ia}", "meaning": "charge-equivalent spin-current tensor; flow index first", "si_unit": "A/m^2"},
-    {"id": "sigma_s", "latex": "sigma_s", "meaning": "spin conductivity and implemented M2 reciprocal coefficient", "si_unit": "S/m"},
-    {"id": "P", "latex": "P", "meaning": "signed transport polarization", "si_unit": "1"},
-    {"id": "theta", "latex": "theta", "meaning": "signed spin Hall angle in the Fullmag convention", "si_unit": "1"},
-    {"id": "lambda", "latex": "lambda", "meaning": "active reaction lengths", "si_unit": "m"},
-    {"id": "R", "latex": "R", "meaning": "reaction densities", "si_unit": "A/m^3"},
-    {"id": "G_interface", "latex": "G_r", "meaning": "interface conductances per area", "si_unit": "S/m^2"},
-    {"id": "M_s", "latex": "M_s", "meaning": "saturation magnetization", "si_unit": "A/m"},
-    {"id": "T", "latex": "T", "meaning": "Gilbert-form transport torque source", "si_unit": "1/s"}
+    {"id": "V", "latex": "$V$", "meaning": "charge electrochemical potential", "si_unit": "$\\mathrm{V}$"},
+    {"id": "mu_s", "latex": "$\\boldsymbol\\mu_s$", "meaning": "full spin-channel splitting", "si_unit": "$\\mathrm{V}$"},
+    {"id": "E", "latex": "$E_i$", "meaning": "electric field", "si_unit": "$\\mathrm{V\\,m^{-1}}$"},
+    {"id": "G", "latex": "$G_{ia}$", "meaning": "negative half-gradient of spin voltage", "si_unit": "$\\mathrm{V\\,m^{-1}}$"},
+    {"id": "J_c", "latex": "$J_{c,i}$", "meaning": "conventional charge-current density", "si_unit": "$\\mathrm{A\\,m^{-2}}$"},
+    {"id": "Q", "latex": "$Q_{ia}$", "meaning": "charge-equivalent spin-current tensor; flow index first", "si_unit": "$\\mathrm{A\\,m^{-2}}$"},
+    {"id": "sigma_s", "latex": "$\\sigma_s$", "meaning": "spin conductivity and implemented M2 reciprocal coefficient", "si_unit": "$\\mathrm{S\\,m^{-1}}$"},
+    {"id": "P", "latex": "$P$", "meaning": "signed transport polarization", "si_unit": "$1$"},
+    {"id": "theta", "latex": "$\\theta_{\\mathrm{SH}}$", "meaning": "signed spin Hall angle in the Fullmag convention", "si_unit": "$1$"},
+    {"id": "lambda", "latex": "$\\lambda_{\\mathrm{sf}},\\lambda_J,\\lambda_\\phi$", "meaning": "active reaction lengths", "si_unit": "$\\mathrm{m}$"},
+    {"id": "R", "latex": "$\\mathbf R_{\\mathrm{sf}},\\mathbf R_J,\\mathbf R_\\phi$", "meaning": "reaction densities", "si_unit": "$\\mathrm{A\\,m^{-3}}$"},
+    {"id": "G_interface", "latex": "$G_\\uparrow,G_\\downarrow,G_r,G_i$", "meaning": "interface conductances per area", "si_unit": "$\\mathrm{S\\,m^{-2}}$"},
+    {"id": "M_s", "latex": "$M_s$", "meaning": "saturation magnetization", "si_unit": "$\\mathrm{A\\,m^{-1}}$"},
+    {"id": "T", "latex": "$\\mathbf T_{\\mathrm{tr},G}$", "meaning": "Gilbert-form transport torque source", "si_unit": "$\\mathrm{s^{-1}}$"}
   ],
   "equations": [
     {"id": "eq-dd-gradients", "symbols": ["V", "mu_s", "E", "G", "Q"], "sources": ["fdm-reference", "fem-m1"]},
-    {"id": "eq-dd-m1-face-flux", "symbols": ["Q", "P", "J_c", "theta", "E", "mu_s", "sigma_s"], "sources": ["fdm-reference", "fdm-native"]},
-    {"id": "eq-dd-spin-balance", "symbols": ["Q", "R", "sigma_s", "mu_s", "lambda"], "sources": ["fdm-reference", "fdm-validation", "fem-m1"]},
-    {"id": "eq-dd-transport-torque", "symbols": ["T", "M_s", "R"], "sources": ["fdm-reference", "fdm-native"]},
+    {"id": "eq-dd-m1-face-flux", "symbols": ["Q", "P", "J_c", "theta", "E", "mu_s", "sigma_s"], "sources": ["fdm-reference", "fdm-native", "fdm-gpu"]},
+    {"id": "eq-dd-spin-balance", "symbols": ["Q", "R", "sigma_s", "mu_s", "lambda"], "sources": ["fdm-reference", "fdm-validation", "fem-m1", "fdm-gpu"]},
+    {"id": "eq-dd-transport-torque", "symbols": ["T", "M_s", "R"], "sources": ["fdm-reference", "fdm-native", "fem-stage-rhs"]},
     {"id": "eq-dd-m2-charge", "symbols": ["J_c", "E", "P", "sigma_s", "G", "theta"], "sources": ["fdm-reference", "fem-m2"]},
     {"id": "eq-dd-m2-spin", "symbols": ["Q", "sigma_s", "G", "P", "E", "theta"], "sources": ["fdm-reference", "fem-m2"]},
     {"id": "eq-dd-mixing-longitudinal", "symbols": ["mu_s", "G_interface"], "sources": ["fdm-reference", "fdm-native"]},
     {"id": "eq-dd-mixing-absorption", "symbols": ["mu_s", "G_interface"], "sources": ["fdm-reference", "fdm-native"]},
-    {"id": "eq-dd-interface-torque-volume", "symbols": ["T", "M_s", "G_interface"], "sources": ["fdm-reference", "fdm-native"]}
+    {"id": "eq-dd-interface-torque-volume", "symbols": ["T", "M_s", "G_interface"], "sources": ["fdm-reference", "fdm-native", "fem-stage-rhs"]}
   ],
   "public_api": {
     "parameters": [
@@ -59,17 +62,17 @@
       {"python": "SpinTransportMaterial.polarization_p", "type": "float", "default": "required", "si_unit": "$1$", "validation": "finite in $[-1, 1]$", "meaning": "signed drift polarization", "backend_support": "FDM/FEM bounded lanes", "problem_ir": "spin_transport_modules[].materials[].material.polarization_p"},
       {"python": "SpinTransportMaterial.theta_sh", "type": "float", "default": "required", "si_unit": "$1$", "validation": "finite", "meaning": "signed spin Hall angle", "backend_support": "direct SHE; M2 also iSHE", "problem_ir": "spin_transport_modules[].materials[].material.theta_sh"},
       {"python": "SpinTransportMaterial.lambda_sf_m", "type": "float", "default": "required", "si_unit": "$\\mathrm{m}$", "validation": "finite and positive", "meaning": "spin-flip length", "backend_support": "FDM/FEM bounded lanes", "problem_ir": "spin_transport_modules[].materials[].material.lambda_sf_m"},
-      {"python": "SpinDriftDiffusion.mode", "type": "str", "default": "steady", "si_unit": "$1$", "validation": "`steady` or `transient`; `transient` requires capacitance", "meaning": "temporal model", "backend_support": "M3 not production-qualified", "problem_ir": "spin_transport_modules[].mode"},
+      {"python": "SpinDriftDiffusion.mode", "type": "str", "default": "steady", "si_unit": "$1$", "validation": "`steady` or `transient`; `transient` requires capacitance", "meaning": "temporal model", "backend_support": "M3 transient coupled via `coupled_imex_ark2`, not production-qualified", "problem_ir": "spin_transport_modules[].mode"},
       {"python": "SpinSolverPolicy.engine", "type": "str", "default": "auto", "si_unit": "$1$", "validation": "non-empty; lane whitelist applies", "meaning": "spatial solver", "backend_support": "lane-specific", "problem_ir": "spin_transport_modules[].solver.engine"},
       {"python": "DriftDiffusionSpinTorque.solve_id", "type": "str", "default": "required", "si_unit": "$1$", "validation": "active named spin solve", "meaning": "solved-spin consumer", "backend_support": "canonical lane-specific", "problem_ir": "spin_torque_modules[].solve_id"},
-      {"python": "CurrentTransport.coupling", "type": "str", "default": "one_way", "si_unit": "$1$", "validation": "`one_way` or `bidirectional`", "meaning": "selects M1/M2", "backend_support": "bounded CPU lanes", "problem_ir": "current_modules[].coupling"},
+      {"python": "CurrentTransport.coupling", "type": "str", "default": "one_way", "si_unit": "$1$", "validation": "`one_way` or `bidirectional`", "meaning": "selects M1/M2", "backend_support": "bounded FDM/FEM lanes", "problem_ir": "current_modules[].coupling"},
       {"python": "TransportExecution.precision", "type": "str", "default": "double", "si_unit": "$1$", "validation": "`single` or `double`", "meaning": "requested precision", "backend_support": "transport lanes require `double`", "problem_ir": "spin_transport_modules[].requested_execution.precision"},
       {"python": "TransportExecution.execution_mode", "type": "str", "default": "strict", "si_unit": "$1$", "validation": "`strict` or `extended`", "meaning": "fallback policy", "backend_support": "strict lanes fail closed", "problem_ir": "spin_transport_modules[].requested_execution.execution_mode"},
       {"python": "SpinTransportMaterial.lambda_j_m", "type": "float | None", "default": "None", "si_unit": "$\\mathrm{m}$", "validation": "positive when enabled", "meaning": "exchange length", "backend_support": "magnetic reactions", "problem_ir": "spin_transport_modules[].materials[].material.lambda_j_m"},
       {"python": "SpinTransportMaterial.lambda_phi_m", "type": "float | None", "default": "None", "si_unit": "$\\mathrm{m}$", "validation": "positive when enabled", "meaning": "dephasing length", "backend_support": "magnetic reactions", "problem_ir": "spin_transport_modules[].materials[].material.lambda_phi_m"},
       {"python": "SpinDriftDiffusion.interfaces", "type": "Sequence", "default": "empty", "si_unit": "$1$", "validation": "typed oriented interfaces", "meaning": "internal transfer", "backend_support": "lane-specific", "problem_ir": "spin_transport_modules[].interfaces"},
       {"python": "SpinDriftDiffusion.boundaries", "type": "Sequence", "default": "empty", "si_unit": "$1$", "validation": "typed non-conflicting faces", "meaning": "external spin BC", "backend_support": "lane-specific", "problem_ir": "spin_transport_modules[].boundaries"},
-      {"python": "SpinSolverPolicy.relative_tolerance", "type": "float", "default": "1e-8", "si_unit": "$1$", "validation": "finite and positive", "meaning": "algebraic tolerance", "backend_support": "bounded CPU lanes", "problem_ir": "spin_transport_modules[].solver.linear.relative_tolerance"},
+      {"python": "SpinSolverPolicy.relative_tolerance", "type": "float", "default": "1e-8", "si_unit": "$1$", "validation": "finite and positive", "meaning": "algebraic tolerance", "backend_support": "bounded FDM/FEM lanes", "problem_ir": "spin_transport_modules[].solver.linear.relative_tolerance"},
       {"python": "SpinSolverPolicy.operator_version", "type": "str", "default": "fv_spin_upwind_v1", "si_unit": "$1$", "validation": "exact lane identifier", "meaning": "discrete operator", "backend_support": "lane-specific", "problem_ir": "spin_transport_modules[].solver.operator_version"},
       {"python": "DriftDiffusionSpinTorque.target", "type": "RegionRef", "default": "required", "si_unit": "$1$", "validation": "magnetic subset with positive $M_s$", "meaning": "torque target", "backend_support": "canonical lane-specific", "problem_ir": "spin_torque_modules[].target"},
       {"python": "MixingConductanceSpinInterface.g_r_Spm2", "type": "float", "default": "required", "si_unit": "$\\mathrm{S\\,m^{-2}}$", "validation": "finite and non-negative", "meaning": "real mixing conductance", "backend_support": "FDM reference/native subsets", "problem_ir": "spin_transport_modules[].interfaces[].g_r_spm2"},

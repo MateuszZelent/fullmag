@@ -3,7 +3,8 @@
     "path": "public_docs/site/physics/foundations/micromagnetic-energy.md",
     "title": "Micromagnetic energy",
     "scope": "typed energy-term composition and variational field convention",
-    "reviewed_revision": "ab3c8802a691a535063102c12f9a79bb0043b367"
+    "reviewed_revision": "752450f8d259ab97c76c36fe666d5474b02abe9a",
+    "reviewed_at": "2026-11-26"
   },
   "backend_matrix": [
     {"solver": "FDM", "device": "CPU", "status": "partial", "reason": "Cell-based term evaluation is term-specific and requires numerical qualification."},

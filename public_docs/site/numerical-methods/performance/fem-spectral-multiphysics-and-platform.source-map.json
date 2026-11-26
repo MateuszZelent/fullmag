@@ -1,0 +1,120 @@
+{
+  "document": {
+    "path": "public_docs/site/numerical-methods/performance/fem-spectral-multiphysics-and-platform.md",
+    "reviewed_revision": "752450f8d259ab97c76c36fe666d5474b02abe9a",
+    "source_of_truth": "Current repository FEM eigensolver, driven response, Wave 2 multiphysics, and platform runtime declarations and verified A/B audit evidence."
+  },
+  "backend_matrix": [
+    {
+      "solver": "FEM",
+      "device": "CPU",
+      "status": "implemented"
+    },
+    {
+      "solver": "FEM",
+      "device": "GPU",
+      "status": "implemented"
+    },
+    {
+      "solver": "FDM",
+      "device": "CPU",
+      "status": "implemented"
+    },
+    {
+      "solver": "FDM",
+      "device": "GPU",
+      "status": "implemented"
+    }
+  ],
+  "equations": [
+    {
+      "id": "eq-perf-fem-augmented-shift",
+      "symbols": ["sms", "q", "dphi", "sigma"],
+      "sources": ["cpu-aug-k0", "cpu-ncv", "cpu-aug-floquet", "gpu-modal-budget", "gpu-modal-window"]
+    },
+    {
+      "id": "eq-perf-fem-driven-ruiz",
+      "symbols": ["omegak", "DrDc", "Galpha", "q", "dphi", "rqphi"],
+      "sources": ["dr-omega-upd", "dr-res-cert", "dr-api-v14"]
+    },
+    {
+      "id": "eq-perf-fem-saddle-equil",
+      "symbols": ["betaeq"],
+      "sources": ["sparse-solver", "saddle-beta", "saddle-csr", "oef1-gpu-dd"]
+    }
+  ],
+  "symbols": [
+    {"id": "sms", "latex": "$s, m_s$", "meaning": "real-split augmented-pencil operator and mass-block scalings", "si_unit": "$1$"},
+    {"id": "q", "latex": "$\\mathbf q$", "meaning": "nodal transverse magnetization perturbation vector", "si_unit": "$1$"},
+    {"id": "dphi", "latex": "$\\delta\\phi$", "meaning": "dynamic magnetic scalar potential perturbation", "si_unit": "$\\mathrm{A}$"},
+    {"id": "sigma", "latex": "$\\sigma$", "meaning": "spectral shift parameter in the real-split augmented pencil", "si_unit": "$\\mathrm{rad\\,s^{-1}}$"},
+    {"id": "omegak", "latex": "$\\omega_k$", "meaning": "angular excitation frequency $2\\pi f_k$", "si_unit": "$\\mathrm{rad\\,s^{-1}}$"},
+    {"id": "DrDc", "latex": "$D_r, D_c$", "meaning": "left and right block-plus-Ruiz equilibration diagonal scalings", "si_unit": "$1$"},
+    {"id": "Galpha", "latex": "$G(\\alpha)$", "meaning": "damped gyrotropic frequency-response operator block ($\\gamma_0^{-1}$-scaled)", "si_unit": "$\\mathrm{A\\,m^{-1}\\,s}$"},
+    {"id": "rqphi", "latex": "$r_q, r_\\phi$", "meaning": "independently certified unscaled magnetic and potential relative residuals", "si_unit": "$1$"},
+    {"id": "betaeq", "latex": "$\\beta_{\\mathrm{eq}}$", "meaning": "clamped linear nanometer saddle-point equilibration factor $a_{\\mathrm{scale}}/b_{\\mathrm{rms}}$", "si_unit": "$1$"},
+    {"id": "dcRs", "latex": "$d_c, R_s$", "meaning": "tetrahedron centroid separation and source circumradius", "si_unit": "$\\mathrm{m}$"},
+    {"id": "Mbudget", "latex": "$M_{\\mathrm{budget}}$", "meaning": "cuDSS post-analysis VRAM admission budget", "si_unit": "$\\mathrm{B}$"}
+  ],
+  "sources": [
+    {"id": "cpu-aug-k0", "path": "backends/fem/cpu/frequency_domain/modal_augmented_shift_solver.hpp", "symbol": "create_augmented_shift_solver", "responsibility": "Create exact augmented (q, phi) MUMPS/METIS shift solver for K0."},
+    {"id": "cpu-ncv", "path": "backends/fem/cpu/frequency_domain/poisson_airbox_schur_matshell.cpp", "symbol": "bounded_krylov_dimensions", "responsibility": "Compute SLEPc default Krylov subspace dimension ncv for single shifts."},
+    {"id": "cpu-aug-floquet", "path": "backends/fem/cpu/frequency_domain/modal/floquet_modal_solver.cpp", "symbol": "create_native_floquet_augmented_shift_solver", "responsibility": "Create augmented MUMPS/METIS shift solver for Floquet eigenmodes."},
+    {"id": "gpu-modal-budget", "path": "backends/fem/gpu/frequency_domain/modal_cudss_shift.cpp", "symbol": "check_device_memory_budget", "responsibility": "Fail-closed post-analysis VRAM admission for GPU modal cuDSS."},
+    {"id": "gpu-modal-window", "path": "backends/fem/gpu/frequency_domain/modal_augmented_window_count.cpp", "symbol": "count_airbox_augmented_window", "responsibility": "Exact-shift inertia window counting and per-solve cache."},
+    {"id": "dr-omega-upd", "path": "backends/fem/gpu/frequency_domain/driven_response_cudss_kernels.cu", "symbol": "launch_driven_response_update_omega_entries", "responsibility": "Update 4*N_{m,eff} frequency entries on GPU per sweep point."},
+    {"id": "dr-res-cert", "path": "backends/fem/gpu/frequency_domain/driven_response_cudss_kernels.cu", "symbol": "launch_driven_response_unscaled_residual_cert", "responsibility": "Multi-block CUB Blue/LAPACK unscaled residual certification."},
+    {"id": "dr-api-v14", "path": "backends/fem/src/api.cpp", "symbol": "fullmag_fem_frequency_domain_solve_driven_response_v14", "responsibility": "C ABI entry for factor-once 2x2-prescaled Ruiz GPU driven response."},
+    {"id": "sparse-solver", "path": "backends/fem/cpu/mfem/common/sparse_linear_solver.hpp", "symbol": "class SparseLinearSolver", "responsibility": "Unified 3-tier CPU + opt-in cuDSS sparse solver for Wave 2 multiphysics."},
+    {"id": "saddle-beta", "path": "backends/fem/cpu/mfem/common/sparse_linear_solver.cpp", "symbol": "compute_saddle_point_equilibration_beta", "responsibility": "Compute symmetric nanometer saddle-point equilibration factor."},
+    {"id": "saddle-csr", "path": "backends/fem/cpu/mfem/common/sparse_linear_solver.cpp", "symbol": "assemble_equilibrated_saddle_point_csr", "responsibility": "Assemble equilibrated saddle-point CSR for OE-F2 and OE-T0."},
+    {"id": "oef1-gpu-dd", "path": "backends/fem/gpu/cuda/interactions/oersted/direct_tetra_farfield_kernels.cu", "symbol": "fullmag_cuda_direct_tetra_evaluate_root_farfield", "responsibility": "Opt-in 106-bit DoubleDouble CUDA far-field Biot-Savart kernel."},
+    {"id": "marker-map", "path": "backends/fem/core/fem_marker_map.hpp", "symbol": "class CompactMarkerMap", "responsibility": "Compact O(1) canonical mesh marker to MFEM attribute mapping."},
+    {"id": "zarr-batch", "path": "crates/fullmag-runner/src/artifact_pipeline.rs", "symbol": "ZarrFieldMetadataBatch", "responsibility": "Batched Zarr field metadata autosave writes."},
+    {"id": "stream-hash", "path": "crates/fullmag-workspace-inspect/src/manifest.rs", "symbol": "hash_regular_file_snapshot", "responsibility": "Streaming SHA-256 attestation for large run output files."}
+  ],
+  "public_api": {
+    "parameters": [
+      {
+        "python": "FrequencyResponseSolverPolicy.method",
+        "type": "str | None",
+        "default": "None",
+        "si_unit": "$1$",
+        "validation": "`\"auto\"`, `\"dense_reference\"`, `\"cpu_sparse_direct\"`, `\"full_coupled_field_split\"`, `\"schur_reduced\"`, `\"modal_reduced\"`, `\"gpu_operator_host_krylov\"`, `\"gpu_device_krylov\"`, or `\"gpu_sparse_direct\"`",
+        "meaning": "driven frequency-response linear solver strategy",
+        "backend_support": "FEM CPU/GPU (`gpu_sparse_direct` on CUDA)",
+        "problem_ir": "`stages[].frequency_response.solver.method`"
+      },
+      {
+        "python": "study.stages.add_eigenmodes(target=...)",
+        "type": "str",
+        "default": "\"lowest\"",
+        "si_unit": "$1$",
+        "validation": "`\"lowest\"`, `\"nearest\"`, or `\"window\"` (`nearest` requires positive `target_frequency`)",
+        "meaning": "modal shift-invert selection target",
+        "backend_support": "FEM CPU/GPU",
+        "problem_ir": "`stages[].eigenmodes.target.kind`"
+      },
+      {
+        "python": "FULLMAG_K0_AUGMENTED_SHIFT",
+        "type": "env int",
+        "default": "1",
+        "si_unit": "$1$",
+        "validation": "`1` (augmented MUMPS+FGMRES) or `0` (legacy nested Schur)",
+        "meaning": "opt-out toggle for exact augmented `K0` CPU shift-invert",
+        "backend_support": "FEM CPU runtime env",
+        "problem_ir": "`provenance.shifted_preconditioner_kind`"
+      },
+      {
+        "python": "FULLMAG_FEM_DRIVEN_CUDSS_MAX_VRAM_MIB",
+        "type": "env int",
+        "default": "device auto",
+        "si_unit": "$\\mathrm{MiB}$",
+        "validation": "positive MiB ceiling for driven-response cuDSS factor budget",
+        "meaning": "explicit VRAM cap for GPU driven-response cuDSS",
+        "backend_support": "FEM GPU runtime env",
+        "problem_ir": "`provenance.resolved_solver_method`"
+      }
+    ]
+  }
+}

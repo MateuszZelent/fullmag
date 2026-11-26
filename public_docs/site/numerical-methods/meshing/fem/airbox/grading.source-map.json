@@ -1,7 +1,7 @@
 {
   "document": {
     "path": "public_docs/site/numerical-methods/meshing/fem/airbox/grading.md",
-    "reviewed_revision": "969efa0941905825ac569d525f4bdaefc059e2af"
+    "reviewed_revision": "752450f8d259ab97c76c36fe666d5474b02abe9a"
   },
   "backend_matrix": [
     {
@@ -163,8 +163,8 @@
         "python": "study.universe.mesh.growth_rate",
         "type": "float | None",
         "default": "None",
-        "si_unit": "1",
-        "validation": "Finite and `0 < value <= 2.5`",
+        "si_unit": "$1$",
+        "validation": "Finite and `1.0 < value <= 2.5`; ignored when `maximum_element_growth_rate` is supplied",
         "meaning": "compatibility growth alias",
         "backend_support": "FEM authoring/lowering is source-backed; runtime lane requires separate qualification",
         "problem_ir": "study.universe.airbox_growth_rate"
@@ -173,8 +173,8 @@
         "python": "study.universe.mesh.maximum_element_growth_rate",
         "type": "float | None",
         "default": "None",
-        "si_unit": "1",
-        "validation": "Finite and `0 < value <= 2.5`; ignored when `growth_rate` is supplied",
+        "si_unit": "$1$",
+        "validation": "Finite and `1.0 < value <= 2.5`; canonical value wins over `growth_rate`",
         "meaning": "growth control",
         "backend_support": "FEM authoring/lowering is source-backed; runtime lane requires separate qualification",
         "problem_ir": "study.universe.airbox_growth_rate"
@@ -188,6 +188,26 @@
         "meaning": "grading vocabulary",
         "backend_support": "FEM authoring/lowering is source-backed; runtime lane requires separate qualification",
         "problem_ir": "AirboxOptions.grading_mode"
+      },
+      {
+        "python": "study.universe.mesh.curvature_factor",
+        "type": "float | None",
+        "default": "None",
+        "si_unit": "$1$",
+        "validation": "Finite and `> 0`; requires `maximum_element_size` (`airbox_hmax`)",
+        "meaning": "air curvature refinement factor next to curved magnetic faces",
+        "backend_support": "FEM authoring/lowering is source-backed; runtime lane requires separate qualification",
+        "problem_ir": "study.universe.airbox_curvature_factor"
+      },
+      {
+        "python": "study.universe.mesh.narrow_region_resolution",
+        "type": "float | None",
+        "default": "None",
+        "si_unit": "$1$",
+        "validation": "Finite and `> 0`; requires `maximum_element_size` (`airbox_hmax`)",
+        "meaning": "air-gap refinement between bodies or body and outer boundary",
+        "backend_support": "FEM authoring/lowering is source-backed; runtime lane requires separate qualification",
+        "problem_ir": "study.universe.airbox_narrow_region_resolution"
       }
     ]
   }

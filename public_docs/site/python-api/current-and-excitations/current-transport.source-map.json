@@ -1,14 +1,14 @@
 {
   "document": {
     "path": "public_docs/site/python-api/current-and-excitations/current-transport.md",
-    "reviewed_revision": "ab3c8802a691a535063102c12f9a79bb0043b367"
+    "reviewed_revision": "752450f8d259ab97c76c36fe666d5474b02abe9a"
   },
   "backend_matrix": [
     {
       "solver": "FEM",
       "device": "CPU",
       "status": "documented",
-      "reason": "authoring and IR documented; runtime qualification separate"
+      "reason": "authoring, IR, and conforming H1 P1 factor-once charge solver documented"
     },
     {
       "solver": "FEM",
@@ -20,13 +20,13 @@
       "solver": "FDM",
       "device": "CPU",
       "status": "documented",
-      "reason": "authoring and IR documented; runtime qualification separate"
+      "reason": "authoring, IR, and finite-volume charge Poisson reference solver documented"
     },
     {
       "solver": "FDM",
       "device": "GPU",
       "status": "documented",
-      "reason": "authoring and IR documented; runtime qualification separate"
+      "reason": "authoring, IR, and CUDA cooperative AMG-PCG / cuDSS charge solver documented"
     }
   ],
   "equations": [],
@@ -36,7 +36,55 @@
       "id": "source_current_transport",
       "path": "packages/fullmag-py/src/fullmag/model/current_transport.py",
       "symbol": "class CurrentTransport",
-      "responsibility": "public constructor and IR lowering"
+      "responsibility": "public current-transport constructor, mutual-exclusivity validation, and IR lowering"
+    },
+    {
+      "id": "source_charge_transport_material",
+      "path": "packages/fullmag-py/src/fullmag/model/current_transport.py",
+      "symbol": "class ChargeTransportMaterial",
+      "responsibility": "isotropic and bidirectional anisotropic conductivity contract"
+    },
+    {
+      "id": "source_charge_potential_gauge",
+      "path": "packages/fullmag-py/src/fullmag/model/current_transport.py",
+      "symbol": "class ChargePotentialGauge",
+      "responsibility": "electric potential gauge contract (dirichlet_reference, zero_mean, terminal_reference)"
+    },
+    {
+      "id": "source_charge_solver_policy",
+      "path": "packages/fullmag-py/src/fullmag/model/current_transport.py",
+      "symbol": "class ChargeSolverPolicy",
+      "responsibility": "charge Poisson linear engine (cg / block_gmres) and operator version validation"
+    },
+    {
+      "id": "source_structured_current_closure",
+      "path": "packages/fullmag-py/src/fullmag/model/current_transport.py",
+      "symbol": "class StructuredCurrentClosure",
+      "responsibility": "structured v1/v2 impressed potential-jump source-cut closure"
+    },
+    {
+      "id": "source_conservative_current_view",
+      "path": "packages/fullmag-py/src/fullmag/model/current_transport.py",
+      "symbol": "class ConservativeCurrentView",
+      "responsibility": "conservative current boundary-role verification view"
+    },
+    {
+      "id": "source_external_lead_preparation",
+      "path": "packages/fullmag-py/src/fullmag/model/current_transport.py",
+      "symbol": "class ExternalLeadPreparation",
+      "responsibility": "declarative external lead extensions for antenna charge precompute"
+    },
+    {
+      "id": "source_external_lead_current_source",
+      "path": "packages/fullmag-py/src/fullmag/model/current_transport.py",
+      "symbol": "class ExternalLeadCurrentSource",
+      "responsibility": "pre-meshed conservative external-lead current source snapshot"
+    },
+    {
+      "id": "source_study_builder",
+      "path": "packages/fullmag-py/src/fullmag/world.py",
+      "symbol": "class StudyBuilder",
+      "responsibility": "study.current_transport(...) study registration helper"
     }
   ],
   "public_api": {
@@ -55,62 +103,152 @@
       {
         "python": "model",
         "type": "str",
-        "default": "prescribed_density",
+        "default": "\"prescribed_density\"",
         "si_unit": "$1$",
-        "validation": "`prescribed_density`, `ohmic_poisson`, or `magnetoresistive_poisson`",
+        "validation": "`\"prescribed_density\"`, `\"ohmic_poisson\"`, or `\"magnetoresistive_poisson\"`",
         "meaning": "transport equation family",
         "backend_support": "FEM/FDM CPU/GPU: IR; resolved module",
         "problem_ir": "model"
       },
       {
         "python": "current_density",
-        "type": "tuple[float,float,float] or None",
+        "type": "Sequence[float] | None",
         "default": "None",
         "si_unit": "$\\mathrm{A\\,m^{-2}}$",
-        "validation": "required by prescribed; forbidden by ohmic",
-        "meaning": "prescribed density",
+        "validation": "required for `\"prescribed_density\"`; forbidden for `\"ohmic_poisson\"`",
+        "meaning": "prescribed uniform current density",
         "backend_support": "FEM/FDM CPU/GPU: IR; resolved module",
         "problem_ir": "current_density"
       },
       {
         "python": "solve_region",
-        "type": "str or None",
+        "type": "str | None",
         "default": "None",
         "si_unit": "$1$",
-        "validation": "non-empty when supplied",
-        "meaning": "solution region",
-        "backend_support": "FEM/FDM CPU/GPU: IR; resolved module",
+        "validation": "non-empty when supplied; cannot mix with complete charge contract",
+        "meaning": "legacy single-region solve selector",
+        "backend_support": "FEM/FDM CPU/GPU: IR; legacy path",
         "problem_ir": "solve_region"
       },
       {
         "python": "conductivity_s_per_m",
-        "type": "float or field",
+        "type": "float | None",
         "default": "None",
         "si_unit": "$\\mathrm{S\\,m^{-1}}$",
-        "validation": "positive when supplied",
-        "meaning": "conductivity",
-        "backend_support": "FEM/FDM CPU/GPU: IR; resolved module",
-        "problem_ir": "conductivity"
+        "validation": "finite and `> 0` when supplied; cannot mix with complete charge contract",
+        "meaning": "legacy scalar conductivity",
+        "backend_support": "FEM/FDM CPU/GPU: IR; legacy path",
+        "problem_ir": "conductivity_s_per_m"
       },
       {
         "python": "coupling",
         "type": "str",
-        "default": "one_way",
+        "default": "\"one_way\"",
         "si_unit": "$1$",
-        "validation": "`one_way` or `bidirectional`; bidirectional requires ohmic",
-        "meaning": "coupling direction",
+        "validation": "`\"one_way\"` or `\"bidirectional\"`; `\"bidirectional\"` requires Ohmic/magnetoresistive solve and `block_gmres`",
+        "meaning": "charge-spin coupling direction",
         "backend_support": "FEM/FDM CPU/GPU: IR; resolved module",
         "problem_ir": "coupling"
       },
       {
-        "python": "domain/materials/boundaries/gauge/solver",
-        "type": "typed values",
-        "default": "empty/None",
-        "si_unit": "$\\mathrm{S\\,m^{-1}}$, $\\mathrm{A\\,m^{-2}}$, or $1$",
-        "validation": "complete for `ohmic_poisson`",
-        "meaning": "Poisson charge contract",
+        "python": "domain",
+        "type": "Sequence[RegionRef]",
+        "default": "()",
+        "si_unit": "$1$",
+        "validation": "non-empty `RegionRef` sequence for `\"ohmic_poisson\"`",
+        "meaning": "charge transport domain regions",
         "backend_support": "FEM/FDM CPU/GPU: IR; resolved module",
-        "problem_ir": "transport"
+        "problem_ir": "domain"
+      },
+      {
+        "python": "materials",
+        "type": "Sequence[ChargeTransportMaterialAssignment]",
+        "default": "()",
+        "si_unit": "$\\mathrm{S\\,m^{-1}}$",
+        "validation": "non-empty typed assignments for `\"ohmic_poisson\"`",
+        "meaning": "per-region charge conductivity assignments",
+        "backend_support": "FEM/FDM CPU/GPU: IR; resolved module",
+        "problem_ir": "materials"
+      },
+      {
+        "python": "boundaries",
+        "type": "Sequence[ChargeBoundary]",
+        "default": "()",
+        "si_unit": "$\\mathrm{V}$, $\\mathrm{A\\,m^{-2}}$, or $1$",
+        "validation": "non-empty unless using `conservative_current_source`, `external_lead_preparation`, or `structured_current_closure` v2",
+        "meaning": "electrode, terminal, and insulating charge boundaries",
+        "backend_support": "FEM/FDM CPU/GPU: IR; resolved module",
+        "problem_ir": "boundaries"
+      },
+      {
+        "python": "gauge",
+        "type": "ChargePotentialGauge | None",
+        "default": "None",
+        "si_unit": "$1$",
+        "validation": "required for `\"ohmic_poisson\"`; `\"dirichlet_reference\"`, `\"zero_mean\"`, or `\"terminal_reference\"`",
+        "meaning": "electric potential reference gauge",
+        "backend_support": "FEM/FDM CPU/GPU: IR; resolved module",
+        "problem_ir": "gauge"
+      },
+      {
+        "python": "solver",
+        "type": "ChargeSolverPolicy | None",
+        "default": "None",
+        "si_unit": "$1$",
+        "validation": "required for `\"ohmic_poisson\"`; engine and operator version must match closure/coupling",
+        "meaning": "linear charge solver policy",
+        "backend_support": "FEM/FDM CPU/GPU: IR; resolved module",
+        "problem_ir": "solver"
+      },
+      {
+        "python": "time_envelope",
+        "type": "TimeEnvelope | None",
+        "default": "None",
+        "si_unit": "$1$",
+        "validation": "canonical `TimeEnvelope` (`ConstantEnvelope`, `SinusoidalEnvelope`, `PulseEnvelope`, `PiecewiseLinearEnvelope`, `SincEnvelope`, `TabulatedEnvelope`); forbidden on static precompute lead/v2 closures",
+        "meaning": "temporal modulation of the transport drive",
+        "backend_support": "FEM/FDM CPU/GPU: IR; resolver-specific",
+        "problem_ir": "time_envelope"
+      },
+      {
+        "python": "conservative_current_view",
+        "type": "ConservativeCurrentView | None",
+        "default": "None",
+        "si_unit": "$1$",
+        "validation": "mutually exclusive with `structured_current_closure`, `conservative_current_source`, and `external_lead_preparation`; one-way `ohmic_poisson` only",
+        "meaning": "conservative current flux verification view",
+        "backend_support": "FEM CPU: IR & conservative view; other lanes fail closed",
+        "problem_ir": "conservative_current_view"
+      },
+      {
+        "python": "structured_current_closure",
+        "type": "StructuredCurrentClosure | None",
+        "default": "None",
+        "si_unit": "$1$",
+        "validation": "mutually exclusive with other closure/lead fields; one-way `ohmic_poisson`; v1 requires `fv_charge_harmonic_source_cut_v1`, v2 requires FEM H1 operator and `zero_mean` gauge",
+        "meaning": "closed-loop impressed potential jump source-cut closure",
+        "backend_support": "FDM/FEM CPU/GPU: IR; lane-specific operator version",
+        "problem_ir": "structured_current_closure"
+      },
+      {
+        "python": "conservative_current_source",
+        "type": "ExternalLeadCurrentSource | None",
+        "default": "None",
+        "si_unit": "$1$",
+        "validation": "mutually exclusive with other closure/lead fields; static one-way FEM H1 `cg` + `terminal_reference` gauge + empty `boundaries`",
+        "meaning": "prepared external-lead conservative current source mesh",
+        "backend_support": "FEM CPU: IR & antenna source precompute",
+        "problem_ir": "conservative_current_source"
+      },
+      {
+        "python": "external_lead_preparation",
+        "type": "ExternalLeadPreparation | None",
+        "default": "None",
+        "si_unit": "$1$",
+        "validation": "mutually exclusive with other closure/lead fields; static one-way FEM H1 `cg` + `terminal_reference` gauge + empty `boundaries`; extensions must belong to `domain`",
+        "meaning": "declarative external lead extension specification",
+        "backend_support": "FEM CPU: IR & antenna lead preparation",
+        "problem_ir": "external_lead_preparation"
       }
     ],
     "returns": "typed ProblemIR record at to_ir()"

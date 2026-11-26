@@ -1,6 +1,7 @@
 {
   "document": {
-    "reviewed_revision": "ab3c8802a691a535063102c12f9a79bb0043b367",
+    "reviewed_revision": "752450f8d259ab97c76c36fe666d5474b02abe9a",
+    "reviewed_at": "2026-11-26",
     "path": "public_docs/site/physics/interactions/inter-region-couplings/index.md",
     "title": "Inter-region couplings",
     "interaction": "inter region couplings"
@@ -10,38 +11,175 @@
       "solver": "FDM",
       "device": "CPU",
       "status": "partial",
-      "reason": "Authoring, planning, runtime, and scientific qualification are reported separately on the page."
+      "reason": "Single-layer region-to-region exchange couplings execute via AoS ExchangeFaces; persistent SoA fast path routes away from exchange_faces, and rkky, interlayer_exchange, and multilayer FDM couplings fail closed."
     },
     {
       "solver": "FDM",
       "device": "GPU",
       "status": "partial",
-      "reason": "Device source presence does not replace executed-device evidence and precision-specific qualification."
+      "reason": "Single-layer region-to-region exchange couplings execute via CUDA face_xp/yp/zp buffers; rkky, interlayer_exchange, and multilayer FDM couplings fail closed."
     },
     {
       "solver": "FEM",
       "device": "CPU",
-      "status": "partial",
-      "reason": "The exact weak/discrete realization and bounded capability envelope remain lane-specific."
+      "status": "unsupported",
+      "reason": "No FEM region-exchange or surface trace quadrature coupling materialization exists; all coupling kinds fail closed."
     },
     {
       "solver": "FEM",
       "device": "GPU",
-      "status": "partial",
-      "reason": "Strict device residency and executed-device qualification remain separate evidence gates."
+      "status": "unsupported",
+      "reason": "No device surface or region-link materializer exists on FEM GPU; all coupling kinds fail closed."
     }
   ],
   "sources": [
     {
-      "id": "python-owner",
+      "id": "python-coupling-endpoint",
+      "path": "packages/fullmag-py/src/fullmag/model/couplings.py",
+      "symbol": "class CouplingEndpoint",
+      "responsibility": "Typed region or surface endpoint descriptor."
+    },
+    {
+      "id": "python-coupling",
+      "path": "packages/fullmag-py/src/fullmag/model/couplings.py",
+      "symbol": "class Coupling",
+      "responsibility": "Validated coupling record and canonical IR lowering."
+    },
+    {
+      "id": "python-coupling-registry",
       "path": "packages/fullmag-py/src/fullmag/model/couplings.py",
       "symbol": "class CouplingRegistry",
-      "responsibility": "Own the public interaction constructor, validation, or canonical IR lowering boundary."
+      "responsibility": "Public exchange, rkky, and interlayer_exchange coupling registry."
+    },
+    {
+      "id": "python-study-couplings",
+      "path": "packages/fullmag-py/src/fullmag/world.py",
+      "symbol": "class StudyCouplingsHandle",
+      "responsibility": "Stage-first study.couplings facade."
+    },
+    {
+      "id": "ir-coupling",
+      "path": "crates/fullmag-ir/src/model.rs",
+      "symbol": "CouplingIR",
+      "responsibility": "Canonical tagged coupling IR record."
+    },
+    {
+      "id": "ir-coupling-kind",
+      "path": "crates/fullmag-ir/src/model.rs",
+      "symbol": "CouplingKindIR",
+      "responsibility": "Canonical coupling-kind enum (Exchange, Rkky, InterlayerExchange)."
+    },
+    {
+      "id": "ir-coupling-endpoint",
+      "path": "crates/fullmag-ir/src/model.rs",
+      "symbol": "CouplingEndpointIR",
+      "responsibility": "Canonical region/surface endpoint IR enum."
+    },
+    {
+      "id": "plan-fdm-couplings",
+      "path": "crates/fullmag-plan/src/fdm.rs",
+      "symbol": "materialize_region_exchange_couplings",
+      "responsibility": "FDM region-to-region exchange face materialization and capability gate."
+    },
+    {
+      "id": "engine-fdm-soa-gate",
+      "path": "crates/fullmag-engine/src/fdm/cpu/fields.rs",
+      "symbol": "soa_fast_path_rejection_reason",
+      "responsibility": "Routes exchange_faces overrides to the AoS CPU reference path."
     }
   ],
-  "symbols": [],
-  "equations": [],
+  "symbols": [
+    {"id": "J1_J2", "latex": "$J_1,J_2$", "meaning": "surface-coupling coefficients", "si_unit": "$\\mathrm{J\\,m^{-2}}$"},
+    {"id": "A_link", "latex": "$A_a,A_b,A_{ab}$", "meaning": "exchange stiffness/link coefficient", "si_unit": "$\\mathrm{J\\,m^{-1}}$"},
+    {"id": "Gamma_ab", "latex": "$\\Gamma_{ab}$", "meaning": "coupled surface set", "si_unit": "$\\mathrm{m^2}$"},
+    {"id": "dS", "latex": "$\\mathrm dS$", "meaning": "surface measure", "si_unit": "$\\mathrm{m^2}$"},
+    {"id": "s", "latex": "$s$", "meaning": "harmonic-mean scale", "si_unit": "$1$"}
+  ],
+  "equations": [
+    {
+      "id": "eq-public-inter-region-couplings-coupling-surface-energy",
+      "symbols": ["J1_J2", "Gamma_ab", "dS"],
+      "sources": ["python-coupling-registry", "ir-coupling", "ir-coupling-kind"]
+    },
+    {
+      "id": "eq-public-inter-region-couplings-coupling-harmonic",
+      "symbols": ["A_link", "s"],
+      "sources": ["python-coupling-registry", "plan-fdm-couplings", "engine-fdm-soa-gate"]
+    }
+  ],
   "public_api": {
-    "parameters": []
+    "constructors": ["fullmag.model.couplings.CouplingRegistry", "fullmag.model.couplings.Coupling"],
+    "parameters": [
+      {
+        "python": "study.couplings.exchange.mode",
+        "type": "str",
+        "default": "\"harmonic_mean\"",
+        "si_unit": "—",
+        "validation": "`\"harmonic_mean\"`, `\"explicit\"`, or `\"disabled\"`",
+        "meaning": "selects inter-region cell-face exchange rule",
+        "backend_support": "FDM CPU/GPU (single-layer), FEM unsupported",
+        "problem_ir": "couplings[].parameters.mode"
+      },
+      {
+        "python": "study.couplings.exchange.scale",
+        "type": "float | None",
+        "default": "None",
+        "si_unit": "$1$",
+        "validation": "non-negative float when `mode=\"harmonic_mean\"`",
+        "meaning": "dimensionless multiplier $s \\ge 0$ on $A_{ab}^{\\mathrm{harm}}$",
+        "backend_support": "FDM CPU/GPU (single-layer), FEM unsupported",
+        "problem_ir": "couplings[].parameters.scale"
+      },
+      {
+        "python": "study.couplings.exchange.inter_exchange",
+        "type": "float | None",
+        "default": "None",
+        "si_unit": "$\\mathrm{J\\,m^{-1}}$",
+        "validation": "required non-negative float when `mode=\"explicit\"`",
+        "meaning": "explicit interface exchange stiffness $A_{ab}$",
+        "backend_support": "FDM CPU/GPU (single-layer), FEM unsupported",
+        "problem_ir": "couplings[].parameters.inter_exchange"
+      },
+      {
+        "python": "study.couplings.rkky.J1",
+        "type": "float",
+        "default": "required",
+        "si_unit": "$\\mathrm{J\\,m^{-2}}$",
+        "validation": "finite float; `authored_only` in strict runtime",
+        "meaning": "bilinear surface RKKY coupling constant $J_1$",
+        "backend_support": "authoring/IR only (rejected at runtime on all lanes)",
+        "problem_ir": "couplings[].parameters.J1"
+      },
+      {
+        "python": "study.couplings.interlayer_exchange.J1",
+        "type": "float",
+        "default": "required",
+        "si_unit": "$\\mathrm{J\\,m^{-2}}$",
+        "validation": "finite float; `authored_only` in strict runtime",
+        "meaning": "bilinear interlayer coupling constant $J_1$",
+        "backend_support": "authoring/IR only (rejected at runtime on all lanes)",
+        "problem_ir": "couplings[].parameters.J1"
+      },
+      {
+        "python": "study.couplings.interlayer_exchange.J2",
+        "type": "float | None",
+        "default": "None",
+        "si_unit": "$\\mathrm{J\\,m^{-2}}$",
+        "validation": "optional finite float; `authored_only` in strict runtime",
+        "meaning": "biquadratic interlayer coupling constant $J_2$",
+        "backend_support": "authoring/IR only (rejected at runtime on all lanes)",
+        "problem_ir": "couplings[].parameters.J2"
+      },
+      {
+        "python": "Coupling.capability_policy",
+        "type": "str",
+        "default": "\"require_runtime\"",
+        "si_unit": "—",
+        "validation": "`\"require_runtime\"` or `\"authored_only\"`",
+        "meaning": "controls whether non-executable IR entries reject at planning or remain schema-only",
+        "backend_support": "all lanes (planner gate)",
+        "problem_ir": "couplings[].capability_policy"
+      }
+    ]
   }
 }

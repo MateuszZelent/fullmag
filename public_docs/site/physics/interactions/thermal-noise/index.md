@@ -77,44 +77,71 @@ H_{\mathrm{th},i,a}^{\,n}H_{\mathrm{th},j,b}^{\,m}
 (\sigma_i^n)^2\delta_{ij}\delta_{ab}\delta_{nm}.
 ```
 
-For FDM, $V_i=\Delta x\Delta y\Delta z$. FEM uses a documented nodal volume or mass-lumping
-measure (with nonmagnetic nodes zeroed). There is no standalone $E_{\mathrm{th}}$.
+For FDM, $V_i=\Delta x\Delta y\Delta z$. FEM uses the nodal lumped-mass volume $V_i$ (with
+nonmagnetic nodes zeroed). There is no standalone $E_{\mathrm{th}}$.
 
 (physics-thermal-noise-symbols-and-si-units)=
 ## Symbols and SI units
 
 | Symbol | Meaning | SI unit |
 |---|---|---:|
-| $T$ | temperature | $\mathrm K$ |
+| $T$ | temperature | $\mathrm{K}$ |
 | $\alpha$ | Gilbert damping | $1$ |
 | $k_{\mathrm B}$ | Boltzmann constant | $\mathrm{J\,K^{-1}}$ |
 | $\gamma_{\mu0}$ | bare gyromagnetic input used by Fullmag | $\mathrm{m\,A^{-1}\,s^{-1}}$ |
 | $V_i$ | cell or nodal volume | $\mathrm{m^3}$ |
-| $\Delta t_n$ | stochastic interval | $\mathrm s$ |
+| $\Delta t_n$ | stochastic interval | $\mathrm{s}$ |
 | $\mathbf H_{\mathrm{th}}$ | sampled thermal field | $\mathrm{A\,m^{-1}}$ |
 
 (physics-thermal-noise-assumptions-and-validity)=
 ## Stochastic integration contract
 
-A fixed seed defines requested replay policy, not universal cross-device bitwise identity.
-Adaptive integrators must specify whether rejected trials reuse the same raw Gaussian draw and
-how the draw is scaled when the accepted interval changes. In Fullmag's FEM CPU reference sampler,
-rejected adaptive attempts reuse the interval's raw draw $\boldsymbol\xi_i^n$ and rescale only
-$\sigma_i^n(\Delta t_{\mathrm{retry}})$, while FSAL reuse is disabled across accepted-step
-boundaries. A deterministic ODE convergence test does not qualify an SDE implementation.
+A fixed seed defines requested replay policy within a single lane, not universal cross-device
+bitwise identity:
+
+- **FDM CPU** uses a counter-based `splitmix64` + Box–Muller stream keyed by
+  `(seed, step, cell, stream)` (`thermal_field_add_into_step`, `thermal_field_add_into_soa`),
+  making replay independent of thread count.
+- **FDM GPU** uses cuRAND `Philox4x32-10` (`curandStatePhilox4_32_10_t`, keyed by
+  `(thermal_seed, idx, thermal_step)`) inside `combine_effective_field_fp64_kernel` and
+  `combine_effective_field_fp32_kernel`, recorded as
+  `FULLMAG_FDM_CHECKPOINT_RNG_CURAND_PHILOX4X32_10` in LLG checkpoint v3.
+- **FEM CPU** uses `std::mt19937_64` seeded per accepted interval via
+  `splitmix64(seed) ^ splitmix64(step_count)` (`refresh_thermal_brown_field`,
+  `thermal_brown_sigma`), reusing the interval's raw Gaussian draw $\boldsymbol\xi_i^n$ and
+  rescaling only $\sigma_i^n(\Delta t_{\mathrm{retry}})$ across rejected adaptive attempts, with
+  FSAL reuse disabled across accepted-step boundaries.
+- **FEM GPU** implements a deterministic `splitmix64` + Box–Muller CUDA kernel
+  (`fullmag_cuda_thermal_field_blocks`) with `ComputeMaxSigma` reduction gating when
+  `block_max_sigma == nullptr` and fused `H_eff` combination via
+  `fullmag_cuda_accumulate_heff_fused_xyz` (see
+  {ref}`numerical-methods-performance-fem-gpu-kernels`), **but strict public FEM GPU planning still
+  rejects `ThermalNoise` fail-closed pending `CAP-THERM-GPU-001`**.
+
+A deterministic ODE convergence test does not qualify an SDE implementation.
 
 (physics-thermal-noise-discrete-realization)=
 ## Backend capability matrix
 
 | Solver | Device | Authoring / IR | Executable realization | Scientific qualification | Exact boundary |
 |---|---|---|---|---|---|
-| FDM | CPU | `ThermalNoise(T, seed)` | partial/reference executable | sampling law not yet full equilibrium qualification | fixed-step Heun recommended (fixed-step `rk4`/`rk23`/`rk45` accepted without SDE qualification; `ABM3` and `adaptive_timestep` rejected); use `H_eff` |
-| FDM | GPU | same canonical IR | partial | executed-device variance and replay evidence required | fixed-step Heun recommended (`ABM3` and `adaptive_timestep` rejected; other fixed-step RK methods lack SDE qualification); cuRAND/precision/runtime identity are part of provenance |
-| FEM | CPU | same canonical IR | partial/reference executable | nodal-volume and accepted-step statistics required | `mt19937_64` raw-draw reuse across retries; FSAL disabled |
-| FEM | GPU | authoring accepted | unsupported in strict public planning | none | rejected pending `CAP-THERM-GPU-001`; kernel source alone is not an executable lane |
+| FDM | CPU | `ThermalNoise(T, seed)` | partial/reference executable (`splitmix64` Box–Muller) | sampling law and thread-invariant replay tests; full equilibrium suite ongoing | fixed-step Heun recommended (`ABM3`, `adaptive_timestep`, multilayer FDM, and `H_therm` output rejected); observe via `H_eff` |
+| FDM | GPU | same canonical IR | partial (`cuRAND Philox4x32-10` in `combine_effective_field_fp{64,32}_kernel`) | executed-device variance, checkpoint v3 RNG provenance, and replay tests | fixed-step Heun recommended (`ABM3`, `adaptive_timestep`, multilayer FDM, and `H_therm` output rejected) |
+| FEM | CPU | same canonical IR | partial/reference executable (`mt19937_64` per accepted interval) | nodal-volume scaling and accepted-step retry statistics | raw-draw reuse across retries; FSAL disabled; materializes canonical `H_therm` |
+| FEM | GPU | authoring accepted | unsupported in strict public planning | kernel contract tests only | rejected fail-closed pending `CAP-THERM-GPU-001`; `fullmag_cuda_thermal_field_blocks` source is not a public executable lane |
 
 (physics-thermal-noise-python-api)=
 ## Python API and stage-first example
+
+### Public API parameters
+
+| Python API | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR field |
+|---|---|---|---|---|---|---|---|
+| `fm.ThermalNoise.temperature` | `float` | required | $\mathrm{K}$ | finite strictly positive float ($T > 0$) | thermal bath temperature $T$ | FDM CPU/GPU, FEM CPU; FEM GPU rejected (`CAP-THERM-GPU-001`) | `energy_terms[].temperature` |
+| `fm.ThermalNoise.seed` | `int \| None` | `None` | $1$ | `None` (system entropy) or positive integer (`seed <= 0` rejected) | replay seed for per-lane RNG stream | FDM CPU/GPU, FEM CPU; FEM GPU rejected (`CAP-THERM-GPU-001`) | `energy_terms[].seed` |
+| `study.thermal_noise` | `(float, *, seed)` | required `temperature`, `seed=None` | $\mathrm{K}$ | delegates to `fm.ThermalNoise(temperature, seed=seed)` | stage-first thermal-noise authoring helper | FDM CPU/GPU, FEM CPU; FEM GPU rejected (`CAP-THERM-GPU-001`) | `energy_terms[]` |
+
+### Stage-first example
 
 ```python
 # %% Study, execution lane, and magnetic body
@@ -139,10 +166,10 @@ study.solver(integrator="heun", fix_dt=1.0e-15)
 study.stages.add_run(stage_id="thermalize", until=1.0e-12)
 ```
 
-Use a physical-time stage, not deterministic energy minimization. A direct `H_therm` output is
-rejected in the current FDM CPU/GPU observable contract; `H_eff` is the portable field
-observable across lanes. For exact constructor arguments on `fm.ThermalNoise`, see
-{doc}`/python-api/interactions/thermal-noise`.
+Use a physical-time stage, not deterministic energy minimization. A direct `H_therm` field output
+is materialized on FEM CPU and explicitly rejected on FDM CPU/GPU (`crates/fullmag-plan/src/fdm.rs`);
+`H_eff` is the portable field observable across lanes. For exact constructor arguments on
+`fm.ThermalNoise`, see {doc}`/python-api/interactions/thermal-noise`.
 
 (physics-thermal-noise-problem-ir)=
 ## ProblemIR
@@ -159,7 +186,8 @@ Omitting `seed` requests system entropy. `seed=0` is not the same state and is r
 `ThermalNoise.temperature` must be finite and strictly positive. `ThermalNoise.seed` accepts
 `None` or a positive integer (`seed <= 0` is rejected, while runtime integer type checking is not
 enforced by the constructor). Planner checks additionally validate lane support, active
-cell/nodal volumes, timestep compatibility, and random-state availability.
+cell/nodal volumes, timestep compatibility, observable legality (`H_therm` on FEM CPU only), and
+random-state availability.
 
 ## Required numerical validation
 
@@ -178,27 +206,30 @@ cell/nodal volumes, timestep compatibility, and random-state availability.
 Requested intent preserves the authored `temperature` in kelvin, optional positive `seed` (or
 explicit entropy policy when omitted), and execution request. Resolved execution records the
 selected solver, device, precision, integrator, RNG policy, and capability decision. Validation errors
-reject non-positive or non-finite temperatures, `seed=0`, conflicting `Problem.temperature`
-values, and duplicate `ThermalNoise` terms before runtime. Unsupported combinations (such as
-strict FEM GPU pending `CAP-THERM-GPU-001`, `ABM3` or `adaptive_timestep` with thermal noise on
-FDM, `H_therm` field exports on FDM, or multilayer FDM thermal execution) fail closed and are
-never silently omitted or replaced by deterministic evolution.
+reject non-positive or non-finite temperatures, `seed=0`, conflicting temperature declarations, and
+duplicate `ThermalNoise` terms before runtime. Unsupported combinations (such as strict FEM GPU
+pending `CAP-THERM-GPU-001`, `ABM3` or `adaptive_timestep` with thermal noise on FDM, `H_therm`
+field exports on FDM, or multilayer FDM thermal execution) fail closed and are never silently
+omitted or replaced by deterministic evolution.
 
 (physics-thermal-noise-implementation-mapping)=
 ## Implementation mapping
 
 Python owns authoring and serialization (`packages/fullmag-py/src/fullmag/model/energy.py`,
-`world.py`), `ProblemIR` owns canonical intent, planners (`crates/fullmag-plan/src/fdm.rs`,
-`fem.rs`) enforce temperature/seed consistency, integrator legality, and lane gates, and backend
-solvers own stochastic field sampling, raw-draw caching, and FSAL invalidation. Control Room parameter exposure is tracked in {doc}`/frontend/capability-register`; parameters
-without a matching UI control are configured in Python.
+`packages/fullmag-py/src/fullmag/world.py`), `ProblemIR` owns canonical intent, planners
+(`crates/fullmag-plan/src/fdm.rs`, `crates/fullmag-plan/src/fem.rs`,
+`crates/fullmag-plan/src/validate.rs`) enforce temperature/seed consistency, integrator legality,
+observable legality, and lane gates (`CAP-THERM-GPU-001`), and backend solvers own stochastic field
+sampling, raw-draw caching, and FSAL invalidation. Control Room parameter exposure is tracked in
+{doc}`/frontend/capability-register`; parameters without a matching UI control are configured in
+Python.
 
 (physics-thermal-noise-limitations)=
 ## Limitations
 
-The model does not provide longitudinal thermal fluctuations, temperature-dependent material
-laws, heat transport, or LLB dynamics near $T_C$. These require separate coupled physics
-contracts.
+Strict public FEM GPU execution remains gated on `CAP-THERM-GPU-001`. The model does not provide
+longitudinal thermal fluctuations, temperature-dependent material laws, heat transport, or LLB
+dynamics near $T_C$. These require separate coupled physics contracts.
 
 (physics-thermal-noise-scientific-bibliography)=
 ## Scientific bibliography
@@ -225,11 +256,12 @@ contracts.
 
 | Repository path | Stable symbol / area | Responsibility |
 |---|---|---|
-| `packages/fullmag-py/src/fullmag/model/energy.py` | `class ThermalNoise` | public temperature/seed contract |
-| `packages/fullmag-py/src/fullmag/world.py` | `thermal_noise` | stage-first registration |
-| `crates/fullmag-plan/src/fdm.rs` | `thermal planning` | FDM lane and seed policy |
-| `crates/fullmag-plan/src/fem.rs` | `thermal planning` | FEM lane and capability rejection |
-| `crates/fullmag-engine/src` | `Brown field sampling` | CPU reference routines |
-| `backends/fdm/gpu/cuda/interactions` | `thermal field kernels` | FDM GPU sampling |
-| `backends/fem/cpu/mfem` | `thermal sampler` | FEM CPU nodal realization |
-| `backends/fem/gpu/cuda` | `thermal source` | non-promoting source evidence |
+| [`packages/fullmag-py/src/fullmag/model/energy.py`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/model/energy.py#L611) | `class ThermalNoise` | public temperature and seed contract with canonical IR lowering |
+| [`crates/fullmag-engine/src/fdm/cpu/fields.rs`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-engine/src/fdm/cpu/fields.rs#L390) | `thermal_field_add_into_soa` | FDM CPU SoA counter-based `splitmix64` Box–Muller thermal field |
+| [`crates/fullmag-engine/src/fdm/cpu/fields.rs`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-engine/src/fdm/cpu/fields.rs#L709) | `thermal_field_add_into_step` | FDM CPU AoS step-indexed `splitmix64` Box–Muller thermal field |
+| [`backends/fdm/gpu/cuda/interactions/demag_fp64.cu`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/backends/fdm/gpu/cuda/interactions/demag_fp64.cu#L246) | `combine_effective_field_fp64_kernel` | FDM GPU FP64 `cuRAND Philox4x32-10` thermal field combination |
+| [`backends/fdm/gpu/cuda/interactions/demag_fp32.cu`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/backends/fdm/gpu/cuda/interactions/demag_fp32.cu#L231) | `combine_effective_field_fp32_kernel` | FDM GPU FP32 `cuRAND Philox4x32-10` thermal field combination |
+| [`backends/fem/cpu/mfem/interactions/thermal_brown_sigma.cpp`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/backends/fem/cpu/mfem/interactions/thermal_brown_sigma.cpp#L21) | `thermal_brown_sigma` | fluctuation–dissipation standard deviation using bare $\gamma_{\mu0}$ |
+| [`backends/fem/cpu/mfem/interactions/thermal_brown_sampler.cpp`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/backends/fem/cpu/mfem/interactions/thermal_brown_sampler.cpp#L107) | `refresh_thermal_brown_field` | FEM CPU `mt19937_64` nodal sampler with retry raw-draw reuse and `H_therm` output |
+| [`backends/fem/gpu/cuda/interactions/thermal/thermal_kernels.cu`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/backends/fem/gpu/cuda/interactions/thermal/thermal_kernels.cu#L104) | `fullmag_cuda_thermal_field_blocks` | FEM GPU `splitmix64` kernel with `ComputeMaxSigma` gating (non-promoting pending `CAP-THERM-GPU-001`) |
+| [`backends/fem/gpu/cuda/fields/vector_field_kernels.cu`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/backends/fem/gpu/cuda/fields/vector_field_kernels.cu#L248) | `fullmag_cuda_accumulate_heff_fused_xyz` | FEM GPU single-launch fused `H_eff` combiner |

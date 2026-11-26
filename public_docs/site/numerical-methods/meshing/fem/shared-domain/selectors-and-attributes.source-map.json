@@ -1,7 +1,7 @@
 {
   "document": {
     "path": "public_docs/site/numerical-methods/meshing/fem/shared-domain/selectors-and-attributes.md",
-    "reviewed_revision": "969efa0941905825ac569d525f4bdaefc059e2af"
+    "reviewed_revision": "752450f8d259ab97c76c36fe666d5474b02abe9a"
   },
   "backend_matrix": [
     {
@@ -111,6 +111,27 @@
       "path": "crates/fullmag-runner/src/lib.rs",
       "symbol": "run_planned_problem",
       "responsibility": "Planned runtime dispatch; source evidence only here."
+    },
+    {
+      "id": "compact_markers",
+      "path": "backends/fem/core/fem_marker_map.hpp",
+      "symbol": "class CompactMarkerMap",
+      "responsibility": "Bijective canonical-to-MFEM compact marker mapping across native boundaries",
+      "evidence_status": "verified"
+    },
+    {
+      "id": "facet_roles",
+      "path": "packages/fullmag-py/src/fullmag/meshing/_gmsh_extraction.py",
+      "symbol": "_derive_facet_roles",
+      "responsibility": "Solver-facing facet-role derivation",
+      "evidence_status": "source-inspected"
+    },
+    {
+      "id": "object_policy_ui",
+      "path": "apps/control-room/src/modules/inspector/panels/mesh-details/ObjectMeshSpecPanel.tsx",
+      "symbol": "function ObjectMeshInspectorSpecPanel",
+      "responsibility": "Control Room object policy and selector controls",
+      "evidence_status": "source-inspected"
     }
   ],
   "symbols": [
@@ -152,7 +173,7 @@
         "type": "Sequence[object]",
         "default": "required",
         "si_unit": "$\\mathrm{m}$",
-        "validation": "each component is converted with float(); resulting list must have length three; no finite check",
+        "validation": "each component is converted with `float()`; resulting list must have length three; no finite check",
         "meaning": "nearest-query point",
         "backend_support": "FEM CPU/GPU capability-gated",
         "problem_ir": "mesh.selectors[].point"
@@ -166,7 +187,7 @@
         "type": "object | None",
         "default": "None",
         "si_unit": "$1$",
-        "validation": "when supplied, exactly str(value).strip(); empty result raises ValueError",
+        "validation": "when supplied, exactly `str(value).strip()`; empty result raises `ValueError`",
         "meaning": "restrict candidate component",
         "backend_support": "FEM CPU/GPU capability-gated",
         "problem_ir": "mesh.selectors[].geometry"
@@ -180,7 +201,7 @@
         "type": "object",
         "default": "1",
         "si_unit": "$1$",
-        "validation": "exactly int(value); result must be at least 1 or ValueError",
+        "validation": "exactly `int(value)`; result must be at least 1 or `ValueError`",
         "meaning": "number passed to closest-entity query",
         "backend_support": "FEM CPU/GPU capability-gated",
         "problem_ir": "mesh.selectors[].count"
@@ -193,8 +214,8 @@
         "python": "boundary_layer_count",
         "type": "int | None",
         "default": "None",
-        "si_unit": "layers",
-        "validation": "int() coercion and at least 1",
+        "si_unit": "$1$",
+        "validation": "`int()` coercion and at least 1",
         "meaning": "boundary-layer count receiving the selector",
         "backend_support": "FEM CPU/GPU capability-gated",
         "problem_ir": "mesh_workflow.per_geometry[].boundary_layer_count"

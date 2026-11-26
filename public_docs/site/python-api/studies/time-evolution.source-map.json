@@ -1,6 +1,6 @@
 {
   "document": {
-    "reviewed_revision": "5e99782acbb7fb3f65d0cad872e102bf67733103",
+    "reviewed_revision": "752450f8d259ab97c76c36fe666d5474b02abe9a",
     "path": "public_docs/site/python-api/studies/time-evolution.md"
   },
   "backend_matrix": [
@@ -23,7 +23,7 @@
     {"id": "alpha_i", "latex": "\\alpha_i", "meaning": "Dimensionless Gilbert damping parameter", "si_unit": "1"},
     {"id": "tau_direct_i", "latex": "\\boldsymbol{\\tau}_{\\mathrm{direct},i}", "meaning": "Direct current-induced spin-torque rate", "si_unit": "\\mathrm{s^{-1}}"},
     {"id": "t_0", "latex": "t_0", "meaning": "Stage initial physical time", "si_unit": "\\mathrm{s}"},
-    {"id": "T", "latex": "T", "meaning": "Stage physical duration (`duration`)", "si_unit": "\\mathrm{s}"},
+    {"id": "T", "latex": "T", "meaning": "Stage physical duration (`until`)", "si_unit": "\\mathrm{s}"},
     {"id": "t", "latex": "t", "meaning": "Physical simulation time", "si_unit": "\\mathrm{s}"}
   ],
   "sources": [
@@ -37,7 +37,7 @@
       "id": "study-builder",
       "path": "packages/fullmag-py/src/fullmag/world.py",
       "symbol": "class StudyBuilder",
-      "responsibility": "Stage-workflow .stages.add_time(...) and .solver(...) authoring"
+      "responsibility": "Stage-workflow .stages.add_run(...) and .solver(...) authoring"
     },
     {
       "id": "fem-cpu-step",

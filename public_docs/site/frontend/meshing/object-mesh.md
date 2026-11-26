@@ -10,8 +10,9 @@ owner: fullmag-public-docs
 # FEM Object Mesh Panel
 
 The object panel edits one object-owned mesh policy. It is implemented by
-`ObjectMeshPolicyPanel.tsx` and canonicalized by
-`ObjectMeshPolicyPanelModel.ts`.
+`ObjectMeshInspectorSpecPanel` (`ObjectMeshSpecPanel.tsx`) and canonicalized by
+`ObjectMeshPolicyPanelModel.ts`, complementing global study sizing in `MeshRootInspectorSpecPanel`
+(`MeshRootSpec.tsx`).
 
 ## Panel groups
 
@@ -52,5 +53,6 @@ executes `mesh.build-selected`; if the draft is dirty, the panel applies it firs
 
 | Repository path | Stable symbol | Responsibility |
 |---|---|---|
-| `apps/control-room/src/modules/inspector/panels/ObjectMeshPolicyPanel.tsx` | `ObjectMeshPolicyPanel` | Object policy read/write and resource invalidation |
+| `apps/control-room/src/modules/inspector/panels/mesh-details/ObjectMeshSpecPanel.tsx` | `ObjectMeshInspectorSpecPanel` | Object policy read/write and resource invalidation |
+| `apps/control-room/src/modules/inspector/inspectors/mesh/MeshRootSpec.tsx` | `MeshRootInspectorSpecPanel` | Study-level FEM default sizing and shared-domain build triggers |
 | `apps/control-room/src/modules/inspector/panels/ObjectMeshPolicyPanelModel.ts` | `buildObjectMeshPolicyReplaceRequest` | Canonical replacement payload |

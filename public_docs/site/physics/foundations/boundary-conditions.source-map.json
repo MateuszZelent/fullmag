@@ -1,18 +1,22 @@
 {
   "document": {
-    "reviewed_revision": "ab3c8802a691a535063102c12f9a79bb0043b367",
+    "reviewed_revision": "752450f8d259ab97c76c36fe666d5474b02abe9a",
+    "reviewed_at": "2026-11-26",
     "path": "public_docs/site/physics/foundations/boundary-conditions.md",
     "title": "Boundary-condition contracts",
-    "scope": "exchange, DMI, periodic, demagnetization, and mechanical boundary laws"
+    "scope": "exchange, DMI, periodic, Floquet, frozen-spin, absorbing boundary layer, demagnetization, and mechanical boundary laws"
   },
   "backend_matrix": [
-    {"solver": "FDM", "device": "CPU", "status": "reference", "reason": "Canonical wrapped-neighbor and open-face reference policies."},
-    {"solver": "FDM", "device": "GPU", "status": "implemented", "reason": "CUDA consumes resolved boundary policy; executed-device parity remains separate evidence."},
-    {"solver": "FEM", "device": "CPU", "status": "implemented", "reason": "Weak-form natural terms and explicit periodic reductions are available."},
-    {"solver": "FEM", "device": "GPU", "status": "implemented", "reason": "GPU lane preserves reduced ordering and device transfer provenance; setup alone is not qualification."}
+    {"solver": "FDM", "device": "CPU", "status": "reference", "reason": "Canonical wrapped-neighbor, open-face, frozen-spin, and absorbing-damping reference policies."},
+    {"solver": "FDM", "device": "GPU", "status": "implemented", "reason": "CUDA consumes resolved boundary, frozen-spin, and absorbing-damping policies; FP32+PBC is intentionally rejected by qualification gate."},
+    {"solver": "FEM", "device": "CPU", "status": "implemented", "reason": "Weak-form natural terms, explicit periodic/Floquet reductions, frozen-spin constraints, and absorbing damping are available."},
+    {"solver": "FEM", "device": "GPU", "status": "implemented", "reason": "GPU lane preserves reduced ordering with PBC-reduced 1D/2D cuDSS, CSR periodic DMI, and single-k GPU Floquet; setup alone is not qualification."}
   ],
   "sources": [
     {"id": "boundary-python-periodic", "path": "packages/fullmag-py/src/fullmag/model/study.py", "symbol": "class PeriodicBC", "responsibility": "Python periodic-axis and demagnetization-policy validation."},
+    {"id": "boundary-python-floquet", "path": "packages/fullmag-py/src/fullmag/model/study.py", "symbol": "class FloquetBC", "responsibility": "Python Floquet-Bloch wavevector boundary contract."},
+    {"id": "boundary-python-frozen", "path": "packages/fullmag-py/src/fullmag/model/constraints.py", "symbol": "class FrozenSpins", "responsibility": "Stage-scoped frozen-spin constraint selector and reference contract."},
+    {"id": "boundary-python-abl", "path": "packages/fullmag-py/src/fullmag/model/absorbing_boundary.py", "symbol": "class AbsorbingBoundaryLayer", "responsibility": "Spatial Gilbert damping ramp contract for absorbing boundaries."},
     {"id": "boundary-python-study", "path": "packages/fullmag-py/src/fullmag/world.py", "symbol": "study", "responsibility": "Stage-first boundary request capture."},
     {"id": "boundary-fdm-neighbor", "path": "crates/fullmag-engine/src/fdm/shared/types.rs", "symbol": "neighbor_index", "responsibility": "FDM periodic/open neighbor resolution."},
     {"id": "boundary-fem-periodic", "path": "backends/fem/cpu/mfem/interactions/exchange_mass_projection.cpp", "symbol": "apply_periodic_consistent_mass_component", "responsibility": "FEM periodic reduced-space mass projection."},
@@ -36,13 +40,15 @@
     {"id": "eq-boundary-conditions-contract", "symbols": ["A", "dn", "n", "m", "D", "Ld", "u", "beta"], "sources": ["boundary-fem-dmi", "boundary-fdm-neighbor", "boundary-fem-demag"]},
     {"id": "eq-neumann-free-surface", "symbols": ["A", "dn", "n"], "sources": ["boundary-fem-dmi"]},
     {"id": "eq-dmi-modified-bc", "symbols": ["A", "dn", "n", "m", "D"], "sources": ["boundary-fem-dmi"]},
-    {"id": "eq-pbc-magnetization", "symbols": ["m", "Ld"], "sources": ["boundary-fdm-neighbor", "boundary-fem-periodic"]}
+    {"id": "eq-pbc-magnetization", "symbols": ["m", "Ld"], "sources": ["boundary-fdm-neighbor", "boundary-fem-periodic", "boundary-python-floquet"]}
   ],
   "public_api": {
     "parameters": [
       {"python": "PeriodicBC.axes", "type": "tuple[bool, bool, bool]", "default": "required", "si_unit": "$1$", "validation": "exactly three boolean axes", "meaning": "periodic directions", "backend_support": "FDM and FEM planners subject to mesh support", "problem_ir": "pbc.axes"},
       {"python": "PeriodicBC.demag", "type": "str", "default": "open", "si_unit": "$1$", "validation": "supported demagnetization policy", "meaning": "closure for periodic demag", "backend_support": "FDM/FEM lane-dependent", "problem_ir": "pbc.demag"},
-      {"python": "study.pbc(...)" , "type": "callable", "default": "—", "si_unit": "$1$", "validation": "rejects incomplete or incompatible pairs", "meaning": "stage-first periodicity request", "backend_support": "public authoring surface", "problem_ir": "pbc"}
+      {"python": "study.pbc(...)", "type": "callable", "default": "—", "si_unit": "$1$", "validation": "rejects incomplete or incompatible pairs", "meaning": "stage-first periodicity request", "backend_support": "public authoring surface", "problem_ir": "pbc"},
+      {"python": "FrozenSpins.selector", "type": "Selection", "default": "required", "si_unit": "$1$", "validation": "non-empty selection unless policy overrides", "meaning": "region/selection frozen to $\\partial_t\\mathbf{m}=\\mathbf{0}$", "backend_support": "FDM/FEM CPU/GPU", "problem_ir": "constraints.frozen_spins[].selector"},
+      {"python": "AbsorbingBoundaryLayer.max_damping", "type": "float", "default": "required", "si_unit": "$1$", "validation": "finite and $> 0$", "meaning": "peak Gilbert damping in absorbing ramp zone", "backend_support": "FDM/FEM CPU/GPU", "problem_ir": "materials[].alpha_field"}
     ]
   }
 }

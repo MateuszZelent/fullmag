@@ -4,8 +4,8 @@ status: partial
 doc_kind: reference
 audience: user
 owner: fullmag-public-docs
-last_updated: 2026-08-31
-reviewed_revision: ab3c8802a691a535063102c12f9a79bb0043b367
+last_updated: 2026-11-26
+reviewed_revision: 752450f8d259ab97c76c36fe666d5474b02abe9a
 source_of_truth: backends/fem/cpu/mfem/interactions/effective_field.cpp and backends/fem/gpu/cuda/integrators/rk/rk_effective_field.cu
 ---
 
@@ -13,8 +13,10 @@ source_of_truth: backends/fem/cpu/mfem/interactions/effective_field.cpp and back
 (foundation-effective-field-problem-statement)=
 # Effective field
 
-Field-form interactions are composed into $\mathbf{H}_{\mathrm{eff}}$ in $\mathrm{A\,m^{-1}}$. The LLG RHS consumes that field;
-direct torque terms remain RHS quantities and are not reinterpreted as fields.
+Field-form interactions are composed into $\mathbf{H}_{\mathrm{eff}}$ in $\mathrm{A\,m^{-1}}$
+according to the active module graph (`fm.PhysicsGraph`, with per-module `PhysicsScope` and
+stage-level `PhysicsActivation`). The LLG RHS consumes that composed field; direct torque terms
+remain RHS quantities and are not reinterpreted as fields.
 
 (foundation-effective-field-governing-equations)=
 ## Governing equations
@@ -64,15 +66,16 @@ Variational effective-field composition versus additive direct spin-torque assem
 (foundation-effective-field-assumptions-and-validity)=
 ## Assumptions and validity
 
-Each interaction owns its sign and energy convention. The variational identity is evaluated
-on magnetic degrees of freedom. FEM and FDM can differ in quadrature, mass projection,
-boundary treatment, precision, and memory placement.
+Each interaction owns its sign, target scope (`PhysicsScope`), stage activation
+(`PhysicsActivation`), and energy convention. The variational identity is evaluated on magnetic
+degrees of freedom. FEM and FDM can differ in quadrature, mass projection, boundary treatment,
+precision, and memory placement.
 
 (foundation-effective-field-python-api)=
 ## Python API
 
 Canonical interaction pages own term constructors. This stage-first capture shows the public
-execution boundary without inventing a top-level Problem constructor.
+execution boundary without inventing a top-level problem constructor.
 
 ```python
 # %%
@@ -105,37 +108,39 @@ vector at the Python boundary.
 ## ProblemIR
 
 `Exchange.to_ir()` and `Zeeman.to_ir()` produce typed energy-term fragments. A complete
-`ProblemIR` additionally contains geometry, materials, magnets, study, and backend policy;
-lowering creates that complete object.
+`ProblemIR` additionally contains geometry, materials, magnets, `PhysicsGraph` scope/activation
+records, study stages, and backend policy; lowering creates that complete object.
 
 (foundation-effective-field-round-trip-and-failure-semantics)=
 ## Round-trip and failure semantics
 
-Requested intent preserves field source and target. Resolved execution records realization,
-precision, and device. Validation errors reject malformed vectors or incompatible terms.
-Unsupported combinations fail closed and are not converted to another field path.
+Requested intent preserves field source, module scope, activation schedule, and target. Resolved execution records realization, precision, and device. Validation errors reject malformed vectors or incompatible terms. Unsupported combinations fail closed and are not converted to another field path.
 
 (foundation-effective-field-discrete-realization)=
 ## Discrete realization
 
-| Lane | Composition owner | Status |
-|---|---|---|
-| FDM CPU | cell fields and CPU dispatch | partial; numerical qualification is separate |
-| FDM GPU | device buffers and CUDA dispatch | partial; executed-device evidence is required |
-| FEM CPU | `compute_effective_fields_for_magnetization` | partial; weak/discrete details are lane-specific |
-| FEM GPU | `gpu_rk_accumulate_effective_field` | partial; build presence is not runtime proof |
+| Solver | Device | Composition owner | Status and acceleration notes |
+|---|---|---|---|
+| FDM | CPU | cell fields and CPU dispatch | partial; numerical qualification is interaction-specific |
+| FDM | GPU | device buffers and CUDA dispatch | partial; FP64 RK45 fuses local prescribed spin torques into the stage kernel (see {ref}`numerical-methods-performance-fdm-core` and {ref}`numerical-methods-performance-fdm-transport`) |
+| FEM | CPU | `compute_effective_fields_for_magnetization` | partial; weak/discrete details are interaction-specific |
+| FEM | GPU | `gpu_rk_accumulate_effective_field` | partial; fuses up to 9 active field contributions into a single device launch (`fullmag_cuda_accumulate_heff_fused_xyz`, collapsing up to $28\to 1$ kernel launches for $17.5\times$ micro-speedup with `max_rel(H_eff) = 1.65e-15`; see {ref}`numerical-methods-performance-fem-gpu-kernels`) |
 
 (foundation-effective-field-implementation-mapping)=
 ## Implementation mapping
 
-Python energy objects own authoring and `to_ir()` serialization. FEM CPU and FEM GPU have
-separate effective-field composition functions; LLG kernels consume the composed field.
+Python energy objects and `PhysicsGraph` own authoring, module scope/activation, and `to_ir()`
+serialization. FEM CPU and FEM GPU have separate effective-field composition functions; LLG
+kernels consume the composed field.
 
 (foundation-effective-field-validation)=
 ## Validation
 
-The stage-first Python example is verified against the repository authoring API. Field-energy
-derivative consistency tests and executed GPU parity remain separate evidence.
+The stage-first Python example is verified against the repository authoring API. On FEM GPU, the
+fused short-range effective-field path is validated on RTX 4080 SUPER across 50 RK4 steps with
+all local terms enabled simultaneously (`max_rel(H_eff) = 1.65e-15`, `max_rel(m) = 4.53e-16` vs.
+the unfused baseline). Field-energy derivative consistency tests and executed GPU parity remain
+interaction-specific.
 
 (foundation-effective-field-limitations)=
 ## Limitations
@@ -155,10 +160,11 @@ equations and qualification evidence remain on canonical interaction pages.
 
 | Claim | Repository path | Stable symbol | Responsibility | Lane | Evidence status |
 |---|---|---|---|---|---|
-| Python exchange authoring | [`packages/fullmag-py/src/fullmag/model/energy.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/energy.py#L11) | [`class Exchange`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/energy.py#L11) | serializes exchange term | all authoring lanes | source-backed |
-| Python Zeeman authoring | [`packages/fullmag-py/src/fullmag/model/energy.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/energy.py#L172) | [`class Zeeman`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/energy.py#L172) | validates and serializes B | all authoring lanes | source-backed |
-| canonical container | [`crates/fullmag-ir/src/lib.rs`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-ir/src/lib.rs#L410) | [`ProblemIR`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-ir/src/lib.rs#L410) | stores energy terms | all lanes | source-backed |
-| FEM CPU composition | [`backends/fem/cpu/mfem/interactions/effective_field.cpp`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/backends/fem/cpu/mfem/interactions/effective_field.cpp#L67) | [`compute_effective_fields_for_magnetization`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/backends/fem/cpu/mfem/interactions/effective_field.cpp#L67) | composes CPU fields | FEM CPU | source-backed |
-| FEM GPU composition | [`backends/fem/gpu/cuda/integrators/rk/rk_effective_field.cu`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/backends/fem/gpu/cuda/integrators/rk/rk_effective_field.cu#L42) | [`gpu_rk_accumulate_effective_field`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/backends/fem/gpu/cuda/integrators/rk/rk_effective_field.cu#L42) | accumulates GPU fields | FEM GPU | source-backed |
-| FEM CPU RHS | [`backends/fem/cpu/mfem/integrators/llg_rhs.cpp`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/backends/fem/cpu/mfem/integrators/llg_rhs.cpp#L29) | [`llg_rhs_aos`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/backends/fem/cpu/mfem/integrators/llg_rhs.cpp#L29) | consumes composed field | FEM CPU | source-backed |
-| FEM GPU RHS | [`backends/fem/gpu/cuda/integrators/llg/llg_rhs_kernels.cu`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/backends/fem/gpu/cuda/integrators/llg/llg_rhs_kernels.cu#L75) | [`fullmag_cuda_llg_rhs_fused`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/backends/fem/gpu/cuda/integrators/llg/llg_rhs_kernels.cu#L75) | consumes composed field | FEM GPU | source-backed |
+| Python exchange authoring | [`packages/fullmag-py/src/fullmag/model/energy.py`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/model/energy.py#L11) | [`class Exchange`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/model/energy.py#L11) | serializes exchange term | all authoring lanes | source-backed |
+| Python Zeeman authoring | [`packages/fullmag-py/src/fullmag/model/energy.py`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/model/energy.py#L198) | [`class Zeeman`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/model/energy.py#L198) | validates and serializes B | all authoring lanes | source-backed |
+| module scope and activation | [`packages/fullmag-py/src/fullmag/model/physics_scope.py`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/model/physics_scope.py#L99) | [`class PhysicsGraph`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/model/physics_scope.py#L99) | owns module scope, activation, and coupling edges | all authoring lanes | source-backed |
+| canonical container | [`crates/fullmag-ir/src/lib.rs`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-ir/src/lib.rs#L429) | [`ProblemIR`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-ir/src/lib.rs#L429) | stores energy terms | all lanes | source-backed |
+| FEM CPU composition | [`backends/fem/cpu/mfem/interactions/effective_field.cpp`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/backends/fem/cpu/mfem/interactions/effective_field.cpp#L68) | [`compute_effective_fields_for_magnetization`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/backends/fem/cpu/mfem/interactions/effective_field.cpp#L68) | composes CPU fields | FEM CPU | source-backed |
+| FEM GPU composition | [`backends/fem/gpu/cuda/integrators/rk/rk_effective_field.cu`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/backends/fem/gpu/cuda/integrators/rk/rk_effective_field.cu#L43) | [`gpu_rk_accumulate_effective_field`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/backends/fem/gpu/cuda/integrators/rk/rk_effective_field.cu#L43) | fused GPU effective-field accumulation | FEM GPU | source-backed |
+| FEM CPU RHS | [`backends/fem/cpu/mfem/integrators/llg_rhs.cpp`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/backends/fem/cpu/mfem/integrators/llg_rhs.cpp#L31) | [`llg_rhs_aos`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/backends/fem/cpu/mfem/integrators/llg_rhs.cpp#L31) | consumes composed field | FEM CPU | source-backed |
+| FEM GPU RHS | [`backends/fem/gpu/cuda/integrators/llg/llg_rhs_kernels.cu`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/backends/fem/gpu/cuda/integrators/llg/llg_rhs_kernels.cu#L84) | [`fullmag_cuda_llg_rhs_fused`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/backends/fem/gpu/cuda/integrators/llg/llg_rhs_kernels.cu#L84) | consumes composed field | FEM GPU | source-backed |

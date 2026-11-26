@@ -65,7 +65,7 @@ overlay masks, and export:
 ## Modules and data boundaries
 
 - **Primary module**: `FieldMapModule` (`apps/control-room/src/modules/field-map/FieldMapModule.tsx`).
-- **Inspector companions**: `PlanarMonitorDraftInspectorPanel`, `PlanarMonitorInspectorPanel`, `PlanarFieldLayerList`, and `PlanarSectionPlaneSection`.
+- **Inspector companions**: `PlanarMonitorDraftTemplatePanel`, `PlanarMonitorTemplatePanel`, `PlanarFieldLayerList`, and `PlanarSectionPlaneSection`.
 - **Rendering boundary**: Planar slices sample backend field resources (`usePlanarScalarResource`, `usePlanarVectorResource`, `usePlanarMeshOverlayResource`, `usePlanarProfileResource`) and never compute solver residuals locally.
 - **Python alignment**: Planar monitor definitions authored in UI commit to the session planar monitor catalog matching Python monitor definitions. Line profiles and CSV slice exports represent sampled visualization buffers for interactive analysis; full volumetric outputs remain in session and Zarr artifacts.
 

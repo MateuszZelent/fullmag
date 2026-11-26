@@ -1,13 +1,13 @@
 {
   "document": {
     "path": "public_docs/site/python-api/outputs/modes-and-spectra.md",
-    "reviewed_revision": "5e99782acbb7fb3f65d0cad872e102bf67733103"
+    "reviewed_revision": "752450f8d259ab97c76c36fe666d5474b02abe9a"
   },
   "backend_matrix": [
-    {"solver": "FEM", "device": "CPU", "status": "documented"},
-    {"solver": "FEM", "device": "GPU", "status": "documented"},
-    {"solver": "FDM", "device": "CPU", "status": "documented"},
-    {"solver": "FDM", "device": "GPU", "status": "documented"}
+    {"solver": "FEM", "device": "CPU", "status": "implemented"},
+    {"solver": "FEM", "device": "GPU", "status": "partial", "reason": "Supported on qualified open_airbox_k0 and single-k floquet_airbox GPU modal lanes"},
+    {"solver": "FDM", "device": "CPU", "status": "unsupported", "reason": "Native linearized modal eigensolve is FEM-only"},
+    {"solver": "FDM", "device": "GPU", "status": "unsupported", "reason": "Native linearized modal eigensolve is FEM-only"}
   ],
   "equations": [],
   "symbols": [],
@@ -19,14 +19,19 @@
   ],
   "public_api": {
     "parameters": [
-      {"python": "SaveMode.field", "type": "`str`", "default": "`\"mode\"`", "si_unit": "$1$", "validation": "Non-empty", "meaning": "Mode field name", "backend_support": "FEM/FDM CPU/GPU; planner and runtime capability checks remain authoritative", "problem_ir": "`eigen_mode.field`"},
-      {"python": "SaveMode.indices", "type": "`Sequence[int]`", "default": "`()`", "si_unit": "$1$", "validation": "Non-negative unique", "meaning": "Raw mode indices", "backend_support": "FEM/FDM CPU/GPU; planner and runtime capability checks remain authoritative", "problem_ir": "`eigen_mode.indices`"},
-      {"python": "SaveMode.branches", "type": "`Sequence[int]`", "default": "`()`", "si_unit": "$1$", "validation": "Non-negative unique", "meaning": "Tracked branch indices", "backend_support": "FEM/FDM CPU/GPU; planner and runtime capability checks remain authoritative", "problem_ir": "`eigen_mode.branches`"},
-      {"python": "SaveMode.sample_indices", "type": "`Sequence[int] | None`", "default": "`None`", "si_unit": "$1$", "validation": "Non-negative unique sample indices", "meaning": "Select samples by numeric index", "backend_support": "FEM/FDM CPU/GPU; planner and runtime capability checks remain authoritative", "problem_ir": "`eigen_mode.sample_indices`"},
-      {"python": "SaveMode.sample_labels", "type": "`Sequence[str] | None`", "default": "`None`", "si_unit": "$1$", "validation": "Non-empty sample labels", "meaning": "Select samples by label", "backend_support": "FEM/FDM CPU/GPU; planner and runtime capability checks remain authoritative", "problem_ir": "`eigen_mode.sample_labels`"},
-      {"python": "SaveSpectrum.quantity", "type": "`str`", "default": "`\"eigenfrequency\"`", "si_unit": "$1$", "validation": "Non-empty", "meaning": "Spectrum quantity", "backend_support": "FEM/FDM CPU/GPU; planner and runtime capability checks remain authoritative", "problem_ir": "`eigen_spectrum.quantity`"},
-      {"python": "SaveSpectrum.scope", "type": "`str`", "default": "`\"per_sample\"`", "si_unit": "$1$", "validation": "`global` or `per_sample`", "meaning": "Spectrum scope", "backend_support": "FEM/FDM CPU/GPU; planner and runtime capability checks remain authoritative", "problem_ir": "`eigen_spectrum.scope`"},
-      {"python": "SaveEigenDiagnostics.*", "type": "`bool`", "default": "`True`", "si_unit": "$1$", "validation": "Boolean", "meaning": "Diagnostic flags", "backend_support": "FEM/FDM CPU/GPU; planner and runtime capability checks remain authoritative", "problem_ir": "`eigen_diagnostics`"}
+      {"python": "SaveMode.field", "type": "`str`", "default": "`\"mode\"`", "si_unit": "$1$", "validation": "Non-empty", "meaning": "Mode field name", "backend_support": "FEM CPU/GPU; planner checks materialization", "problem_ir": "`eigen_mode.field`"},
+      {"python": "SaveMode.indices", "type": "`Sequence[int]`", "default": "`()`", "si_unit": "$1$", "validation": "Non-negative unique", "meaning": "Raw mode indices", "backend_support": "FEM CPU/GPU; planner checks materialization", "problem_ir": "`eigen_mode.indices`"},
+      {"python": "SaveMode.branches", "type": "`Sequence[int]`", "default": "`()`", "si_unit": "$1$", "validation": "Non-negative unique", "meaning": "Tracked branch indices", "backend_support": "FEM CPU/GPU; planner checks materialization", "problem_ir": "`eigen_mode.branches`"},
+      {"python": "SaveMode.sample_indices", "type": "`Sequence[int]`", "default": "`()`", "si_unit": "$1$", "validation": "Non-negative unique sample indices", "meaning": "Select samples by numeric index", "backend_support": "FEM CPU/GPU; planner checks materialization", "problem_ir": "`eigen_mode.sample_indices`"},
+      {"python": "SaveMode.sample_labels", "type": "`Sequence[str]`", "default": "`()`", "si_unit": "$1$", "validation": "Non-empty sample labels", "meaning": "Select samples by label", "backend_support": "FEM CPU/GPU; planner checks materialization", "problem_ir": "`eigen_mode.sample_labels`"},
+      {"python": "SaveMode.all_modes", "type": "`bool`", "default": "`False`", "si_unit": "$1$", "validation": "Boolean; mutually exclusive with explicit `indices`/`branches`", "meaning": "Persist all computed eigenmodes", "backend_support": "FEM CPU/GPU; planner checks materialization", "problem_ir": "`eigen_mode.all_modes`"},
+      {"python": "SaveSpectrum.quantity", "type": "`str`", "default": "`\"eigenfrequency\"`", "si_unit": "$1$", "validation": "Non-empty", "meaning": "Spectrum quantity", "backend_support": "FEM CPU/GPU; planner checks materialization", "problem_ir": "`eigen_spectrum.quantity`"},
+      {"python": "SaveSpectrum.scope", "type": "`str`", "default": "`\"per_sample\"`", "si_unit": "$1$", "validation": "`global` or `per_sample`", "meaning": "Spectrum scope", "backend_support": "FEM CPU/GPU; planner checks materialization", "problem_ir": "`eigen_spectrum.scope`"},
+      {"python": "SaveEigenDiagnostics.include_tracking", "type": "`bool`", "default": "`True`", "si_unit": "$1$", "validation": "Boolean", "meaning": "Include branch-tracking diagnostics", "backend_support": "FEM CPU/GPU", "problem_ir": "`eigen_diagnostics.include_tracking`"},
+      {"python": "SaveEigenDiagnostics.include_residuals", "type": "`bool`", "default": "`True`", "si_unit": "$1$", "validation": "Boolean", "meaning": "Include coupled eigenproblem residual diagnostics", "backend_support": "FEM CPU/GPU", "problem_ir": "`eigen_diagnostics.include_residuals`"},
+      {"python": "SaveEigenDiagnostics.include_overlaps", "type": "`bool`", "default": "`True`", "si_unit": "$1$", "validation": "Boolean", "meaning": "Include modal overlap matrices", "backend_support": "FEM CPU/GPU", "problem_ir": "`eigen_diagnostics.include_overlaps`"},
+      {"python": "SaveEigenDiagnostics.include_tangent_leakage", "type": "`bool`", "default": "`True`", "si_unit": "$1$", "validation": "Boolean", "meaning": "Include tangent-space leakage norms", "backend_support": "FEM CPU/GPU", "problem_ir": "`eigen_diagnostics.include_tangent_leakage`"},
+      {"python": "SaveEigenDiagnostics.include_orthogonality", "type": "`bool`", "default": "`True`", "si_unit": "$1$", "validation": "Boolean", "meaning": "Include modal orthogonality diagnostics", "backend_support": "FEM CPU/GPU", "problem_ir": "`eigen_diagnostics.include_orthogonality`"}
     ]
   }
 }

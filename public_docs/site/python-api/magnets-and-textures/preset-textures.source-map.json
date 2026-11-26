@@ -1,11 +1,11 @@
 {
   "document": {
-    "reviewed_revision": "ab3c8802a691a535063102c12f9a79bb0043b367",
+    "reviewed_revision": "752450f8d259ab97c76c36fe666d5474b02abe9a",
     "path": "public_docs/site/python-api/magnets-and-textures/preset-textures.md",
     "title": "Preset Textures",
-    "status": "implemented_with_explicit_mapping_and_runtime_qualification_limits",
-    "updated": "2026-08-23",
-    "source_revision": "2a04975375242346a9d656a360f8fc4b1a124cdb"
+    "status": "implemented",
+    "updated": "2026-11-26",
+    "source_revision": "752450f8d259ab97c76c36fe666d5474b02abe9a"
   },
   "backend_matrix": [
     {
@@ -392,7 +392,7 @@
     {
       "id": "gamma",
       "latex": "\\gamma",
-      "meaning": "fixed skyrmion helicity: 0 for Neel and pi/2 for Bloch",
+      "meaning": "skyrmion helicity: 0 or pi for Neel, +-pi/2 for Bloch",
       "si_unit": "\\mathrm{rad}"
     },
     {
@@ -768,6 +768,72 @@
       "path": "crates/fullmag-plan/src/mesh.rs",
       "symbol": "object_space_sample_points",
       "responsibility": "world-to-object coordinate mapping for translated FEM texture samples"
+    },
+    {
+      "id": "python-skyrmion-lattice-factory",
+      "path": "packages/fullmag-py/src/fullmag/init/textures.py",
+      "symbol": "skyrmion_lattice",
+      "responsibility": "public hexagonal/square skyrmion-lattice factory"
+    },
+    {
+      "id": "python-spiral-factory",
+      "path": "packages/fullmag-py/src/fullmag/init/textures.py",
+      "symbol": "spiral",
+      "responsibility": "public cycloidal/proper-screw/custom-plane spiral factory"
+    },
+    {
+      "id": "python-bloch-point-factory",
+      "path": "packages/fullmag-py/src/fullmag/init/textures.py",
+      "symbol": "bloch_point",
+      "responsibility": "public 3D Bloch-point hedgehog factory"
+    },
+    {
+      "id": "python-artificial-spin-ice-factory",
+      "path": "packages/fullmag-py/src/fullmag/init/textures.py",
+      "symbol": "artificial_spin_ice",
+      "responsibility": "public square/kagome artificial spin-ice factory"
+    },
+    {
+      "id": "rust-skyrmion-lattice",
+      "path": "crates/fullmag-plan/src/magnetization_textures_v2.rs",
+      "symbol": "skyrmion_lattice",
+      "responsibility": "Wigner-Seitz skyrmion-lattice evaluation"
+    },
+    {
+      "id": "rust-spiral",
+      "path": "crates/fullmag-plan/src/magnetization_textures_v2.rs",
+      "symbol": "spiral",
+      "responsibility": "cycloidal, proper-screw, and custom-plane spiral evaluation"
+    },
+    {
+      "id": "rust-bloch-point",
+      "path": "crates/fullmag-plan/src/magnetization_textures_v2.rs",
+      "symbol": "bloch_point",
+      "responsibility": "3D Bloch-point hedgehog evaluation"
+    },
+    {
+      "id": "rust-artificial-spin-ice",
+      "path": "crates/fullmag-plan/src/magnetization_textures_v2.rs",
+      "symbol": "artificial_spin_ice",
+      "responsibility": "square and kagome artificial spin-ice bond evaluation"
+    },
+    {
+      "id": "rust-clamp-mode",
+      "path": "crates/fullmag-plan/src/magnetization_textures_v2.rs",
+      "symbol": "apply_clamp_mode_v2",
+      "responsibility": "none, clamp, repeat, mirror, and background coordinate handling"
+    },
+    {
+      "id": "rust-axis-extent",
+      "path": "crates/fullmag-plan/src/magnetization_textures_v2.rs",
+      "symbol": "validate_axis_extent_v2",
+      "responsibility": "slab-thickness mode validation and clipping"
+    },
+    {
+      "id": "rust-tile-period",
+      "path": "crates/fullmag-plan/src/magnetization_textures_v2.rs",
+      "symbol": "resolve_default_tile_period",
+      "responsibility": "explicit, bounds-extent, and active-sample AABB period resolution"
     }
   ],
   "public_api": {
@@ -998,7 +1064,7 @@
         "default": "1",
         "si_unit": "1",
         "validation": "-1 or +1 in v2",
-        "meaning": "multiplies the fixed helicity 0",
+        "meaning": "selects radial Neel-wall helicity: 0 for +1, pi for -1",
         "backend_support": "FDM/FEM; CPU/GPU via planner materialization",
         "problem_ir": "initial_magnetization.preset_params.chirality"
       },

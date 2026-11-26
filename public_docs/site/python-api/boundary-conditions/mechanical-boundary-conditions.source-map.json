@@ -1,32 +1,32 @@
 {
   "document": {
     "path": "public_docs/site/python-api/boundary-conditions/mechanical-boundary-conditions.md",
-    "reviewed_revision": "ab3c8802a691a535063102c12f9a79bb0043b367"
+    "reviewed_revision": "752450f8d259ab97c76c36fe666d5474b02abe9a"
   },
   "backend_matrix": [
     {
       "solver": "FEM",
       "device": "CPU",
       "status": "documented",
-      "reason": "authoring and IR documented; runtime qualification separate"
+      "reason": "authoring and IR documented; prescribed-strain runtime qualification separate"
     },
     {
       "solver": "FEM",
       "device": "GPU",
       "status": "documented",
-      "reason": "authoring and IR documented; runtime qualification separate"
+      "reason": "authoring and IR documented; unsupported coupled mechanics fail closed"
     },
     {
       "solver": "FDM",
       "device": "CPU",
       "status": "documented",
-      "reason": "authoring and IR documented; runtime qualification separate"
+      "reason": "authoring and IR documented; displacement/traction BCs fail closed"
     },
     {
       "solver": "FDM",
       "device": "GPU",
       "status": "documented",
-      "reason": "authoring and IR documented; runtime qualification separate"
+      "reason": "authoring and IR documented; unsupported coupled mechanics fail closed"
     }
   ],
   "equations": [],
@@ -36,7 +36,31 @@
       "id": "source_mechanical_boundary",
       "path": "packages/fullmag-py/src/fullmag/model/mechanics.py",
       "symbol": "class MechanicalBoundaryCondition",
-      "responsibility": "public constructor and IR lowering"
+      "responsibility": "mechanical surface boundary condition constructor and IR lowering"
+    },
+    {
+      "id": "source_mechanical_load",
+      "path": "packages/fullmag-py/src/fullmag/model/mechanics.py",
+      "symbol": "class MechanicalLoad",
+      "responsibility": "volumetric body-force, prescribed-strain, and prescribed-stress load constructor"
+    },
+    {
+      "id": "source_prescribed_strain",
+      "path": "packages/fullmag-py/src/fullmag/model/dynamics.py",
+      "symbol": "class PrescribedStrain",
+      "responsibility": "prescribed-strain mechanical dynamics regime"
+    },
+    {
+      "id": "source_quasistatic_elasticity",
+      "path": "packages/fullmag-py/src/fullmag/model/dynamics.py",
+      "symbol": "class QuasistaticElasticity",
+      "responsibility": "quasistatic bidirectional Picard elasticity regime"
+    },
+    {
+      "id": "source_elastodynamics",
+      "path": "packages/fullmag-py/src/fullmag/model/dynamics.py",
+      "symbol": "class Elastodynamics",
+      "responsibility": "full coupled elastodynamics regime"
     }
   ],
   "public_api": {
@@ -44,12 +68,12 @@
     "parameters": [
       {
         "python": "MechanicalBoundaryCondition.kind",
-        "type": "Literal[str]",
+        "type": "str",
         "default": "required",
         "si_unit": "$1$",
-        "validation": "`prescribed_displacement` or `prescribed_traction`",
-        "meaning": "boundary data family",
-        "backend_support": "FEM CPU/GPU: IR; FDM not currently resolved",
+        "validation": "`\"traction_free\"`, `\"clamped\"`, `\"prescribed_displacement\"`, or `\"prescribed_traction\"`",
+        "meaning": "boundary condition family",
+        "backend_support": "FEM/FDM CPU/GPU: IR; coupled mechanics runtime required",
         "problem_ir": "kind"
       },
       {
@@ -57,50 +81,70 @@
         "type": "str",
         "default": "required",
         "si_unit": "$1$",
-        "validation": "non-empty",
-        "meaning": "surface selector",
-        "backend_support": "FEM CPU/GPU: IR; FDM not currently resolved",
+        "validation": "non-empty string",
+        "meaning": "named boundary surface selector",
+        "backend_support": "FEM/FDM CPU/GPU: IR; coupled mechanics runtime required",
         "problem_ir": "surface"
       },
       {
         "python": "MechanicalBoundaryCondition.u",
-        "type": "tuple[float,float,float]",
+        "type": "Sequence[float] | None",
         "default": "None",
         "si_unit": "$\\mathrm{m}$",
-        "validation": "required for displacement; finite",
-        "meaning": "displacement vector",
-        "backend_support": "FEM CPU/GPU: IR; FDM not currently resolved",
+        "validation": "3-component vector; required when `kind=\"prescribed_displacement\"`",
+        "meaning": "prescribed displacement vector",
+        "backend_support": "FEM/FDM CPU/GPU: IR; coupled mechanics runtime required",
         "problem_ir": "u"
       },
       {
         "python": "MechanicalBoundaryCondition.t",
-        "type": "tuple[float,float,float]",
+        "type": "Sequence[float] | None",
         "default": "None",
         "si_unit": "$\\mathrm{Pa}$",
-        "validation": "required for traction; finite",
-        "meaning": "traction vector",
-        "backend_support": "FEM CPU/GPU: IR; FDM not currently resolved",
+        "validation": "3-component vector; required when `kind=\"prescribed_traction\"`",
+        "meaning": "prescribed surface traction vector",
+        "backend_support": "FEM/FDM CPU/GPU: IR; coupled mechanics runtime required",
         "problem_ir": "t"
       },
       {
         "python": "MechanicalLoad.kind",
-        "type": "Literal[str]",
+        "type": "str",
         "default": "required",
         "si_unit": "$1$",
-        "validation": "`body_force`, `prescribed_strain`, or `prescribed_stress`",
-        "meaning": "volume load family",
-        "backend_support": "FEM CPU/GPU: IR; FDM not currently resolved",
+        "validation": "`\"body_force\"`, `\"prescribed_strain\"`, or `\"prescribed_stress\"`",
+        "meaning": "volume load or prescribed deformation family",
+        "backend_support": "FEM/FDM CPU/GPU: IR; prescribed-strain subset executable where qualified",
         "problem_ir": "kind"
       },
       {
-        "python": "MechanicalLoad.f/strain/stress",
-        "type": "tuple[float,...]",
+        "python": "MechanicalLoad.f",
+        "type": "Sequence[float] | None",
         "default": "None",
-        "si_unit": "$\\mathrm{N\\,m^{-3}}$, $1$, or $\\mathrm{Pa}$",
-        "validation": "payload required by kind; strain/stress six Voigt values",
-        "meaning": "body force, strain, or stress",
-        "backend_support": "FEM CPU/GPU: IR; FDM not currently resolved",
-        "problem_ir": "payload"
+        "si_unit": "$\\mathrm{N\\,m^{-3}}$",
+        "validation": "required when `kind=\"body_force\"`",
+        "meaning": "volumetric body force density",
+        "backend_support": "FEM/FDM CPU/GPU: IR; coupled mechanics runtime required",
+        "problem_ir": "f"
+      },
+      {
+        "python": "MechanicalLoad.strain",
+        "type": "Sequence[float] | None",
+        "default": "None",
+        "si_unit": "$1$",
+        "validation": "required when `kind=\"prescribed_strain\"`; length 6 (Voigt)",
+        "meaning": "prescribed engineering-Voigt strain tensor",
+        "backend_support": "FEM/FDM CPU/GPU: IR; prescribed-strain subset executable where qualified",
+        "problem_ir": "strain"
+      },
+      {
+        "python": "MechanicalLoad.stress",
+        "type": "Sequence[float] | None",
+        "default": "None",
+        "si_unit": "$\\mathrm{Pa}$",
+        "validation": "required when `kind=\"prescribed_stress\"`; length 6 (Voigt)",
+        "meaning": "prescribed Voigt stress tensor",
+        "backend_support": "FEM/FDM CPU/GPU: IR; coupled mechanics runtime required",
+        "problem_ir": "stress"
       }
     ],
     "returns": "typed ProblemIR record at to_ir()"

@@ -1,32 +1,32 @@
 {
   "document": {
     "path": "public_docs/site/python-api/interactions/cubic-anisotropy.md",
-    "reviewed_revision": "ab3c8802a691a535063102c12f9a79bb0043b367"
+    "reviewed_revision": "752450f8d259ab97c76c36fe666d5474b02abe9a"
   },
   "backend_matrix": [
     {
       "solver": "FEM",
       "device": "CPU",
-      "status": "documented",
-      "reason": "authoring and IR documented; runtime qualification separate"
+      "status": "implemented",
+      "reason": "IR lowering and local FEM CPU cubic anisotropy evaluation implemented"
     },
     {
       "solver": "FEM",
       "device": "GPU",
-      "status": "documented",
-      "reason": "authoring and IR documented; runtime qualification separate"
+      "status": "implemented",
+      "reason": "IR lowering and fused GPU cubic anisotropy evaluation with FP64 parity implemented"
     },
     {
       "solver": "FDM",
       "device": "CPU",
-      "status": "documented",
-      "reason": "authoring and IR documented; runtime qualification separate"
+      "status": "implemented",
+      "reason": "IR lowering and cell-local FDM CPU cubic anisotropy evaluation implemented"
     },
     {
       "solver": "FDM",
       "device": "GPU",
-      "status": "documented",
-      "reason": "authoring and IR documented; runtime qualification separate"
+      "status": "implemented",
+      "reason": "IR lowering and fused CUDA FDM cubic anisotropy evaluation implemented"
     }
   ],
   "equations": [],
@@ -37,39 +37,71 @@
       "path": "packages/fullmag-py/src/fullmag/model/energy.py",
       "symbol": "class CubicAnisotropy",
       "responsibility": "public constructor and IR lowering"
+    },
+    {
+      "id": "source_as_vector3",
+      "path": "packages/fullmag-py/src/fullmag/_validation.py",
+      "symbol": "as_vector3",
+      "responsibility": "length-3 tuple conversion without normalization or finiteness rejection"
+    },
+    {
+      "id": "source_magnet_handle",
+      "path": "packages/fullmag-py/src/fullmag/world.py",
+      "symbol": "class MagnetHandle",
+      "responsibility": "per-magnet Kc1, Kc2, Kc3, anisC1, and anisC2 authoring facade"
     }
   ],
   "public_api": {
-    "owner": "fm.CubicAnisotropy(kc1, kc2=0.0, kc3=0.0, axis1=(1,0,0), axis2=(0,1,0))",
+    "owner": "fm.CubicAnisotropy(kc1, kc2=0.0, kc3=0.0, axis1=(1.0, 0.0, 0.0), axis2=(0.0, 1.0, 0.0))",
     "parameters": [
       {
-        "python": "fm.CubicAnisotropy.kc1/kc2/kc3",
+        "python": "fm.CubicAnisotropy.kc1",
         "type": "float",
-        "default": "kc1 required; others 0.0",
+        "default": "required",
         "si_unit": "$\\mathrm{J\\,m^{-3}}$",
-        "validation": "finite",
-        "meaning": "cubic anisotropy constants",
-        "backend_support": "FEM/FDM CPU/GPU: IR; resolved support required",
-        "problem_ir": "kc1/kc2/kc3"
+        "validation": "converted via `float`; planner/backend checks finiteness",
+        "meaning": "first-order cubic anisotropy constant",
+        "backend_support": "FEM/FDM CPU/GPU: IR and local field/energy kernels",
+        "problem_ir": "kc1"
+      },
+      {
+        "python": "fm.CubicAnisotropy.kc2",
+        "type": "float",
+        "default": "0.0",
+        "si_unit": "$\\mathrm{J\\,m^{-3}}$",
+        "validation": "converted via `float`; planner/backend checks finiteness",
+        "meaning": "second-order cubic anisotropy constant",
+        "backend_support": "FEM/FDM CPU/GPU: IR and local field/energy kernels",
+        "problem_ir": "kc2"
+      },
+      {
+        "python": "fm.CubicAnisotropy.kc3",
+        "type": "float",
+        "default": "0.0",
+        "si_unit": "$\\mathrm{J\\,m^{-3}}$",
+        "validation": "converted via `float`; planner/backend checks finiteness",
+        "meaning": "third-order cubic anisotropy constant",
+        "backend_support": "FEM/FDM CPU/GPU: IR and local field/energy kernels",
+        "problem_ir": "kc3"
       },
       {
         "python": "fm.CubicAnisotropy.axis1",
-        "type": "tuple[float,float,float]",
-        "default": "(1,0,0)",
+        "type": "Sequence[float]",
+        "default": "(1.0, 0.0, 0.0)",
         "si_unit": "$1$",
-        "validation": "finite non-zero; normalized",
-        "meaning": "first cubic axis",
-        "backend_support": "FEM/FDM CPU/GPU: IR; resolved support required",
+        "validation": "length-3 sequence via `as_vector3`; planner/backend validates finiteness, non-zero norm, and normalizes",
+        "meaning": "first crystal axis",
+        "backend_support": "FEM/FDM CPU/GPU: IR and local field/energy kernels",
         "problem_ir": "axis1"
       },
       {
         "python": "fm.CubicAnisotropy.axis2",
-        "type": "tuple[float,float,float]",
-        "default": "(0,1,0)",
+        "type": "Sequence[float]",
+        "default": "(0.0, 1.0, 0.0)",
         "si_unit": "$1$",
-        "validation": "finite non-zero; normalized",
-        "meaning": "second cubic axis",
-        "backend_support": "FEM/FDM CPU/GPU: IR; resolved support required",
+        "validation": "length-3 sequence via `as_vector3`; planner/backend validates finiteness, non-zero norm, orthogonality, and normalizes",
+        "meaning": "second crystal axis",
+        "backend_support": "FEM/FDM CPU/GPU: IR and local field/energy kernels",
         "problem_ir": "axis2"
       }
     ],

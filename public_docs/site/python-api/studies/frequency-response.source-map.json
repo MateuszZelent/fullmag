@@ -1,7 +1,7 @@
 {
   "document": {
     "path": "public_docs/site/python-api/studies/frequency-response.md",
-    "reviewed_revision": "5e99782acbb7fb3f65d0cad872e102bf67733103"
+    "reviewed_revision": "752450f8d259ab97c76c36fe666d5474b02abe9a"
   },
   "backend_matrix": [
     {
@@ -13,8 +13,8 @@
     {
       "solver": "FEM",
       "device": "GPU",
-      "status": "partial",
-      "reason": "GPU-operator/host-Krylov lane supported on qualified configurations"
+      "status": "implemented",
+      "reason": "Factor-once cuDSS gpu_sparse_direct and gpu_operator_host_krylov lanes implemented with residual certification"
     },
     {
       "solver": "FDM",
@@ -53,66 +53,16 @@
     }
   ],
   "symbols": [
-    {
-      "id": "f",
-      "latex": "f",
-      "meaning": "prescribed harmonic drive frequency (`frequencies_hz`)",
-      "si_unit": "\\mathrm{Hz}"
-    },
-    {
-      "id": "omega",
-      "latex": "\\omega",
-      "meaning": "angular drive frequency $2\\pi f$",
-      "si_unit": "\\mathrm{rad\\,s^{-1}}"
-    },
-    {
-      "id": "h_ext",
-      "latex": "\\widehat{\\mathbf{h}}_{\\mathrm{ext}}",
-      "meaning": "transverse excitation field amplitude (`excitation_field_au_per_m`)",
-      "si_unit": "\\mathrm{A\\,m^{-1}}"
-    },
-    {
-      "id": "phi_drive",
-      "latex": "\\phi_{\\mathrm{drive}}",
-      "meaning": "global harmonic drive phase (`excitation_phase_rad`)",
-      "si_unit": "\\mathrm{rad}"
-    },
-    {
-      "id": "A_omega",
-      "latex": "\\mathsf{A}(\\omega)",
-      "meaning": "shifted complex tangent response operator",
-      "si_unit": "\\mathrm{rad\\,s^{-1}}"
-    },
-    {
-      "id": "K",
-      "latex": "\\mathsf{K}",
-      "meaning": "linearized effective-field stiffness operator",
-      "si_unit": "\\mathrm{rad\\,s^{-1}}"
-    },
-    {
-      "id": "G",
-      "latex": "\\mathsf{G}",
-      "meaning": "gyrotropic and Gilbert damping operator",
-      "si_unit": "\\mathrm{1}"
-    },
-    {
-      "id": "C",
-      "latex": "\\mathsf{C}",
-      "meaning": "tangent-plane drive projection operator",
-      "si_unit": "\\mathrm{m\\,A^{-1}\\,s^{-1}}"
-    },
-    {
-      "id": "q_hat",
-      "latex": "\\widehat{\\mathbf{q}}(\\omega)",
-      "meaning": "complex tangent-coordinate response vector",
-      "si_unit": "\\mathrm{1}"
-    },
-    {
-      "id": "b_hat",
-      "latex": "\\widehat{\\mathbf{b}}(\\omega)",
-      "meaning": "assembled harmonic right-hand side vector",
-      "si_unit": "\\mathrm{rad\\,s^{-1}}"
-    }
+    {"id": "f", "latex": "f", "meaning": "prescribed harmonic drive frequency (`frequencies_hz`)", "si_unit": "\\mathrm{Hz}"},
+    {"id": "omega", "latex": "\\omega", "meaning": "angular drive frequency $2\\pi f$", "si_unit": "\\mathrm{rad\\,s^{-1}}"},
+    {"id": "h_ext", "latex": "\\widehat{\\mathbf{h}}_{\\mathrm{ext}}", "meaning": "transverse excitation field amplitude (`excitation_field_au_per_m`)", "si_unit": "\\mathrm{A\\,m^{-1}}"},
+    {"id": "phi_drive", "latex": "\\phi_{\\mathrm{drive}}", "meaning": "global harmonic drive phase (`excitation_phase_rad`)", "si_unit": "\\mathrm{rad}"},
+    {"id": "A_omega", "latex": "\\mathsf{A}(\\omega)", "meaning": "shifted complex tangent response operator", "si_unit": "\\mathrm{rad\\,s^{-1}}"},
+    {"id": "K", "latex": "\\mathsf{K}", "meaning": "linearized effective-field stiffness operator", "si_unit": "\\mathrm{rad\\,s^{-1}}"},
+    {"id": "G", "latex": "\\mathsf{G}", "meaning": "gyrotropic and Gilbert damping operator", "si_unit": "1"},
+    {"id": "C", "latex": "\\mathsf{C}", "meaning": "tangent-plane drive projection operator", "si_unit": "\\mathrm{m\\,A^{-1}\\,s^{-1}}"},
+    {"id": "q_hat", "latex": "\\widehat{\\mathbf{q}}(\\omega)", "meaning": "complex tangent-coordinate response vector", "si_unit": "1"},
+    {"id": "b_hat", "latex": "\\widehat{\\mathbf{b}}(\\omega)", "meaning": "assembled harmonic right-hand side vector", "si_unit": "\\mathrm{rad\\,s^{-1}}"}
   ],
   "sources": [
     {
@@ -154,146 +104,27 @@
   ],
   "public_api": {
     "parameters": [
-      {
-        "python": "FrequencyResponse.outputs",
-        "type": "`Sequence[FrequencyOutputSpec]`",
-        "default": "`required`",
-        "si_unit": "1",
-        "validation": "At least one",
-        "meaning": "Response observables",
-        "backend_support": "FEM/FDM CPU/GPU; planner checks materialization",
-        "problem_ir": "`sampling.outputs`"
-      },
-      {
-        "python": "FrequencyResponse.frequencies_hz",
-        "type": "`Sequence[float]`",
-        "default": "`required`",
-        "si_unit": "\\mathrm{Hz}",
-        "validation": "Non-empty, finite, positive",
-        "meaning": "Sweep frequencies",
-        "backend_support": "FEM/FDM CPU/GPU",
-        "problem_ir": "`frequencies_hz.values_hz`"
-      },
-      {
-        "python": "FrequencyResponse.excitation_field_au_per_m",
-        "type": "`tuple[float, float, float]`",
-        "default": "`(0,0,1)`",
-        "si_unit": "\\mathrm{A\\,m^{-1}}",
-        "validation": "Length-3 finite vector",
-        "meaning": "Small transverse excitation field",
-        "backend_support": "FEM/FDM CPU/GPU",
-        "problem_ir": "`excitation.field_au_per_m`"
-      },
-      {
-        "python": "FrequencyResponse.excitation_phase_rad",
-        "type": "`float`",
-        "default": "`0.0`",
-        "si_unit": "\\mathrm{rad}",
-        "validation": "Finite",
-        "meaning": "Excitation phase",
-        "backend_support": "FEM/FDM CPU/GPU",
-        "problem_ir": "`excitation.phase_rad`"
-      },
-      {
-        "python": "FrequencyResponse.operator",
-        "type": "`str`",
-        "default": "`\"linearized_llg\"`",
-        "si_unit": "1",
-        "validation": "`linearized_llg` or `full_2x2`",
-        "meaning": "Linearized operator",
-        "backend_support": "FEM/FDM CPU/GPU",
-        "problem_ir": "`operator.kind`"
-      },
-      {
-        "python": "FrequencyResponse.include_demag",
-        "type": "`bool`",
-        "default": "`True`",
-        "si_unit": "1",
-        "validation": "Boolean",
-        "meaning": "Include dynamic demagnetization",
-        "backend_support": "FEM/FDM CPU/GPU",
-        "problem_ir": "`operator.include_demag`"
-      },
-      {
-        "python": "FrequencyResponse.equilibrium_source",
-        "type": "`str`",
-        "default": "`\"provided\"`",
-        "si_unit": "1",
-        "validation": "`provided`, `relax`, or `artifact`",
-        "meaning": "Equilibrium acquisition",
-        "backend_support": "FEM/FDM CPU/GPU",
-        "problem_ir": "`equilibrium`"
-      },
-      {
-        "python": "FrequencyResponse.magnetostatic_bc",
-        "type": "`str`",
-        "default": "`\"open\"`",
-        "si_unit": "1",
-        "validation": "`open`, `periodic_airbox_k0`, or `floquet_airbox`",
-        "meaning": "Magnetostatic boundary condition",
-        "backend_support": "FEM/FDM CPU/GPU",
-        "problem_ir": "`magnetostatic_bc`"
-      },
-      {
-        "python": "FrequencyResponse.solver_policy",
-        "type": "`FrequencyResponseSolverPolicy | None`",
-        "default": "`None`",
-        "si_unit": "mixed",
-        "validation": "Valid method/preconditioner/tolerance/iteration values",
-        "meaning": "Solver method and preconditioner overrides",
-        "backend_support": "FEM/FDM CPU/GPU; several methods are planned",
-        "problem_ir": "`solver_policy`"
-      },
-      {
-        "python": "FrequencyResponseSolverPolicy.method",
-        "type": "`str | None`",
-        "default": "`None`",
-        "si_unit": "1",
-        "validation": "Supported solver method name (`auto`, `dense_reference`, `schur_reduced`, `gpu_operator_host_krylov`, etc.)",
-        "meaning": "Requested linear solver lane",
-        "backend_support": "FEM CPU/GPU",
-        "problem_ir": "`solver_policy.method`"
-      },
-      {
-        "python": "FrequencyResponseSolverPolicy.preconditioner",
-        "type": "`str | None`",
-        "default": "`None`",
-        "si_unit": "1",
-        "validation": "One of `auto`, `graph_demag_coarse`, `demag_coarse`, `block_jacobi`, `none`",
-        "meaning": "Requested Krylov preconditioner",
-        "backend_support": "FEM CPU/GPU",
-        "problem_ir": "`solver_policy.preconditioner`"
-      },
-      {
-        "python": "FrequencyResponseSolverPolicy.rtol",
-        "type": "`float | None`",
-        "default": "`None`",
-        "si_unit": "1",
-        "validation": "Finite and positive",
-        "meaning": "Relative algebraic residual tolerance",
-        "backend_support": "FEM CPU/GPU",
-        "problem_ir": "`solver_policy.rtol`"
-      },
-      {
-        "python": "FrequencyResponseSolverPolicy.max_iterations",
-        "type": "`int | None`",
-        "default": "`None`",
-        "si_unit": "1",
-        "validation": "Positive integer",
-        "meaning": "Maximum Krylov iterations per frequency",
-        "backend_support": "FEM CPU/GPU",
-        "problem_ir": "`solver_policy.max_iterations`"
-      },
-      {
-        "python": "FrequencyResponseSolverPolicy.restart_iterations",
-        "type": "`int | None`",
-        "default": "`None`",
-        "si_unit": "1",
-        "validation": "Positive integer $\\le$ `max_iterations`",
-        "meaning": "GMRES/FGMRES restart subspace dimension",
-        "backend_support": "FEM CPU/GPU",
-        "problem_ir": "`solver_policy.restart_iterations`"
-      }
+      {"python": "FrequencyResponse.outputs", "type": "`Sequence[FrequencyOutputSpec]`", "default": "`required`", "si_unit": "1", "validation": "At least one", "meaning": "Response observables", "backend_support": "FEM CPU/GPU; planner checks materialization", "problem_ir": "`sampling.outputs`"},
+      {"python": "FrequencyResponse.frequencies_hz", "type": "`Sequence[float]`", "default": "`required`", "si_unit": "\\mathrm{Hz}", "validation": "Non-empty, finite, positive", "meaning": "Sweep frequencies", "backend_support": "FEM CPU/GPU", "problem_ir": "`frequencies_hz.values_hz`"},
+      {"python": "FrequencyResponse.excitation_field_au_per_m", "type": "`tuple[float, float, float]`", "default": "`(0.0, 0.0, 1.0)`", "si_unit": "\\mathrm{A\\,m^{-1}}", "validation": "Length-3 finite vector", "meaning": "Small transverse excitation field", "backend_support": "FEM CPU/GPU", "problem_ir": "`excitation.field_au_per_m`"},
+      {"python": "FrequencyResponse.excitation_phase_rad", "type": "`float`", "default": "`0.0`", "si_unit": "\\mathrm{rad}", "validation": "Finite", "meaning": "Excitation phase", "backend_support": "FEM CPU/GPU", "problem_ir": "`excitation.phase_rad`"},
+      {"python": "FrequencyResponse.operator", "type": "`str`", "default": "`\"linearized_llg\"`", "si_unit": "1", "validation": "`linearized_llg` or `full_2x2`", "meaning": "Linearized operator", "backend_support": "FEM CPU/GPU", "problem_ir": "`operator.kind`"},
+      {"python": "FrequencyResponse.equilibrium_source", "type": "`str`", "default": "`\"provided\"`", "si_unit": "1", "validation": "`provided`, `relax`, or `artifact`", "meaning": "Equilibrium acquisition", "backend_support": "FEM CPU/GPU", "problem_ir": "`equilibrium`"},
+      {"python": "FrequencyResponse.equilibrium_artifact", "type": "`str | None`", "default": "`None`", "si_unit": "1", "validation": "Non-empty path/reference required when `equilibrium_source=\"artifact\"`", "meaning": "Equilibrium checkpoint/artifact path", "backend_support": "FEM CPU/GPU", "problem_ir": "`equilibrium.artifact`"},
+      {"python": "FrequencyResponse.include_demag", "type": "`bool`", "default": "`True`", "si_unit": "1", "validation": "Boolean", "meaning": "Include dynamic demagnetization", "backend_support": "FEM CPU/GPU", "problem_ir": "`operator.include_demag`"},
+      {"python": "FrequencyResponse.k_sampling", "type": "`object | None`", "default": "`None`", "si_unit": "\\mathrm{rad\\,m^{-1}}", "validation": "Valid wave-vector sampling (`KPoint`, `KPath`, or mapping)", "meaning": "Wave-vector sampling for periodic/Bloch response", "backend_support": "FEM CPU/GPU", "problem_ir": "`k_sampling`"},
+      {"python": "FrequencyResponse.k_vector", "type": "`tuple[float, float, float] | None`", "default": "`None`", "si_unit": "\\mathrm{rad\\,m^{-1}}", "validation": "Length-3 finite wave vector", "meaning": "Single Bloch wave vector", "backend_support": "FEM CPU/GPU", "problem_ir": "`k_sampling`"},
+      {"python": "FrequencyResponse.normalization", "type": "`str`", "default": "`\"unit_l2\"`", "si_unit": "1", "validation": "`unit_l2` or `unit_max_amplitude`", "meaning": "Response vector normalization convention", "backend_support": "FEM CPU/GPU", "problem_ir": "`normalization`"},
+      {"python": "FrequencyResponse.damping_policy", "type": "`str`", "default": "`\"ignore\"`", "si_unit": "1", "validation": "`ignore` or `include`", "meaning": "Damping treatment in the linearized operator", "backend_support": "FEM CPU/GPU", "problem_ir": "`damping_policy`"},
+      {"python": "FrequencyResponse.spin_wave_bc", "type": "`str | mapping | PeriodicBC | FloquetBC`", "default": "`\"free\"`", "si_unit": "1", "validation": "`free`, `pinned`, `periodic`, `floquet`, `surface_anisotropy`", "meaning": "Spin-wave boundary condition", "backend_support": "FEM CPU/GPU", "problem_ir": "`spin_wave_bc`"},
+      {"python": "FrequencyResponse.magnetostatic_bc", "type": "`str`", "default": "`\"open\"`", "si_unit": "1", "validation": "`open`, `periodic_airbox_k0`, or `floquet_airbox`", "meaning": "Magnetostatic boundary condition", "backend_support": "FEM CPU/GPU", "problem_ir": "`magnetostatic_bc`"},
+      {"python": "FrequencyResponse.solver_policy", "type": "`FrequencyResponseSolverPolicy | None`", "default": "`None`", "si_unit": "mixed", "validation": "Valid method/preconditioner/tolerance/iteration values", "meaning": "Solver method and preconditioner overrides", "backend_support": "FEM CPU/GPU", "problem_ir": "`solver_policy`"},
+      {"python": "FrequencyResponse.dynamics", "type": "`LLG`", "default": "`LLG()`", "si_unit": "mixed", "validation": "Typed `LLG` dynamics contract", "meaning": "Gyromagnetic ratio and reference dynamics contract", "backend_support": "FEM CPU/GPU", "problem_ir": "`dynamics`"},
+      {"python": "FrequencyResponseSolverPolicy.method", "type": "`str | None`", "default": "`None`", "si_unit": "1", "validation": "One of `auto`, `dense_reference`, `schur_reduced`, `cpu_sparse_direct`, `gpu_sparse_direct`, `full_coupled_field_split`, `modal_reduced`, `gpu_operator_host_krylov`, `gpu_device_krylov`", "meaning": "Requested linear solver lane", "backend_support": "FEM CPU/GPU", "problem_ir": "`solver_policy.method`"},
+      {"python": "FrequencyResponseSolverPolicy.preconditioner", "type": "`str | None`", "default": "`None`", "si_unit": "1", "validation": "One of `auto`, `graph_demag_coarse`, `demag_coarse`, `block_jacobi`, `none`", "meaning": "Requested Krylov preconditioner", "backend_support": "FEM CPU/GPU", "problem_ir": "`solver_policy.preconditioner`"},
+      {"python": "FrequencyResponseSolverPolicy.rtol", "type": "`float | None`", "default": "`None`", "si_unit": "1", "validation": "Finite and positive", "meaning": "Relative algebraic residual tolerance", "backend_support": "FEM CPU/GPU", "problem_ir": "`solver_policy.rtol`"},
+      {"python": "FrequencyResponseSolverPolicy.max_iterations", "type": "`int | None`", "default": "`None`", "si_unit": "1", "validation": "Positive integer", "meaning": "Maximum Krylov iterations per frequency", "backend_support": "FEM CPU/GPU", "problem_ir": "`solver_policy.max_iterations`"},
+      {"python": "FrequencyResponseSolverPolicy.restart_iterations", "type": "`int | None`", "default": "`None`", "si_unit": "1", "validation": "Positive integer $\\le$ `max_iterations`", "meaning": "GMRES/FGMRES restart subspace dimension", "backend_support": "FEM CPU/GPU", "problem_ir": "`solver_policy.restart_iterations`"}
     ]
   }
 }

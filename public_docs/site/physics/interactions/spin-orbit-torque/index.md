@@ -3,6 +3,8 @@ title: Spin-orbit torque
 description: Local damping-like and field-like spin-orbit torque with prescribed signed current or a named vector-current source.
 status: partial
 doc_kind: reference
+last_updated: 2026-11-26
+reviewed_revision: 752450f8d259ab97c76c36fe666d5474b02abe9a
 ---
 
 (public-docs-physics-interactions-sot)=
@@ -220,7 +222,7 @@ and solver restrictions, are maintained on the drift-diffusion page.
 ::::{tab-set}
 :::{tab-item} Prescribed SOT
 
-```python
+```text
 study.spin_torque(fm.PrescribedSpinOrbitTorque(
     name="local_sot",
     target=fm.RegionRef("fm"),
@@ -240,7 +242,7 @@ spin boundary is consumed by this module.
 :::
 :::{tab-item} M1 one-way
 
-```python
+```text
 charge = study.current_transport(
     name="charge",
     model="ohmic_poisson",
@@ -265,7 +267,7 @@ is authored.
 :::
 :::{tab-item} M2 reciprocal
 
-```python
+```text
 charge = study.current_transport(
     name="charge",
     model="ohmic_poisson",
@@ -524,32 +526,32 @@ Geometric and algebraic structure of `PrescribedSpinOrbitTorque` (`prescribed_so
 ## Symbols and SI units
 
 | Symbol | Meaning | SI unit |
-| --- | --- | --- |
+| --- | --- | ---: |
 | $m$ | unit magnetization | $1$ |
 | $\hat{\boldsymbol\sigma}$ | unit spin-polarization axis | $1$ |
 | $\boldsymbol\sigma$ | authored nonzero spin-polarization vector | $1$ |
-| $J_{\mathrm{signed}}$ | signed conventional charge-current density driving the local source | $\mathrm{A\,m^{-2}}$ (`A/m^2`) |
-| $J_0$ | prescribed signed current-density amplitude | $\mathrm{A\,m^{-2}}$ (`A/m^2`) |
-| $\mathbf J_c$ | named vector charge-current density | $\mathrm{A\,m^{-2}}$ (`A/m^2`) |
+| $J_{\mathrm{signed}}$ | signed conventional charge-current density driving the local source | $\mathrm{A\,m^{-2}}$ |
+| $J_0$ | prescribed signed current-density amplitude | $\mathrm{A\,m^{-2}}$ |
+| $\mathbf J_c$ | named vector charge-current density | $\mathrm{A\,m^{-2}}$ |
 | $\hat{\mathbf t}$ | normalized current-projection direction | $1$ |
 | $\hat{\mathbf n}_{NF}$ | normalized oriented nonmagnet-to-ferromagnet interface normal | $1$ |
 | $\xi_{\mathrm{DL}}$ | signed effective damping-like efficiency | $1$ |
 | $\xi_{\mathrm{FL}}$ | signed effective field-like efficiency | $1$ |
-| $t_F$ | physical free-layer thickness | $\mathrm{m}$ (`m`) |
-| $M_s$ | local saturation magnetization | $\mathrm{A\,m^{-1}}$ (`A/m`) |
-| $\gamma_e$ | positive magnitude of electron gyromagnetic ratio | $\mathrm{s^{-1}\,T^{-1}}$ (`1/(s T)`) |
-| $\hbar$ | reduced Planck constant | $\mathrm{J\,s}$ (`J s`) |
-| $e$ | positive elementary charge | $\mathrm{C}$ (`C`) |
+| $t_F$ | physical free-layer thickness | $\mathrm{m}$ |
+| $M_s$ | local saturation magnetization | $\mathrm{A\,m^{-1}}$ |
+| $\gamma_e$ | positive magnitude of electron gyromagnetic ratio | $\mathrm{s^{-1}\,T^{-1}}$ |
+| $\hbar$ | reduced Planck constant | $\mathrm{J\,s}$ |
+| $e$ | positive elementary charge | $\mathrm{C}$ |
 | $\alpha$ | Gilbert damping | $1$ |
-| $\Omega_0$ | signed base torque frequency | $\mathrm{s^{-1}}$ (`1/s`) |
-| $\Omega_{\mathrm{DL}}$ | signed damping-like Gilbert rate | $\mathrm{s^{-1}}$ (`1/s`) |
-| $\Omega_{\mathrm{FL}}$ | signed field-like Gilbert rate | $\mathrm{s^{-1}}$ (`1/s`) |
-| $C_{\mathrm{DL}}$ | damping-like coefficient after Gilbert-to-explicit conversion | $\mathrm{s^{-1}}$ (`1/s`) |
-| $C_{\mathrm{FL}}$ | field-like coefficient after Gilbert-to-explicit conversion | $\mathrm{s^{-1}}$ (`1/s`) |
-| $\mathbf T_{\mathrm{DL}}^{G}$ | damping-like source in Gilbert form | $\mathrm{s^{-1}}$ (`1/s`) |
-| $\mathbf T_{\mathrm{FL}}^{G}$ | field-like source in Gilbert form | $\mathrm{s^{-1}}$ (`1/s`) |
-| $\mathbf T_{\mathrm{SOT}}^{G}$ | total prescribed source in Gilbert form | $\mathrm{s^{-1}}$ (`1/s`) |
-| $\mathbf T_{\mathrm{SOT}}$ | prescribed spin-orbit torque contribution | $\mathrm{s^{-1}}$ (`1/s`) |
+| $\Omega_0$ | signed base torque frequency | $\mathrm{s^{-1}}$ |
+| $\Omega_{\mathrm{DL}}$ | signed damping-like Gilbert rate | $\mathrm{s^{-1}}$ |
+| $\Omega_{\mathrm{FL}}$ | signed field-like Gilbert rate | $\mathrm{s^{-1}}$ |
+| $C_{\mathrm{DL}}$ | damping-like coefficient after Gilbert-to-explicit conversion | $\mathrm{s^{-1}}$ |
+| $C_{\mathrm{FL}}$ | field-like coefficient after Gilbert-to-explicit conversion | $\mathrm{s^{-1}}$ |
+| $\mathbf T_{\mathrm{DL}}^{G}$ | damping-like source in Gilbert form | $\mathrm{s^{-1}}$ |
+| $\mathbf T_{\mathrm{FL}}^{G}$ | field-like source in Gilbert form | $\mathrm{s^{-1}}$ |
+| $\mathbf T_{\mathrm{SOT}}^{G}$ | total prescribed source in Gilbert form | $\mathrm{s^{-1}}$ |
+| $\mathbf T_{\mathrm{SOT}}$ | prescribed spin-orbit torque contribution | $\mathrm{s^{-1}}$ |
 | $f(t)$ | canonical scalar time-envelope multiplier | $1$ |
 
 (physics-spin-orbit-torque-assumptions-and-validity)=
@@ -690,21 +692,42 @@ If the study already contains a current module named `charge`, replace the
 drive object only:
 
 ```python
-# %% Alternative object-level vector-current binding
+# %% Stage-first vector-current binding example
+import fullmag as fm
+
+nm = 1.0e-9
+study = fm.study("prescribed_sot_vector_drive")
+study.engine("fdm")
+study.device("cpu", precision="double")
+study.mode("strict")
+study.objects.mesh.defaults(cell_size=(2 * nm, 2 * nm, 2 * nm))
+
+film = study.geometry(fm.Box(40 * nm, 20 * nm, 4 * nm), name="film")
+film.Ms = 8.0e5
+film.Aex = 13.0e-12
+film.alpha = 0.02
+film.m = fm.texture.uniform(1.0, 0.0, 0.0)
+
+charge = study.current_transport(
+    name="charge",
+    model="prescribed_density",
+    current_density=(-4.0e11, 0.0, 0.0),
+)
 drive = fm.VectorCurrentDrive(
-    current_source="charge",
+    current_source=charge.name,
     drive_direction=(1.0, 0.0, 0.0),
     interface_normal=(0.0, 0.0, 1.0),
 )
-
 sot = fm.PrescribedSpinOrbitTorque(
     name="hm_sot_from_charge",
     target=fm.RegionRef("film"),
     drive=drive,
     xi_dl=0.12,
     xi_fl=-0.03,
-    free_layer_thickness_m=1.5e-9,
+    free_layer_thickness_m=1.5 * nm,
 )
+study.spin_torque(sot)
+study.stages.add_run(stage_id="drive", until=1.0e-12)
 sot.to_ir_module()
 ```
 
@@ -721,8 +744,8 @@ named current source.
 | `PrescribedSpinOrbitTorque.drive` | `SignedScalarDrive or VectorCurrentDrive` | `required` | $1$ | exact canonical drive type | signed current and polarization definition | all prescribed-SOT lanes after planning | `spin_torque_modules[].drive` |
 | `PrescribedSpinOrbitTorque.xi_dl` | `float` | `required` | $1$ | finite | signed damping-like efficiency | all prescribed-SOT lanes | `spin_torque_modules[].xi_dl` |
 | `PrescribedSpinOrbitTorque.xi_fl` | `float` | `0.0` | $1$ | finite | signed field-like efficiency | all prescribed-SOT lanes | `spin_torque_modules[].xi_fl` |
-| `PrescribedSpinOrbitTorque.free_layer_thickness_m` | `float` | `required` | $\mathrm{m}$ (`m`) | finite and positive | physical free-layer thickness | all prescribed-SOT lanes | `spin_torque_modules[].free_layer_thickness_m` |
-| `SignedScalarDrive.current_density_Apm2` | `float` | `required` | $\mathrm{A\,m^{-2}}$ (`A/m^2`) | finite; sign retained | prescribed scalar current amplitude | all prescribed-SOT lanes | `spin_torque_modules[].drive.current_density_Apm2` |
+| `PrescribedSpinOrbitTorque.free_layer_thickness_m` | `float` | `required` | $\mathrm{m}$ | finite and positive | physical free-layer thickness | all prescribed-SOT lanes | `spin_torque_modules[].free_layer_thickness_m` |
+| `SignedScalarDrive.current_density_Apm2` | `float` | `required` | $\mathrm{A\,m^{-2}}$ | finite; sign retained | prescribed scalar current amplitude | all prescribed-SOT lanes | `spin_torque_modules[].drive.current_density_Apm2` |
 | `SignedScalarDrive.sigma` | `Sequence[float]` | `required` | $1$ | finite nonzero three-axis vector; normalized | authored spin-polarization direction | all prescribed-SOT lanes | `spin_torque_modules[].drive.sigma_hat` |
 | `SignedScalarDrive.envelope` | `TimeEnvelope or None` | `None` | $1$ | canonical supported envelope type | scalar time multiplier | bounded prescribed-SOT lanes | `spin_torque_modules[].drive.envelope` |
 | `VectorCurrentDrive.current_source` | `str` | `required` | $1$ | non-empty and resolvable named current source | vector-current producer | planner-resolved prescribed-SOT lanes | `spin_torque_modules[].drive.current_source_id` |
@@ -795,6 +818,11 @@ the signed scalar amplitude, normalized polarization, and the stage-time envelop
 
 The native CUDA path selects `prescribed_sot.fullmag.v1` explicitly and is bounded
 by fixed-trajectory CPU parity and current-scaling tests when a CUDA device is present.
+On FP64 RK45, `PrescribedSpinOrbitTorque` is fused directly into the CUDA field/RHS stage
+kernel (`add_prescribed_spin_torques_fp64`), preserving exact post-torque `FrozenSpins`
+projection and eliminating extra global memory round-trips (see
+{ref}`numerical-methods-performance-fdm-transport`). Stages can also toggle registered spin
+torques on or off via `set_spin_torque_enabled` without rebuilding the problem graph.
 
 ### FEM CPU
 
@@ -838,16 +866,17 @@ backend and device:
 
 | Layer | File and stable symbol | Responsibility |
 | --- | --- | --- |
-| Python API | [`packages/fullmag-py/src/fullmag/model/spin_torque.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/spin_torque.py#L833), [`class PrescribedSpinOrbitTorque`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/spin_torque.py#L833) | validates module arguments and emits canonical v1 ProblemIR |
+| Python API | [`packages/fullmag-py/src/fullmag/model/spin_torque.py`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/model/spin_torque.py#L902), [`class PrescribedSpinOrbitTorque`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/model/spin_torque.py#L902) | validates module arguments and emits canonical v1 ProblemIR |
 | Scalar drive | same file, `class SignedScalarDrive` | preserves signed current, normalizes `sigma`, validates envelope |
 | Vector drive | same file, `class VectorCurrentDrive` | validates axes and emits named-current binding |
-| ProblemIR | [`crates/fullmag-ir/src/study.rs`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-ir/src/study.rs#L557), [`PrescribedSotV1DriveIR`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-ir/src/study.rs#L557) | owns tagged drive variants and formula fields |
-| Planner | [`crates/fullmag-plan/src/spin_torque.rs`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-plan/src/spin_torque.rs#L444), [`resolve_sot_fields`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-plan/src/spin_torque.rs#L444) | resolves current projection, polarization, target, and lane eligibility |
-| FDM CPU | [`crates/fullmag-runner/src/fdm/cpu/reference/interactions.rs`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-runner/src/fdm/cpu/reference/interactions.rs#L22), [`build_sot`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-runner/src/fdm/cpu/reference/interactions.rs#L22) | maps the plan into the CPU evaluator configuration |
-| FDM GPU | [`crates/fullmag-runner/src/fdm/gpu/cuda/native.rs`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-runner/src/fdm/gpu/cuda/native.rs#L589), [`ffi_prescribed_sot_formula`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-runner/src/fdm/gpu/cuda/native.rs#L589) | selects canonical versus legacy native CUDA formula |
-| FEM CPU | [`backends/fem/cpu/mfem/interactions/sot.cpp`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/backends/fem/cpu/mfem/interactions/sot.cpp#L350), [`add_sot_rhs_aos`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/backends/fem/cpu/mfem/interactions/sot.cpp#L350) | evaluates the canonical SI torque and damping conversion |
-| FEM GPU | [`backends/fem/gpu/cuda/integrators/rk/rk_sot_torque.cu`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/backends/fem/gpu/cuda/integrators/rk/rk_sot_torque.cu#L57), [`fullmag_cuda_add_prescribed_sot_rhs`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/backends/fem/gpu/cuda/integrators/rk/rk_sot_torque.cu#L57) | adds the canonical source to the device RHS |
-| UI | [`apps/control-room/src/modules/inspector/inspectors/objects/transport/SpinTorqueSpec.tsx`](https://github.com/MateuszZelent/fullmag/blob/dec31b1c59aed4924e5adc6557292003004aaa8c/apps/control-room/src/modules/inspector/inspectors/objects/transport/SpinTorqueSpec.tsx#L59), [`SpinTorqueInspectorPanel`](https://github.com/MateuszZelent/fullmag/blob/dec31b1c59aed4924e5adc6557292003004aaa8c/apps/control-room/src/modules/inspector/inspectors/objects/transport/SpinTorqueSpec.tsx#L59) | exposes prescribed SOT and its DL/FL efficiencies |
+| ProblemIR | [`crates/fullmag-ir/src/study.rs`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-ir/src/study.rs#L560), [`PrescribedSotV1DriveIR`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-ir/src/study.rs#L560) | owns tagged drive variants and formula fields |
+| Planner | [`crates/fullmag-plan/src/spin_torque.rs`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-plan/src/spin_torque.rs#L480), [`resolve_sot_fields`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-plan/src/spin_torque.rs#L480) | resolves current projection, polarization, target, and lane eligibility |
+| FDM CPU | [`crates/fullmag-runner/src/fdm/cpu/reference/interactions.rs`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-runner/src/fdm/cpu/reference/interactions.rs#L23), [`build_sot`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-runner/src/fdm/cpu/reference/interactions.rs#L23) | maps the plan into the CPU evaluator configuration |
+| FDM GPU | [`crates/fullmag-runner/src/fdm/gpu/cuda/native.rs`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-runner/src/fdm/gpu/cuda/native.rs#L662), [`ffi_prescribed_sot_formula`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-runner/src/fdm/gpu/cuda/native.rs#L662) | selects canonical versus legacy native CUDA formula |
+| FDM GPU fused helper | [`backends/fdm/gpu/cuda/integrators/prescribed_spin_torques_fp64.cuh`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/backends/fdm/gpu/cuda/integrators/prescribed_spin_torques_fp64.cuh#L7), [`add_prescribed_spin_torques_fp64`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/backends/fdm/gpu/cuda/integrators/prescribed_spin_torques_fp64.cuh#L7) | fuses FP64 RK45 prescribed SOT and Slonczewski torque accumulation |
+| FEM CPU | [`backends/fem/cpu/mfem/interactions/sot.cpp`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/backends/fem/cpu/mfem/interactions/sot.cpp#L351), [`add_sot_rhs_aos`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/backends/fem/cpu/mfem/interactions/sot.cpp#L351) | evaluates the canonical SI torque and damping conversion |
+| FEM GPU | [`backends/fem/gpu/cuda/integrators/rk/rk_sot_torque.cu`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/backends/fem/gpu/cuda/integrators/rk/rk_sot_torque.cu#L57), [`fullmag_cuda_add_prescribed_sot_rhs`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/backends/fem/gpu/cuda/integrators/rk/rk_sot_torque.cu#L57) | adds the canonical source to the device RHS |
+| UI | [`apps/control-room/src/modules/inspector/inspectors/objects/transport/SpinTorqueSpec.tsx`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/apps/control-room/src/modules/inspector/inspectors/objects/transport/SpinTorqueSpec.tsx#L59), [`SpinTorqueInspectorPanel`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/apps/control-room/src/modules/inspector/inspectors/objects/transport/SpinTorqueSpec.tsx#L59) | exposes prescribed SOT and its DL/FL efficiencies |
 
 (physics-spin-orbit-torque-scientific-bibliography)=
 ## Scientific bibliography
@@ -867,17 +896,22 @@ backend and device:
 
 | Claim | Path | Symbol | Responsibility and evidence |
 | --- | --- | --- | --- |
-| Python torque API | [`packages/fullmag-py/src/fullmag/model/spin_torque.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/spin_torque.py#L833) | [`class PrescribedSpinOrbitTorque`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/spin_torque.py#L833) | canonical validation and ProblemIR lowering |
-| Scalar drive | [`packages/fullmag-py/src/fullmag/model/spin_torque.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/spin_torque.py#L261) | [`class SignedScalarDrive`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/spin_torque.py#L261) | signed current, normalized polarization, envelope validation |
-| Vector drive | [`packages/fullmag-py/src/fullmag/model/spin_torque.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/spin_torque.py#L309) | [`class VectorCurrentDrive`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/spin_torque.py#L309) | axes and named-current binding |
-| ProblemIR | [`crates/fullmag-ir/src/study.rs`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-ir/src/study.rs#L557) | [`PrescribedSotV1DriveIR`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-ir/src/study.rs#L557) | canonical tagged drive variants |
-| Planner | [`crates/fullmag-plan/src/spin_torque.rs`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-plan/src/spin_torque.rs#L444) | [`resolve_sot_fields`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-plan/src/spin_torque.rs#L444) | projection, target, envelope, and executable fields |
-| FDM CPU | [`crates/fullmag-runner/src/fdm/cpu/reference/interactions.rs`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-runner/src/fdm/cpu/reference/interactions.rs#L22) | [`build_sot`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-runner/src/fdm/cpu/reference/interactions.rs#L22) | CPU evaluator configuration |
-| FDM GPU | [`crates/fullmag-runner/src/fdm/gpu/cuda/native.rs`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-runner/src/fdm/gpu/cuda/native.rs#L589) | [`ffi_prescribed_sot_formula`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-runner/src/fdm/gpu/cuda/native.rs#L589) | canonical native formula selection |
-| FEM CPU | [`backends/fem/cpu/mfem/interactions/sot.cpp`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/backends/fem/cpu/mfem/interactions/sot.cpp#L350) | [`add_sot_rhs_aos`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/backends/fem/cpu/mfem/interactions/sot.cpp#L350) | SI torque and damping conversion |
-| FEM GPU | [`backends/fem/gpu/cuda/integrators/rk/rk_sot_torque.cu`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/backends/fem/gpu/cuda/integrators/rk/rk_sot_torque.cu#L57) | [`fullmag_cuda_add_prescribed_sot_rhs`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/backends/fem/gpu/cuda/integrators/rk/rk_sot_torque.cu#L57) | device RHS source |
-| Python tests | [`packages/fullmag-py/tests/test_prescribed_sot.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/tests/test_prescribed_sot.py#L226) | [`class TestPrescribedSpinOrbitTorque`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/tests/test_prescribed_sot.py#L226) | exact JSON and fail-closed authoring tests |
-| Planner test | [`crates/fullmag-plan/src/spin_torque.rs`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-plan/src/spin_torque.rs#L715) | [`canonical_prescribed_sot_vector_binding_preserves_axes_and_reverses_signed_projection`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-plan/src/spin_torque.rs#L715) | signed vector projection contract |
-| FDM GPU test | [`crates/fullmag-runner/src/fdm/gpu/cuda/native.rs`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-runner/src/fdm/gpu/cuda/native.rs#L6167) | [`native_fdm_prescribed_sot_matches_cpu_reference_for_fixed_trajectory_when_cuda_is_available`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-runner/src/fdm/gpu/cuda/native.rs#L6167) | bounded CUDA/CPU trajectory parity |
-| FEM GPU test | [`backends/fem/tests/cuda_sot_contract.cpp`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/backends/fem/tests/cuda_sot_contract.cpp#L246) | [`main`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/backends/fem/tests/cuda_sot_contract.cpp#L246) | independent oracle and CPU/CUDA contract runner |
-| Control Room | [`apps/control-room/src/modules/inspector/inspectors/objects/transport/SpinTorqueSpec.tsx`](https://github.com/MateuszZelent/fullmag/blob/dec31b1c59aed4924e5adc6557292003004aaa8c/apps/control-room/src/modules/inspector/inspectors/objects/transport/SpinTorqueSpec.tsx#L59) | [`SpinTorqueInspectorPanel`](https://github.com/MateuszZelent/fullmag/blob/dec31b1c59aed4924e5adc6557292003004aaa8c/apps/control-room/src/modules/inspector/inspectors/objects/transport/SpinTorqueSpec.tsx#L59) | prescribed-SOT authoring fields |
+| Python torque API | [`packages/fullmag-py/src/fullmag/model/spin_torque.py`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/model/spin_torque.py#L902) | [`class PrescribedSpinOrbitTorque`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/model/spin_torque.py#L902) | canonical validation and ProblemIR lowering |
+| Scalar drive | [`packages/fullmag-py/src/fullmag/model/spin_torque.py`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/model/spin_torque.py#L316) | [`class SignedScalarDrive`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/model/spin_torque.py#L316) | signed current, normalized polarization, envelope validation |
+| Vector drive | [`packages/fullmag-py/src/fullmag/model/spin_torque.py`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/model/spin_torque.py#L364) | [`class VectorCurrentDrive`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/model/spin_torque.py#L364) | axes and named-current binding |
+| Charge transport comparison | [`packages/fullmag-py/src/fullmag/model/current_transport.py`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/model/current_transport.py#L1467) | [`class CurrentTransport`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/model/current_transport.py#L1467) | one-way vs. reciprocal charge coupling |
+| Spin transport comparison | [`packages/fullmag-py/src/fullmag/model/spin_transport.py`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/model/spin_transport.py#L443) | [`class SpinDriftDiffusion`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/model/spin_transport.py#L443) | one-way M1 and reciprocal M2 constitutive contract |
+| Transport torque comparison | [`packages/fullmag-py/src/fullmag/model/spin_transport.py`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/model/spin_transport.py#L504) | [`class DriftDiffusionSpinTorque`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/model/spin_transport.py#L504) | absorbed spin-flux consumer for M1/M2 comparison |
+| Problem transport validation | [`packages/fullmag-py/src/fullmag/model/problem.py`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/model/problem.py#L2733) | [`class Problem`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/model/problem.py#L2733) | reciprocal steady-mode and charge-spin graph validation |
+| ProblemIR | [`crates/fullmag-ir/src/study.rs`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-ir/src/study.rs#L560) | [`PrescribedSotV1DriveIR`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-ir/src/study.rs#L560) | canonical tagged drive variants |
+| Planner | [`crates/fullmag-plan/src/spin_torque.rs`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-plan/src/spin_torque.rs#L480) | [`resolve_sot_fields`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-plan/src/spin_torque.rs#L480) | projection, target, envelope, and executable fields |
+| FDM CPU | [`crates/fullmag-runner/src/fdm/cpu/reference/interactions.rs`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-runner/src/fdm/cpu/reference/interactions.rs#L23) | [`build_sot`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-runner/src/fdm/cpu/reference/interactions.rs#L23) | CPU evaluator configuration |
+| FDM GPU | [`crates/fullmag-runner/src/fdm/gpu/cuda/native.rs`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-runner/src/fdm/gpu/cuda/native.rs#L662) | [`ffi_prescribed_sot_formula`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-runner/src/fdm/gpu/cuda/native.rs#L662) | canonical native formula selection |
+| FDM GPU fused helper | [`backends/fdm/gpu/cuda/integrators/prescribed_spin_torques_fp64.cuh`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/backends/fdm/gpu/cuda/integrators/prescribed_spin_torques_fp64.cuh#L7) | [`add_prescribed_spin_torques_fp64`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/backends/fdm/gpu/cuda/integrators/prescribed_spin_torques_fp64.cuh#L7) | fused FP64 RK45 prescribed SOT device accumulation |
+| FEM CPU | [`backends/fem/cpu/mfem/interactions/sot.cpp`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/backends/fem/cpu/mfem/interactions/sot.cpp#L351) | [`add_sot_rhs_aos`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/backends/fem/cpu/mfem/interactions/sot.cpp#L351) | SI torque and damping conversion |
+| FEM GPU | [`backends/fem/gpu/cuda/integrators/rk/rk_sot_torque.cu`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/backends/fem/gpu/cuda/integrators/rk/rk_sot_torque.cu#L57) | [`fullmag_cuda_add_prescribed_sot_rhs`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/backends/fem/gpu/cuda/integrators/rk/rk_sot_torque.cu#L57) | device RHS source |
+| Python tests | [`packages/fullmag-py/tests/test_prescribed_sot.py`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/tests/test_prescribed_sot.py#L228) | [`class TestPrescribedSpinOrbitTorque`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/tests/test_prescribed_sot.py#L228) | exact JSON and fail-closed authoring tests |
+| Planner test | [`crates/fullmag-plan/src/spin_torque.rs`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-plan/src/spin_torque.rs#L751) | [`canonical_prescribed_sot_vector_binding_preserves_axes_and_reverses_signed_projection`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-plan/src/spin_torque.rs#L751) | signed vector projection contract |
+| FDM GPU test | [`crates/fullmag-runner/src/fdm/gpu/cuda/native.rs`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-runner/src/fdm/gpu/cuda/native.rs#L6649) | [`native_fdm_prescribed_sot_matches_cpu_reference_for_fixed_trajectory_when_cuda_is_available`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-runner/src/fdm/gpu/cuda/native.rs#L6649) | bounded CUDA/CPU trajectory parity |
+| FEM GPU test | [`backends/fem/tests/cuda_sot_contract.cpp`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/backends/fem/tests/cuda_sot_contract.cpp#L247) | [`main`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/backends/fem/tests/cuda_sot_contract.cpp#L247) | independent oracle and CPU/CUDA contract runner |
+| Control Room | [`apps/control-room/src/modules/inspector/inspectors/objects/transport/SpinTorqueSpec.tsx`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/apps/control-room/src/modules/inspector/inspectors/objects/transport/SpinTorqueSpec.tsx#L59) | [`SpinTorqueInspectorPanel`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/apps/control-room/src/modules/inspector/inspectors/objects/transport/SpinTorqueSpec.tsx#L59) | prescribed-SOT authoring fields |

@@ -1,6 +1,6 @@
 ---
 title: FullMag documentation
-status: partial
+status: implemented
 doc_kind: reference
 audience: user
 owner: fullmag-public-docs
@@ -92,6 +92,7 @@ acknowledgements/index
 |---|---|
 | How do I operate the browser application? | {doc}`frontend/index` |
 | What algorithm and data structure does the solver execute? | {doc}`backend/index` |
+| How are FDM/FEM CPU and CUDA solvers accelerated and preflight-checked? | {ref}`numerical-methods-performance` |
 | Which Python command or parameter should I use? | {doc}`python-api/index` |
 | How was a capability validated? | {doc}`validation/index` |
 | How do I run a first study? | {doc}`getting-started/index` |

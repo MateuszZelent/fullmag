@@ -1,0 +1,136 @@
+{
+  "document": {
+    "path": "public_docs/site/numerical-methods/performance/fdm-gpu-and-cpu-acceleration.md",
+    "reviewed_revision": "752450f8d259ab97c76c36fe666d5474b02abe9a",
+    "source_of_truth": "Current repository CUDA and CPU FDM backend declarations and verified A/B audit evidence."
+  },
+  "backend_matrix": [
+    {
+      "solver": "FDM",
+      "device": "CPU",
+      "status": "implemented"
+    },
+    {
+      "solver": "FDM",
+      "device": "GPU",
+      "status": "implemented"
+    },
+    {
+      "solver": "FEM",
+      "device": "CPU",
+      "status": "not-applicable",
+      "reason": "Unstructured FEM uses MFEM sparse assembly rather than Cartesian FFT or SoA voxel grids."
+    },
+    {
+      "solver": "FEM",
+      "device": "GPU",
+      "status": "not-applicable",
+      "reason": "Unstructured FEM CUDA optimizations are owned by the dedicated FEM GPU performance pages."
+    }
+  ],
+  "equations": [
+    {
+      "id": "eq-perf-fdm-hermitian",
+      "symbols": ["Pxyz", "M"],
+      "sources": ["fdm-demag-pack-fp64", "fdm-r2c-cpu"]
+    },
+    {
+      "id": "eq-perf-fdm-half-spectrum-conv",
+      "symbols": ["Hd", "Nhat", "M", "sx"],
+      "sources": ["fdm-demag-conv-fp64", "fdm-demag-pack-fp32"]
+    },
+    {
+      "id": "eq-perf-fdm-preflight-budget",
+      "symbols": ["Wfft", "Breq"],
+      "sources": ["fdm-preflight-single", "fdm-preflight-multi"]
+    },
+    {
+      "id": "eq-perf-fdm-pgbb-retract",
+      "symbols": ["mk", "gk", "lambdak", "E"],
+      "sources": ["fdm-pgbb-driver", "fdm-pgbb-retract", "fdm-pgbb-capi"]
+    },
+    {
+      "id": "eq-perf-fdm-face-exchange",
+      "symbols": ["Hex", "mu0", "Ms", "wij", "Deltaij"],
+      "sources": ["fdm-cpu-soa-par"]
+    }
+  ],
+  "symbols": [
+    {"id": "Pxyz", "latex": "$P_x, P_y, P_z$", "meaning": "zero-padded FFT grid dimensions along $x, y, z$", "si_unit": "$1$"},
+    {"id": "sx", "latex": "$s_x$", "meaning": "non-redundant Hermitian half-spectrum stride $\\lfloor P_x/2 \\rfloor + 1$", "si_unit": "$1$"},
+    {"id": "M", "latex": "$\\mathbf M$", "meaning": "magnetization vector field", "si_unit": "$\\mathrm{A\\,m^{-1}}$"},
+    {"id": "Hd", "latex": "$\\mathbf H_{\\mathrm{d}}$", "meaning": "demagnetizing magnetic field", "si_unit": "$\\mathrm{A\\,m^{-1}}$"},
+    {"id": "Nhat", "latex": "$\\widehat N_{\\alpha\\beta}$", "meaning": "Fourier-transformed Newell demagnetization tensor component", "si_unit": "$1$"},
+    {"id": "Wfft", "latex": "$W_{\\mathrm{fwd}}, W_{\\mathrm{inv}}$", "meaning": "exact forward and inverse cuFFT work-area sizes", "si_unit": "$\\mathrm{B}$"},
+    {"id": "Breq", "latex": "$B_{\\mathrm{req}}, M_{\\mathrm{free}}$", "meaning": "required workspace and available free device memory", "si_unit": "$\\mathrm{B}$"},
+    {"id": "mk", "latex": "$\\mathbf m^{(k)}$", "meaning": "unit magnetization vector at relaxation iteration $k$", "si_unit": "$1$"},
+    {"id": "gk", "latex": "$\\mathbf g^{(k)}$", "meaning": "projected tangent gradient of total energy", "si_unit": "$\\mathrm{A\\,m^{-1}}$"},
+    {"id": "lambdak", "latex": "$\\lambda_k$", "meaning": "Barzilai--Borwein step parameter", "si_unit": "$\\mathrm{m\\,A^{-1}}$"},
+    {"id": "E", "latex": "$E$", "meaning": "total micromagnetic free energy", "si_unit": "$\\mathrm{J}$"},
+    {"id": "Hex", "latex": "$\\mathbf H_{\\mathrm{ex},i}$", "meaning": "discrete exchange effective field at cell $i$", "si_unit": "$\\mathrm{A\\,m^{-1}}$"},
+    {"id": "mu0", "latex": "$\\mu_0$", "meaning": "vacuum permeability", "si_unit": "$\\mathrm{N\\,A^{-2}}$"},
+    {"id": "Ms", "latex": "$M_{s,i}$", "meaning": "saturation magnetization at cell $i$", "si_unit": "$\\mathrm{A\\,m^{-1}}$"},
+    {"id": "wij", "latex": "$w_{ij}$", "meaning": "harmonic-mean interface exchange stiffness", "si_unit": "$\\mathrm{J\\,m^{-1}}$"},
+    {"id": "Deltaij", "latex": "$\\Delta_{ij}$", "meaning": "center-to-center cell spacing across face $(i,j)$", "si_unit": "$\\mathrm{m}$"}
+  ],
+  "sources": [
+    {"id": "fdm-preflight-single", "path": "backends/fdm/gpu/cuda/runtime/context.cu", "symbol": "context_preflight_single_grid_workspace", "responsibility": "Exact cuFFT workspace and VRAM preflight for single-layer grids."},
+    {"id": "fdm-preflight-multi", "path": "backends/fdm/gpu/cuda/runtime/context.cu", "symbol": "context_preflight_multilayer_workspace_v2", "responsibility": "Aggregate multilayer VRAM preflight and allocation cap guard."},
+    {"id": "fdm-demag-pack-fp64", "path": "backends/fdm/gpu/cuda/interactions/demag_fp64.cu", "symbol": "pack_magnetization_fft_fp64_kernel", "responsibility": "Contiguous Hermitian half-spectrum real packing for FP64 D2Z/Z2D."},
+    {"id": "fdm-demag-conv-fp64", "path": "backends/fdm/gpu/cuda/interactions/demag_fp64.cu", "symbol": "tensor_convolution_fp64_kernel", "responsibility": "Symmetric 6-component Newell tensor contraction on half-spectrum."},
+    {"id": "fdm-demag-pack-fp32", "path": "backends/fdm/gpu/cuda/interactions/demag_fp32.cu", "symbol": "pack_magnetization_fft_fp32_kernel", "responsibility": "Contiguous Hermitian half-spectrum real packing for FP32 R2C/C2R."},
+    {"id": "fdm-newell-gpu-fp64", "path": "backends/fdm/gpu/cuda/demag/newell_gpu_fp64.cu", "symbol": "newell_fill_fg_kernel", "responsibility": "Device-side FP64 Newell tensor kernel construction."},
+    {"id": "fdm-pgbb-driver", "path": "backends/fdm/gpu/cuda/runtime/single_layer_bb.cu", "symbol": "context_single_layer_bb", "responsibility": "Device-resident single-layer projected-gradient BB driver."},
+    {"id": "fdm-pgbb-retract", "path": "backends/fdm/gpu/cuda/runtime/single_layer_bb.cu", "symbol": "trial_retract_kernel", "responsibility": "GPU unit-sphere retraction for PG-BB trial states."},
+    {"id": "fdm-pgbb-capi", "path": "backends/fdm/api/c_api.cpp", "symbol": "fullmag_fdm_backend_single_layer_bb_v1", "responsibility": "C ABI entry point for native_cuda_pgbb."},
+    {"id": "fdm-pgbb-prov", "path": "crates/fullmag-runner/src/relaxation/provenance.rs", "symbol": "cuda_fdm_direct_minimizer_realization", "responsibility": "Provenance projection for native_cuda_pgbb vs host NCG."},
+    {"id": "fdm-graph-elig", "path": "crates/fullmag-runner/src/fdm/gpu/cuda/execute.rs", "symbol": "adaptive_batch_execution_eligible", "responsibility": "CUDA conditional-graph batch eligibility policy."},
+    {"id": "fdm-cpu-soa-par", "path": "crates/fullmag-engine/src/fdm/cpu/soa_par.rs", "symbol": "soa_for_each_row_mut", "responsibility": "Rayon-parallel row-wise persistent SoA iteration on FDM CPU."},
+    {"id": "fdm-r2c-cpu", "path": "crates/fullmag-engine/src/fdm/cpu/r2c.rs", "symbol": "R2c3dPlan", "responsibility": "3D real-to-complex FFT plan on FDM CPU."},
+    {"id": "fdm-kernel-reuse", "path": "crates/fullmag-fdm-demag/src/descriptors.rs", "symbol": "KernelReuseCatalog", "responsibility": "Analytical Newell kernel deduplication catalog."}
+  ],
+  "public_api": {
+    "parameters": [
+      {
+        "python": "study.device(precision=...)",
+        "type": "str | None",
+        "default": "None",
+        "si_unit": "$1$",
+        "validation": "`\"double\"` (`full_double.v1`) or `\"single\"` (`single_storage_fp64_reduction.v1`)",
+        "meaning": "arithmetic storage and reduction precision policy",
+        "backend_support": "FDM CPU/GPU (`single` GPU-oriented)",
+        "problem_ir": "`backend_policy.precision_policy`"
+      },
+      {
+        "python": "study.fdm(default_cell=...)",
+        "type": "Sequence[float] | None",
+        "default": "None",
+        "si_unit": "$\\mathrm{m}$",
+        "validation": "strictly positive finite 3-tuple `(dx, dy, dz)`",
+        "meaning": "Cartesian cell dimensions setting padded FFT size",
+        "backend_support": "FDM CPU/GPU",
+        "problem_ir": "`backend_policy.discretization_hints.fdm.default_cell`"
+      },
+      {
+        "python": "study.stages.add_minimize(method=...)",
+        "type": "str",
+        "default": "\"bb\"",
+        "si_unit": "$1$",
+        "validation": "`\"bb\"` (PG-BB) or `\"ncg\"` (nonlinear conjugate gradient)",
+        "meaning": "direct energy minimizer algorithm",
+        "backend_support": "FDM CPU/GPU (`bb` uses `native_cuda_pgbb` on CUDA)",
+        "problem_ir": "`stages[].minimize.method`"
+      },
+      {
+        "python": "study.threads(cpu_threads)",
+        "type": "int",
+        "default": "host default",
+        "si_unit": "$1$",
+        "validation": "integer greater than or equal to $1$",
+        "meaning": "Rayon worker thread budget for `FDM CPU` SoA loops",
+        "backend_support": "FDM CPU",
+        "problem_ir": "`backend_policy.execution.cpu_threads`"
+      }
+    ]
+  }
+}

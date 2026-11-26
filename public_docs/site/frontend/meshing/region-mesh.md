@@ -31,4 +31,4 @@ realized membership and quality rather than promising an exact local element cou
 
 | Repository path | Stable symbol | Responsibility |
 |---|---|---|
-| `apps/control-room/src/modules/inspector/panels/region/ObjectRegionMeshPanel.tsx` | `ObjectRegionMeshPanel` | FEM editor and FDM membership-only branch |
+| `apps/control-room/src/modules/inspector/inspectors/objects/regions/RegionMeshSpec.tsx` | `ObjectRegionMeshInspectorPanel` | FEM editor and FDM membership-only branch |

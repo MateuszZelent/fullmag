@@ -25,12 +25,11 @@ criteria, and expected artifacts.
 4. **{doc}`Choosing a solver <choosing-a-solver>`** — select FDM or FEM and CPU or GPU from the
    documented capability and validation scope.
 5. **{doc}`Interactive Live Python & REPL <interactive-python>`** — connect a terminal, script, or
-   Jupyter notebook directly to a running Control Room session via `fm.connect()`.
+   Jupyter notebook directly to a running Control Room session via `fm.connect()` (runnable `.py`
+   and `.ipynb` examples live in `examples/live/`, and full live API contracts live in
+   {doc}`../python-api/runtime/live-session`).
 6. **{doc}`Control Room <control-room>`** — author, launch, monitor, and inspect a study through the
    browser interface.
-6. **{doc}`Live control from Python and Jupyter <../python-api/runtime/live-session>`** — drive the
-   current session of a running instance with `fm.connect()` from a script, an interpreter, or a
-   Jupyter notebook; runnable `.py` and `.ipynb` examples are in `examples/live/`.
 
 ## Stage-first script structure
 

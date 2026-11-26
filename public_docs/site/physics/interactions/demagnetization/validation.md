@@ -10,9 +10,11 @@ source_of_truth: docs/physics/0910-permalloy-film-fem-demag-benchmark.md
 (public-docs-physics-interactions-demagnetization-validation)=
 # Validation
 
-Demagnetization validation must establish physical correctness, numerical convergence, and backend
+Demagnetization validation establishes physical correctness, numerical convergence, and backend
 qualification separately. A source-level contract test is evidence of an implementation contract,
-not proof of an executed GPU result.
+not proof of an executed GPU result. For full timing and VRAM benchmark matrices, see
+{ref}`numerical-methods-performance`, {ref}`numerical-methods-performance-fdm-core`, and
+{ref}`numerical-methods-performance-fem-gpu-demag`.
 
 (demag-validation-problem-statement)=
 ## Physical problem
@@ -35,7 +37,7 @@ E_{\mathrm d}=-\frac{\mu_0}{2}\int_{\Omega_m}\mathbf M\cdot\mathbf H_{\mathrm d}
 :label: eq-demag-validation-residual
 r=\nabla\cdot(\mathbf H_{\mathrm d}+\mathbf M),
 \qquad
-\nabla\times\mathbf H_{\mathrm d}=\mathbf0.
+\nabla\times\mathbf H_{\mathrm d}=\mathbf 0.
 ```
 
 (demag-validation-symbols-and-si-units)=
@@ -124,14 +126,14 @@ selected realization can materialize `H_demag` and `E_demag` before execution.
 (demag-validation-round-trip-and-failure-semantics)=
 ## Round-trip and failure semantics
 
-The report records requested intent, resolved execution, validation errors, and unsupported combinations.
-A missing quantity is a fail-closed planner error rather than a zero-filled result.
+The report records **requested intent**, **resolved execution**, **validation errors**, and
+**unsupported combinations**. A missing quantity is a fail-closed planner error rather than a
+zero-filled result.
 
-The validation artifact separates requested intent from resolved execution. Requested intent
-contains the chosen model, mesh/grid, output quantities, tolerance, precision, and device request.
-Resolved execution contains the selected backend realization, actual mesh identity, solver policy,
-iteration count, convergence flag, field recovery, energy reduction, and runtime/device identity.
-An artifact that omits any of these fields is not sufficient for a CPU/GPU qualification claim.
+Requested intent contains the chosen model, mesh/grid, output quantities, tolerance, `gpu_strategy`,
+precision, and device request. Resolved execution contains the selected backend realization, actual
+mesh identity, resolved linear solver (`cudss_direct` or `hypre_krylov`), fallback reason, iteration
+count, convergence flag, field recovery, energy reduction, and runtime/device identity.
 
 (demag-validation-discrete-realization)=
 ## Discrete realization
@@ -143,8 +145,9 @@ between FDM convolution, FEM Poisson airbox, FEM–BEM Fredkin–Koehler, and pe
 
 For FDM, the reference comparison must fix cell dimensions, padding, kernel convention, FFT
 normalization, self-term, and periodic-image policy. For FEM, it must fix the magnetic/air domain,
-boundary marker, Robin or Dirichlet closure, mesh order, quadrature/recovery rule, linear solver,
-preconditioner, relative tolerance, absolute tolerance when present, and maximum iterations.
+boundary marker, Robin or Dirichlet closure, mesh topology (`tet4`, `mixed_p1`, `pure_prism_p2`)
+and potential order (`P1` vs `P2`), linear solver, preconditioner, `gpu_strategy`, relative
+tolerance, absolute tolerance when present, and maximum iterations.
 
 (demag-validation-error-metrics)=
 ## Error metrics and acceptance
@@ -159,47 +162,70 @@ Use more than one metric:
 | Maxwell residual | Norm of $r$ and curl residual | Detects a plausible energy with an invalid field. |
 | Refinement slope | Observed error versus grid/mesh scale | Distinguishes convergence from accidental agreement. |
 
-The report must state $H_*$ and $E_*$ whenever relative metrics are used. No universal numerical
-threshold is implied by this page; the threshold belongs to the qualified test or standard problem.
+The report must state $H_*$ and $E_*$ whenever relative metrics are used.
 
 (demag-validation-lane-matrix)=
-## Lane-specific qualification
+## Lane-specific qualification and RTX 4080 SUPER evidence
 
-| Lane | Minimum evidence before status can be implemented | Typical failure that must remain visible |
-|---|---|---|
-| FDM CPU | independent kernel/tensor checks, analytic geometry, refinement | wrong self-term, padding, or FFT normalization |
-| FDM GPU | matched CPU reference, executed CUDA device identity, precision record | skipped device test or silent CPU fallback |
-| FEM CPU | weak-form residual, airbox/boundary convergence, energy derivative | residual/energy mismatch or unconverged Hypre solve |
-| FEM GPU | executed device operator, matched tolerance/precision, phase telemetry | host-only assembly reported as GPU parity |
+| Lane | Status | Executed evidence summary | Exact boundary |
+|---|---|---|---|
+| FDM CPU | `reference` | Newell 27-point tensor symmetry, Aharoni rectangular prism (`−6e-7%`), single-layer mixed periodic dipole tail ($r \ge 40\,h_{\max}$), and CPU FP64 multilayer oracles. | Reference FP64 lane. |
+| FDM GPU | `implemented` | RTX 4080 SUPER Hermitian `D2Z/Z2D` (FP64) parity: `rel dE_demag <= 1.76e-16` and `rel dE_total = 0.00e+00` (step 50) across all 8 FP64 geometries (`rel dE_total <= 2.63e-14`, `max \|dm\| <= 1.22e-8` at step 500), `−12.0%` to `−23.1%` peak VRAM, up to `3.21×` step speedup. | Single-layer FP64/FP32 verified; FP32+PBC intentionally rejected; multilayer CUDA remains partial. |
+| FEM CPU | `implemented` | MFEM/Hypre open Poisson (`tet4` P2, `mixed_p1`, `pure_prism_p2`), periodic reduced P1, and hierarchical $H^2$ Fredkin–Koehler contracts. | Reference CPU FEM lane. |
+| FEM GPU | `implemented` | RTX 4080 SUPER A/B parity across open Poisson (`max \|Δm\| <= 2.51e-11`, `19.1×–218.4×`), PBC-reduced 1-D Robin / 2-D film (`max \|Δm\| <= 3.51e-11`, `26.8×–35.5×`), strict GPU FEM–BEM (`max \|Δm\| = 4.88e-14`, `34.6×` vs AMG, `0` memcheck errors), and `pure_prism_p2` Aharoni benchmark (`−0.60%` vs Aharoni, `−0.43%` vs FDM, `+0.30%` vs MuMax3). | Periodic `pure_prism_p2`, unpinned 3-D Neumann, and `fmm` remain fail-closed. |
+
+### Executed RTX 4080 SUPER parity and benchmark summary
+
+All GPU evidence below was collected inside managed Docker DEV containers on an **NVIDIA GeForce
+RTX 4080 SUPER** (16 GiB VRAM, SM 8.9, CUDA 12.6, `cuDSS 0.8.0.10`, `precision="double"`):
+
+| Benchmark suite | Configuration | Key accuracy / parity metric | Speedup / VRAM result |
+|---|---|---|---|
+| FDM GPU Hermitian `D2Z/Z2D` cuFFT (8 FP64 geometries) | Single-layer Heun/RK4 (film, 3-D, `pbcxy`, cylinder) | `rel dE_demag <= 1.76e-16` (s50); `rel dE_total <= 2.63e-14`, `max \|dm\| <= 1.22e-8` (s500) | **1.09×–3.21×** step speedup; **−12.0% to −23.1%** peak VRAM |
+| FEM GPU open Poisson `cuDSS` vs `cg_amg` | SP4 (`8,208` nodes) & medium (`49,600` nodes), Heun/RK4, `rtol=1e-8` | `max \|Δm\| <= 2.51e-11`, `rel \|ΔE_d\| <= 4.48e-11`, `max_res <= 8.22e-14` | **19.1×–218.4×** (`auto`/`cuDSS`), **1.24×–2.19×** (`cg_amg`) |
+| FEM GPU VRAM budget guard (`MAX_VRAM_MIB=32`) | `49,600` nodes (`3.13 GiB` est. > `32 MiB` cap) | `auto -> hypre_krylov` bit-exact `0.0` vs `cg_amg`; forced `cudss` exits hard `rc=2` | `factorization_started = false` (`factor_nnz = 0`) |
+| FEM GPU PBC-reduced `cuDSS` | 1-D Robin & 2-D film (Neumann + pin), `8,379` nodes, Heun/RK4 | `max \|Δm\| <= 3.51e-11`, `max_res <= 1.87e-14`, FSAL `k0` active | **26.8×–35.5×** vs baseline Krylov |
+| FEM GPU Fredkin–Koehler FEM–BEM | Open `1,183` nodes, `5,184` `tet4`, `664` boundary nodes, Heun | `max \|Δm\| = 4.88e-14`, `rel \|ΔE_d\| = 1.54e-14`, `rel \|ΔH_d\| = 2.27e-13` vs CPU; `0` memcheck errors | `2.202 ms/step` (**34.6×** vs GPU AMG, **19.5×** vs GPU JACOBI, **5.4×** vs CPU) |
+| FEM GPU `pure_prism_p2` thin-film Aharoni benchmark | `300×300×5 nm` Permalloy, `L=2, h=5.0 nm`, `709,253` P2 DOFs, PGBB (`8,153` steps) | Uniform `−0.60%` vs Aharoni (`4.60508e-18` vs `4.63285e-18 J`); relaxed `−0.43%` vs FDM, `+0.30%` vs MuMax3 | Mesh `0.51 s` (**246×** vs `tet P2`), `51.88 ms/step` (`L=1`: `38.53 ms`, **144.8×** vs `cg_amg`), `6.73 GiB` cuDSS |
+| Mixed `layers=2` `tet4` conformity untangler | `300×300×5 nm`, `h=2.5 nm`, `pyramid_to_tetrahedra` | `same_side_two_owner_face`: `6 -> 0` (`p05(prism6) = 0.8616`) | `7.52 ms/step` on GPU `cuDSS` (`180 MB`) |
 
 (demag-validation-implementation-mapping)=
 ## Implementation mapping
 
-Contract tests include `batched_demag_fft_contract.cpp`, `cuda_demag_robin_energy_contract.cpp`,
-and `cuda_periodic_demag_contract.cpp`; production qualification additionally needs managed runtime
-and executed-device evidence.
+Contract tests include `batched_demag_fft_contract.cpp`, `multilayer_create_v2_contract.cpp`,
+`cuda_demag_robin_energy_contract.cpp`, `cuda_periodic_demag_contract.cpp`,
+`cudss_poisson_budget_contract.cpp`, `demag_fem_bem_gpu_contract.cpp`, and
+`fem_pure_prism_p2_gpu_contract.cpp`, backed by executed RTX 4080 SUPER A/B verification runs.
 
 ### Control Room support
 
-When `PhysicsInteractionPanel` exposes demagnetization settings under `Model Explorer -> Objects -> <object> -> Physics`, browser support is partial: parameters without a UI control must be configured in Python or `ProblemIR`. See {doc}`/frontend/capability-register` for current Control Room coverage.
+Demagnetization settings are hosted under `Model Explorer -> Objects -> <object> -> Physics` by
+`ObjectPhysicsInspectorPanel`
+(`apps/control-room/src/modules/inspector/inspectors/objects/physics/ObjectPhysicsSpec.tsx`).
+Browser exposure is partial: validation tolerances, solver strategies, and output schedules without
+a UI control must be configured in Python or `ProblemIR`. See {doc}`/frontend/capability-register`
+for current Control Room coverage.
 
 (demag-validation-validation)=
 ## Validation matrix
 
 | Test family | Required evidence |
 |---|---|
-| Analytical rectangle | Demag factors and energy against an independent reference. |
-| FDM tensor/FFT | Kernel symmetry, self term, padding, CPU/CUDA parity. |
-| FEM airbox | Mesh and airbox convergence, Robin energy accounting, residual. |
-| FEM/BEM | Surface orientation, solid-angle terms, open-boundary comparison. |
-| Periodic | Image-count or periodic-class convergence and zero-mode behavior. |
-| Qualification | Same tolerance, same precision, runtime identity, executed device. |
+| Analytical rectangle (Aharoni 1998) | Demag factors and uniform energy against exact analytic prism reference (`pure_prism_p2` `−0.60%`, FDM `−6e-7%`). |
+| FDM tensor/FFT | Kernel symmetry, self term, padding, exact cuFFT preflight, and RTX 4080 SUPER FP64 Hermitian parity (`<= 1.76e-16`). |
+| FEM airbox | Mesh, airbox, and P1/P2 convergence, Robin energy accounting, residual certification, and RTX 4080 SUPER `cuDSS`/Krylov A/B parity. |
+| FEM/BEM | Watertight surface orientation, solid-angle/ACA probes, CPU `boundary_tdofs_by_row`, and RTX 4080 SUPER GPU parity (`4.88e-14`) + memcheck. |
+| Periodic | Image-count and distant dipole-tail ($r \ge 40\,h_{\max}$) checks for FDM; PBC-reduced 1-D Robin / 2-D film `cuDSS` parity for FEM. |
+| Qualification | Same tolerance, same precision, runtime identity, executed device, and strict operator receipt. |
 
 (demag-validation-limitations)=
 ## Limitations
 
-Historical reports and source tests may document a no-go or partial gate. They must not be rewritten
-as a production qualification claim without current evidence.
+- Executed RTX 4080 SUPER evidence does not automatically qualify unmeasured GPU architectures,
+  multi-GPU execution, or out-of-scope features (FDM CUDA FP32+PBC, multilayer FDM CUDA parity,
+  periodic `pure_prism_p2`, unpinned 3-D periodic FEM Neumann, or `fmm`).
+- Historical reports and source-only tests do not substitute for fresh executed-device receipts on
+  the current commit.
 
 (demag-validation-scientific-bibliography)=
 ## Scientific bibliography
@@ -224,7 +250,11 @@ as a production qualification claim without current evidence.
 (demag-validation-source-code-index)=
 ## Source-code index
 
-| Repository path | Stable symbol | Responsibility |
-|---|---|---|
-| [`packages/fullmag-py/src/fullmag/model/energy.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/energy.py#L51) | [`class Demag`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/energy.py#L51) | Validation target selection. |
-| [`backends/fem/cpu/mfem/interactions/demag.cpp`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/backends/fem/cpu/mfem/interactions/demag.cpp#L164) | [`compute_demag_field_for_magnetization`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/backends/fem/cpu/mfem/interactions/demag.cpp#L164) | FEM production field path used by validation. |
+| Repository path | Stable symbol | Responsibility | Lane | Immutable link |
+|---|---|---|---|---|
+| `packages/fullmag-py/src/fullmag/model/energy.py` | `class Demag` | Validation target selection. | Public API | [`energy.py#L51`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/model/energy.py#L51) |
+| `backends/fdm/gpu/cuda/interactions/demag_fp64.cu` | `launch_demag_field_fp64` | Single-layer CUDA FP64 Hermitian `D2Z/Z2D` cuFFT production field path. | FDM GPU | [`demag_fp64.cu#L671`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/backends/fdm/gpu/cuda/interactions/demag_fp64.cu#L671) |
+| `backends/fem/cpu/mfem/interactions/demag.cpp` | `compute_demag_field_for_magnetization` | FEM production field path used by validation. | FEM CPU | [`demag.cpp#L167`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/backends/fem/cpu/mfem/interactions/demag.cpp#L167) |
+| `backends/fem/gpu/cuda/demag_poisson/cudss_direct_solver.cpp` | `try_initialize_demag_cudss_direct` | Three-state VRAM-guarded `cuDSS` direct solver admission verified in A/B suites. | FEM GPU | [`cudss_direct_solver.cpp#L653`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/backends/fem/gpu/cuda/demag_poisson/cudss_direct_solver.cpp#L653) |
+| `backends/fem/gpu/cuda/demag_fem_bem/fem_bem.cpp` | `compute_device_demag_fem_bem_for_device_stage` | Strict device-resident GPU Fredkin–Koehler field path verified against CPU oracle. | FEM GPU | [`fem_bem.cpp#L1161`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/backends/fem/gpu/cuda/demag_fem_bem/fem_bem.cpp#L1161) |
+| `apps/control-room/src/modules/inspector/inspectors/objects/physics/ObjectPhysicsSpec.tsx` | `ObjectPhysicsInspectorPanel` | Object-level physics inspector exposing demagnetization settings. | Control Room | [`ObjectPhysicsSpec.tsx#L78`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/apps/control-room/src/modules/inspector/inspectors/objects/physics/ObjectPhysicsSpec.tsx#L78) |

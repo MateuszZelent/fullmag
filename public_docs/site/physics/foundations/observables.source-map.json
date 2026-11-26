@@ -1,23 +1,26 @@
 {
   "document": {
-    "reviewed_revision": "ab3c8802a691a535063102c12f9a79bb0043b367",
+    "reviewed_revision": "752450f8d259ab97c76c36fe666d5474b02abe9a",
+    "reviewed_at": "2026-11-26",
     "path": "public_docs/site/physics/foundations/observables.md",
     "title": "Observable contracts",
-    "scope": "field and scalar observables, sampling, materialisation, and reductions"
+    "scope": "field and scalar observables, canonical 56-entry quantity catalog, planar monitors, sampling, materialisation, and reductions"
   },
   "backend_matrix": [
-    {"solver": "FDM", "device": "CPU", "status": "reference", "reason": "Host cell-field and scalar reduction reference lane."},
-    {"solver": "FDM", "device": "GPU", "status": "implemented", "reason": "CUDA field/reduction paths exist; executed-device qualification is separate evidence."},
-    {"solver": "FEM", "device": "CPU", "status": "implemented", "reason": "Native nodal field extraction and scalar reduction paths exist."},
-    {"solver": "FEM", "device": "GPU", "status": "implemented", "reason": "Device field and reduction paths exist; transfer and device identity remain qualification evidence."}
+    {"solver": "FDM", "device": "CPU", "status": "reference", "reason": "Host cell-field, energy-density, and scalar reduction reference lane."},
+    {"solver": "FDM", "device": "GPU", "status": "implemented", "reason": "CUDA field/reduction paths with deferred full-SHE steady-spin observations; executed-device qualification is separate evidence."},
+    {"solver": "FEM", "device": "CPU", "status": "implemented", "reason": "Native nodal field extraction and airbox-excluding scalar reduction paths exist."},
+    {"solver": "FEM", "device": "GPU", "status": "implemented", "reason": "Device field and reduction paths with packed AoS/SoA state_io transfers; transfer and device identity remain qualification evidence."}
   ],
   "sources": [
     {"id": "observables-python-study", "path": "packages/fullmag-py/src/fullmag/world.py", "symbol": "study", "responsibility": "Stage-first study capture and output ownership."},
     {"id": "observables-python-table", "path": "packages/fullmag-py/src/fullmag/model/study.py", "symbol": "class TableAutosave", "responsibility": "Scalar table cadence and quantity validation."},
     {"id": "observables-python-field", "path": "packages/fullmag-py/src/fullmag/model/study.py", "symbol": "class FieldAutosave", "responsibility": "Field output cadence and field-name validation."},
+    {"id": "observables-python-planar", "path": "packages/fullmag-py/src/fullmag/model/planar_monitor.py", "symbol": "class PlanarMonitor", "responsibility": "2D planar monitor target, frame, and sampling operator contract."},
     {"id": "observables-planner", "path": "crates/fullmag-plan/src/validate.rs", "symbol": "validate_executable_outputs", "responsibility": "Fail-closed output legality and interaction prerequisites."},
+    {"id": "observables-quantity-catalog", "path": "crates/fullmag-quantities/src/catalog.rs", "symbol": "quantity_catalog", "responsibility": "Canonical 56-entry QuantityId metadata and tensor descriptor catalog."},
     {"id": "observables-quantity-registry", "path": "crates/fullmag-quantities/src/registry.rs", "symbol": "evaluate_by_name", "responsibility": "Named quantity lookup and evaluation dispatch."},
-    {"id": "observables-fem-state", "path": "backends/fem/cpu/mfem/runtime/state_io.cpp", "symbol": "context_copy_field_f64", "responsibility": "FEM observable field extraction and transfer accounting."}
+    {"id": "observables-fem-state", "path": "backends/fem/cpu/mfem/runtime/state_io.cpp", "symbol": "context_copy_field_f64", "responsibility": "FEM observable field extraction and packed GPU transfer accounting."}
   ],
   "symbols": [
     {"id": "Qn", "latex": "$Q_n$", "meaning": "sampled observable at accepted state $n$", "si_unit": "$1$"},
@@ -29,7 +32,7 @@
     {"id": "tn", "latex": "$t_n$", "meaning": "accepted physical time", "si_unit": "$\\mathrm{s}$"}
   ],
   "equations": [
-    {"id": "eq-observables-total-energy", "symbols": ["Etotal", "Ek", "Qn"], "sources": ["observables-quantity-registry", "observables-planner"]},
+    {"id": "eq-observables-total-energy", "symbols": ["Etotal", "Ek", "Qn"], "sources": ["observables-quantity-catalog", "observables-quantity-registry", "observables-planner"]},
     {"id": "eq-observables-volume-reduction", "symbols": ["Qn", "wi", "qi", "N"], "sources": ["observables-quantity-registry", "observables-fem-state"]}
   ],
   "public_api": {
@@ -37,7 +40,9 @@
       {"python": "TableAutosave.every_steps", "type": "int | None", "default": "None", "si_unit": "$1$", "validation": "positive integer; exclusive with `t_sampl`", "meaning": "accepted-step cadence for scalar rows", "backend_support": "FDM/FEM CPU/GPU where table autosave is materialised", "problem_ir": "study.sampling.outputs[].every_steps"},
       {"python": "TableAutosave.quantities", "type": "Sequence[str] | None", "default": "default registry", "si_unit": "$1$", "validation": "every name must be a supported scalar quantity", "meaning": "scalar columns to evaluate", "backend_support": "FDM/FEM CPU/GPU subject to quantity availability", "problem_ir": "study.sampling.outputs[].quantities"},
       {"python": "FieldAutosave.quantity", "type": "str", "default": "required", "si_unit": "$1$", "validation": "known field identifier", "meaning": "spatial field to write", "backend_support": "lane-dependent; planner rejects unavailable fields", "problem_ir": "study.sampling.outputs[].name"},
-      {"python": "FieldAutosave.every_steps", "type": "int | None", "default": "None", "si_unit": "$1$", "validation": "positive integer; exclusive with `every`", "meaning": "accepted-step field cadence", "backend_support": "FDM/FEM CPU/GPU where the field is materialised", "problem_ir": "study.sampling.outputs[].every_steps"}
+      {"python": "FieldAutosave.every_steps", "type": "int | None", "default": "None", "si_unit": "$1$", "validation": "positive integer; exclusive with `every`", "meaning": "accepted-step field cadence", "backend_support": "FDM/FEM CPU/GPU where the field is materialised", "problem_ir": "study.sampling.outputs[].every_steps"},
+      {"python": "PlanarMonitor.target", "type": "MonitorTarget", "default": "required", "si_unit": "$1$", "validation": "valid object or region target", "meaning": "spatial domain sampled by 2D planar monitor", "backend_support": "planner-resolved FDM/FEM lanes", "problem_ir": "monitors[].target"},
+      {"python": "PlanarMonitor.frame", "type": "PlanarFrame", "default": "required", "si_unit": "$\\mathrm{m}$", "validation": "finite origin, orthonormal basis, positive extents", "meaning": "2D sampling plane geometry and resolution", "backend_support": "planner-resolved FDM/FEM lanes", "problem_ir": "monitors[].frame"}
     ]
   }
 }

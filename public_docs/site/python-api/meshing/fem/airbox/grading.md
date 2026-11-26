@@ -87,7 +87,7 @@ film.mesh(minimum_element_size=2.5 * nm, maximum_element_size=5 * nm)
 study.exchange()
 study.demag(model="airbox", variant="robin")
 study.build_domain_mesh()
-study.stages.add_relax(stage_id="equilibrium", tolT=1.0e-6)
+study.stages.add_relax(stage_id="equilibrium", algorithm="projected_gradient_bb", tolT=1.0e-6)
 ```
 
 (python-api-meshing-fem-airbox-grading-python-api)=
@@ -103,7 +103,8 @@ study.stages.add_relax(stage_id="equilibrium", tolT=1.0e-6)
 | `grading` | `str \| None` | `None` | $1$ | `"geometric"`, `"linear"` | grading type | FEM CPU/GPU; FDM not applicable to this mesh policy | `mesh_workflow` |
 
 The advanced universe resource policy adds curvature and narrow-region resolution.
-All values are **targets**, not guaranteed extrema.
+All values are **targets**, not guaranteed extrema. For FEM GPU demagnetization
+performance on graded airbox meshes, see {ref}`numerical-methods-performance-fem-gpu-demag`.
 
 Failure behavior: non-positive values → `ValueError`; mixing FDM controls
 (`cell_size`) with FEM ones → `ValueError`.
@@ -130,7 +131,7 @@ Model Explorer
 └── Universe / Airbox      → selection kinds: airbox.*
 ```
 
-The **Airbox Mesh Parameters** inspector (`AirboxMeshParametersPanel`) configures `airbox_hmin`, `airbox_hmax`, `airbox_growth_rate`, `airbox_grading` (`auto`, `geometric`, `linear`), `airbox_curvature_factor`, and `airbox_narrow_region_resolution`. Full description: {doc}`../../../../frontend/meshing/airbox-mesh`.
+The **Airbox Mesh Parameters** inspector (`apps/control-room/src/modules/inspector/inspectors/universe/AirboxMeshSizingSpecs.tsx`, `AirboxMeshParametersInspectorSpecPanel`) configures `airbox_hmin`, `airbox_hmax`, `airbox_growth_rate`, `airbox_grading` (`auto`, `geometric`, `linear`), `airbox_curvature_factor`, and `airbox_narrow_region_resolution`. Full description: {doc}`../../../../frontend/meshing/airbox-mesh`.
 
 ```{image} /_static/images/ui/inspector-fem-mesh-and-airbox.png
 :alt: Semantic Inspector Airbox Mesh Parameters showing hmin, hmax, growth rate, and grading fields
@@ -168,6 +169,6 @@ Focused constructor, lowering, and mesh-report tests are the evidence boundary f
 
 | Claim | Path | Symbol | Evidence |
 |---|---|---|---|
-| Gmsh mesh sizing and grading options | [`packages/fullmag-py/src/fullmag/meshing/_gmsh_types.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/meshing/_gmsh_types.py#L272) | [`class MeshOptions`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/meshing/_gmsh_types.py#L272) | meshing and API tests |
-| air sizing and grading | `packages/fullmag-py/src/fullmag/world.py` | `StudyUniverseMeshHandle.mesh` | validation and `_configure_study_universe` |
-| FDM/FEM mutual exclusion | `packages/fullmag-py/src/fullmag/world.py` | `StudyUniverseMeshHandle.mesh` | `cell_size` vs FEM controls branch |
+| Gmsh mesh sizing and grading options | [`packages/fullmag-py/src/fullmag/meshing/_gmsh_types.py`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/meshing/_gmsh_types.py#L544) | [`class MeshOptions`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/meshing/_gmsh_types.py#L544) | meshing and API tests |
+| air sizing and grading | [`packages/fullmag-py/src/fullmag/world.py`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/world.py#L5730) | `StudyUniverseHandle.mesh` | validation and `_configure_study_universe` |
+| FDM/FEM mutual exclusion | [`packages/fullmag-py/src/fullmag/world.py`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/world.py#L5751) | `StudyUniverseHandle.mesh` | `cell_size` vs FEM controls branch |

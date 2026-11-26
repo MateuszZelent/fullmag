@@ -1,7 +1,7 @@
 {
   "document": {
     "path": "public_docs/site/python-api/geometry/primitives.md",
-    "reviewed_revision": "ab3c8802a691a535063102c12f9a79bb0043b367"
+    "reviewed_revision": "752450f8d259ab97c76c36fe666d5474b02abe9a"
   },
   "backend_matrix": [
     {
@@ -37,10 +37,16 @@
       "path": "packages/fullmag-py/src/fullmag/model/geometry.py",
       "symbol": "class Box",
       "responsibility": "public constructor and IR lowering"
+    },
+    {
+      "id": "source_shapes_box",
+      "path": "packages/fullmag-py/src/fullmag/shapes.py",
+      "symbol": "box",
+      "responsibility": "centered fm.shapes.* convenience factories"
     }
   ],
   "public_api": {
-    "owner": "fm.Box, fm.Cylinder, fm.Ellipsoid, fm.Sphere, fm.Ellipse",
+    "owner": "fm.Box, fm.Cylinder, fm.Ellipsoid, fm.Sphere, fm.Ellipse, fm.Cone, fm.Torus, fm.PolygonPrism",
     "parameters": [
       {
         "python": "Box.size_or_x",

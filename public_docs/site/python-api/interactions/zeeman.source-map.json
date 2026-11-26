@@ -1,32 +1,32 @@
 {
   "document": {
     "path": "public_docs/site/python-api/interactions/zeeman.md",
-    "reviewed_revision": "ab3c8802a691a535063102c12f9a79bb0043b367"
+    "reviewed_revision": "752450f8d259ab97c76c36fe666d5474b02abe9a"
   },
   "backend_matrix": [
     {
       "solver": "FEM",
       "device": "CPU",
-      "status": "documented",
-      "reason": "authoring and IR documented; runtime qualification separate"
+      "status": "implemented",
+      "reason": "Uniform Zeeman field evaluation implemented on FEM CPU; StaticFieldMap lowers to IR"
     },
     {
       "solver": "FEM",
       "device": "GPU",
-      "status": "documented",
-      "reason": "authoring and IR documented; runtime qualification separate"
+      "status": "implemented",
+      "reason": "Uniform Zeeman field evaluation implemented on FEM GPU; StaticFieldMap lowers to IR"
     },
     {
       "solver": "FDM",
       "device": "CPU",
-      "status": "documented",
-      "reason": "authoring and IR documented; runtime qualification separate"
+      "status": "implemented",
+      "reason": "Uniform Zeeman field evaluation implemented on FDM CPU; StaticFieldMap lowers to IR"
     },
     {
       "solver": "FDM",
       "device": "GPU",
-      "status": "documented",
-      "reason": "authoring and IR documented; runtime qualification separate"
+      "status": "implemented",
+      "reason": "Uniform Zeeman field evaluation implemented on FDM GPU; StaticFieldMap lowers to IR"
     }
   ],
   "equations": [],
@@ -36,21 +36,69 @@
       "id": "source_zeeman",
       "path": "packages/fullmag-py/src/fullmag/model/energy.py",
       "symbol": "class Zeeman",
-      "responsibility": "public constructor and IR lowering"
+      "responsibility": "uniform induction constructor and IR lowering"
+    },
+    {
+      "id": "source_static_field_map",
+      "path": "packages/fullmag-py/src/fullmag/model/energy.py",
+      "symbol": "class StaticFieldMap",
+      "responsibility": "cell-wise static external induction map constructor and IR lowering"
+    },
+    {
+      "id": "source_as_vector3",
+      "path": "packages/fullmag-py/src/fullmag/_validation.py",
+      "symbol": "as_vector3",
+      "responsibility": "length-3 tuple conversion used by Zeeman"
+    },
+    {
+      "id": "source_study_builder",
+      "path": "packages/fullmag-py/src/fullmag/world.py",
+      "symbol": "class StudyBuilder",
+      "responsibility": "stage-first study.b_ext(...) Cartesian and spherical bias-field facade"
     }
   ],
   "public_api": {
-    "owner": "fm.Zeeman(B)",
+    "owner": "fm.Zeeman(B), fm.StaticFieldMap(*, id, field_B_T), study.b_ext(...)",
     "parameters": [
       {
         "python": "fm.Zeeman.B",
-        "type": "tuple[float,float,float]",
+        "type": "Sequence[float]",
         "default": "required",
         "si_unit": "$\\mathrm{T}$",
-        "validation": "finite three-vector",
-        "meaning": "applied magnetic induction",
-        "backend_support": "FEM/FDM CPU/GPU: IR; resolved support required",
+        "validation": "length-3 sequence via `as_vector3`; planner/backend checks finiteness",
+        "meaning": "uniform applied magnetic induction",
+        "backend_support": "FEM/FDM CPU/GPU: IR and local Zeeman kernels",
         "problem_ir": "B"
+      },
+      {
+        "python": "fm.StaticFieldMap.id",
+        "type": "str",
+        "default": "required",
+        "si_unit": "$1$",
+        "validation": "non-empty string via `require_non_empty`",
+        "meaning": "static field map identifier",
+        "backend_support": "FEM/FDM CPU/GPU: IR; planner validates cell/node cardinality",
+        "problem_ir": "id"
+      },
+      {
+        "python": "fm.StaticFieldMap.field_B_T",
+        "type": "Sequence[Sequence[float]]",
+        "default": "required",
+        "si_unit": "$\\mathrm{T}$",
+        "validation": "non-empty sequence of finite length-3 vectors",
+        "meaning": "per-cell static external induction map",
+        "backend_support": "FEM/FDM CPU/GPU: IR; planner validates cell/node cardinality",
+        "problem_ir": "field_B_T"
+      },
+      {
+        "python": "study.b_ext",
+        "type": "(bx, by, bz)` or `(magnitude, theta, phi)",
+        "default": "required",
+        "si_unit": "$\\mathrm{T}$ ($\\mathrm{deg}$ for angles)",
+        "validation": "Cartesian or spherical mode; cannot mix",
+        "meaning": "study-scoped uniform external bias field",
+        "backend_support": "FEM/FDM CPU/GPU: lowers to `zeeman` energy term",
+        "problem_ir": "energy_terms[].B"
       }
     ],
     "returns": "typed ProblemIR record at to_ir()"

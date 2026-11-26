@@ -19,6 +19,8 @@ separate truncated-image policy documented in {doc}`periodic-demag`.
 For multiple separated magnetic layers with native grids, use the dedicated
 {doc}`multilayer-convolution` physics page and the complete
 {doc}`../../../python-api/discretization/fdm-multilayer-convolution` Python/ProblemIR/UI guide.
+For GPU performance benchmarks and Hermitian cuFFT throughput details, see
+{ref}`numerical-methods-performance-fdm-core`.
 
 (demag-fdm-problem-statement)=
 ## 1. Physical problem and grid
@@ -98,9 +100,13 @@ The FFT realization embeds the finite grid in a padded grid and uses the convolu
 \left[\widehat{\mathbf H}_{\mathrm d}\right].
 ```
 
-Zero padding separates the source and destination copies and prevents circular wraparound from
-being mistaken for an open-boundary solution. Periodic truncated images intentionally change this
-embedding and are not the same policy.
+Because $\mathbf M(\mathbf r)$ and the real-space Newell tensor are real-valued, the discrete
+Fourier transform obeys Hermitian conjugate symmetry along the leading transform axis. On single-layer
+CUDA, Fullmag exploits this exact symmetry with real-to-complex `D2Z/Z2D` (FP64) and `R2C/C2R`
+(FP32) cuFFT plans on the half-spectrum extent $F_x^{\mathrm{half}} = \lfloor F_x / 2 \rfloor + 1$
+with zero mathematical approximation. Zero padding separates the source and destination copies and
+prevents circular wraparound from being mistaken for an open-boundary solution. Periodic truncated
+images intentionally change this embedding and are documented in {doc}`periodic-demag`.
 
 ```{figure} /_static/diagrams/demag-fdm-newell-and-multilayer.svg
 :alt: Two-panel diagram of FDM demagnetization convolution: (a) Newell double-volume cell-averaged 27-point stencil (+8, -4, +2, -1) with 2N zero-padded FFT buffer layout avoiding wraparound; (b) Lepadatu (2019) multilayer cross-layer convolution skipping vacuum gaps with volume-adjoint transfers P and P* versus 2D periodic image-count convergence of uniform-mode demagnetization factors and k=0 mode rules.
@@ -178,6 +184,7 @@ grid, padding, precision, mask, and energy reduction policy.
 | `study.universe.mesh(cell_size=...)` | `Sequence[float]` | inferred for compatible grids | $\mathrm{m}$ | Three finite positive values; common extents must divide exactly. | Requested common convolution-grid resolution for multiple native grids. | FDM multilayer CPU/GPU subject to lane qualification. | `backend_policy.discretization_hints.fdm.demag.common_cell_size` |
 | `FDMDemag.strategy` | `str` | `auto` | $1$ | `auto`, `single_grid`, or `multilayer_convolution`. | Selects one common-grid or explicit multilayer convolution topology. | FDM CPU/GPU. | `backend_policy.discretization_hints.fdm.demag.strategy` |
 | `FDMDemag.mode` | `str` | `auto` | $1$ | `auto`, `two_d_stack`, or `three_d`. | Selects thin-film stack or full 3-D multilayer mode. | FDM CPU/GPU. | `backend_policy.discretization_hints.fdm.demag.mode` |
+| `FDMDemag.fft_backend` | `str` | `auto` | $1$ | `auto`, `rustfft`, `fftw`, `mkl`, or `cufft`. | Requested FFT realization; unsupported choices fail closed in capability planning. | FDM CPU/GPU according to compiled FFT library. | `backend_policy.discretization_hints.fdm.demag.fft_backend` |
 | `FDMDemag.common_cells` | `tuple[int,int,int] \| None` | `None` | $1$ | Exactly three positive integers. | Explicit 3-D common convolution grid size. | FDM CPU/GPU. | `backend_policy.discretization_hints.fdm.demag.common_cells` |
 | `FDMDemag.common_cells_xy` | `tuple[int,int] \| None` | `None` | $1$ | Exactly two positive integers. | Explicit in-plane common grid for `two_d_stack`. | FDM CPU/GPU. | `backend_policy.discretization_hints.fdm.demag.common_cells_xy` |
 | `FDMDemag.allow_single_grid_fallback` | `bool \| None` | `None` | $1$ | Any non-`None` value raises `ValueError`; it is never silently lowered. | Removed compatibility switch. | Unsupported; choose strategy explicitly. | Not serialized |
@@ -234,11 +241,11 @@ study.stages.add_run(until=1.0e-13, stage_id="fdm_demag_run")
 (demag-fdm-problem-ir)=
 ## 6. ProblemIR and normalization
 
-`FDMDemag.to_ir()` stores the requested strategy and mode, plus explicit common-grid sizes. The
-outer `FDM.to_ir()` stores cell sizes, per-magnet overrides, boundary controls, and the nested
-demag policy. The planner then resolves actual grid dimensions, FFT padding, precision, masks,
-periodicity, and memory estimates. None of these resolved values may be inferred from `auto` after
-execution; they belong in provenance.
+`FDMDemag.to_ir()` stores the requested `strategy`, `mode`, `fft_backend`, and optional explicit
+common-grid sizes. The outer `FDM.to_ir()` stores cell sizes, per-magnet overrides, boundary
+controls, and the nested demag policy. The planner then resolves actual grid dimensions, FFT
+padding, precision, masks, periodicity, and memory estimates. None of these resolved values may be
+inferred from `auto` after execution; they belong in provenance.
 
 The interaction term `Demag()` enables demagnetization. `FDMDemag` does not replace the physical
 term; it controls the FDM numerical realization. This separation means a requested physical model
@@ -247,20 +254,30 @@ can remain identical while the resolved single-grid and multilayer paths differ.
 (demag-fdm-round-trip-and-failure-semantics)=
 ## 7. Round-trip and failure semantics
 
-**Requested intent** contains the authored cell, strategy, mode, boundary correction, and precision
-request. **Resolved execution** contains the common or native grids, padded FFT shape, tensor
-spectrum identity, active masks, periodic boundary policy, FP32/FP64 lane, memory reservation, and
-runtime identity.
+**Requested intent** contains the authored cell, strategy, mode, FFT backend, boundary correction,
+and precision request. **Resolved execution** contains the common or native grids, padded FFT
+shape (and Hermitian half-spectrum pitch on single-layer CUDA), tensor spectrum identity, active
+masks, periodic boundary policy, FP32/FP64 lane, memory reservation, and runtime identity.
 
-Constructor validation errors cover invalid strategies, modes, cell shapes, non-positive cell
-sizes, malformed common-grid dimensions, invalid volume-fraction floors, and the removed fallback
-switch. Planner validation reports incompatible periodic policies, grid-cost overflow, missing
-validated tensor spectra, and illegal output requests. Unsupported combinations are reported
-explicitly; the planner must not silently change multilayer convolution to one common grid or
-replace CUDA with CPU.
+Constructor **validation errors** cover invalid strategies, modes, FFT backends, cell shapes,
+non-positive cell sizes, malformed common-grid dimensions, invalid volume-fraction floors, and the
+removed fallback switch. Planner and backend preflight report **unsupported combinations** and
+resource limits explicitly, including incompatible periodic policies (such as FDM CUDA FP32+PBC),
+`fdm_gpu_workspace_oom_preflight` memory overflows before solver allocation, missing validated
+tensor spectra, and illegal output requests. The planner never silently converts multilayer
+convolution to one common grid or replaces CUDA with CPU.
 
 (demag-fdm-discrete-realization)=
 ## 8. Discrete realization by lane
+
+### Four-lane support and qualification matrix
+
+| Solver | Device | Status | Realization summary | Qualification boundary |
+|---|---|---|---|---|
+| FDM | CPU | `reference` | Newell 27-point tensor spectra and host FFT convolution (`demag_field_from_vectors`). | Reference FP64 lane for open, periodic truncated-image, and CPU multilayer convolution. |
+| FDM | GPU | `implemented` | Single-layer Hermitian `D2Z/Z2D` (FP64) & `R2C/C2R` (FP32) cuFFT with shared `max(work_fwd, work_inv)` workspace and exact preflight (`context_preflight_single_grid_workspace`). | Verified on RTX 4080 SUPER across 15 geometries (FP64 `rel dE_demag <= 1.76e-16`); FP32+PBC intentionally rejected; multilayer CUDA remains partial. |
+| FEM | CPU | `not-applicable` | FDM Cartesian tensor convolution is not an FEM scalar-potential operator. | Use {doc}`fem-poisson-airbox` or {doc}`fem-bem`. |
+| FEM | GPU | `not-applicable` | FDM Cartesian tensor convolution is not an FEM scalar-potential operator. | Use {doc}`fem-poisson-airbox` or {doc}`fem-bem`. |
 
 ### FDM CPU reference
 
@@ -269,25 +286,33 @@ FFT domain, accumulates the symmetric six-component tensor product, applies the 
 sign, inverse-transforms the field, and performs the energy reduction. It is a trusted numerical
 reference lane, not evidence that a CUDA device executed.
 
-### FDM GPU FP64
+### FDM GPU FP64 (`D2Z/Z2D` Hermitian cuFFT and exact preflight)
 
-The persistent CUDA FP64 path uploads prevalidated tensor spectra, uses cuFFT for the vector
-components, applies device-side mask and volume-fraction semantics, and reduces energy in a CUDA
-reduction path. FP64 is a separate arithmetic lane: host double precision and device execution
-identity must both be recorded.
+Single-layer FDM GPU FP64 replaces legacy complex `Z2Z` transforms with in-place real-to-complex
+Hermitian `D2Z` forward and `Z2D` inverse batched cuFFT plans over the half-spectrum
+$F_x^{\mathrm{half}} = \lfloor F_x / 2 \rfloor + 1$ (`launch_demag_field_fp64`), sharing a single
+explicit cuFFT scratch allocation sized to $\max(W_{\mathrm{fwd}}, W_{\mathrm{inv}})$. The six
+symmetric tensor spectra (`xx`, `yy`, `zz`, `xy`, `xz`, `yz`) and three magnetization transform
+buffers store only the non-redundant Hermitian half-spectrum (`3 + 6` half-spectrum buffers instead
+of full complex buffers).
 
-### FDM GPU FP32
+Before allocating solver arrays, `context_preflight_single_grid_workspace`
+(`backends/fdm/gpu/cuda/runtime/context.cu`) prepares the actual single-grid cuFFT plans, queries
+the exact cuFFT scratch requirement (`fft_work_area_bytes`), and checks the aggregate workspace
+against `usable_device_bytes = free_device_bytes - max(256 MiB, total_device_bytes / 20)`. If the
+total exceeds the usable budget, setup frees the temporary FFT plan and fails closed with
+`fdm_gpu_workspace_oom_preflight` before allocating solver arrays, avoiding false rejections from
+over-conservative worst-case cuFFT upper bounds while protecting device memory.
 
-The FP32 path uses float magnetization/field and complex spectra. It has distinct rounding and
-reduction behavior from FP64. A source-level or compile-only check cannot establish FP32/FP64 parity;
-the same grid, tensor, magnetization, padding, and executed device must be used in a comparison.
+### FDM GPU FP32 (`R2C/C2R` Hermitian cuFFT)
 
-### Terminal single-grid fields and airbox — planned / in implementation
+The single-layer FP32 lane uses real-to-complex `R2C/C2R` Hermitian cuFFT (`launch_demag_field_fp32`)
+with the same shared `max(work_fwd, work_inv)` workspace and exact preflight. Because FP32
+rounding ($\sim 10^{-7}$) perturbs nonlinear LLG precession over long horizons, FP32 parity is
+qualified separately from FP64. Single-layer CUDA FP32 with periodic boundary conditions remains
+intentionally rejected by the existing qualification gate (`rc=1`; see {doc}`periodic-demag`).
 
-This section specifies a terminal runtime contract; it does not add a Python DSL parameter,
-`ProblemIR` property, or a new demagnetization API. The contract is **planned / in
-implementation** until fresh completed-runtime evidence exists. In particular, source-level code,
-unit contracts, or CPU execution do not qualify a CUDA device path.
+### Terminal single-grid fields and prepared airbox
 
 On active magnetic support, `H_eff` is the full sum of every resolved active contribution:
 
@@ -315,38 +340,22 @@ defined and materialized from the same state, it exposes only:
 \qquad \mathbf x\in\Omega_{\mathrm{air}}.
 ```
 
-For each of `H_demag`, `H_ext`, `H_oe`, and `H_ant`, the terminal legality check must record
-`full_domain` coverage for this exact structured grid, state generation, step, and time. Matching
-vector length does not prove this: a field can be `magnetic_only`. If a source is absent in the
-resolved plan its contribution is zero. If a required source is not `full_domain` or is not
-materialized from the same state, the airbox aggregate is unavailable; it must not combine values
-from different steps. `H_demag` is `full_domain` by the FDM observable contract. `H_ext` is
-`full_domain` only when its own observable metadata says so. `H_oe` is `full_domain` only when
-its own observable metadata says so. `H_ant` is `full_domain` only when its own observable
-metadata says so; its support cannot be inferred from its name. Material-only fields (exchange,
-anisotropy, DMI, magnetoelastic, thermal and torque) are zero or unavailable in the airbox with
-explicit metadata.
-
-For `Completed`, the target publication is one atomic replacement batch: final `m` and every
-requested field carry exactly the same terminal step and time. A newer complete batch replaces the
-previous terminal batch as a whole; consumers must not merge old and new quantities. This is
-session-memory retention only, not disk persistence or a restart guarantee. Durable field output
-still requires an explicit output/artifact schedule. `Failed` and `Cancelled` runs do not publish a
-completed terminal batch; any retained earlier batch keeps its own status, step, and time.
-
-`disable_preview_3d` controls intermediate 3-D preview work for benchmark/display use. It neither
-requests omission of terminal scientific-field finalization nor proves that a field has been
-persisted. The CPU single-grid target is host materialization and atomic replacement. The CUDA
-single-grid target must publish the same complete batch with executed-device evidence, or reject an
-unsupported requested terminal quantity explicitly; it may not silently substitute CPU data.
+Prepared pre-start field evaluation (`crates/fullmag-api/src/live_prepared_fields.rs`, `evaluate`)
+now preserves published FDM airbox geometry and evaluates prepared FDM and FEM initial fields on
+the published carrier before a study advances, while `build_atomic_terminal_update` and
+`reconstruct_inactive_fdm_visual_effective_field` own terminal field materialization on FDM CPU.
+For each of `H_demag`, `H_ext`, `H_oe`, and `H_ant`, legality requires `full_domain` coverage from
+the same grid, state generation, step, and time; material-only fields (exchange, anisotropy, DMI,
+magnetoelastic, thermal, and torque) remain zero or unavailable in $\Omega_{\mathrm{air}}$ with
+explicit metadata. Full atomic terminal airbox publication on CUDA remains separately gated on
+executed-device evidence and never silently substitutes CPU data.
 
 ### Multilayer convolution
 
-`single_grid` makes the planner construct one common grid. `multilayer_convolution` preserves
-per-magnet native grids and evaluates self- and cross-layer tensor products explicitly. In
-`two_d_stack`, common in-plane cells are mandatory when explicitly provided; thickness and layer
-placement remain part of the resolved plan. The path must not silently fall back when the requested
-layout cannot be represented.
+`single_grid` constructs one common grid and uses the Hermitian `D2Z/Z2D` or `R2C/C2R` single-layer
+CUDA path. `multilayer_convolution` preserves per-magnet native grids and evaluates self- and
+cross-layer tensor products explicitly via the separate v2 multilayer workspace
+({doc}`multilayer-convolution`). The planner never silently falls back between the two strategies.
 
 (demag-fdm-implementation-mapping)=
 ## 9. Implementation mapping
@@ -357,21 +366,49 @@ layout cannot be represented.
 | Newell base functions and 27-point tensor | `compute_newell_kernels` | CPU/reference preparation |
 | FFT tensor product | `accumulate_tensor_convolution` | CPU/reference |
 | CPU field path | `compute_newell_kernel_spectra` and `demag_field_from_vectors` | FDM CPU |
-| CUDA FP64 field | `launch_demag_field_fp64` | FDM GPU FP64 |
-| CUDA FP32 field | `launch_demag_field_fp32` | FDM GPU FP32 |
+| Exact single-grid cuFFT preflight | `context_preflight_single_grid_workspace` | FDM GPU |
+| CUDA FP64 Hermitian `D2Z/Z2D` field | `launch_demag_field_fp64` | FDM GPU FP64 |
+| CUDA FP32 Hermitian `R2C/C2R` field | `launch_demag_field_fp32` | FDM GPU FP32 |
 | CUDA FP64 energy | `reduce_demag_energy_fp64` | FDM GPU FP64 |
 | GPU resource/FFT setup | `context_upload_demag_kernel_spectra` and `context_refresh_demag_observable` | FDM GPU |
-| Active and airbox effective-field reconstruction | `reconstruct_inactive_fdm_visual_effective_field` | FDM CPU, source-level owner; terminal contract not runtime-qualified |
-| Atomic terminal field materialization | `build_atomic_terminal_update` | FDM CPU, publishes one terminal update with the final field set |
-| CPU terminal outcome | `execute_reference_fdm` | FDM CPU source-level current path; not proof of an atomic terminal generation/batch |
-| Session field promotion | `ingest_preview_fields_from_update` | CLI promotes fields individually; not proof of an atomic terminal generation/batch |
+| Prepared FDM/FEM airbox field evaluation | `evaluate` | Control Room API (CPU prepared path) |
+| Active and airbox effective-field reconstruction | `reconstruct_inactive_fdm_visual_effective_field` | FDM CPU |
+| Atomic terminal field materialization | `build_atomic_terminal_update` | FDM CPU |
+| CPU terminal outcome | `execute_reference_fdm` | FDM CPU |
+| Session field promotion | `ingest_preview_fields_from_update` | CLI control plane |
 
 ### Control Room support
 
-When `PhysicsInteractionPanel` (`apps/control-room/src/modules/inspector/panels/PhysicsInteractionPanel.tsx`) exposes FDM demagnetization controls under `Model Explorer -> Objects -> <object> -> Physics`, browser support is partial: parameters without a UI control must be configured via the Python API or `ProblemIR`. See {doc}`/frontend/capability-register` for current Control Room coverage.
+Demagnetization object settings are exposed through `ObjectPhysicsInspectorPanel`
+(`apps/control-room/src/modules/inspector/inspectors/objects/physics/ObjectPhysicsSpec.tsx`) and
+summarized in `PhysicsInspectorOverview`
+(`apps/control-room/src/modules/inspector/panels/PhysicsInspectorOverview.tsx`) under
+`Model Explorer -> Objects -> <object> -> Physics`. Browser exposure is partial: FDM grid and FFT
+controls without a dedicated UI widget must be authored in Python or `ProblemIR`. See
+{doc}`/frontend/capability-register` for current Control Room coverage.
 
 (demag-fdm-validation)=
 ## 10. Validation and qualification
+
+### Executed RTX 4080 SUPER Hermitian cuFFT A/B evidence
+
+Measured on an **NVIDIA GeForce RTX 4080 SUPER** (16 GiB VRAM, SM 8.9, CUDA runtime 12.6) across
+all 15 runnable single-layer geometries (Heun and RK4, FP64 and FP32, thin film, 3-D bulk,
+periodic XY, and cylinder), comparing Hermitian `D2Z/Z2D` and `R2C/C2R` with shared
+`max(work_fwd, work_inv)` workspace against legacy complex `Z2Z/C2C` (see
+{ref}`numerical-methods-performance-fdm-core` for the full benchmark matrix):
+
+| Case | Precision / integrator | `rel dE_demag` (step 50) | `rel dE_total` (step 500) | `max \|dm\|` (step 500) | Step time speedup | Peak `gpu_workspace` VRAM |
+|---|---|---:|---:|---:|---:|---|
+| `128×128×2` film | FP64 Heun | `0.00e+00` | `2.63e-14` | `1.73e-09` | **3.21×** (`2.290 -> 0.714 ms`) | `53.65 -> 41.27 MB` (**−23.1%**) |
+| `128×128×2` film | FP32 Heun | `6.62e-10` | `7.41e-06` | `1.62e+00` | **2.76×** (`1.352 -> 0.489 ms`) | `27.57 -> 21.38 MB` (**−22.5%**) |
+| `64×64×32` 3-D bulk | FP64 RK4 | `0.00e+00` | `6.99e-15` | `8.73e-09` | **2.47×** (`30.25 -> 12.27 ms`) | `224.01 -> 175.25 MB` (**−21.8%**) |
+| `256×256×1` thin film | FP64 Heun | `1.76e-16` | `2.43e-15` | `5.43e-10` | **1.09×** (`1.295 -> 1.186 ms`) | `69.54 -> 57.06 MB` (**−18.0%**) |
+| `256×256×1` thin film | FP64 RK4 | `0.00e+00` | `1.63e-15` | `4.20e-10` | **1.91×** (`21.96 -> 11.49 ms`) | `74.26 -> 61.78 MB` (**−16.8%**) |
+| `pbcxy 128×128×2` | FP64 Heun | `0.00e+00` | `1.47e-14` | `1.68e-09` | **1.11×** (`5.50 -> 4.97 ms`) | `25.34 -> 22.29 MB` (**−12.0%**) |
+
+Across all 8 FP64 geometries, `rel dE_demag <= 1.76e-16` and `rel dE_total = 0.00e+00` at step 50,
+and peak `gpu_workspace` VRAM dropped by **12.0%–23.1%** across all 15 geometries.
 
 | Validation | Required evidence |
 |---|---|
@@ -379,6 +416,7 @@ When `PhysicsInteractionPanel` (`apps/control-room/src/modules/inspector/panels/
 | Open boundary | Padding and far-field comparison against an analytical or high-resolution reference. |
 | Uniform body | Demagnetization factors and energy for a rectangular prism, sphere, or ellipsoid. |
 | CPU/GPU parity | Same tensor spectrum, grid, mask, precision, reduction policy, and executed device. |
+| Exact cuFFT preflight | Verified admission of smooth single-grid plans and fail-closed `fdm_gpu_workspace_oom_preflight` rejection before allocation (`multilayer_create_v2_contract.cpp`). |
 | FP64/FP32 comparison | Absolute and relative field/energy error with a stated scale; near-zero values need absolute tolerances. |
 | Multilayer | Self and cross-layer terms, layer offsets, common-grid policy, and no-fallback behavior. |
 | Boundary correction | T0/T1 geometry, volume fractions, distance floor, precision and lane-specific evidence. |
@@ -387,10 +425,11 @@ When `PhysicsInteractionPanel` (`apps/control-room/src/modules/inspector/panels/
 ## 11. Limitations
 
 FFT padding is a finite computational embedding, not a proof of exact continuum infinity. FP32
-reductions can differ from FP64 even when both use the same tensor spectrum. A larger FFT grid may
-reduce wraparound error but increases memory and does not fix geometric staircasing. `rtol` and
-linear-solver parameters belong to FEM Poisson/BEM; FDM convolution has no Krylov solve and must
-not expose those parameters as if they controlled FFT accuracy.
+reductions and nonlinear LLG trajectories diverge from FP64 over hundreds of steps even when both
+use the same tensor spectrum, and CUDA FP32+PBC remains intentionally rejected. A larger FFT grid
+may reduce wraparound error but increases memory and does not fix geometric staircasing. `rtol`
+and linear-solver parameters belong to FEM Poisson/BEM; FDM convolution has no Krylov solve and
+does not expose those parameters.
 
 (demag-fdm-scientific-bibliography)=
 ## 12. Scientific bibliography
@@ -418,22 +457,24 @@ not expose those parameters as if they controlled FFT accuracy.
 (demag-fdm-source-code-index)=
 ## 13. Source-code index
 
-| Repository path | Stable symbol | Responsibility | Lane |
-|---|---|---|---|
-| `packages/fullmag-py/src/fullmag/model/discretization.py` | `class FDMDemag` | Strategy, mode, common-grid and explanation policy. | Public authoring |
-| `packages/fullmag-py/src/fullmag/model/discretization.py` | `class FDM` | Cell, multilayer and boundary-correction policy. | Public authoring |
-| `crates/fullmag-fdm-demag/src/newell.rs` | `compute_newell_kernels` | Newell base functions, 27-point tensor and stable summation. | CPU/reference |
-| `crates/fullmag-fdm-demag/src/multiply.rs` | `accumulate_tensor_convolution` | Symmetric tensor-vector FFT product before negation. | CPU/reference |
-| `crates/fullmag-engine/src/fdm/cpu/fft.rs` | `compute_newell_kernel_spectra` | CPU kernel-spectrum construction. | FDM CPU |
-| `crates/fullmag-engine/src/fdm/cpu/fields.rs` | `demag_field_from_vectors` | CPU field realization. | FDM CPU |
-| `backends/fdm/gpu/cuda/interactions/demag_fp64.cu` | `launch_demag_field_fp64` | CUDA double-precision field dispatch. | FDM GPU FP64 |
-| `backends/fdm/gpu/cuda/interactions/demag_fp32.cu` | `launch_demag_field_fp32` | CUDA single-precision field dispatch. | FDM GPU FP32 |
-| `backends/fdm/gpu/cuda/runtime/reductions_fp64.cu` | `reduce_demag_energy_fp64` | CUDA FP64 energy reduction. | FDM GPU FP64 |
-| `backends/fdm/gpu/cuda/runtime/context.cu` | `context_upload_demag_kernel_spectra` | Device tensor-spectrum upload and validation. | FDM GPU |
-| `backends/fdm/gpu/cuda/runtime/context.cu` | `context_refresh_demag_observable` | Device demag observable refresh. | FDM GPU |
-| `crates/fullmag-runner/src/fdm/cpu/reference.rs` | `reconstruct_inactive_fdm_visual_effective_field` | Reconstructs the defined airbox aggregate from demag, external, Oersted and antenna fields. | FDM CPU, source-level only |
-| `crates/fullmag-runner/src/interactive/runtime.rs` | `build_atomic_terminal_update` | Builds one atomic terminal update and materializes the final FDM field set from the terminal backend state. | FDM CPU, source-level only |
-| `crates/fullmag-runner/src/fdm/cpu/reference.rs` | `execute_reference_fdm` | Returns the CPU terminal run outcome and scheduled outputs; it is not proof of an atomic terminal generation/batch. | FDM CPU, source-level only |
-| `crates/fullmag-cli/src/live_workspace.rs` | `ingest_preview_fields_from_update` | Promotes incoming fields individually into session state; it is not proof of an atomic terminal generation/batch. | CLI control plane |
-| `crates/fullmag-cli/src/live_workspace.rs` | `feature_flags` | Reads preview-disable benchmark/display configuration. | CLI control plane |
-
+| Repository path | Stable symbol | Responsibility | Lane | Immutable link |
+|---|---|---|---|---|
+| `packages/fullmag-py/src/fullmag/model/discretization.py` | `class FDMDemag` | Strategy, mode, FFT backend, common-grid, and explanation policy. | Public authoring | [`discretization.py#L51`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/model/discretization.py#L51) |
+| `packages/fullmag-py/src/fullmag/model/discretization.py` | `class FDM` | Cell, multilayer, and boundary-correction policy. | Public authoring | [`discretization.py#L220`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/model/discretization.py#L220) |
+| `crates/fullmag-fdm-demag/src/newell.rs` | `compute_newell_kernels` | Newell base functions, 27-point tensor, and stable summation. | CPU/reference | [`newell.rs#L596`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-fdm-demag/src/newell.rs#L596) |
+| `crates/fullmag-fdm-demag/src/multiply.rs` | `accumulate_tensor_convolution` | Symmetric tensor-vector FFT product before negation. | CPU/reference | [`multiply.rs#L25`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-fdm-demag/src/multiply.rs#L25) |
+| `crates/fullmag-engine/src/fdm/cpu/fft.rs` | `compute_newell_kernel_spectra` | CPU kernel-spectrum construction. | FDM CPU | [`fft.rs#L681`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-engine/src/fdm/cpu/fft.rs#L681) |
+| `crates/fullmag-engine/src/fdm/cpu/fields/demag.rs` | `demag_field_from_vectors` | CPU demagnetizing-field realization. | FDM CPU | [`demag.rs#L8`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-engine/src/fdm/cpu/fields/demag.rs#L8) |
+| `backends/fdm/gpu/cuda/runtime/context.cu` | `context_preflight_single_grid_workspace` | Exact single-grid cuFFT workspace measurement and fail-closed VRAM preflight. | FDM GPU | [`context.cu#L140`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/backends/fdm/gpu/cuda/runtime/context.cu#L140) |
+| `backends/fdm/gpu/cuda/interactions/demag_fp64.cu` | `launch_demag_field_fp64` | CUDA FP64 Hermitian `D2Z/Z2D` cuFFT field dispatch. | FDM GPU FP64 | [`demag_fp64.cu#L671`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/backends/fdm/gpu/cuda/interactions/demag_fp64.cu#L671) |
+| `backends/fdm/gpu/cuda/interactions/demag_fp32.cu` | `launch_demag_field_fp32` | CUDA FP32 Hermitian `R2C/C2R` cuFFT field dispatch. | FDM GPU FP32 | [`demag_fp32.cu#L643`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/backends/fdm/gpu/cuda/interactions/demag_fp32.cu#L643) |
+| `backends/fdm/gpu/cuda/runtime/reductions_fp64.cu` | `reduce_demag_energy_fp64` | CUDA FP64 energy reduction. | FDM GPU FP64 | [`reductions_fp64.cu#L1347`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/backends/fdm/gpu/cuda/runtime/reductions_fp64.cu#L1347) |
+| `backends/fdm/gpu/cuda/runtime/context.cu` | `context_upload_demag_kernel_spectra` | Device Hermitian half-spectrum tensor upload and validation. | FDM GPU | [`context.cu#L3884`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/backends/fdm/gpu/cuda/runtime/context.cu#L3884) |
+| `backends/fdm/gpu/cuda/runtime/context.cu` | `context_refresh_demag_observable` | Device demag observable refresh. | FDM GPU | [`context.cu#L7221`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/backends/fdm/gpu/cuda/runtime/context.cu#L7221) |
+| `crates/fullmag-api/src/live_prepared_fields.rs` | `evaluate` | Pre-start prepared field evaluation preserving published FDM/FEM airbox carriers. | Control Room API | [`live_prepared_fields.rs#L399`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-api/src/live_prepared_fields.rs#L399) |
+| `crates/fullmag-runner/src/fdm/cpu/reference.rs` | `reconstruct_inactive_fdm_visual_effective_field` | Reconstructs the defined airbox aggregate from demag, external, Oersted, and antenna fields. | FDM CPU | [`reference.rs#L4818`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-runner/src/fdm/cpu/reference.rs#L4818) |
+| `crates/fullmag-runner/src/interactive/runtime.rs` | `build_atomic_terminal_update` | Builds one atomic terminal update and materializes the final FDM field set. | FDM CPU | [`runtime.rs#L16`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-runner/src/interactive/runtime.rs#L16) |
+| `crates/fullmag-runner/src/fdm/cpu/reference.rs` | `execute_reference_fdm` | Returns the CPU terminal run outcome and scheduled outputs. | FDM CPU | [`reference.rs#L1591`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-runner/src/fdm/cpu/reference.rs#L1591) |
+| `crates/fullmag-cli/src/live_workspace.rs` | `ingest_preview_fields_from_update` | Promotes incoming fields into session workspace state. | CLI control plane | [`live_workspace.rs#L6518`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-cli/src/live_workspace.rs#L6518) |
+| `crates/fullmag-cli/src/live_workspace.rs` | `feature_flags` | Reads preview-disable benchmark/display configuration. | CLI control plane | [`live_workspace.rs#L47`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-cli/src/live_workspace.rs#L47) |
+| `apps/control-room/src/modules/inspector/inspectors/objects/physics/ObjectPhysicsSpec.tsx` | `ObjectPhysicsInspectorPanel` | Object-level physics inspector panel exposing demagnetization controls. | Control Room | [`ObjectPhysicsSpec.tsx#L78`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/apps/control-room/src/modules/inspector/inspectors/objects/physics/ObjectPhysicsSpec.tsx#L78) |

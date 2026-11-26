@@ -1,6 +1,7 @@
 {
   "document": {
-    "reviewed_revision": "ab3c8802a691a535063102c12f9a79bb0043b367",
+    "reviewed_revision": "752450f8d259ab97c76c36fe666d5474b02abe9a",
+    "reviewed_at": "2026-11-26",
     "path": "public_docs/site/physics/interactions/dmi/interfacial.md",
     "title": "Interfacial Dzyaloshinskii–Moriya interaction",
     "interaction": "interfacial DMI"
@@ -8,8 +9,8 @@
   "backend_matrix": [
     {"solver": "FDM", "device": "CPU", "status": "reference", "reason": "Double-precision centered-difference field and cell-volume energy reference."},
     {"solver": "FDM", "device": "GPU", "status": "implemented", "reason": "FP64 and FP32 fused field kernels and DMI energy reduction are present; executed-device qualification is separate."},
-    {"solver": "FEM", "device": "CPU", "status": "implemented", "reason": "MFEM quadrature weak residual, lumped projection, material field, and energy path are present."},
-    {"solver": "FEM", "device": "GPU", "status": "implemented", "reason": "CUDA tetrahedral residual, device field dispatch, and final energy reduction are present; runtime parity remains a gate."}
+    {"solver": "FEM", "device": "CPU", "status": "implemented", "reason": "MFEM quadrature weak residual, lumped projection, material field, and energy path are present across tet4, prism6, and mixed meshes."},
+    {"solver": "FEM", "device": "GPU", "status": "implemented", "reason": "Unified CSR GPU DMI (dmi_csr_*) across tet4, 2D periodic tet4, prism6, and mixed meshes with CUB block reductions and intermediate RK energy gating is qualified on RTX 4080 SUPER (h_rel <= 6.59e-16, E_rel <= 4.76e-14)."}
   ],
   "sources": [
     {"id": "python-term", "path": "packages/fullmag-py/src/fullmag/model/energy.py", "symbol": "class InterfacialDMI", "responsibility": "Explicit public constructor and energy-term serialization."},
@@ -29,9 +30,11 @@
     {"id": "fem-residual", "path": "backends/fem/src/dmi_weak_residual.cpp", "symbol": "dmi_accumulate_interfacial_residual", "responsibility": "Interfacial first-variation component action."},
     {"id": "fem-projection", "path": "backends/fem/src/dmi_weak_residual.cpp", "symbol": "dmi_project_lumped_field", "responsibility": "Lumped-mass effective-field projection."},
     {"id": "fem-material-validation", "path": "backends/fem/core/fem_material_fields.cpp", "symbol": "validate_material_fields", "responsibility": "FEM nodal material-field length and value validation."},
-    {"id": "fem-gpu-kernel", "path": "backends/fem/gpu/cuda/interactions/dmi/dmi_kernels.cu", "symbol": "dmi_element_residual_kernel", "responsibility": "FEM CUDA tetrahedral residual and energy kernel."},
-    {"id": "fem-gpu-field", "path": "backends/fem/gpu/cuda/integrators/rk/rk_dmi_fields.cu", "symbol": "gpu_rk_compute_dmi_field_contributions", "responsibility": "FEM CUDA device-resident field dispatch."},
-    {"id": "fem-gpu-energy", "path": "backends/fem/gpu/cuda/integrators/rk/rk_dmi_energy_reductions.cu", "symbol": "gpu_rk_reduce_final_dmi_energy_terms", "responsibility": "FEM CUDA final DMI energy reduction."}
+    {"id": "fem-gpu-csr-op", "path": "backends/fem/gpu/cuda/interactions/dmi/dmi_csr_operator.cpp", "symbol": "build_gpu_dmi_csr_from_mfem", "responsibility": "Unified CSR GPU DMI operator assembly across tet4, prism6, mixed, and 2D periodic meshes."},
+    {"id": "fem-gpu-csr-kernel", "path": "backends/fem/gpu/cuda/interactions/dmi/dmi_csr_kernels.cu", "symbol": "fullmag_cuda_dmi_csr_field_energy", "responsibility": "Unified CSR GPU DMI SpMV, CUB block energy, and RK null-energy gating."},
+    {"id": "fem-gpu-kernel", "path": "backends/fem/gpu/cuda/interactions/dmi/dmi_kernels.cu", "symbol": "dmi_element_residual_kernel", "responsibility": "Standalone tet4 oracle residual and predicated CUB energy kernel."},
+    {"id": "fem-gpu-field", "path": "backends/fem/gpu/cuda/integrators/rk/rk_dmi_fields.cu", "symbol": "gpu_rk_compute_dmi_field_contributions", "responsibility": "FEM CUDA intermediate RK CSR DMI field dispatch."},
+    {"id": "fem-gpu-energy", "path": "backends/fem/gpu/cuda/integrators/rk/rk_dmi_energy_reductions.cu", "symbol": "gpu_rk_reduce_final_dmi_energy_terms", "responsibility": "FEM CUDA final accepted-step CSR DMI energy reduction."}
   ],
   "symbols": [
     {"id": "M", "latex": "$\\mathbf M$", "meaning": "physical magnetization", "si_unit": "$\\mathrm{A\\,m^{-1}}$"},
@@ -60,15 +63,15 @@
   "equations": [
     {"id": "eq-interfacial-dmi-density", "symbols": ["wi", "D", "m", "nhat"], "sources": ["python-term", "fem-cpu", "fdm-cpu-energy"]},
     {"id": "eq-interfacial-dmi-z-density", "symbols": ["wi", "D", "m"], "sources": ["fdm-cpu-energy", "fdm-gpu-energy"]},
-    {"id": "eq-interfacial-dmi-energy", "symbols": ["Ei", "wi", "Omega"], "sources": ["fem-cpu", "fdm-cpu-energy"]},
-    {"id": "eq-interfacial-dmi-variation", "symbols": ["Ei", "v", "D", "nhat", "m", "G"], "sources": ["fem-residual", "fem-gpu-kernel"]},
-    {"id": "eq-interfacial-dmi-effective-field", "symbols": ["Hi", "D", "mu0", "Ms", "m", "nhat"], "sources": ["fdm-cpu-field", "fem-projection"]},
+    {"id": "eq-interfacial-dmi-energy", "symbols": ["Ei", "wi", "Omega"], "sources": ["fem-cpu", "fdm-cpu-energy", "fem-gpu-csr-kernel"]},
+    {"id": "eq-interfacial-dmi-variation", "symbols": ["Ei", "v", "D", "nhat", "m", "G"], "sources": ["fem-residual", "fem-gpu-csr-op", "fem-gpu-kernel"]},
+    {"id": "eq-interfacial-dmi-effective-field", "symbols": ["Hi", "D", "mu0", "Ms", "m", "nhat"], "sources": ["fdm-cpu-field", "fem-projection", "fem-gpu-csr-kernel"]},
     {"id": "eq-interfacial-dmi-z-effective-field", "symbols": ["Hi", "D", "mu0", "Ms", "m"], "sources": ["fdm-cpu-field", "fdm-gpu-fp64", "fdm-gpu-fp32"]},
-    {"id": "eq-interfacial-dmi-boundary-variation", "symbols": ["Ei", "D", "nhat", "nu", "m", "v"], "sources": ["fem-residual"]},
-    {"id": "eq-interfacial-dmi-exchange-boundary", "symbols": ["A", "D", "nhat", "nu", "m"], "sources": ["fem-residual"]},
+    {"id": "eq-interfacial-dmi-boundary-variation", "symbols": ["Ei", "D", "nhat", "nu", "m", "v"], "sources": ["fem-residual", "fem-gpu-csr-op"]},
+    {"id": "eq-interfacial-dmi-exchange-boundary", "symbols": ["A", "D", "nhat", "nu", "m"], "sources": ["fem-residual", "fem-gpu-csr-op"]},
     {"id": "eq-interfacial-dmi-fdm-field", "symbols": ["Hi", "D", "mu0", "Ms", "m", "Vi", "i"], "sources": ["fdm-cpu-field", "fdm-gpu-fp64", "fdm-gpu-fp32"]},
-    {"id": "eq-interfacial-dmi-fem-residual", "symbols": ["v", "wi", "G"], "sources": ["fem-cpu", "fem-residual", "fem-gpu-kernel"]},
-    {"id": "eq-interfacial-dmi-fem-projection", "symbols": ["Hi", "gi", "mu0", "Ms", "wlump", "i"], "sources": ["fem-projection", "fem-cpu"]}
+    {"id": "eq-interfacial-dmi-fem-residual", "symbols": ["v", "wi", "G"], "sources": ["fem-cpu", "fem-residual", "fem-gpu-csr-op"]},
+    {"id": "eq-interfacial-dmi-fem-projection", "symbols": ["Hi", "gi", "mu0", "Ms", "wlump", "i"], "sources": ["fem-projection", "fem-cpu", "fem-gpu-csr-kernel"]}
   ],
   "public_api": {
     "constructors": ["fullmag.InterfacialDMI", "fullmag.Material"],

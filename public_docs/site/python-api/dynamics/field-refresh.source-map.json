@@ -1,7 +1,7 @@
 {
   "document": {
     "path": "public_docs/site/python-api/dynamics/field-refresh.md",
-    "reviewed_revision": "5e99782acbb7fb3f65d0cad872e102bf67733103"
+    "reviewed_revision": "752450f8d259ab97c76c36fe666d5474b02abe9a"
   },
   "backend_matrix": [
     {"solver": "FEM", "device": "CPU", "status": "documented"},
@@ -45,7 +45,7 @@
         "type": "`float | None`",
         "default": "`None`",
         "si_unit": "\\mathrm{s}",
-        "validation": "Positive",
+        "validation": "Positive finite when set",
         "meaning": "Demag refresh cadence",
         "backend_support": "FEM/FDM CPU/GPU; planner and runtime capability checks remain authoritative",
         "problem_ir": "`field_refresh.demag_interval_s`"
@@ -55,8 +55,8 @@
         "type": "`FieldRefreshPolicy | None`",
         "default": "`None`",
         "si_unit": "1",
-        "validation": "Valid policy",
-        "meaning": "Attach refresh cadence to dynamics",
+        "validation": "Valid `FieldRefreshPolicy` instance",
+        "meaning": "Attach refresh cadence to `fm.LLG` dynamics",
         "backend_support": "FEM/FDM CPU/GPU; planner and runtime capability checks remain authoritative",
         "problem_ir": "`dynamics.field_refresh`"
       }

@@ -1,7 +1,7 @@
 {
   "document": {
     "path": "public_docs/site/python-api/materials/magnetostriction-laws.md",
-    "reviewed_revision": "ab3c8802a691a535063102c12f9a79bb0043b367"
+    "reviewed_revision": "752450f8d259ab97c76c36fe666d5474b02abe9a"
   },
   "backend_matrix": [
     {
@@ -36,14 +36,14 @@
       "id": "source_magnetostriction_law",
       "path": "packages/fullmag-py/src/fullmag/model/mechanics.py",
       "symbol": "class MagnetostrictionLaw",
-      "responsibility": "public constructor and IR lowering"
+      "responsibility": "public constructor and lowercase b1/b2/lambda_s IR lowering"
     }
   ],
   "public_api": {
     "owner": "fm.MagnetostrictionLaw(name, kind=\"cubic\", B1=None, B2=None, lambda_s=None)",
     "parameters": [
       {
-        "python": "name",
+        "python": "MagnetostrictionLaw.name",
         "type": "str",
         "default": "required",
         "si_unit": "$1$",
@@ -53,32 +53,42 @@
         "problem_ir": "name"
       },
       {
-        "python": "kind",
+        "python": "MagnetostrictionLaw.kind",
         "type": "str",
-        "default": "cubic",
+        "default": "\"cubic\"",
         "si_unit": "$1$",
-        "validation": "cubic or isotropic",
+        "validation": "`\"cubic\"` or `\"isotropic\"`",
         "meaning": "law family",
         "backend_support": "FEM CPU/GPU: IR; FDM not currently resolved",
         "problem_ir": "kind"
       },
       {
-        "python": "B1/B2",
-        "type": "float or None",
+        "python": "MagnetostrictionLaw.B1",
+        "type": "float | None",
         "default": "None",
         "si_unit": "$\\mathrm{Pa}$",
-        "validation": "both required for cubic; finite",
-        "meaning": "cubic coefficients",
+        "validation": "required and finite for `\"cubic\"`",
+        "meaning": "first cubic magnetoelastic coefficient",
         "backend_support": "FEM CPU/GPU: IR; FDM not currently resolved",
-        "problem_ir": "B1/B2"
+        "problem_ir": "b1"
       },
       {
-        "python": "lambda_s",
-        "type": "float or None",
+        "python": "MagnetostrictionLaw.B2",
+        "type": "float | None",
+        "default": "None",
+        "si_unit": "$\\mathrm{Pa}$",
+        "validation": "required and finite for `\"cubic\"`",
+        "meaning": "second cubic magnetoelastic coefficient",
+        "backend_support": "FEM CPU/GPU: IR; FDM not currently resolved",
+        "problem_ir": "b2"
+      },
+      {
+        "python": "MagnetostrictionLaw.lambda_s",
+        "type": "float | None",
         "default": "None",
         "si_unit": "$1$",
-        "validation": "required for isotropic; finite",
-        "meaning": "saturation magnetostriction",
+        "validation": "required and finite for `\"isotropic\"`",
+        "meaning": "isotropic saturation magnetostriction",
         "backend_support": "FEM CPU/GPU: IR; FDM not currently resolved",
         "problem_ir": "lambda_s"
       }

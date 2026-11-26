@@ -1,37 +1,31 @@
 ---
 title: Stopping Criteria
-status: partial
+status: implemented
 doc_kind: reference
 audience: user
 owner: fullmag-public-docs
-reviewed_revision: a1de38b4d7dad275dccbdbfd937b757d6ca7ee99
+last_updated: 2026-11-26
+reviewed_revision: 752450f8d259ab97c76c36fe666d5474b02abe9a
 source_of_truth: /physics/foundations/effective-field, /physics/foundations/micromagnetic-energy
 ---
 
 (public-docs-numerical-methods-relaxation-stopping-criteria)=
 # Relaxation stopping criteria and completion
 
+(numerical-methods-relaxation-stopping-problem-statement)=
 ## Scope and purpose
 
-This page defines the shared accepted-state completion contract for relaxation and separates torque,
-optional energy, work budgets, failure states and output cadence.
-
-## Scientific and numerical model
-
-Completion is evaluated after an accepted state and field refresh. Torque is mandatory; an energy
-plateau is an additional conjunction rather than a replacement criterion.
-
-(numerical-methods-relaxation-stopping-problem-statement)=
-## Completion problem
-
-Relaxation completion is a contract over the accepted state, not a label attached after an iteration
-budget expires. The canonical policy combines a torque residual with optional energy and time/step
-budgets. A budget limits work; it does not by itself prove equilibrium.
+This page defines the shared accepted-state completion contract for relaxation across all four
+discretization/device lanes, separating mandatory torque convergence, optional energy plateau
+confirmation, work/time budgets, strict GPU residency receipts, non-converged eigenmode handoff
+certificates (`equilibrium_acceptance="force"`), and output cadence.
 
 (numerical-methods-relaxation-stopping-governing-equations)=
-## Governing equations
+## Scientific and numerical model
 
-The primary residual is the maximum effective-field torque:
+Relaxation completion is evaluated exclusively over committed accepted states after field refresh,
+never merely because an iteration or time ceiling has expired. The primary residual is the maximum
+effective-field torque:
 
 ```{math}
 :label: eq-relax-stop-torque
@@ -39,8 +33,8 @@ The primary residual is the maximum effective-field torque:
 =\max_i\left\lVert\mathbf m_i^{(k)}\times\mathbf H_{\mathrm{eff},i}^{(k)}\right\rVert_2.
 ```
 
-If an energy criterion is configured, the accepted energy sequence is checked over the implementation
-window $W_E$:
+If an energy criterion is configured, the accepted energy sequence is checked over the fixed
+implementation window $W_E = 50$ accepted samples:
 
 ```{math}
 :label: eq-relax-stop-energy
@@ -50,12 +44,11 @@ window $W_E$:
 \Delta E_{W_E}^{(k)}\leq\varepsilon_E.
 ```
 
-In the shared runner, $W_E$ is exactly 50 accepted energy samples. The combined torque predicate
-(and, when configured, the energy-window predicate) is then observed on fresh accepted states.
-`torque_confirmed` becomes true after at least three consecutive accepted samples satisfy that
-combined predicate; the counter is not capped at three. A failed sample resets the consecutive
-counter to zero. This confirmation is independent of output cadence: sparse saved output cannot
-change the authoritative completion record.
+The combined torque predicate (and, when configured, the 50-sample energy-window predicate) is
+observed on fresh accepted states. `torque_confirmed` becomes true only after at least three
+consecutive accepted samples satisfy the combined predicate; a failed sample resets the consecutive
+counter to zero. Confirmation is independent of output cadence so sparse saving never alters
+authoritative completion.
 
 The logical completion rule is conjunction, not disjunction:
 
@@ -66,11 +59,11 @@ The logical completion rule is conjunction, not disjunction:
 \land\left(\varepsilon_E\ \mathrm{unset}\ \lor\Delta E_{W_E}\leq\varepsilon_E\right).
 ```
 
-`max_steps` and `max_relaxation_time_s` are ceilings. If a ceiling is reached before the residual
-rule is true, the result is budget-exhausted or non-converged, never converged by budget alone.
+`max_steps` and `max_relaxation_time_s` are ceilings: exhausting either before the residual rule
+holds records a budget-exhausted non-converged stage, never converged by budget alone.
 
 (numerical-methods-relaxation-stopping-symbols-and-si-units)=
-## Symbols and SI units
+### Symbols and SI units
 
 | Symbol | Meaning | SI unit |
 |---|---|---|
@@ -81,29 +74,67 @@ rule is true, the result is budget-exhausted or non-converged, never converged b
 | $E^{(k)}$ | accepted total energy | $\mathrm{J}$ |
 | $\Delta E_{W_E}^{(k)}$ | energy range in the completion window | $\mathrm{J}$ |
 | $\varepsilon_E$ | optional energy threshold | $\mathrm{J}$ |
-| $W_E$ | accepted-energy window | $1$ |
+| $W_E$ | accepted-energy window ($50$ samples) | $1$ |
 | $\mathrm{converged}$ | completion predicate | $1$ |
 | $k$ | accepted iteration index | $1$ |
 | $T_{\mathrm{relax}}$ | optional relaxation-coordinate ceiling | $\mathrm{s}$ |
 
-`max_pseudotime_s` and `max_physical_time_s` are Python aliases for the same canonical
-$T_{\mathrm{relax}}$ field. They are accepted only when they agree with
-`max_relaxation_time_s`, and only `llg_overdamped` may use the field. Direct minimizers report
-`time=0`, `dt=0`, and no pseudo-time.
+`max_pseudotime_s` and `max_physical_time_s` are Python aliases for $T_{\mathrm{relax}}$; they must
+agree when supplied together and are restricted to `llg_overdamped`. Direct minimizers report
+`time=0`, `dt=0`, and `pseudo_time_s=null`.
 
 (numerical-methods-relaxation-stopping-assumptions-and-validity)=
-## Assumptions and validity
+### Assumptions, eigenmode handoff, and strict residency receipts
 
-- The torque is evaluated after the accepted state has been committed and after the effective field
-  has been refreshed according to the selected field-refresh policy.
-- The field residual is in A/m internally. A `tolT` request is converted through $\mu_0$ and the
-  requested unit is retained in provenance.
-- `energy_tolerance` is an optional secondary condition. Setting it does not remove the torque
-  requirement.
-- `max_steps` is an integer work budget. `max_relaxation_time_s` is meaningful only for
-  `llg_overdamped`; direct minimizers have no time coordinate.
-- A failed field solve, invalid state, failed line search, or non-finite metric is a failure and
-  cannot satisfy the stop contract.
+- Torque is evaluated after committing the accepted state and refreshing $\mathbf H_{\mathrm{eff}}$.
+- `tolT` converts to internal $\mathrm{A\,m^{-1}}$ via $\mu_0$ while retaining requested units in
+  provenance.
+- **Downstream eigenmode handoff (`equilibrium_acceptance`)**: By default, an eigenmode stage
+  consuming a preceding relaxation stage requires `converged=true`. Explicitly authoring
+  `study.stages.add_eigenmodes(..., equilibrium_acceptance="force")` permits linearizing around a
+  non-converged relax state while attaching a mandatory torque certificate recording measured
+  $\max\|\mathbf m_0 \times \mathbf H_{\mathrm{eff},0}\|$, `converged=false`, the true `stop_reason`,
+  and `forced=true` (recomputed from certified fields during plan binding).
+- **Strict GPU residency receipts**: Single-layer FDM CUDA `native_cuda_pgbb` and FEM GPU PGBB
+  record device-residency telemetry (`hot_loop_full_vector_h2d/d2h = 0`, `fallback_count = 0`,
+  `energy_minimizer_realization`) alongside completion metadata; see
+  {ref}`numerical-methods-performance-fdm-core` and {ref}`numerical-methods-performance-fem-gpu-kernels`.
+
+(numerical-methods-relaxation-stopping-discrete-realization)=
+### Discrete realization
+
+| Solver | Device | Status | Stop-metric realization |
+|---|---|---|---|
+| FDM | CPU | `implemented` | Cellwise maximum torque, 3-sample confirmation, and 50-sample accepted-energy window (`resolve_stage_completion`). |
+| FDM | GPU | `implemented` | Device-resident torque/energy reductions (`native_cuda_pgbb` & CUDA LLG) feeding shared `resolve_stage_completion` with strict residency receipt. |
+| FEM | CPU | `implemented` | Finite-element magnetic-node torque residual, direct-energy difference proof, and native stage completion. |
+| FEM | GPU | `implemented` | Device-resident reductions and telemetry with reduced host syncs (`-2..-3/step` on PGBB) feeding shared completion semantics. |
+
+For direct minimizers, `max_steps` counts accepted minimizer steps (rejected Armijo trials do not
+advance it). For `llg_overdamped`, `max_steps` counts accepted integration steps. A failure or user
+cancellation is mapped before any budget predicate so it is never reclassified as converged.
+
+(numerical-methods-relaxation-stopping-implementation-mapping)=
+### Implementation mapping
+
+`RelaxStop` owns public validation and serialization; `_resolve_flat_relax_stop` normalizes
+`tolT`/`tolA` and checks alias agreement. `crates/fullmag-runner/src/relaxation/convergence.rs`
+owns `relaxation_converged`, `RelaxationEnergyPlateauWindow`, `RelaxationTorqueConfirmation`,
+`llg_overdamped_uses_pure_damping`, and `resolve_stage_completion`.
+
+(numerical-methods-relaxation-stopping-problem-ir)=
+## Parameters
+
+| Python | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR |
+|---|---|---|---|---|---|---|---|
+| `fm.RelaxStop.torque_tolerance_apm` | `float \| None` | $0.7957747154594767$ | $\mathrm{A\,m^{-1}}$ | positive when set | primary torque threshold | FDM/FEM lanes | `study.stop.torque_tolerance_apm` |
+| `fm.RelaxStop.energy_tolerance_j` | `float \| None` | `None` | $\mathrm{J}$ | positive when set | optional 50-sample accepted-energy range threshold | FDM/FEM lanes | `study.stop.energy_tolerance_j` |
+| `fm.RelaxStop.max_steps` | `int \| None` | $50{,}000$ | $1$ | positive integer when set | accepted-step work budget | FDM/FEM lanes | `study.stop.max_steps` |
+| `fm.RelaxStop.max_relaxation_time_s` | `float \| None` | `None` | $\mathrm{s}$ | positive when set; LLG only | relaxation-coordinate ceiling | `llg_overdamped` only | `study.stop.max_relaxation_time_s` |
+| `fm.RelaxStop(max_pseudotime_s=...)` | `float \| None` | `None` | $\mathrm{s}$ | alias; must agree with other time aliases; LLG only | same relaxation-coordinate ceiling | `llg_overdamped` only | `study.stop.max_relaxation_time_s` |
+| `fm.RelaxStop(max_physical_time_s=...)` | `float \| None` | `None` | $\mathrm{s}$ | alias; must agree with other time aliases; LLG only | compatibility alias for relaxation coordinate | `llg_overdamped` only | `study.stop.max_relaxation_time_s` |
+| `add_relax(tolT=...)` | `float` | $10^{-6}$ | $\mathrm{T}$ | exclusive with `tolA` | user-facing torque threshold | FDM/FEM lanes | `study.stop.torque_tolerance_apm` |
+| `add_relax(tolA=...)` | `float` | canonical equivalent | $\mathrm{A\,m^{-1}}$ | exclusive with `tolT` | canonical field threshold | FDM/FEM lanes | `study.stop.torque_tolerance_apm` |
 
 (numerical-methods-relaxation-stopping-python-api)=
 ## Python API
@@ -125,11 +156,11 @@ film = study.geometry(
 film.Ms = 8.0e5
 film.Aex = 1.3e-11
 film.alpha = 0.02
-film.m = fm.init.UniformMagnetization((1.0, 0.1, 0.0))
+film.m = fm.texture.uniform(1.0, 0.1, 0.0)
 study.exchange()
 study.stages.add_relax(
     stage_id="relax",
-    algorithm="nonlinear_cg",
+    algorithm="projected_gradient_bb",
     stop=fm.RelaxStop(
         torque_tolerance_apm=0.7957747154594767,
         energy_tolerance_j=1.0e-18,
@@ -138,37 +169,7 @@ study.stages.add_relax(
 )
 ```
 
-| Python | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR |
-|---|---|---|---|---|---|---|---|
-| `fm.RelaxStop.torque_tolerance_apm` | `float \| None` | $0.7957747154594767$ | $\mathrm{A\,m^{-1}}$ | positive when set | primary torque threshold | FDM/FEM lanes | `study.stop.torque_tolerance_apm` |
-| `fm.RelaxStop.energy_tolerance_j` | `float \| None` | `None` | $\mathrm{J}$ | positive when set | optional accepted-energy range threshold | FDM/FEM lanes | `study.stop.energy_tolerance_j` |
-| `fm.RelaxStop.max_steps` | `int \| None` | $50,000$ | $1$ | positive integer when set | work budget | FDM/FEM lanes | `study.stop.max_steps` |
-| `fm.RelaxStop.max_relaxation_time_s` | `float \| None` | `None` | $\mathrm{s}$ | positive when set; LLG only | relaxation-coordinate ceiling | `llg_overdamped` only | `study.stop.max_relaxation_time_s` |
-| `fm.RelaxStop(max_pseudotime_s=...)` | `float \| None` | `None` | $\mathrm{s}$ | alias; must numerically agree with every other time alias; LLG only | same relaxation-coordinate ceiling, never a direct-minimizer time | `llg_overdamped` only | `study.stop.max_relaxation_time_s` |
-| `fm.RelaxStop(max_physical_time_s=...)` | `float \| None` | `None` | $\mathrm{s}$ | alias; must numerically agree with every other time alias; LLG only | compatibility name for the same relaxation coordinate; not a physical experiment clock | `llg_overdamped` only | `study.stop.max_relaxation_time_s` |
-| `add_relax(tolT=...)` | `float` | $10^{-6}$ | $\mathrm{T}$ | exclusive with `tolA` | user-facing torque threshold | FDM/FEM lanes | normalized A/m stop field |
-| `add_relax(tolA=...)` | `float` | canonical default equivalent | $\mathrm{A\,m^{-1}}$ | exclusive with `tolT` | canonical field threshold | FDM/FEM lanes | normalized A/m stop field |
-
-The `stop=` object is the canonical grouped form. Scalar aliases are accepted on
-`study.stages.add_relax`, but mixing a scalar with a conflicting field in `RelaxStop` is rejected.
-The legacy `tol` parameter is removed and must not be documented as usable.
-
-`RelaxStop` accepts at least one criterion. Its default object contains both the canonical torque
-threshold and the default accepted-step budget, so an otherwise empty `add_relax` call is still
-bounded. `max_pseudotime_s` and `max_physical_time_s` are constructor aliases only; serialization
-always emits the single canonical `max_relaxation_time_s` key. Supplying two aliases with different
-values is a validation error rather than a precedence rule.
-
-(numerical-methods-relaxation-stopping-problem-ir)=
-## Parameters
-
-The executable controls are the grouped `RelaxStop` fields and scalar stage aliases listed in the
-Python table. The canonical payload stores torque, optional energy, step and LLG-only time criteria;
-budgets never imply convergence.
-
-## ProblemIR
-
-The grouped stop object lowers to a canonical payload:
+### `ProblemIR` excerpt
 
 ```json
 {
@@ -180,101 +181,54 @@ The grouped stop object lowers to a canonical payload:
 }
 ```
 
-Normalization converts `tolT` to A/m before runtime comparison. Requested unit and authored field
-remain provenance metadata; resolved execution stores the canonical A/m threshold and the actual
-completion reason.
+## Control Room workflow
+
+Use the stage editor to configure torque, optional energy, and work-budget fields, then inspect the
+resolved completion reason (`torque`, `max_steps`, `max_physical_time`, `gradient`, `backend_error`,
+`user_cancelled`) and provenance metrics.
 
 (numerical-methods-relaxation-stopping-round-trip-and-failure-semantics)=
 ## Diagnostics and failure semantics
 
-Record accepted-state torque, energy-window samples, confirmation count, field-refresh policy,
-budget counters, stop reason and failure or cancellation status. Non-finite metrics, invalid state,
-failed field solves and failed line searches cannot satisfy completion.
-
-## Round-trip and failure semantics
-
-Script export preserves the grouped `RelaxStop` values or the equivalent scalar stage arguments.
-Validation errors cover non-positive tolerances, non-positive step/time ceilings, conflicting stop
-aliases, a stop with no criterion, energy-only completion assumptions, and time limits on direct
-minimizers. Unsupported combinations are rejected instead of weakening the completion rule.
-The result must identify requested intent, `converged`, `stop_reason`, `stop_metric`, `stop_value`, and
-`stop_threshold`; a budget-exhausted result is not a converged result.
-
-The authoritative completion reasons include `torque` (at-least-three-sample torque confirmation, plus any
-configured energy plateau), `max_steps`, `max_physical_time`, `gradient` for numerical stagnation,
-`backend_error`, `user_cancelled`, and an unset reason while a stage remains incomplete. The
-`energy` metric alone never produces convergence because torque is mandatory in the canonical stop
-contract.
-
-(numerical-methods-relaxation-stopping-discrete-realization)=
-## Discrete realization
-
-| Solver | Device | Status | Stop-metric realization |
-|---|---|---|---|
-| FDM | CPU | source-backed | cellwise maximum torque and accepted-energy window |
-| FDM | GPU | source-backed | CUDA/native reduction with explicit completion metrics |
-| FEM | CPU | source-backed | finite-element magnetic-node residual and native stage completion |
-| FEM | GPU | source-backed | device reduction/telemetry with runtime-qualified completion evidence required |
-
-The shared stop semantics do not imply identical floating-point reductions. Each lane must record
-precision, mesh/grid identity, field refresh, and runtime provenance with its metrics.
-
-For direct minimizers, `max_steps` counts accepted minimizer steps; rejected Armijo trials do not
-advance it. For LLG, `max_steps` counts accepted integration steps and the relaxation-time ceiling
-is checked against the stage relaxation coordinate. A failure or cancellation is mapped before any
-budget predicate, so it cannot be reclassified as converged.
-
-The FDM reference direct-minimizer loops contain an early torque-only exit before the first
-accepted step. When an energy tolerance is also requested, that internal `converged` flag does not
-constitute canonical completion because no 50-sample energy window exists yet; the shared
-`resolve_stage_completion` record remains authoritative and leaves the stage non-converged until
-the conjunction is actually evaluable. This distinction is intentional provenance: backend-local
-loop flags are not interchangeable with the public completion result.
-
-(numerical-methods-relaxation-stopping-implementation-mapping)=
-## Implementation mapping
-
-`RelaxStop` owns public validation and serialization. The runner convergence module owns accepted
-state completion, torque confirmation, energy-window policy, budget handling, and pure-damping mode
-selection. Backend-specific reducers provide the metrics consumed by that shared policy.
+- **Round-trip preservation**: Script export preserves grouped `RelaxStop` or equivalent scalar
+  stage arguments while separating requested intent (`tolT` vs `tolA`) from resolved execution.
+- **Validation errors and unsupported combinations**: Non-positive tolerances or ceilings,
+  conflicting stop aliases, empty `RelaxStop`, legacy `tol`, or unsupported combinations such as
+  relaxation-time limits attached to direct minimizers fail validation without weakening completion
+  rules.
+- **Authoritative completion reasons**: `torque` (at-least-three-sample confirmation plus optional
+  energy plateau), `max_steps`, `max_physical_time`, `gradient` (stagnation), `backend_error`,
+  `user_cancelled`, or unset while incomplete. Energy alone never produces convergence.
 
 (numerical-methods-relaxation-stopping-validation)=
 ## Validation
 
-Tests must prove: torque conversion from T to A/m; conjunction of torque and energy criteria;
-rejection of budget-only completion; exact zero torque behavior; confirmation on accepted states;
-failure on non-finite metrics; and round-trip preservation of requested/resolved stop policy.
-Runtime qualification adds backend/device identity and artifact evidence.
+Unit and runner tests verify `tolT` $\to$ $\mathrm{A\,m^{-1}}$ conversion, torque/energy
+conjunction, rejection of budget-only completion, 3-sample confirmation, non-finite failure
+rejection, `equilibrium_acceptance="force"` handoff certificates, and round-trip preservation.
 
 (numerical-methods-relaxation-stopping-limitations)=
 ## Limitations
 
-The stop contract does not prove a global energy minimum, physical-time equilibrium uniqueness, or
-cross-mesh trajectory equality. The energy window is a numerical completion criterion, not a proof
-that the continuous functional has reached its global minimum.
+The stop contract certifies local stationarity within the discrete tolerance budget; it does not
+prove global energy optimality, uniqueness of equilibrium, or cross-mesh trajectory identity.
 
 (numerical-methods-relaxation-stopping-scientific-bibliography)=
 ## Scientific bibliography
 
 - W. F. Brown, Jr., *Micromagnetics*, Wiley, 1963.
 - J. Nocedal and S. J. Wright, *Numerical Optimization*, 2nd ed., Springer, 2006, DOI: [10.1007/978-0-387-40065-5](https://doi.org/10.1007/978-0-387-40065-5).
-- Fullmag public physics contracts: {doc}`/physics/foundations/effective-field` and {doc}`/physics/foundations/micromagnetic-energy`.
-
-## Control Room workflow
-
-Use the stage editor to configure torque, optional energy and work-budget fields, then inspect the
-resolved completion reason and metrics. A direct minimizer must not receive an LLG physical-time
-limit.
+- FullMag public physics contracts: {doc}`/physics/foundations/effective-field` and {doc}`/physics/foundations/micromagnetic-energy`.
 
 (numerical-methods-relaxation-stopping-source-code-index)=
-## Source-code index
+## Where this is implemented
 
 | Claim | Repository path | Stable symbol | Responsibility | Lane | Evidence |
 |---|---|---|---|---|---|
-| Stop object validation and IR | [`packages/fullmag-py/src/fullmag/model/study.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/study.py#L765) | [`class RelaxStop`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/study.py#L765) | canonical criterion validation and serialization | public API | Python contract tests |
-| Flat stage stop normalization | [`packages/fullmag-py/src/fullmag/world.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/world.py#L3026) | [`_resolve_flat_relax_stop`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/world.py#L3026) | tolT/tolA conversion and alias conflict handling | public API | stage tests |
-| Accepted-state completion | [`crates/fullmag-runner/src/relaxation/convergence.rs`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-runner/src/relaxation/convergence.rs#L62) | [`relaxation_converged`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-runner/src/relaxation/convergence.rs#L62) | torque/energy conjunction and budget semantics | FDM/FEM orchestration | Rust tests |
-| Pure-damping mode selection | `crates/fullmag-runner/src/relaxation/convergence.rs` | `llg_overdamped_uses_pure_damping` | distinguishes overdamped LLG from full dynamics | FDM/FEM orchestration | runner tests |
-| Energy plateau window | `crates/fullmag-runner/src/relaxation/convergence.rs` | `RelaxationEnergyPlateauWindow::record` | fixed 50-sample accepted-energy range | shared orchestration | runner tests |
-| Torque confirmation | `crates/fullmag-runner/src/relaxation/convergence.rs` | `RelaxationTorqueConfirmation::observe` | at least three consecutive accepted samples satisfying the combined predicate | shared orchestration | runner tests |
-| Final reason mapping | `crates/fullmag-runner/src/relaxation/convergence.rs` | `resolve_stage_completion` | maps torque, budgets, stagnation and backend status | shared orchestration | runner tests |
+| Stop object validation and IR | [`packages/fullmag-py/src/fullmag/model/study.py`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/model/study.py#L831) | [`class RelaxStop`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/model/study.py#L831) | canonical criterion validation and serialization | public API | Python contract tests |
+| Flat stage stop normalization | [`packages/fullmag-py/src/fullmag/world.py`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/world.py#L3321) | [`_resolve_flat_relax_stop`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/world.py#L3321) | `tolT`/`tolA` conversion and alias conflict handling | public API | stage tests |
+| Accepted-state completion | [`crates/fullmag-runner/src/relaxation/convergence.rs`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-runner/src/relaxation/convergence.rs#L63) | [`relaxation_converged`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-runner/src/relaxation/convergence.rs#L63) | torque/energy conjunction and budget semantics | FDM/FEM orchestration | Rust tests |
+| Pure-damping mode selection | [`crates/fullmag-runner/src/relaxation/convergence.rs`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-runner/src/relaxation/convergence.rs#L193) | [`llg_overdamped_uses_pure_damping`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-runner/src/relaxation/convergence.rs#L193) | distinguishes overdamped LLG from full dynamics | FDM/FEM orchestration | runner tests |
+| Energy plateau window | [`crates/fullmag-runner/src/relaxation/convergence.rs`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-runner/src/relaxation/convergence.rs#L18) | [`RelaxationEnergyPlateauWindow`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-runner/src/relaxation/convergence.rs#L18) | fixed 50-sample accepted-energy range | shared orchestration | runner tests |
+| Torque confirmation | [`crates/fullmag-runner/src/relaxation/convergence.rs`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-runner/src/relaxation/convergence.rs#L93) | [`RelaxationTorqueConfirmation`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-runner/src/relaxation/convergence.rs#L93) | at least three consecutive accepted samples satisfying the combined predicate | shared orchestration | runner tests |
+| Final reason mapping | [`crates/fullmag-runner/src/relaxation/convergence.rs`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-runner/src/relaxation/convergence.rs#L235) | [`resolve_stage_completion`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-runner/src/relaxation/convergence.rs#L235) | maps torque, budgets, stagnation, and backend status | shared orchestration | runner tests |

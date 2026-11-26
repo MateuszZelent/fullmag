@@ -98,10 +98,10 @@ Status: Advertised global/object mesh controls are partial; compatibility-only f
 
 Discretization parameters not represented in the mesh panels are configured in Python scripts.
 See the [Control Room capability register](/frontend/capability-register) for UI coverage details.
-Frontend component: `apps/control-room/src/modules/inspector/panels/ObjectMeshPolicyPanel.tsx` (`ObjectMeshPolicyPanel`).
+Frontend components: `apps/control-room/src/modules/inspector/inspectors/mesh/MeshRootSpec.tsx` (`MeshRootInspectorSpecPanel`) and `apps/control-room/src/modules/inspector/panels/mesh-details/ObjectMeshSpecPanel.tsx` (`ObjectMeshInspectorSpecPanel`).
 
 (python-api-discretization-discretization-hints-source-code-index)=
 ## Source-code index
 | Claim | Path | Stable symbol | Responsibility | Evidence |
 |---|---|---|---|---|
-| Constructor, validation, lowering | [`packages/fullmag-py/src/fullmag/model/discretization.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/discretization.py#L551) | [`class DiscretizationHints`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/discretization.py#L551) | Canonical Python API behavior | Signature and IR lowering contract tests |
+| Constructor, validation, lowering | [`packages/fullmag-py/src/fullmag/model/discretization.py`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/model/discretization.py#L566) | [`class DiscretizationHints`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/model/discretization.py#L566) | Canonical Python API behavior | Signature and IR lowering contract tests |

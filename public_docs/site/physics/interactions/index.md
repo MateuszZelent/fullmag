@@ -31,11 +31,13 @@ Taxonomy of Fullmag's 12 physical interactions grouped by variational role, oper
 | {doc}`dmi/index` | Differential chiral field $\mathbf{H}_{\mathrm{DMI}}$ | `InterfacialDMI`, `RotatedInterfacialDMI`, `BulkDMI` | Chiral boundary twist $2A\partial_{\boldsymbol{\nu}}\mathbf{m} + D[(\hat{\mathbf{n}}\times\boldsymbol{\nu})\times\mathbf{m}]=\mathbf{0}$ |
 | {doc}`inter-region-couplings/index` | Interface link / surface energy $\Gamma_{ab}$ | `study.couplings.exchange`, `.rkky`, `.interlayer_exchange` | Harmonic region exchange $A_{ab}$ vs. bilinear/biquadratic $J_1, J_2$ |
 | {doc}`demagnetization/index` | Nonlocal magnetostatic field $\mathbf{H}_{\mathrm{d}}$ | `Demag` | Open FFT / multilayer, FEM airbox (Dirichlet/Robin), FEM–BEM, PBC |
-| {doc}`oersted-field/index` | Current-generated field $\mathbf{H}_{\mathrm{oe}}$ | `OerstedCylinder`, `OerstedField` | Analytic Ampère cylinder vs. closed `CurrentTransport` Biot–Savart |
-| {doc}`thermal-noise/index` | Stochastic field $\mathbf{H}_{\mathrm{th}}$ | `ThermalNoise` | FDT variance with bare $\gamma_0$; disables RK FSAL reuse |
+| {doc}`oersted-field/index` | Current-generated field $\mathbf{H}_{\mathrm{oe}}$ | `OerstedCylinder`, `OerstedField` | Analytic Ampère cylinder vs. closed `CurrentTransport` Biot–Savart / sparse OE-F2 |
+| {doc}`thermal-noise/index` | Stochastic field $\mathbf{H}_{\mathrm{th}}$ (`H_therm`) | `ThermalNoise` | FDT variance with bare $\gamma_0$; disables RK FSAL reuse |
 | {doc}`spin-transfer-torque/index` | Direct spin torque $\mathbf{T}_{\mathrm{SL},G}, \mathbf{T}_{\mathrm{ZL},G}$ | `SlonczewskiSTT`, `ZhangLiSTT` | Single Gilbert-to-explicit RHS conversion |
 | {doc}`spin-orbit-torque/index` | Direct local torque $\mathbf{T}_{\mathrm{SOT},G}$ | `PrescribedSpinOrbitTorque` | `SignedScalarDrive` / `VectorCurrentDrive`; no transport mesh |
 | {doc}`drift-diffusion-spin-torque/index` | Solved transport torque $\mathbf{T}_{\mathrm{tr},G}$ | `CurrentTransport`, `SpinDriftDiffusion`, `DriftDiffusionSpinTorque` | M1 one-way vs. M2 reciprocal $(V, \boldsymbol{\mu}_s)$ with mixing interfaces |
+
+For CUDA and CPU solver acceleration details (Hermitian cuFFT, `cuDSS` direct solves, unified CSR GPU DMI, fused short-range kernels, and multiphysics sparse solvers), see {ref}`numerical-methods-performance`.
 
 ```{toctree}
 :maxdepth: 1

@@ -1,32 +1,32 @@
 {
   "document": {
     "path": "public_docs/site/python-api/interactions/oersted-field.md",
-    "reviewed_revision": "ab3c8802a691a535063102c12f9a79bb0043b367"
+    "reviewed_revision": "752450f8d259ab97c76c36fe666d5474b02abe9a"
   },
   "backend_matrix": [
     {
       "solver": "FEM",
       "device": "CPU",
-      "status": "documented",
-      "reason": "authoring and IR documented; runtime qualification separate"
+      "status": "implemented",
+      "reason": "0-ULP parallel OE-F1 direct Biot-Savart quadrature and 3-tier sparse OE-F2 vector potential implemented on FEM CPU"
     },
     {
       "solver": "FEM",
       "device": "GPU",
-      "status": "documented",
-      "reason": "authoring and IR documented; runtime qualification separate"
+      "status": "partial",
+      "reason": "Hybrid GPU OE-F1 quadrature and opt-in DoubleDouble CUDA far-field implemented on FEM GPU"
     },
     {
       "solver": "FDM",
       "device": "CPU",
-      "status": "documented",
-      "reason": "authoring and IR documented; runtime qualification separate"
+      "status": "implemented",
+      "reason": "Analytic OerstedCylinder and planner-gated prescribed-cylinder OerstedField supported on FDM CPU"
     },
     {
       "solver": "FDM",
       "device": "GPU",
-      "status": "documented",
-      "reason": "authoring and IR documented; runtime qualification separate"
+      "status": "implemented",
+      "reason": "Precomputed GPU OerstedCylinder field with TimeDependence scaling implemented on FDM GPU"
     }
   ],
   "equations": [],
@@ -36,11 +36,53 @@
       "id": "source_oersted_field",
       "path": "packages/fullmag-py/src/fullmag/model/energy.py",
       "symbol": "class OerstedField",
-      "responsibility": "public constructor and IR lowering"
+      "responsibility": "solved-current Oersted constructor and IR lowering"
+    },
+    {
+      "id": "source_oersted_cylinder",
+      "path": "packages/fullmag-py/src/fullmag/model/energy.py",
+      "symbol": "class OerstedCylinder",
+      "responsibility": "analytic cylindrical conductor Oersted constructor and IR lowering"
+    },
+    {
+      "id": "source_constant",
+      "path": "packages/fullmag-py/src/fullmag/model/energy.py",
+      "symbol": "class Constant",
+      "responsibility": "constant TimeDependence envelope"
+    },
+    {
+      "id": "source_sinusoidal",
+      "path": "packages/fullmag-py/src/fullmag/model/energy.py",
+      "symbol": "class Sinusoidal",
+      "responsibility": "harmonic TimeDependence envelope"
+    },
+    {
+      "id": "source_pulse",
+      "path": "packages/fullmag-py/src/fullmag/model/energy.py",
+      "symbol": "class Pulse",
+      "responsibility": "rectangular pulse TimeDependence envelope"
+    },
+    {
+      "id": "source_piecewise_linear",
+      "path": "packages/fullmag-py/src/fullmag/model/energy.py",
+      "symbol": "class PiecewiseLinear",
+      "responsibility": "piecewise-linear TimeDependence envelope"
+    },
+    {
+      "id": "source_sinc_pulse",
+      "path": "packages/fullmag-py/src/fullmag/model/energy.py",
+      "symbol": "class SincPulse",
+      "responsibility": "normalized sinc TimeDependence envelope"
+    },
+    {
+      "id": "source_study_builder",
+      "path": "packages/fullmag-py/src/fullmag/world.py",
+      "symbol": "class StudyBuilder",
+      "responsibility": "study.oersted(...) registration facade"
     }
   ],
   "public_api": {
-    "owner": "fm.OerstedField(source, model=\"from_current_solution\", id=None)",
+    "owner": "fm.OerstedField(...), fm.OerstedCylinder(...), TimeDependence, study.oersted(...)",
     "parameters": [
       {
         "python": "source",
@@ -48,7 +90,7 @@
         "default": "required",
         "si_unit": "$1$",
         "validation": "non-empty current transport source",
-        "meaning": "current solution identifier",
+        "meaning": "upstream `CurrentTransport` module identifier",
         "backend_support": "FEM/FDM CPU/GPU: IR; solved transport runtime required",
         "problem_ir": "source"
       },
@@ -57,19 +99,79 @@
         "type": "str",
         "default": "from_current_solution",
         "si_unit": "$1$",
-        "validation": "current source model",
+        "validation": "\"from_current_solution\"",
         "meaning": "field reconstruction model",
         "backend_support": "FEM/FDM CPU/GPU: IR; solved transport runtime required",
         "problem_ir": "model"
       },
       {
         "python": "id",
-        "type": "str or None",
+        "type": "str | None",
         "default": "None",
         "si_unit": "$1$",
-        "validation": "non-empty when supplied; otherwise derived",
+        "validation": "non-empty when supplied; otherwise derived as `oersted:<source>`",
         "meaning": "stable interaction identifier",
         "backend_support": "FEM/FDM CPU/GPU: IR; resolver-specific",
+        "problem_ir": "id"
+      },
+      {
+        "python": "fm.OerstedCylinder.current",
+        "type": "float",
+        "default": "required",
+        "si_unit": "$\\mathrm{A}$",
+        "validation": "converted via `float`; sign sets chirality",
+        "meaning": "DC current amplitude of cylindrical conductor",
+        "backend_support": "FDM/FEM CPU/GPU: analytic cylinder field precomputed and scaled per step",
+        "problem_ir": "current"
+      },
+      {
+        "python": "fm.OerstedCylinder.radius",
+        "type": "float",
+        "default": "required",
+        "si_unit": "$\\mathrm{m}$",
+        "validation": "finite and strictly positive via `require_positive`",
+        "meaning": "cylinder radius",
+        "backend_support": "FDM/FEM CPU/GPU: analytic cylinder radius",
+        "problem_ir": "radius"
+      },
+      {
+        "python": "fm.OerstedCylinder.center",
+        "type": "Sequence[float]",
+        "default": "(0.0, 0.0, 0.0)",
+        "si_unit": "$\\mathrm{m}$",
+        "validation": "length-3 sequence via `as_vector3`; planner checks finiteness",
+        "meaning": "cross-section center coordinates",
+        "backend_support": "FDM/FEM CPU/GPU: cylinder origin",
+        "problem_ir": "center"
+      },
+      {
+        "python": "fm.OerstedCylinder.axis",
+        "type": "Sequence[float]",
+        "default": "(0.0, 0.0, 1.0)",
+        "si_unit": "$1$",
+        "validation": "length-3 sequence via `as_vector3`; planner checks finiteness/unit norm",
+        "meaning": "current-flow axis",
+        "backend_support": "FDM/FEM CPU/GPU: cylinder axis",
+        "problem_ir": "axis"
+      },
+      {
+        "python": "fm.OerstedCylinder.time_dependence",
+        "type": "TimeDependence | None",
+        "default": "None",
+        "si_unit": "$1$",
+        "validation": "`Constant`, `Sinusoidal`, `Pulse`, `PiecewiseLinear`, or `SincPulse`",
+        "meaning": "time-varying envelope multiplying `current`",
+        "backend_support": "FDM/FEM CPU/GPU: evaluated per RK stage/step",
+        "problem_ir": "time_dependence"
+      },
+      {
+        "python": "fm.OerstedCylinder.id",
+        "type": "str",
+        "default": "oersted:cylinder",
+        "si_unit": "$1$",
+        "validation": "non-empty string via `require_non_empty`",
+        "meaning": "stable cylindrical Oersted identifier",
+        "backend_support": "FDM/FEM CPU/GPU: IR identifier",
         "problem_ir": "id"
       }
     ],

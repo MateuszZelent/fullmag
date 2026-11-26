@@ -4,39 +4,25 @@ status: partial
 doc_kind: reference
 audience: user
 owner: fullmag-public-docs
-reviewed_revision: a1de38b4d7dad275dccbdbfd937b757d6ca7ee99
+last_updated: 2026-11-26
+reviewed_revision: 752450f8d259ab97c76c36fe666d5474b02abe9a
 source_of_truth: /physics/foundations/micromagnetic-energy, /physics/foundations/effective-field
 ---
 
 (public-docs-numerical-methods-relaxation-nonlinear-cg)=
 # Nonlinear conjugate-gradient relaxation
 
+(numerical-methods-relaxation-ncg-problem-statement)=
 ## Scope and purpose
 
-This page documents the source-backed nonlinear conjugate-gradient direct minimizer for normalized
-magnetization, including tangent directions, retraction, line search and completion semantics.
-
-## Scientific and numerical model
-
-The method minimizes the resolved micromagnetic energy on the unit-spin manifold; rejected trials
-leave the accepted state and completion history unchanged.
-
-(numerical-methods-relaxation-ncg-problem-statement)=
-## Physical and numerical problem
-
-`nonlinear_cg` is a direct constrained minimizer for the discrete micromagnetic energy. It
-searches $(\mathbb S^2)^N$ instead of integrating a physical-time LLG trajectory. Each active
-cell or finite-element node remains a unit vector. The tangent gradient is projected at the
-current state, trial states are retracted to the sphere, and accepted steps use the
-Polak–Ribière+ coefficient, an energy-metric product, periodic restart, and Armijo
-sufficient-decrease backtracking.
-
-`nonlinear_cg` has no damping parameter, RK solver, adaptive timestep, physical-time duration,
-or LLG precession switch. Its line-search step is an internal numerical quantity, not a user
-supplied timestep.
+This page documents the nonlinear conjugate-gradient direct minimizer (`nonlinear_cg`) for
+normalized magnetization on $(\mathbb S^2)^N$, including tangent-plane transport, Polak–Ribière+
+conjugate direction updates, normalized sphere retraction, periodic restarts, Armijo backtracking,
+and accepted-state completion semantics. `nonlinear_cg` has no damping parameter, RK solver,
+adaptive timestep, or physical-time coordinate.
 
 (numerical-methods-relaxation-ncg-governing-equations)=
-## Governing equations
+## Scientific and numerical model
 
 For reduced magnetization $\mathbf m_i$ and effective field $\mathbf H_{\mathrm{eff},i}$, the
 tangent energy gradient is
@@ -82,11 +68,8 @@ P_{\mathbf m_k}\mathbf p_{k-1},
 \left\langle\mathbf p_k,\mathbf g_k\right\rangle_E<0.
 ```
 
-If this is not a descent direction, the implementation restarts from the negative current
-gradient. The shared FDM/reference policy forces a restart every 50 accepted steps. Native FEM
-implementations maintain their own backend state and must report the resolved policy in provenance.
-
-The Armijo acceptance condition is
+If this is not a descent direction, the implementation restarts from $-\mathbf g_k$. The shared
+FDM/reference policy forces a restart every 50 accepted steps. The Armijo acceptance condition is
 
 ```{math}
 :label: eq-relax-ncg-armijo
@@ -96,46 +79,40 @@ E\!\left(\mathbf m(\lambda)\right)
 \qquad c_1=10^{-4}.
 ```
 
-Rejected trials halve $\lambda$ and leave the accepted state unchanged. A lower energy or a
-successful line search alone is not convergence; the shared accepted-state stop contract must
-also be satisfied.
+The energy metric used by the FDM/shared implementation is
+
+```{math}
+:label: eq-relax-ncg-energy-metric
+\langle a,b\rangle_E
+=\sum_i \mu_0 M_{s,i}V_i\,a_i\cdot b_i,
+\qquad
+[\langle a,b\rangle_E]
+=\mathrm{J\,A^{-1}}[a][b].
+```
 
 The implementation starts with $\mathbf p_0=-\mathbf g_0$ and
-$\lambda_0=\min(10^{-6},1/\lVert\mathbf p_0\rVert)$, with $10^{-6}$ in
-$\mathrm{m\,A^{-1}}$ and the norm computed by the unweighted vector product. Before each line
-search, a non-descent direction ($\langle p,g\rangle_E\geq0$) is replaced by $-g$. The
-Polak–Ribière+ numerator uses the trial tangent projection of the previous gradient. The
-coefficient is clipped with $\max(0,\cdot)$; invalid or non-positive previous-gradient metric
-norms give $\beta=0$. The next direction transports the previous direction to the new tangent
-plane and is reset to $-g$ if it is not a descent direction. Every 50th accepted step sets
-$\beta=0$. Backtracking multiplies $\lambda$ by $1/2$ and allows at most 30 rejected trials.
+$\lambda_0=\min(10^{-6},1/\lVert\mathbf p_0\rVert)$, with $10^{-6}$ in $\mathrm{m\,A^{-1}}$.
+Backtracking halves $\lambda$ and permits up to 30 rejected trials on the FDM/shared loop. For FEM,
+$V_i$ is replaced by the MFEM mass/lumped-mass realization, and both FEM CPU and GPU evaluate a
+representable direct-energy difference and roundoff bound before accepting a step. On FEM GPU,
+stiff-exchange workloads generally prefer `projected_gradient_bb` with the qualified
+`bb_exchange_mass` preconditioner ({doc}`projected-gradient`,
+{ref}`numerical-methods-performance-fem-gpu-kernels`).
 
 (numerical-methods-relaxation-ncg-iteration)=
-## One nonlinear-CG iteration
+### One nonlinear-CG iteration
 
-The accepted-step loop is:
-
-1. Assemble the current effective field, tangent gradient, energy and torque. Reject non-finite
-   quantities and classify an exactly degenerate gradient as numerical stagnation.
-2. Transport the previous gradient and direction into the current tangent plane. Compute PR+ with
-   the energy metric, force $\beta=0$ on the 50-step restart boundary, and replace any
-   non-descent direction by $-\mathbf g_k$.
-3. Start the line search at the bounded initial proposal, retract
-   $\mathcal R_{\mathbf m}(\lambda\mathbf p_k)$, and evaluate the complete trial energy. Apply
-   the Armijo inequality; halve and retry on rejection. The FDM/shared loop permits 30 rejected
-   trials. Native FEM recovery paths may consume additional restart trials, which are recorded as
-   rejected attempts rather than accepted steps.
-4. Commit only the accepted trial, preserve its field/energy snapshot for the next direction, and
-   increment `accepted_step`. Rejected trials never modify the accepted state.
-5. Feed the accepted torque and energy into the shared completion controller. The line search proves
-   sufficient decrease for one step; it does not prove equilibrium or a global minimum.
-
-Native FEM CPU and GPU implementations additionally evaluate a representable direct-energy
-difference and its roundoff bound before accepting a step. This is an implementation-level
-acceptance proof and must be reported separately from the shared torque/energy stop result.
+1. Assemble the current effective field, tangent gradient, energy, and torque; reject non-finite
+   quantities and classify an exactly zero gradient as numerical stagnation.
+2. Transport the previous gradient and direction into the current tangent plane, compute PR+, force
+   $\beta=0$ on the 50-step restart boundary, and replace any non-descent direction with $-\mathbf g_k$.
+3. Retract $\mathcal R_{\mathbf m}(\lambda\mathbf p_k)$, evaluate the complete trial energy, and
+   apply the Armijo inequality (halving $\lambda$ on rejection, up to 30 retries on the shared loop).
+4. Commit only the accepted trial, preserve its field/energy snapshot, and increment `accepted_step`.
+5. Feed accepted torque and energy into the shared completion controller ({doc}`stopping-criteria`).
 
 (numerical-methods-relaxation-ncg-symbols-and-si-units)=
-## Symbols and SI units
+### Symbols and SI units
 
 | Symbol | Meaning | SI unit |
 |---|---|---|
@@ -149,7 +126,7 @@ acceptance proof and must be reported separately from the shared torque/energy s
 | $\beta_k^{\mathrm{PR+}}$ | Polak–Ribière+ coefficient | $1$ |
 | $\lambda$ | direct-minimizer line-search step | $\mathrm{m\,A^{-1}}$ |
 | $E$ | total micromagnetic energy | $\mathrm{J}$ |
-| $\langle\cdot,\cdot\rangle_E$ | energy-metric inner product | dimension-dependent metric |
+| $\langle\cdot,\cdot\rangle_E$ | energy-metric inner product | $\mathrm{J\,A^{-1}}[a][b]$ |
 | $c_1$ | Armijo constant | $1$ |
 | $N$ | active cells or finite-element nodes | $1$ |
 | $k$ | accepted minimizer iteration | $1$ |
@@ -161,44 +138,50 @@ acceptance proof and must be reported separately from the shared torque/energy s
 | $a_i$ | first vector in the energy metric | $\mathrm{A\,m^{-1}}$ |
 | $b_i$ | second vector in the energy metric | $\mathrm{A\,m^{-1}}$ |
 
-The metric used by the FDM/shared implementation is
-
-```{math}
-:label: eq-relax-ncg-energy-metric
-\langle a,b\rangle_E
-=\sum_i \mu_0 M_{s,i}V_i\,a_i\cdot b_i,
-\qquad
-[\langle a,b\rangle_E]
-=\mathrm{J\,A^{-1}}[a][b].
-```
-
-The metric weight $\mu_0M_{s,i}V_i$ is $\mathrm{J\,A^{-1}}$. Thus the Armijo slope
-$\langle g,p\rangle_E$ is $\mathrm{J\,A\,m^{-1}}$ for field-valued $g$ and $p$, and
-$\lambda\langle g,p\rangle_E$ is an energy. The displacement vectors $s$ are dimensionless,
-so the BB/PR products have different operand-dependent units; they must not be treated as a
-single unitless dot product.
-
-For FEM the same physical metric is realized by the MFEM mass/lumped-mass operators rather than
-Cartesian cell volumes. The line-search parameter has units $\mathrm{m\,A^{-1}}$ because it
-multiplies a field-valued direction.
-
 (numerical-methods-relaxation-ncg-assumptions-and-validity)=
-## Assumptions and validity
+### Assumptions and validity
 
-- Every committed magnetization is normalized. A zero or non-finite retraction is a failure.
-- Gradient norms, metric products and energy differences must be finite. Degenerate gradients
-  produce numerical stagnation, not a false converged result.
-- Armijo rejection rolls back the accepted magnetization and the backend field/energy state needed
-  for the next trial.
-- PR+ is clipped at zero. A non-descent direction is replaced with the negative tangent gradient.
-- Direct minimizers have no physical time. `max_relaxation_time_s`, `solver`, `dt`,
-  `max_error`, `max_err`, `dt_min`, `dt_max`, `dt_initial`, `adaptive_timestep`,
-  `field_refresh`, and `relax_alpha` are invalid for `nonlinear_cg`.
+- Every committed magnetization is normalized; a zero or non-finite retraction is a failure.
+- Armijo rejection rolls back the accepted magnetization and field/energy state cleanly.
+- PR+ is clipped at zero; non-descent directions reset to $-\mathbf g_k$.
+- Direct minimizers have no physical time: `max_relaxation_time_s`, `solver`, `dt`, `max_error`,
+  `max_err`, `dt_min`, `dt_max`, `dt_initial`, `adaptive_timestep`, `field_refresh`, and
+  `relax_alpha` are rejected for `nonlinear_cg`.
+
+(numerical-methods-relaxation-ncg-discrete-realization)=
+### Discrete realization
+
+| Solver | Device | Status | Realization and evidence boundary |
+|---|---|---|---|
+| FDM | CPU | `source-backed` | Single-layer cellwise tangent gradient, energy-weighted products, retraction, and reference Armijo loop (`execute_nonlinear_cg`). |
+| FDM | GPU | `source-backed` | Single-layer CUDA direct-minimizer dispatcher (`execute_direct_minimizer`); multilayer FDM admits `llg_overdamped` and bounded FP64 `three_d` `projected_gradient_bb`, while rejecting `nonlinear_cg`. |
+| FEM | CPU | `source-backed` | Native MFEM nodal gradient, mass metric, direct-energy Armijo decision, rollback, and persistent direction (`run_nonlinear_cg_step`). |
+| FEM | GPU | `source-backed` | Native CUDA device-resident gradients, reductions, retraction, rollback, and persistent direction (`gpu_relax_nonlinear_cg_step`); executed-device qualification is tracked separately ({doc}`../../validation/qualification-status`). |
+
+(numerical-methods-relaxation-ncg-implementation-mapping)=
+### Implementation mapping
+
+The Python stage is lowered by `relax_stage` and validated by `Relaxation`. The FDM reference loop
+is `execute_nonlinear_cg`, sharing direction, transport, restart, and line-search helpers in
+`direct_minimizer.rs`. Native FEM CPU (`run_nonlinear_cg_step`) and GPU
+(`gpu_relax_nonlinear_cg_step`) own separate state and recovery implementations.
+
+(numerical-methods-relaxation-ncg-problem-ir)=
+## Parameters
+
+| Python parameter | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR |
+|---|---|---:|---|---|---|---|---|
+| `StudyStagesBuilder.add_relax(algorithm="nonlinear_cg")` | `str` | `"llg_overdamped"` | $1$ | supported identifier | selects NCG | single-layer FDM; FEM CPU/GPU | `study.algorithm` |
+| `StudyStagesBuilder.add_relax(tolT=...)` | `float` | $10^{-6}$ | $\mathrm{T}$ | finite, positive, exclusive with `tolA` | public torque threshold converted to $\mathrm{A\,m^{-1}}$ | FDM/FEM | `study.stop.torque_tolerance_apm` |
+| `StudyStagesBuilder.add_relax(tolA=...)` | `float` | equivalent | $\mathrm{A\,m^{-1}}$ | finite, positive, exclusive with `tolT` | canonical torque threshold | FDM/FEM | `study.stop.torque_tolerance_apm` |
+| `StudyStagesBuilder.add_relax(max_steps=...)` | `int` | $50{,}000$ | $1$ | positive integer | accepted-step budget | FDM/FEM | `study.stop.max_steps` |
+| `StudyStagesBuilder.add_relax(energy_tolerance=...)` | `float \| None` | `None` | $\mathrm{J}$ | positive when set | accepted-energy plateau threshold | FDM/FEM | `study.stop.energy_tolerance_j` |
+| `StudyStagesBuilder.add_relax(stop=...)` | `RelaxStop \| None` | `None` | $1$ | grouped stop; scalar conflicts rejected | canonical stopping object | FDM/FEM | `study.stop` |
+| LLG-only keywords (`solver`, `dt`, `max_err`, `max_error`, `dt_min`, `dt_max`, `dt_initial`, `adaptive_timestep`, `field_refresh`, `relax_alpha`, `max_relaxation_time_s`, `max_pseudotime_s`, `max_physical_time_s`) | various | `None` | $1$ | rejected for NCG | LLG dynamics and time controls | none for NCG | none |
+| legacy `tol=...` | `float` | unavailable | $1$ | always rejected | removed tolerance spelling; use `tolT` or `tolA` | none | none |
 
 (numerical-methods-relaxation-ncg-python-api)=
 ## Python API
-
-This is the copyable stage-first pattern. It does not use `fm.Problem(...)`.
 
 ```python
 # %% Configure nonlinear-CG relaxation
@@ -216,7 +199,7 @@ film = study.geometry(
 )
 film.Ms = 8.0e5
 film.Aex = 1.3e-11
-film.m = fm.init.UniformMagnetization((1.0, 0.1, 0.0))
+film.m = fm.texture.uniform(1.0, 0.1, 0.0)
 study.exchange()
 study.stages.add_relax(
     stage_id="relax",
@@ -226,43 +209,7 @@ study.stages.add_relax(
 )
 ```
 
-| Python parameter | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR |
-|---|---|---:|---|---|---|---|---|
-| `StudyStagesBuilder.add_relax(algorithm="nonlinear_cg")` | str | "llg_overdamped" | $1$ | supported identifier | selects NCG | FDM reference; FEM CPU/GPU native lanes | `study.algorithm` |
-| `StudyStagesBuilder.add_relax(tolT=...)` | float | $10^{-6}$ | $\mathrm{T}$ | finite, positive, exclusive with `tolA` | public torque threshold converted to A/m | FDM/FEM | `study.stop.torque_tolerance_apm` |
-| `StudyStagesBuilder.add_relax(tolA=...)` | float | equivalent | $\mathrm{A\,m^{-1}}$ | finite, positive, exclusive with `tolT` | canonical torque threshold | FDM/FEM | `study.stop.torque_tolerance_apm` |
-| `StudyStagesBuilder.add_relax(max_steps=...)` | int | $50{,}000$ | $1$ | positive integer | accepted-step budget | FDM/FEM | `study.stop.max_steps` |
-| `StudyStagesBuilder.add_relax(energy_tolerance=...)` | float or None | None | $\mathrm{J}$ | positive when set | accepted-energy plateau threshold | FDM/FEM | `study.stop.energy_tolerance_j` |
-| `StudyStagesBuilder.add_relax(max_relaxation_time_s=...)` | float or None | None | $\mathrm{s}$ | rejected for NCG | LLG-only time ceiling | none for NCG | `study.stop.max_relaxation_time_s` |
-| `StudyStagesBuilder.add_relax(solver=...)` | str or None | None | $1$ | rejected for NCG | LLG integrator selector | none for NCG | `study.dynamics.integrator` |
-| `StudyStagesBuilder.add_relax(dt=...)` | float or auto or None | None | $\mathrm{s}$ | rejected for NCG | LLG timestep | none for NCG | `study.dynamics` |
-| `StudyStagesBuilder.add_relax(max_error=...)` | float or None | None | $1$ | rejected for NCG | LLG adaptive error control | none for NCG | `study.dynamics.adaptive_timestep.atol` |
-| `StudyStagesBuilder.add_relax(max_err=...)` | float or None | None | $1$ | rejected for NCG | LLG error alias | none for NCG | `study.dynamics.adaptive_timestep.atol` |
-| `StudyStagesBuilder.add_relax(dt_min=...)` | float or None | None | $\mathrm{s}$ | rejected for NCG | LLG lower timestep bound | none for NCG | `study.dynamics.adaptive_timestep.dt_min` |
-| `StudyStagesBuilder.add_relax(dt_max=...)` | float or None | None | $\mathrm{s}$ | rejected for NCG | LLG upper timestep bound | none for NCG | `study.dynamics.adaptive_timestep.dt_max` |
-| `StudyStagesBuilder.add_relax(dt_initial=...)` | float or None | None | $\mathrm{s}$ | rejected for NCG | LLG initial timestep | none for NCG | `study.dynamics.adaptive_timestep.dt_initial` |
-| `StudyStagesBuilder.add_relax(adaptive_timestep=...)` | AdaptiveTimestep or None | None | mixed | rejected for NCG | LLG adaptive policy | none for NCG | `study.dynamics.adaptive_timestep` |
-| `StudyStagesBuilder.add_relax(field_refresh=...)` | FieldRefreshPolicy or None | None | $1$ | rejected for NCG | LLG field-refresh policy | none for NCG | `study.dynamics.field_refresh` |
-| `StudyStagesBuilder.add_relax(relax_alpha=...)` | float or None | None | $1$ | rejected for NCG | LLG damping override | none for NCG | resolved LLG provenance |
-| legacy tol=... | float | unavailable | legacy | always rejected | use tolT or tolA | none | none |
-| `StudyStagesBuilder.add_relax(max_pseudotime_s=...)` | float or None | None | $\mathrm{s}$ | rejected for NCG | LLG-only alias | none | none |
-| `StudyStagesBuilder.add_relax(max_physical_time_s=...)` | float or None | None | $\mathrm{s}$ | rejected for NCG | LLG-only alias | none | none |
-| `StudyStagesBuilder.add_relax(stop=...)` | `RelaxStop` or None | None | mixed | grouped stop; scalar conflicts rejected | canonical stopping object | FDM/FEM | `study.stop` |
-
-Line-search constants, restart interval, curvature guards and backend recovery limits are
-implementation policy, not user parameters. They must be included in resolved provenance when
-they affect qualification.
-
-(numerical-methods-relaxation-ncg-problem-ir)=
-## Parameters
-
-The executable controls are the algorithm identifier, torque and optional energy stop criteria, and
-the accepted-step budget. LLG timestep, adaptive and damping controls are explicitly rejected for
-this direct minimizer, as shown by the Python-to-ProblemIR table.
-
-## ProblemIR
-
-The request lowers to this direct-minimizer payload:
+### `ProblemIR` excerpt
 
 ```json
 {
@@ -278,102 +225,58 @@ The request lowers to this direct-minimizer payload:
 }
 ```
 
-This is an explanatory projection of the serializer, not a hand-written replacement for
-`study.stages.add_relax(...)`. There is intentionally no `dynamics` object for NCG. The
-planner adds the requested FEM/FDM lane, CPU/GPU device, precision, field realization and
-resolved policy as execution/provenance data.
-
-(numerical-methods-relaxation-ncg-round-trip-and-failure-semantics)=
-## Diagnostics and failure semantics
-
-Record tangent-gradient norms, direction updates, Armijo trials and backtracks, accepted-step
-energy, torque completion, failure or cancellation status and resolved lane. A non-finite metric,
-invalid curvature or failed line search is not convergence.
-
-## Round-trip and failure semantics
-
-The requested intent is preserved separately from the resolved execution record.
-
-The exporter preserves the requested algorithm, stop fields, requested engine/device and absence of
-LLG dynamics. `tolT` is retained as authored intent while the canonical stop field is A/m. The
-resolved execution record separately identifies solver, device, precision, mesh and backend policy.
-Validation errors include unknown algorithm, legacy tol, simultaneous `tolT` and `tolA`,
-non-positive threshold or step budget, any LLG-only parameter, non-finite gradient or energy,
-unrecoverable non-descent direction, exhausted line search, failed field/energy evaluation, and
-an unnormalizable magnetization. Unsupported combinations are rejected by the planner; there is no
-silent fallback to another algorithm or device.
-
-(numerical-methods-relaxation-ncg-discrete-realization)=
-## Discrete realization
-
-| Solver | Device | Status | Realization and evidence boundary |
-|---|---|---|---|
-| FDM | CPU | source-backed | cellwise tangent gradient, energy-weighted products, retraction and reference Armijo loop |
-| FDM | GPU | source-backed with planner boundary | native CUDA direct-minimizer dispatcher exists; public multilayer planner currently permits only `llg_overdamped` |
-| FEM | CPU | source-backed | native MFEM nodal gradient, mass metric, direct-energy Armijo decision, rollback and persistent direction |
-| FEM | GPU | source-backed | native CUDA device-resident gradients, reductions, retraction, rollback and persistent direction; executed-device qualification is separate |
-
-The continuum algorithm is shared, but the discrete metric is not. FDM uses cell-volume/material
-weights. FEM uses its finite-element mass/lumped-mass realization and native field operators.
-CPU/GPU comparison requires the same problem, mesh, precision, stop contract and resolved
-provenance.
-
-FDM CPU calls the reference grid loop; FDM GPU calls the native CUDA direct-minimizer dispatcher
-when the resolved plan permits direct minimization. The public multilayer FDM planner currently
-rejects PG/NCG for that runner, so “CUDA source exists” and “this multilayer script executes NCG on
-GPU” are different claims. FEM CPU performs native MFEM field/energy recovery and rollback; FEM
-GPU keeps direction, accepted field and reduction workspaces device-resident. Runtime qualification
-must identify the actual device and precision.
-
-(numerical-methods-relaxation-ncg-implementation-mapping)=
-## Implementation mapping
-
-The Python stage is lowered by `relax_stage` and validated by `Relaxation`. The FDM reference
-loop is `execute_nonlinear_cg`. Shared direction, transport, restart and line-search helpers
-live in `direct_minimizer.rs`. Native FEM CPU and GPU are separate implementations: CPU owns
-MFEM state and direct-energy recovery; GPU owns device-resident vectors, reductions and rollback.
-Source presence and serialization do not prove executed GPU behavior.
-
-(numerical-methods-relaxation-ncg-validation)=
-## Validation
-
-Validation covers tangent orthogonality, unit-norm retraction, PR+ and restart, Armijo halving and
-rollback, line-search exhaustion, accepted-state torque/energy completion, stage-to-`ProblemIR`
-round-trip, and separate FDM CPU, FDM GPU, FEM CPU and FEM GPU planner/runtime gates. Python
-`to_ir()` proves authoring/lowering only, not runtime convergence.
-
-(numerical-methods-relaxation-ncg-limitations)=
-## Limitations
-
-`nonlinear_cg` is a local constrained minimizer and may end in a metastable equilibrium. It does
-not guarantee a global minimum, fixed iteration count, identical FDM/FEM trajectories, monotone
-energy across every backend recovery policy, or universal GPU qualification. Its line-search step
-has no physical-time interpretation.
-
-(numerical-methods-relaxation-ncg-scientific-bibliography)=
-## Scientific bibliography
-
-- J. Nocedal and S. J. Wright, *Numerical Optimization*, 2nd ed., Springer, 2006, DOI: [10.1007/978-0-387-40065-5](https://doi.org/10.1007/978-0-387-40065-5).
-- B. T. Polyak, “The conjugate gradient method in extremal problems,” *USSR Computational Mathematics and Mathematical Physics* 9 (1969), 94–112.
-- Fullmag public physics contracts: {doc}`/physics/foundations/micromagnetic-energy`, {doc}`/physics/foundations/effective-field`, and {doc}`stopping-criteria`.
-
 ## Control Room workflow
 
 Use the stage editor to select `nonlinear_cg` and configure only direct-minimizer stop controls.
 Inspect the resolved algorithm and completion telemetry; LLG integrator and physical-time controls
 are not valid controls for this stage.
 
+(numerical-methods-relaxation-ncg-round-trip-and-failure-semantics)=
+## Diagnostics and failure semantics
+
+- **Requested intent vs resolved execution**: Script export preserves `algorithm="nonlinear_cg"`,
+  stop fields, requested intent, and absence of LLG dynamics separately from resolved execution
+  provenance.
+- **Validation errors and unsupported combinations**: Validation errors include unknown algorithm,
+  legacy `tol`, simultaneous `tolT`/`tolA`, non-positive thresholds/budgets, and any LLG-only
+  parameter. Unsupported combinations such as requesting `nonlinear_cg` on multilayer FDM fail
+  closed with zero silent fallback.
+- **Runtime failure semantics**: Non-finite gradients/energies, unrecoverable non-descent
+  directions, exhausted line searches, or failed field solves report failure rather than
+  convergence.
+
+(numerical-methods-relaxation-ncg-validation)=
+## Validation
+
+Validation covers tangent orthogonality, unit-norm retraction, PR+ and periodic restarts, Armijo
+halving and rollback, line-search exhaustion, accepted-state torque/energy completion,
+stage-to-`ProblemIR` round-trip, and lane-specific planner/runtime gates.
+
+(numerical-methods-relaxation-ncg-limitations)=
+## Limitations
+
+`nonlinear_cg` is a local constrained minimizer and may terminate in a metastable equilibrium. It is
+unsupported on multilayer FDM (use `projected_gradient_bb` or `llg_overdamped`) and has no
+physical-time interpretation.
+
+(numerical-methods-relaxation-ncg-scientific-bibliography)=
+## Scientific bibliography
+
+- J. Nocedal and S. J. Wright, *Numerical Optimization*, 2nd ed., Springer, 2006, DOI: [10.1007/978-0-387-40065-5](https://doi.org/10.1007/978-0-387-40065-5).
+- B. T. Polyak, “The conjugate gradient method in extremal problems,” *USSR Computational Mathematics and Mathematical Physics* **9**, 94–112 (1969), DOI: [10.1016/0041-5553(69)90035-4](https://doi.org/10.1016/0041-5553(69)90035-4).
+- FullMag public physics contracts: {doc}`/physics/foundations/micromagnetic-energy`, {doc}`/physics/foundations/effective-field`, and {doc}`stopping-criteria`.
+
 (numerical-methods-relaxation-ncg-source-code-index)=
-## Source-code index
+## Where this is implemented
 
 | Claim | Repository path | Stable symbol | Responsibility | Lane | Evidence |
 |---|---|---|---|---|---|
-| Public algorithm contract | [`packages/fullmag-py/src/fullmag/model/study.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/study.py#L835) | [`class Relaxation`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/study.py#L835) | validates algorithms, rejects LLG dynamics for direct minimizers, serializes `ProblemIR` | public API | Python contract tests |
-| Stop fields | [`packages/fullmag-py/src/fullmag/model/study.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/study.py#L765) | [`class RelaxStop`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/study.py#L765) | validates torque, energy and step/time criteria | public API | Python contract tests |
-| Stage lowering | [`packages/fullmag-py/src/fullmag/world.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/world.py#L3123) | [`relax_stage`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/world.py#L3123) | maps stage arguments into the canonical payload | public API | stage export tests |
-| NCG direction policy | [`crates/fullmag-runner/src/relaxation/direct_minimizer.rs`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-runner/src/relaxation/direct_minimizer.rs#L714) | [`nonlinear_cg_next_direction`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-runner/src/relaxation/direct_minimizer.rs#L714) | tangent transport, PR+, restart and descent recovery | shared/FDM policy | Rust unit tests |
-| NCG line search | [`crates/fullmag-runner/src/relaxation/direct_minimizer.rs`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-runner/src/relaxation/direct_minimizer.rs#L368) | [`nonlinear_cg_armijo_accepts`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-runner/src/relaxation/direct_minimizer.rs#L368) | Armijo acceptance predicate | shared/FDM policy | Rust unit tests |
-| FDM reference loop | [`crates/fullmag-runner/src/relaxation/direct_minimizer_reference.rs`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-runner/src/relaxation/direct_minimizer_reference.rs#L834) | [`execute_nonlinear_cg`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-runner/src/relaxation/direct_minimizer_reference.rs#L834) | cellwise NCG implementation | FDM CPU/reference | Rust unit tests |
-| FDM CUDA loop | `crates/fullmag-runner/src/fdm/gpu/cuda/direct_minimizer.rs` | `execute_direct_minimizer` | CUDA PG/NCG state, line search and metrics | FDM GPU | device-gated tests |
-| FEM CPU step | [`backends/fem/cpu/mfem/relaxation/nonlinear_cg.cpp`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/backends/fem/cpu/mfem/relaxation/nonlinear_cg.cpp#L419) | [`run_nonlinear_cg_step`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/backends/fem/cpu/mfem/relaxation/nonlinear_cg.cpp#L419) | MFEM gradient, energy decision, recovery and state update | FEM CPU | native source contract tests |
-| FEM GPU step | [`backends/fem/gpu/cuda/relaxation/nonlinear_cg.cpp`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/backends/fem/gpu/cuda/relaxation/nonlinear_cg.cpp#L1238) | [`gpu_relax_nonlinear_cg_step`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/backends/fem/gpu/cuda/relaxation/nonlinear_cg.cpp#L1238) | device-resident reductions, direction, retraction and rollback | FEM GPU | native source contract tests |
+| Public algorithm contract | [`packages/fullmag-py/src/fullmag/model/study.py`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/model/study.py#L901) | [`class Relaxation`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/model/study.py#L901) | validates algorithms, rejects LLG dynamics for direct minimizers, serializes `ProblemIR` | public API | Python contract tests |
+| Stop fields | [`packages/fullmag-py/src/fullmag/model/study.py`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/model/study.py#L831) | [`class RelaxStop`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/model/study.py#L831) | validates torque, energy and step/time criteria | public API | Python contract tests |
+| Stage lowering | [`packages/fullmag-py/src/fullmag/world.py`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/world.py#L3419) | [`relax_stage`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/world.py#L3419) | maps stage arguments into the canonical payload | public API | stage export tests |
+| NCG direction policy | [`crates/fullmag-runner/src/relaxation/direct_minimizer.rs`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-runner/src/relaxation/direct_minimizer.rs#L717) | [`nonlinear_cg_next_direction`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-runner/src/relaxation/direct_minimizer.rs#L717) | tangent transport, PR+, restart and descent recovery | shared/FDM policy | Rust unit tests |
+| NCG line search | [`crates/fullmag-runner/src/relaxation/direct_minimizer.rs`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-runner/src/relaxation/direct_minimizer.rs#L363) | [`nonlinear_cg_armijo_accepts`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-runner/src/relaxation/direct_minimizer.rs#L363) | Armijo acceptance predicate | shared/FDM policy | Rust unit tests |
+| FDM reference loop | [`crates/fullmag-runner/src/relaxation/direct_minimizer_reference.rs`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-runner/src/relaxation/direct_minimizer_reference.rs#L1146) | [`execute_nonlinear_cg`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-runner/src/relaxation/direct_minimizer_reference.rs#L1146) | cellwise NCG implementation | FDM CPU/reference | Rust unit tests |
+| FDM CUDA loop | [`crates/fullmag-runner/src/fdm/gpu/cuda/direct_minimizer.rs`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-runner/src/fdm/gpu/cuda/direct_minimizer.rs#L729) | [`execute_direct_minimizer`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-runner/src/fdm/gpu/cuda/direct_minimizer.rs#L729) | single-layer CUDA PG/NCG state, line search and metrics | FDM GPU | device-gated tests |
+| FEM CPU step | [`backends/fem/cpu/mfem/relaxation/nonlinear_cg.cpp`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/backends/fem/cpu/mfem/relaxation/nonlinear_cg.cpp#L420) | [`run_nonlinear_cg_step`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/backends/fem/cpu/mfem/relaxation/nonlinear_cg.cpp#L420) | MFEM gradient, energy decision, recovery and state update | FEM CPU | native source contract tests |
+| FEM GPU step | [`backends/fem/gpu/cuda/relaxation/nonlinear_cg.cpp`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/backends/fem/gpu/cuda/relaxation/nonlinear_cg.cpp#L1248) | [`gpu_relax_nonlinear_cg_step`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/backends/fem/gpu/cuda/relaxation/nonlinear_cg.cpp#L1248) | device-resident reductions, direction, retraction and rollback | FEM GPU | native source contract tests |

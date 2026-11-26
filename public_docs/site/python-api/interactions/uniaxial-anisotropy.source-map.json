@@ -1,32 +1,32 @@
 {
   "document": {
     "path": "public_docs/site/python-api/interactions/uniaxial-anisotropy.md",
-    "reviewed_revision": "ab3c8802a691a535063102c12f9a79bb0043b367"
+    "reviewed_revision": "752450f8d259ab97c76c36fe666d5474b02abe9a"
   },
   "backend_matrix": [
     {
       "solver": "FEM",
       "device": "CPU",
-      "status": "documented",
-      "reason": "authoring and IR documented; runtime qualification separate"
+      "status": "implemented",
+      "reason": "IR lowering and local FEM CPU uniaxial anisotropy evaluation implemented"
     },
     {
       "solver": "FEM",
       "device": "GPU",
-      "status": "documented",
-      "reason": "authoring and IR documented; runtime qualification separate"
+      "status": "implemented",
+      "reason": "IR lowering and fused GPU uniaxial anisotropy evaluation implemented"
     },
     {
       "solver": "FDM",
       "device": "CPU",
-      "status": "documented",
-      "reason": "authoring and IR documented; runtime qualification separate"
+      "status": "implemented",
+      "reason": "IR lowering and cell-local FDM CPU uniaxial anisotropy evaluation implemented"
     },
     {
       "solver": "FDM",
       "device": "GPU",
-      "status": "documented",
-      "reason": "authoring and IR documented; runtime qualification separate"
+      "status": "implemented",
+      "reason": "IR lowering and fused CUDA FDM uniaxial anisotropy evaluation implemented"
     }
   ],
   "equations": [],
@@ -37,19 +37,31 @@
       "path": "packages/fullmag-py/src/fullmag/model/energy.py",
       "symbol": "class UniaxialAnisotropy",
       "responsibility": "public constructor and IR lowering"
+    },
+    {
+      "id": "source_as_vector3",
+      "path": "packages/fullmag-py/src/fullmag/_validation.py",
+      "symbol": "as_vector3",
+      "responsibility": "length-3 tuple conversion without normalization or finiteness rejection"
+    },
+    {
+      "id": "source_magnet_handle",
+      "path": "packages/fullmag-py/src/fullmag/world.py",
+      "symbol": "class MagnetHandle",
+      "responsibility": "per-magnet Ku1, Ku2, and anisU authoring facade"
     }
   ],
   "public_api": {
-    "owner": "fm.UniaxialAnisotropy(ku1, ku2=0.0, axis=(0,0,1))",
+    "owner": "fm.UniaxialAnisotropy(ku1, ku2=0.0, axis=(0.0, 0.0, 1.0))",
     "parameters": [
       {
         "python": "fm.UniaxialAnisotropy.ku1",
         "type": "float",
         "default": "required",
         "si_unit": "$\\mathrm{J\\,m^{-3}}$",
-        "validation": "finite",
-        "meaning": "first anisotropy constant",
-        "backend_support": "FEM/FDM CPU/GPU: IR; resolved support required",
+        "validation": "converted via `float`; planner/backend checks finiteness",
+        "meaning": "first-order uniaxial anisotropy constant",
+        "backend_support": "FEM/FDM CPU/GPU: IR and local field/energy kernels",
         "problem_ir": "ku1"
       },
       {
@@ -57,19 +69,19 @@
         "type": "float",
         "default": "0.0",
         "si_unit": "$\\mathrm{J\\,m^{-3}}$",
-        "validation": "finite",
-        "meaning": "second anisotropy constant",
-        "backend_support": "FEM/FDM CPU/GPU: IR; resolved support required",
+        "validation": "converted via `float`; planner/backend checks finiteness",
+        "meaning": "second-order uniaxial anisotropy constant",
+        "backend_support": "FEM/FDM CPU/GPU: IR and local field/energy kernels",
         "problem_ir": "ku2"
       },
       {
         "python": "fm.UniaxialAnisotropy.axis",
-        "type": "tuple[float,float,float]",
-        "default": "(0,0,1)",
+        "type": "Sequence[float]",
+        "default": "(0.0, 0.0, 1.0)",
         "si_unit": "$1$",
-        "validation": "finite non-zero; normalized",
-        "meaning": "easy axis",
-        "backend_support": "FEM/FDM CPU/GPU: IR; resolved support required",
+        "validation": "length-3 sequence via `as_vector3`; planner/backend validates finiteness, non-zero norm, and normalizes",
+        "meaning": "easy-axis direction",
+        "backend_support": "FEM/FDM CPU/GPU: IR and local field/energy kernels",
         "problem_ir": "axis"
       }
     ],

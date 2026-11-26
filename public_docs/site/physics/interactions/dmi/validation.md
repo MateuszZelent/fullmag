@@ -100,7 +100,7 @@ film.Ms = 5.8e5
 film.Aex = 15.0e-12
 film.Dind = 3.0e-3
 film.alpha = 0.02
-film.m = fm.init.UniformMagnetization((0.0, 0.0, 1.0))
+film.m = fm.texture.uniform(0.0, 0.0, 1.0)
 study.exchange(enabled=False)
 study.demag(enabled=False)
 study.solver(integrator="rk4", fix_dt=1.0e-14)
@@ -150,7 +150,7 @@ and equivalent output location before a tolerance is interpreted.
 (dmi-validation-implementation-mapping)=
 ## Implementation mapping
 
-Python term classes own input lowering, FDM and FEM variants provide separate field paths, and the planner owns output legality and normal restrictions. The source-code index below lists the corresponding implementation symbols and test suites.
+Python term classes own input lowering, FDM and FEM variants provide separate field paths, and the planner owns output legality and normal restrictions. On FEM GPU, production RK and relaxation stages use the unified preassembled skew-symmetric CSR DMI operator (`dmi_csr_operator.cpp` / `dmi_csr_kernels.cu`) with deadlock-free predicated `cub::BlockReduce` and intermediate RK `energy_out=nullptr` reduction gating; see {ref}`numerical-methods-performance-fem-gpu-demag` and {ref}`numerical-methods-performance-fem-gpu-kernels`. The source-code index below lists the corresponding implementation symbols and test suites.
 
 (dmi-validation-validation)=
 ## Validation strategy
@@ -158,8 +158,8 @@ Python term classes own input lowering, FDM and FEM variants provide separate fi
 DMI validation relies on analytic checks, cross-backend comparison, and sign/symmetry
 tests. While NIST $\mu\mathrm{MAG}$ does not host an official numbered DMI standard problem,
 Cortés-Ortuño *et al.* (2018) established a community standard problem for chiral DMI media,
-complemented in Fullmag by the Göbel *et al.* (2019) bimeron reproduction and analytic
-operator checks:
+complemented in Fullmag by the Göbel *et al.* (2019) bimeron reproduction, machine-precision
+FEM GPU CSR parity tests, and analytic operator checks:
 
 1. **Zero-field test**: uniform magnetization produces zero DMI field and zero DMI energy.
 2. **Sign reversal**: $D \to -D$ reverses the field and energy sign.
@@ -178,15 +178,42 @@ operator checks:
 | FDM CPU reference | Analytic stencil checks: zero-field, sign reversal, linear profile | Implemented and tested; not freshly executed for this revision |
 | FDM GPU FP64 | Fused-kernel parity with CPU reference | Device-capable tests present |
 | FDM GPU FP32 | FP64–FP32 Tier B parity | Device-capable tests present |
-| FEM CPU MFEM | Residual consistency, energy derivative, tilted normal, `Dind_field` | Source contracts pass; managed runtime tests exist |
-| FEM GPU CUDA | Element residual kernel parity with CPU residual | Device-capable contracts present |
+| FEM CPU MFEM | Residual consistency, energy derivative, tilted normal, `Dind_field` | Source contracts pass; managed runtime tests verified across `tet4`, `prism6`, and `mixed` meshes |
+| FEM GPU CUDA | Unified CSR GPU DMI parity (`tet4`, 2D periodic `tet4`, `prism6`, `mixed`) and short-range RK kernel contracts | Qualified on RTX 4080 SUPER (SM `89-real`): `h_rel <= 1.12e-15`, `E_rel <= 4.76e-14` across 15 configs; `compute-sanitizer --tool memcheck` 0 errors |
+
+## Unified CSR GPU DMI and short-range kernel validation (FEM GPU)
+
+On an NVIDIA GeForce RTX 4080 SUPER (SM `89-real`, FP64), the unified preassembled CSR GPU DMI
+operator (`build_gpu_dmi_csr_from_mfem` and `fullmag_cuda_dmi_csr_field_energy`, verified by
+`fem_cuda_csr_dmi_prism_contract` with `compute-sanitizer --tool memcheck` reporting 0 errors)
+achieves machine-precision parity against CPU MFEM across all 15 tested mesh/variant
+configurations—`tet4`, 2D periodic `tet4` ($P^{\mathsf T} D P$), `prism6` ($60\times 60\times 2$
+and $120\times 120\times 2$), and `mixed` (`prism6 + pyramid5 + tet4`, $30\times 30\times 2$)
+for oblique-normal interfacial, rotated interfacial (Göbel), and bulk DMI:
+
+- **Numerical parity vs CPU MFEM**: $h_{\mathrm{rel}} \le 1.12 \times 10^{-15}$ for effective
+  fields and $E_{\mathrm{rel}} \le 4.76 \times 10^{-14}$ for integrated energies across all 15
+  configurations (including compensated double-double Armijo energy differences `m1 - m0`).
+- **Throughput vs CPU MFEM and legacy `tet4` GPU**: `780×–4,812×` faster than CPU MFEM on
+  `tet4_32x32x4` (`780×–2,787×`) and `prism6_120x120x2` (`1,953×–4,812×`), and `1.67×–4.80×`
+  faster than legacy `tet4` GPU DMI (`1.67×–2.51×` with energy; `3.33×–4.80×` field-only on
+  intermediate RK stages).
+- **Short-range RK reduction gating and `cub::BlockReduce`**: gating unused intermediate RK
+  energy reductions (`energy_out=nullptr`) delivers a `2.54×` speedup (`0.3095 ms` vs `0.7873 ms`)
+  and predicated `cub::BlockReduce` yields `2.17×` (`0.3632 ms` vs `0.7873 ms`) on `33,150`
+  nodes / `180,000` `tet4`, with 50-step RK4 end-to-end DMI energy parity
+  $\Delta E_{\mathrm{dmi}} = 1.62 \times 10^{-15}$.
+
+See {ref}`numerical-methods-performance-fem-gpu-demag` and
+{ref}`numerical-methods-performance-fem-gpu-kernels` for the full benchmark tables and
+memory-safety gates.
 
 ## Rotated interfacial DMI: Göbel 2019 bimeron
 
 The dedicated {doc}`rotated-interfacial` page records a paper-based thin-film
 reproduction with $D=3\,\mathrm{mJ\,m^{-2}}$. The stored strict FDM CUDA FP64
 report was produced before the verifier gained its current 19 gates: it
-historically passed 15/15, preserved $|Q|>0.999$ through a 100 ps zero-current
+historically passed 15/15, preserved $\lvert Q\rvert>0.999$ through a 100 ps zero-current
 hold, retained two opposite-sign $m_z$ cores, and decreased the total energy.
 Until the run is repeated with the current verifier, this historical evidence
 is **NOT VERIFIED** for the current 19-gate contract, including the minimum
@@ -217,12 +244,17 @@ The key analytic checks for interfacial DMI:
 ## Bulk DMI tests
 
 Bulk DMI tests follow the same structure with the appropriate energy density
-$D\,\mathbf{m}\cdot(\nabla\times\mathbf{m})$:
+$w_{\mathrm b} = D\,\mathbf{m}\cdot(\nabla\times\mathbf{m})$:
 
 1. **Uniform $\mathbf{m}$**: zero field and energy.
-2. **Helical state**: for a helical magnetization
-   $\mathbf{m}(x)=(\cos kx,\sin kx,0)$, the energy density is $Dk$ and the field is
-   analytically known.
+2. **Transverse Bloch helix**: for the transverse Bloch helix propagating along $x$,
+   $\mathbf{m}(x)=(0,\sin kx,\cos kx)$, the curl satisfies
+   $\nabla\times\mathbf{m}=(0,+k\sin kx,+k\cos kx)=+k\mathbf{m}$, giving uniform bulk DMI energy
+   density $w_{\mathrm b}=+Dk$ and analytic effective field
+   $\mathbf{H}_{\mathrm b}=-\frac{2Dk}{\mu_0 M_s}\mathbf{m}$. (By contrast, a cycloidal texture
+   with $\mathbf{m}$ rotating in the plane containing the propagation vector, such as
+   $(\cos kx,\sin kx,0)$, has $\nabla\times\mathbf{m}=(0,0,k\cos kx)\perp\mathbf{m}$ and zero
+   bulk DMI density.)
 3. **Sign reversal**: $D\to -D$ reverses chirality preference.
 
 (dmi-validation-limitations)=
@@ -230,10 +262,11 @@ $D\,\mathbf{m}\cdot(\nabla\times\mathbf{m})$:
 
 - No µMAG-style standard problem exists for DMI validation; the Göbel case is
   a paper reproduction with an explicit Fullmag acceptance contract.
-- Executed-device identity is captured for the rotated-DMI Göbel FP64 case, but
-  not retroactively for every conventional interfacial or bulk DMI test.
-- FEM GPU mixed-P1 element qualification for DMI is incomplete.
-- Cross-solver (FDM vs FEM) quantitative convergence comparison has not been published.
+- Executed-device identity is captured for the FEM GPU unified CSR DMI suite (`tet4`, 2D periodic
+  `tet4`, `prism6`, `mixed`) and the historical rotated-DMI Göbel FDM FP64 case, but not
+  retroactively for every conventional FDM interfacial or bulk DMI test.
+- Cross-solver (FDM vs FEM) quantitative convergence comparison for chiral domain walls and
+  skyrmions has not been published.
 
 (dmi-validation-scientific-bibliography)=
 ## Scientific bibliography
@@ -247,11 +280,14 @@ $D\,\mathbf{m}\cdot(\nabla\times\mathbf{m})$:
 
 | Claim | Repository path | Stable symbol | Responsibility | Lane |
 |---|---|---|---|---|
-| Interfacial API | [`packages/fullmag-py/src/fullmag/model/energy.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/energy.py#L128) | [`class InterfacialDMI`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/energy.py#L128) | coefficient and normal lowering | Python |
-| Bulk API | [`packages/fullmag-py/src/fullmag/model/energy.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/energy.py#L161) | [`class BulkDMI`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/energy.py#L161) | coefficient lowering | Python |
-| Rotated API | [`packages/fullmag-py/src/fullmag/model/energy.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/energy.py#L150) | [`class RotatedInterfacialDMI`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/energy.py#L150) | coefficient lowering | Python |
-| Interfacial FEM field | [`backends/fem/cpu/mfem/interactions/dmi_interfacial.cpp`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/backends/fem/cpu/mfem/interactions/dmi_interfacial.cpp#L29) | [`compute_interfacial_dmi_field`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/backends/fem/cpu/mfem/interactions/dmi_interfacial.cpp#L29) | FEM residual/field | FEM CPU |
-| Bulk FEM field | [`backends/fem/cpu/mfem/interactions/dmi_bulk.cpp`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/backends/fem/cpu/mfem/interactions/dmi_bulk.cpp#L27) | [`compute_bulk_dmi_field`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/backends/fem/cpu/mfem/interactions/dmi_bulk.cpp#L27) | FEM residual/field | FEM CPU |
-| Device DMI field/energy | [`backends/fem/gpu/cuda/interactions/dmi/dmi_kernels.cu`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/backends/fem/gpu/cuda/interactions/dmi/dmi_kernels.cu#L448) | [`fullmag_cuda_dmi_field_energy`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/backends/fem/gpu/cuda/interactions/dmi/dmi_kernels.cu#L448) | CUDA field and energy | FEM GPU |
-| Göbel scenario | [`tests/standard_problems/bimeron/goebel_2019/scenario_fdm.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/tests/standard_problems/bimeron/goebel_2019/scenario_fdm.py#L29) | [`study`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/tests/standard_problems/bimeron/goebel_2019/scenario_fdm.py#L29) | canonical thin-film reproduction | FDM GPU |
-| Göbel verifier | [`tests/standard_problems/bimeron/goebel_2019/verify.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/tests/standard_problems/bimeron/goebel_2019/verify.py#L344) | [`verify_bundle`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/tests/standard_problems/bimeron/goebel_2019/verify.py#L344) | topology, energy, and device-receipt gates | FDM GPU |
+| Interfacial API | [`packages/fullmag-py/src/fullmag/model/energy.py`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/model/energy.py#L128) | [`class InterfacialDMI`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/model/energy.py#L128) | coefficient and normal lowering | Python |
+| Bulk API | [`packages/fullmag-py/src/fullmag/model/energy.py`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/model/energy.py#L187) | [`class BulkDMI`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/model/energy.py#L187) | coefficient lowering | Python |
+| Rotated API | [`packages/fullmag-py/src/fullmag/model/energy.py`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/model/energy.py#L150) | [`class RotatedInterfacialDMI`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/model/energy.py#L150) | coefficient lowering | Python |
+| Interfacial FEM field | [`backends/fem/cpu/mfem/interactions/dmi_interfacial.cpp`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/backends/fem/cpu/mfem/interactions/dmi_interfacial.cpp#L30) | [`compute_interfacial_dmi_field`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/backends/fem/cpu/mfem/interactions/dmi_interfacial.cpp#L30) | FEM residual/field | FEM CPU |
+| Bulk FEM field | [`backends/fem/cpu/mfem/interactions/dmi_bulk.cpp`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/backends/fem/cpu/mfem/interactions/dmi_bulk.cpp#L28) | [`compute_bulk_dmi_field`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/backends/fem/cpu/mfem/interactions/dmi_bulk.cpp#L28) | FEM residual/field | FEM CPU |
+| Unified CSR DMI assembler | [`backends/fem/gpu/cuda/interactions/dmi/dmi_csr_operator.cpp`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/backends/fem/gpu/cuda/interactions/dmi/dmi_csr_operator.cpp#L138) | [`build_gpu_dmi_csr_from_mfem`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/backends/fem/gpu/cuda/interactions/dmi/dmi_csr_operator.cpp#L138) | skew-symmetric edge-vector CSR assembly across `tet4`/`prism6`/`mixed`/periodic | FEM GPU |
+| Unified CSR DMI CUDA kernel | [`backends/fem/gpu/cuda/interactions/dmi/dmi_csr_kernels.cu`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/backends/fem/gpu/cuda/interactions/dmi/dmi_csr_kernels.cu#L331) | [`fullmag_cuda_dmi_csr_field_energy`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/backends/fem/gpu/cuda/interactions/dmi/dmi_csr_kernels.cu#L331) | row-wise SpMV, `cub::BlockReduce`, and `energy_out=nullptr` RK gating | FEM GPU |
+| Legacy `tet4` GPU oracle | [`backends/fem/gpu/cuda/interactions/dmi/dmi_kernels.cu`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/backends/fem/gpu/cuda/interactions/dmi/dmi_kernels.cu#L502) | [`fullmag_cuda_dmi_field_energy`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/backends/fem/gpu/cuda/interactions/dmi/dmi_kernels.cu#L502) | standalone `tet4` oracle CUDA field and predicated `cub::BlockReduce` energy | FEM GPU |
+| CSR GPU DMI contract suite | [`backends/fem/tests/cuda_csr_dmi_prism_contract.cpp`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/backends/fem/tests/cuda_csr_dmi_prism_contract.cpp#L181) | [`make_multilayer_prism6_mesh`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/backends/fem/tests/cuda_csr_dmi_prism_contract.cpp#L181) | 15-config `tet4`/`prism6`/`mixed`/periodic CPU-vs-GPU parity contract | FEM GPU |
+| Göbel scenario | [`tests/standard_problems/bimeron/goebel_2019/scenario_fdm.py`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/tests/standard_problems/bimeron/goebel_2019/scenario_fdm.py#L29) | [`study`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/tests/standard_problems/bimeron/goebel_2019/scenario_fdm.py#L29) | canonical thin-film reproduction | FDM GPU |
+| Göbel verifier | [`tests/standard_problems/bimeron/goebel_2019/verify.py`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/tests/standard_problems/bimeron/goebel_2019/verify.py#L344) | [`verify_bundle`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/tests/standard_problems/bimeron/goebel_2019/verify.py#L344) | topology, energy, and device-receipt gates | FDM GPU |

@@ -1,0 +1,141 @@
+{
+  "document": {
+    "path": "public_docs/site/numerical-methods/performance/fdm-transport-acceleration.md",
+    "reviewed_revision": "752450f8d259ab97c76c36fe666d5474b02abe9a",
+    "source_of_truth": "Current repository CUDA FDM transport backend declarations and verified A/B audit evidence."
+  },
+  "backend_matrix": [
+    {
+      "solver": "FDM",
+      "device": "CPU",
+      "status": "implemented"
+    },
+    {
+      "solver": "FDM",
+      "device": "GPU",
+      "status": "implemented"
+    },
+    {
+      "solver": "FEM",
+      "device": "CPU",
+      "status": "not-applicable",
+      "reason": "Unstructured FEM charge and M1/M2 spin transport use the MFEM sparse solver stack documented on the FEM multiphysics page."
+    },
+    {
+      "solver": "FEM",
+      "device": "GPU",
+      "status": "not-applicable",
+      "reason": "Unstructured FEM GPU transport uses opt-in cuda_cudss_lu on MFEM CSR blocks rather than Cartesian finite-volume grids."
+    }
+  ],
+  "equations": [
+    {
+      "id": "eq-perf-fdm-charge-fv",
+      "symbols": ["Lsigma", "V", "bq", "sigma", "Jc"],
+      "sources": ["charge-agg", "charge-rap", "charge-amg-pcg"]
+    },
+    {
+      "id": "eq-perf-fdm-charge-cudss-ir",
+      "symbols": ["Lsigma", "V", "bq", "Omegac"],
+      "sources": ["charge-comp", "charge-cudss-csr", "charge-cudss-req", "charge-cudss-fit"]
+    },
+    {
+      "id": "eq-perf-fdm-spin-closure",
+      "symbols": ["epsclosure", "tautotal", "ctaui", "sJphi", "Vi", "Af", "Qabs"],
+      "sources": ["spin-mat-cells", "spin-closure", "spin-accept-mat"]
+    },
+    {
+      "id": "eq-perf-fdm-fused-rhs",
+      "symbols": ["gamma0", "alpha", "Heff"],
+      "sources": ["fused-spin-inline", "fused-spin-launch"]
+    }
+  ],
+  "symbols": [
+    {"id": "Lsigma", "latex": "$\\mathbf L_{\\sigma}$", "meaning": "discrete finite-volume ohmic conductivity operator", "si_unit": "$\\mathrm{A\\,V^{-1}}$"},
+    {"id": "V", "latex": "$V$", "meaning": "scalar electric potential", "si_unit": "$\\mathrm{V}$"},
+    {"id": "bq", "latex": "$\\mathbf b_q$", "meaning": "discrete current-boundary source vector", "si_unit": "$\\mathrm{A}$"},
+    {"id": "sigma", "latex": "$\\sigma$", "meaning": "electrical conductivity", "si_unit": "$\\mathrm{S\\,m^{-1}}$"},
+    {"id": "Jc", "latex": "$\\mathbf J_c$", "meaning": "charge current density", "si_unit": "$\\mathrm{A\\,m^{-2}}$"},
+    {"id": "Omegac", "latex": "$\\Omega_c$", "meaning": "connected conducting component", "si_unit": "$\\mathrm{m^3}$"},
+    {"id": "Nface", "latex": "$N_{\\mathrm{face}}$", "meaning": "count of boundary or mixing-conductance interface faces", "si_unit": "$1$"},
+    {"id": "epsclosure", "latex": "$\\varepsilon_{\\mathrm{closure}}$", "meaning": "maximum per-cell spin-torque volume--surface closure residual", "si_unit": "$\\mathrm{s^{-1}}$"},
+    {"id": "tautotal", "latex": "$\\boldsymbol\\tau_{\\mathrm{total},i}$", "meaning": "total spin torque in magnetic cell $i$", "si_unit": "$\\mathrm{s^{-1}}$"},
+    {"id": "ctaui", "latex": "$c_{\\tau,i}$", "meaning": "spin-torque prefactor $-\\gamma_e\\hbar/(2 e M_{s,i})$", "si_unit": "$\\mathrm{m^3\\,A^{-1}\\,s^{-1}}$"},
+    {"id": "sJphi", "latex": "$\\mathbf s_{J,i}, \\mathbf s_{\\phi,i}$", "meaning": "volumetric exchange and dephasing spin-reaction sinks", "si_unit": "$\\mathrm{A\\,m^{-3}}$"},
+    {"id": "Vi", "latex": "$V_i$", "meaning": "cell volume", "si_unit": "$\\mathrm{m^3}$"},
+    {"id": "Af", "latex": "$A_f$", "meaning": "interface face area", "si_unit": "$\\mathrm{m^2}$"},
+    {"id": "Qabs", "latex": "$\\mathbf Q_{\\mathrm{abs},f}$", "meaning": "absorbed interfacial spin flux across mixing face $f$", "si_unit": "$\\mathrm{A\\,m^{-2}}$"},
+    {"id": "gamma0", "latex": "$\\gamma_0$", "meaning": "gyromagnetic ratio $\\mu_0 \\gamma$", "si_unit": "$\\mathrm{m\\,A^{-1}\\,s^{-1}}$"},
+    {"id": "alpha", "latex": "$\\alpha$", "meaning": "Gilbert damping parameter", "si_unit": "$1$"},
+    {"id": "Heff", "latex": "$\\mathbf H_{\\mathrm{eff}}$", "meaning": "effective magnetic field", "si_unit": "$\\mathrm{A\\,m^{-1}}$"}
+  ],
+  "sources": [
+    {"id": "charge-agg", "path": "backends/fdm/gpu/cuda/transport/charge/device_solver.cu", "symbol": "assign_geometric_aggregates_kernel", "responsibility": "Assign 2x2x2 geometric aggregates for 6-7 level GPU AMG."},
+    {"id": "charge-rap", "path": "backends/fdm/gpu/cuda/transport/charge/device_solver.cu", "symbol": "build_geometric_rap_kernel", "responsibility": "Assemble exact device Galerkin coarse-level operators."},
+    {"id": "charge-amg-pcg", "path": "backends/fdm/gpu/cuda/transport/charge/device_solver.cu", "symbol": "charge_pcg_device_amg_kernel", "responsibility": "Multi-block cooperative W-cycle AMG-PCG charge solver."},
+    {"id": "charge-comp", "path": "backends/fdm/gpu/cuda/transport/charge/device_solver.cu", "symbol": "label_reference_components_coop_kernel", "responsibility": "Cooperative connected-component labeling for zero-mean gauge."},
+    {"id": "charge-cudss-csr", "path": "backends/fdm/gpu/cuda/transport/charge/device_solver.cu", "symbol": "assemble_cudss_lower_csr_kernel", "responsibility": "Assemble center-pinned SPD CSR matrix for cuDSS."},
+    {"id": "charge-cudss-req", "path": "backends/fdm/gpu/cuda/transport/charge/cudss_solver.cpp", "symbol": "charge_cudss_direct_requested", "responsibility": "Parse opt-in FULLMAG_FDM_CHARGE_GPU_DIRECT_SOLVER policy."},
+    {"id": "charge-cudss-fit", "path": "backends/fdm/gpu/cuda/transport/charge/cudss_solver.cpp", "symbol": "check_charge_cudss_factor_fits", "responsibility": "Check cuDSS post-analysis factor VRAM against device budget."},
+    {"id": "charge-prov", "path": "crates/fullmag-runner/src/fdm/gpu/cuda/charge_transport.rs", "symbol": "resolve_charge_linear_solver_realization", "responsibility": "Resolve and attest charge linear solver provenance."},
+    {"id": "spin-mat-cells", "path": "backends/fdm/gpu/cuda/transport/spin/device_solver.cu", "symbol": "materialize_cells_kernel", "responsibility": "Multi-block cell spin field and torque materialization."},
+    {"id": "spin-closure", "path": "backends/fdm/gpu/cuda/transport/spin/device_solver.cu", "symbol": "measure_materialized_closure_kernel", "responsibility": "Multi-block CUB spin-torque volume-surface closure diagnostics."},
+    {"id": "spin-accept-mat", "path": "backends/fdm/gpu/cuda/transport/context.cu", "symbol": "materialize_accepted_spin", "responsibility": "Lazy once-per-observed-endpoint spin observation reconstruction."},
+    {"id": "fused-spin-inline", "path": "backends/fdm/gpu/cuda/integrators/prescribed_spin_torques_fp64.cuh", "symbol": "add_prescribed_spin_torques_fp64", "responsibility": "Inline FP64 Slonczewski STT and prescribed SOT helper."},
+    {"id": "fused-spin-launch", "path": "backends/fdm/gpu/cuda/interactions/demag_fp64.cu", "symbol": "launch_effective_field_and_local_spin_rhs_fp64", "responsibility": "Fused FP64 effective field, LLG RHS, and local spin torque launch."}
+  ],
+  "public_api": {
+    "parameters": [
+      {
+        "python": "CurrentTransport.model",
+        "type": "str",
+        "default": "\"prescribed_density\"",
+        "si_unit": "$1$",
+        "validation": "`\"prescribed_density\"`, `\"ohmic_poisson\"`, or `\"magnetoresistive_poisson\"`",
+        "meaning": "charge transport PDE formulation",
+        "backend_support": "FDM/FEM CPU/GPU (`ohmic_poisson` accelerated on CUDA)",
+        "problem_ir": "`current_transport[].model`"
+      },
+      {
+        "python": "CurrentTransport.gauge",
+        "type": "ChargePotentialGauge | None",
+        "default": "None",
+        "si_unit": "$1$",
+        "validation": "`\"dirichlet_reference\"`, `\"zero_mean\"`, or `\"terminal_reference\"`",
+        "meaning": "electrostatic potential gauge policy",
+        "backend_support": "FDM/FEM CPU/GPU",
+        "problem_ir": "`current_transport[].gauge`"
+      },
+      {
+        "python": "SpinDriftDiffusion.mode",
+        "type": "str",
+        "default": "\"steady\"",
+        "si_unit": "$1$",
+        "validation": "`\"steady\"` (M1/M2) or `\"transient\"` (M3)",
+        "meaning": "steady elliptic vs transient IMEX spin transport",
+        "backend_support": "FDM CPU/GPU (`steady` CUDA accelerated)",
+        "problem_ir": "`spin_transport[].mode`"
+      },
+      {
+        "python": "FULLMAG_FDM_CHARGE_GPU_DIRECT_SOLVER",
+        "type": "env str",
+        "default": "unset (`amg`)",
+        "si_unit": "$1$",
+        "validation": "case-insensitive `\"cudss\"` opts in; all other tokens resolve to `\"cg_device_amg_wcycle_v1\"`",
+        "meaning": "override CUDA M1 charge linear solver",
+        "backend_support": "FDM GPU runtime env",
+        "problem_ir": "`provenance.linear_solver_realization`"
+      },
+      {
+        "python": "FULLMAG_FDM_CHARGE_GPU_DIRECT_SOLVER_DEVICE_BUDGET_BYTES",
+        "type": "env int",
+        "default": "device auto",
+        "si_unit": "$\\mathrm{B}$",
+        "validation": "positive byte budget capping cuDSS factor estimate; invalid values fail closed",
+        "meaning": "explicit VRAM budget cap for opt-in cuDSS charge",
+        "backend_support": "FDM GPU runtime env",
+        "problem_ir": "`provenance.linear_solver_realization`"
+      }
+    ]
+  }
+}

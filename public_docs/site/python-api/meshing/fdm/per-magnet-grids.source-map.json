@@ -1,7 +1,7 @@
 {
   "document": {
     "path": "public_docs/site/python-api/meshing/fdm/per-magnet-grids.md",
-    "reviewed_revision": "ab3c8802a691a535063102c12f9a79bb0043b367"
+    "reviewed_revision": "752450f8d259ab97c76c36fe666d5474b02abe9a"
   },
   "backend_matrix": [
     {
@@ -49,7 +49,7 @@
         "python": "FDMGrid.cell",
         "type": "`Sequence[float]`",
         "default": "required",
-        "si_unit": "\\mathrm{m}",
+        "si_unit": "$\\mathrm{m}$",
         "validation": "exactly three positive values",
         "meaning": "one native object grid",
         "backend_support": "FDM CPU/GPU; FEM not applicable to Cartesian grid authoring",
@@ -59,7 +59,7 @@
         "python": "FDM.per_magnet",
         "type": "`dict[str, FDMGrid] | None`",
         "default": "`None`",
-        "si_unit": "1",
+        "si_unit": "$1$",
         "validation": "non-empty string keys and `FDMGrid` values",
         "meaning": "object-name keyed overrides",
         "backend_support": "FDM CPU/GPU; FEM not applicable to Cartesian grid authoring",
@@ -69,21 +69,21 @@
         "python": "FDM.default_cell",
         "type": "`Sequence[float] | None`",
         "default": "`None`",
-        "si_unit": "\\mathrm{m}",
+        "si_unit": "$\\mathrm{m}$",
         "validation": "required when the map is incomplete",
         "meaning": "fallback grid",
         "backend_support": "FDM CPU/GPU; FEM not applicable to Cartesian grid authoring",
         "problem_ir": "`backend_policy.discretization_hints.fdm.default_cell`"
       },
       {
-        "python": "FDMDemag",
+        "python": "FDM.demag",
         "type": "`FDMDemag | None`",
         "default": "`None`",
-        "si_unit": "1",
+        "si_unit": "$1$",
         "validation": "planner validates strategy/mode/grid policy",
         "meaning": "nonlocal coupling policy",
         "backend_support": "FDM CPU/GPU; FEM not applicable to Cartesian grid authoring",
-        "problem_ir": "`mesh_workflow`"
+        "problem_ir": "`backend_policy.discretization_hints.fdm.demag`"
       }
     ]
   }

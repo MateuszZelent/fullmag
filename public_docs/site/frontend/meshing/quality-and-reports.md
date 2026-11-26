@@ -36,4 +36,5 @@ a failed rebuild does not erase the last successfully built mesh; success alone 
 
 | Repository path | Stable symbol | Responsibility |
 |---|---|---|
+| `apps/control-room/src/modules/inspector/inspectors/mesh/MeshQualitySpec.tsx` | `MeshQualityInspectorSpecPanel` | Declarative mesh quality route and scope presentation |
 | `apps/control-room/src/modules/inspector/panels/MeshQualityStatisticsView.tsx` | `MeshQualityStatisticsView` | Distributions and quality presentation |

@@ -1,7 +1,7 @@
 {
   "document": {
     "path": "public_docs/site/python-api/runtime/provenance.md",
-    "reviewed_revision": "ab3c8802a691a535063102c12f9a79bb0043b367"
+    "reviewed_revision": "752450f8d259ab97c76c36fe666d5474b02abe9a"
   },
   "backend_matrix": [
     {
@@ -38,7 +38,7 @@
       "id": "source-2",
       "path": "packages/fullmag-py/src/fullmag/runtime/simulation.py",
       "symbol": "class Result",
-      "responsibility": "Resolved execution result and status."
+      "responsibility": "Resolved execution result, status, and diagnostic notes."
     }
   ],
   "public_api": {
@@ -47,31 +47,111 @@
         "python": "RuntimeSelection.backend_target",
         "type": "`BackendTarget`",
         "default": "`auto`",
-        "si_unit": "1",
-        "validation": "Enum value; normalized by runtime selection.",
-        "meaning": "Requested backend family.",
-        "backend_support": "FEM/FDM CPU/GPU; planner resolves capability.",
+        "si_unit": "$1$",
+        "validation": "Enum value (`auto`, `fdm`, `fem`, `hybrid`)",
+        "meaning": "Requested backend family",
+        "backend_support": "FEM/FDM CPU/GPU; planner resolves capability",
         "problem_ir": "`backend_policy.requested_backend`"
+      },
+      {
+        "python": "RuntimeSelection.device_target",
+        "type": "`DeviceTarget`",
+        "default": "`auto`",
+        "si_unit": "$1$",
+        "validation": "Enum value (`auto`, `cpu`, `cuda`, `gpu`)",
+        "meaning": "Requested device target",
+        "backend_support": "FEM/FDM CPU/GPU; planner resolves capability",
+        "problem_ir": "`problem_meta.runtime_metadata.runtime_selection.device`"
+      },
+      {
+        "python": "RuntimeSelection.gpu_count",
+        "type": "`int`",
+        "default": "`0`",
+        "si_unit": "$1$",
+        "validation": "`0` or `1`; requires `cuda`/`gpu` when non-zero",
+        "meaning": "Requested GPU count",
+        "backend_support": "CUDA/GPU lanes",
+        "problem_ir": "`problem_meta.runtime_metadata.runtime_selection.gpu_count`"
+      },
+      {
+        "python": "RuntimeSelection.device_index",
+        "type": "`int | None`",
+        "default": "`None`",
+        "si_unit": "$1$",
+        "validation": "Non-negative ordinal; requires `cuda`/`gpu`",
+        "meaning": "Requested GPU ordinal",
+        "backend_support": "CUDA/GPU lanes",
+        "problem_ir": "`problem_meta.runtime_metadata.runtime_selection.device_index`"
+      },
+      {
+        "python": "RuntimeSelection.cpu_threads",
+        "type": "`int | None`",
+        "default": "`None`",
+        "si_unit": "$1$",
+        "validation": "Integer `>= 1` when set",
+        "meaning": "Requested CPU Rayon thread count",
+        "backend_support": "CPU lanes",
+        "problem_ir": "`problem_meta.runtime_metadata.runtime_selection.cpu_threads`"
       },
       {
         "python": "RuntimeSelection.execution_mode",
         "type": "`ExecutionMode`",
         "default": "`strict`",
-        "si_unit": "1",
-        "validation": "Enum value; normalized by runtime selection.",
-        "meaning": "Requested execution mode.",
-        "backend_support": "FEM/FDM CPU/GPU; planner resolves capability.",
-        "problem_ir": "`backend_policy.execution_mode`"
+        "si_unit": "$1$",
+        "validation": "Enum value (`strict`, `extended`, `hybrid`)",
+        "meaning": "Requested execution mode",
+        "backend_support": "FEM/FDM CPU/GPU; planner resolves capability",
+        "problem_ir": "`validation_profile.execution_mode`"
+      },
+      {
+        "python": "RuntimeSelection.execution_precision",
+        "type": "`ExecutionPrecision`",
+        "default": "`double`",
+        "si_unit": "$1$",
+        "validation": "Enum value (`single`, `double`)",
+        "meaning": "Requested floating-point precision",
+        "backend_support": "FEM/FDM CPU/GPU; planner resolves capability",
+        "problem_ir": "`backend_policy.execution_precision`"
+      },
+      {
+        "python": "RuntimeSelection.fdm_precision_policy",
+        "type": "`FdmPrecisionPolicy | None`",
+        "default": "`None`",
+        "si_unit": "$1$",
+        "validation": "`full_double` or `single_storage_fp64_reduction`; must match `execution_precision`",
+        "meaning": "Requested FDM storage/reduction precision policy",
+        "backend_support": "FDM CPU/GPU",
+        "problem_ir": "`problem_meta.runtime_metadata.runtime_selection.fdm_precision_policy`"
+      },
+      {
+        "python": "RuntimeSelection.parallel_execution",
+        "type": "`ParallelExecutionPolicy`",
+        "default": "`ParallelExecutionPolicy()`",
+        "si_unit": "$1$",
+        "validation": "`serial` or `adaptive` (`adaptive` requires `fem` + `cpu`)",
+        "meaning": "Requested independent-work admission policy",
+        "backend_support": "Serial: all lanes; adaptive: FEM CPU only",
+        "problem_ir": "`problem_meta.runtime_metadata.runtime_selection.parallel_execution`"
       },
       {
         "python": "Result.status",
         "type": "`str`",
         "default": "required",
-        "si_unit": "1",
-        "validation": "One of `completed`, `planned`, or `not-executable`.",
-        "meaning": "Resolved execution outcome.",
-        "backend_support": "FEM/FDM CPU/GPU runtime record.",
+        "si_unit": "$1$",
+        "validation": "One of `completed`, `planned`, or `not-executable`",
+        "meaning": "Resolved execution outcome",
+        "backend_support": "FEM/FDM CPU/GPU runtime record",
         "problem_ir": "`runtime.status`"
+      },
+      {
+        "python": "Result.notes",
+        "type": "`Sequence[str]`",
+        "default": "`()`",
+        "si_unit": "$1$",
+        "validation": "Diagnostic strings emitted by planner/runner",
+        "meaning": "Human-readable provenance and capability notes",
+        "backend_support": "FEM/FDM CPU/GPU runtime record",
+        "problem_ir": "`runtime.notes`"
       }
     ]
   }

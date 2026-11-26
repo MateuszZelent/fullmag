@@ -36,9 +36,9 @@ version-2 canonical Rust sampler used by both FEM and FDM planning; see also
 | `CurrentMag` | stage continuation or checkpoint restore | runtime state transfer, not an analytic preset |
 | `Radial` | none | not present in the pinned Mumax3 `engine/config.go`; unsupported in Fullmag |
 
-Fullmag additionally provides `antiskyrmion`, `skyrmionium`, `bimeron`, `domain_wall`,
-and a stereographic `hopfion` initializer. These are Fullmag extensions rather than named
-Mumax3 `Config` constructors.
+Fullmag additionally provides `antiskyrmion`, `skyrmionium`, `skyrmion_lattice`, `bimeron`,
+`domain_wall`, `spiral`, `bloch_point`, `artificial_spin_ice`, and a stereographic `hopfion`
+initializer. These are Fullmag extensions rather than named Mumax3 `Config` constructors.
 
 (mumax3-governing-equations)=
 ## Governing equations
@@ -280,28 +280,28 @@ specific resolved mesh and simulation state.
 
 ## Control Room support
 
-Status: The exposed texture families are `partial`; unlisted presets remain Python-only.
+Status: The exposed texture families (`20` built-in `MAGNETIZATION_TEXTURE_PRESETS`) are `partial`; custom callbacks and unlisted Python options remain Python-only.
 
 | Python/API surface | Control Room path | Status | Transaction |
 |---|---|---|---|
 | Parameters documented on this page | `Model Explorer -> Objects -> <object> -> Magnetization` | `partial` | Apply magnetization draft; authored object state is revised |
 | Parameters without a named UI field | `Model Explorer -> Objects -> <object> -> Magnetization` | `Python-only` | Authored in Python |
 
-Texture presets and arguments outside `ObjectMagneticTexturePanel` remain Python-only.
+Texture presets and arguments outside `MagneticTextureInspectorPanel` remain Python-only.
 See [Control Room capability register](/frontend/capability-register) for the UI support matrix.
-Frontend source owner: `apps/control-room/src/modules/inspector/panels/ObjectMagneticTexturePanel.tsx` (`ObjectMagneticTexturePanel`).
+Frontend source owner: `apps/control-room/src/modules/inspector/panels/magnetic-texture/MagneticTextureInspectorPanel.tsx` (`MagneticTextureInspectorPanel`).
 
 (mumax3-source-code-index)=
 ## Source-code index
 
 | Source ID | Repository path | Stable symbol | Evidence |
 |---|---|---|---|
-| rust-vortex-wall | [`crates/fullmag-plan/src/magnetization_textures_v2.rs`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-plan/src/magnetization_textures_v2.rs#L535) | [`vortex_wall`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-plan/src/magnetization_textures_v2.rs#L535) | `mumax_vortex_wall_has_domains_and_vortex_core` |
-| rust-compact-hopfion | [`crates/fullmag-plan/src/magnetization_textures_v2.rs`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-plan/src/magnetization_textures_v2.rs#L557) | [`hopfion_compact_support`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-plan/src/magnetization_textures_v2.rs#L557) | `mumax_compact_hopfion_is_exactly_uniform_outside_support` |
-| python-vortex-wall | [`packages/fullmag-py/src/fullmag/init/preset_eval_v2.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/init/preset_eval_v2.py#L331) | [`_vortex_wall`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/init/preset_eval_v2.py#L331) | `test_mumax_vortex_wall_factory_and_profile` |
-| python-compact-hopfion | [`packages/fullmag-py/src/fullmag/init/preset_eval_v2.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/init/preset_eval_v2.py#L354) | [`_hopfion_compact_support`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/init/preset_eval_v2.py#L354) | `test_mumax_compact_hopfion_factory_and_support_boundary` |
-| python-vortex-wall-factory | [`packages/fullmag-py/src/fullmag/init/textures.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/init/textures.py#L581) | [`vortex_wall`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/init/textures.py#L581) | `test_mumax_vortex_wall_factory_and_profile` |
-| python-compact-hopfion-factory | [`packages/fullmag-py/src/fullmag/init/textures.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/init/textures.py#L625) | [`hopfion_compact_support`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/init/textures.py#L625) | `test_mumax_compact_hopfion_factory_and_support_boundary` |
+| rust-vortex-wall | [`crates/fullmag-plan/src/magnetization_textures_v2.rs`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-plan/src/magnetization_textures_v2.rs#L542) | [`vortex_wall`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-plan/src/magnetization_textures_v2.rs#L542) | `mumax_vortex_wall_has_domains_and_vortex_core` |
+| rust-compact-hopfion | [`crates/fullmag-plan/src/magnetization_textures_v2.rs`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-plan/src/magnetization_textures_v2.rs#L570) | [`hopfion_compact_support`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-plan/src/magnetization_textures_v2.rs#L570) | `mumax_compact_hopfion_is_exactly_uniform_outside_support` |
+| python-vortex-wall | [`packages/fullmag-py/src/fullmag/init/preset_eval_v2.py`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/init/preset_eval_v2.py#L341) | [`_vortex_wall`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/init/preset_eval_v2.py#L341) | `test_mumax_vortex_wall_factory_and_profile` |
+| python-compact-hopfion | [`packages/fullmag-py/src/fullmag/init/preset_eval_v2.py`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/init/preset_eval_v2.py#L363) | [`_hopfion_compact_support`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/init/preset_eval_v2.py#L363) | `test_mumax_compact_hopfion_factory_and_support_boundary` |
+| python-vortex-wall-factory | [`packages/fullmag-py/src/fullmag/init/textures.py`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/init/textures.py#L657) | [`vortex_wall`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/init/textures.py#L657) | `test_mumax_vortex_wall_factory_and_profile` |
+| python-compact-hopfion-factory | [`packages/fullmag-py/src/fullmag/init/textures.py`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/init/textures.py#L701) | [`hopfion_compact_support`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/init/textures.py#L701) | `test_mumax_compact_hopfion_factory_and_support_boundary` |
 | mumax3-vortex-wall | `external_solvers/3/engine/config.go` | `func VortexWall` | pinned submodule `f656494b29516bead825b444b1f0b38c6e6c7dbf` + independent parity fixtures |
 | mumax3-compact-hopfion | `external_solvers/3/engine/config.go` | `func HopfionCompactSupport` | pinned submodule `f656494b29516bead825b444b1f0b38c6e6c7dbf` + independent parity fixtures |
 

@@ -1,6 +1,7 @@
 {
   "document": {
-    "reviewed_revision": "ab3c8802a691a535063102c12f9a79bb0043b367",
+    "reviewed_revision": "752450f8d259ab97c76c36fe666d5474b02abe9a",
+    "reviewed_at": "2026-11-26",
     "path": "public_docs/site/physics/interactions/dmi/bulk.md",
     "title": "Bulk Dzyaloshinskii–Moriya interaction",
     "interaction": "isotropic bulk DMI"
@@ -8,8 +9,8 @@
   "backend_matrix": [
     {"solver": "FDM", "device": "CPU", "status": "reference", "reason": "Centered cell-curl reference field and active-cell energy path are implemented; non-periodic natural-boundary execution is planner-rejected."},
     {"solver": "FDM", "device": "GPU", "status": "implemented", "reason": "FP64/FP32 CUDA bulk-curl field and DMI reduction source paths are present; executed-device qualification is separate evidence."},
-    {"solver": "FEM", "device": "CPU", "status": "implemented", "reason": "Native MFEM bulk weak residual, lumped projection, periodic input projection, and quadrature energy paths are present."},
-    {"solver": "FEM", "device": "GPU", "status": "implemented", "reason": "CUDA bulk residual/energy kernel, RK field dispatch, and final energy reduction paths are present; executed-device parity is separate evidence."}
+    {"solver": "FEM", "device": "CPU", "status": "implemented", "reason": "Native MFEM bulk weak residual, lumped projection, periodic input projection, and quadrature energy paths are present across tet4, prism6, and mixed meshes."},
+    {"solver": "FEM", "device": "GPU", "status": "implemented", "reason": "Unified CSR GPU DMI (dmi_csr_*) covers tet4, 2D periodic tet4, prism6, and mixed meshes with CUB block reductions and intermediate RK energy gating; qualified on RTX 4080 SUPER (h_rel <= 8.67e-16, E_rel <= 3.27e-14)."}
   ],
   "sources": [
     {"id": "python-term", "path": "packages/fullmag-py/src/fullmag/model/energy.py", "symbol": "class BulkDMI", "responsibility": "Explicit finite bulk-DMI constructor and bulk_dmi IR serialization."},
@@ -26,9 +27,11 @@
     {"id": "fem-cpu", "path": "backends/fem/cpu/mfem/interactions/dmi_bulk.cpp", "symbol": "compute_bulk_dmi_field", "responsibility": "MFEM quadrature residual, projection, periodic input, and energy."},
     {"id": "fem-weak", "path": "backends/fem/src/dmi_weak_residual.cpp", "symbol": "dmi_accumulate_bulk_residual", "responsibility": "Bulk weak-residual component algebra."},
     {"id": "fem-project", "path": "backends/fem/src/dmi_weak_residual.cpp", "symbol": "dmi_project_lumped_field", "responsibility": "Residual-to-field lumped projection and positivity checks."},
-    {"id": "fem-gpu-kernel", "path": "backends/fem/gpu/cuda/interactions/dmi/dmi_kernels.cu", "symbol": "dmi_element_residual_kernel", "responsibility": "FEM CUDA bulk residual and energy element kernel."},
-    {"id": "fem-gpu-field", "path": "backends/fem/gpu/cuda/integrators/rk/rk_dmi_fields.cu", "symbol": "gpu_rk_compute_dmi_field_contributions", "responsibility": "FEM CUDA resident-resource field dispatch."},
-    {"id": "fem-gpu-energy", "path": "backends/fem/gpu/cuda/integrators/rk/rk_dmi_energy_reductions.cu", "symbol": "gpu_rk_reduce_final_dmi_energy_terms", "responsibility": "FEM CUDA final Bulk DMI energy slot reduction."}
+    {"id": "fem-gpu-csr-op", "path": "backends/fem/gpu/cuda/interactions/dmi/dmi_csr_operator.cpp", "symbol": "build_gpu_dmi_csr_from_mfem", "responsibility": "Unified CSR GPU DMI operator assembly across tet4, prism6, mixed, and 2D periodic meshes."},
+    {"id": "fem-gpu-csr-kernel", "path": "backends/fem/gpu/cuda/interactions/dmi/dmi_csr_kernels.cu", "symbol": "fullmag_cuda_dmi_csr_field_energy", "responsibility": "Unified CSR GPU bulk DMI SpMV, CUB block energy, and RK null-energy gating."},
+    {"id": "fem-gpu-kernel", "path": "backends/fem/gpu/cuda/interactions/dmi/dmi_kernels.cu", "symbol": "dmi_element_residual_kernel", "responsibility": "Standalone tet4 oracle bulk residual and predicated CUB energy kernel."},
+    {"id": "fem-gpu-field", "path": "backends/fem/gpu/cuda/integrators/rk/rk_dmi_fields.cu", "symbol": "gpu_rk_compute_dmi_field_contributions", "responsibility": "FEM CUDA intermediate RK CSR field dispatch."},
+    {"id": "fem-gpu-energy", "path": "backends/fem/gpu/cuda/integrators/rk/rk_dmi_energy_reductions.cu", "symbol": "gpu_rk_reduce_final_dmi_energy_terms", "responsibility": "FEM CUDA final accepted-step Bulk DMI energy slot reduction."}
   ],
   "symbols": [
     {"id": "M", "latex": "$\\mathbf M$", "meaning": "physical magnetization", "si_unit": "$\\mathrm{A\\,m^{-1}}$"},
@@ -67,19 +70,19 @@
   ],
   "equations": [
     {"id": "eq-bulk-dmi-density", "symbols": ["wb", "D", "m"], "sources": ["fdm-density", "fem-cpu"]},
-    {"id": "eq-bulk-dmi-energy", "symbols": ["Eb", "Omega", "wb"], "sources": ["fdm-energy", "fem-cpu"]},
+    {"id": "eq-bulk-dmi-energy", "symbols": ["Eb", "Omega", "wb"], "sources": ["fdm-energy", "fem-cpu", "fem-gpu-csr-kernel"]},
     {"id": "eq-bulk-dmi-cartesian", "symbols": ["m"], "sources": ["fdm-density"]},
-    {"id": "eq-bulk-dmi-first-variation", "symbols": ["Eb", "D", "Omega", "v", "m"], "sources": ["fem-weak"]},
+    {"id": "eq-bulk-dmi-first-variation", "symbols": ["Eb", "D", "Omega", "v", "m"], "sources": ["fem-weak", "fem-gpu-csr-op"]},
     {"id": "eq-bulk-dmi-variation-separated", "symbols": ["Eb", "D", "Omega", "boundary", "nu", "v", "m"], "sources": ["fem-weak"]},
-    {"id": "eq-bulk-dmi-effective-field", "symbols": ["Hb", "D", "mu0", "Ms", "m"], "sources": ["fdm-field", "fem-project"]},
-    {"id": "eq-bulk-dmi-boundary-term", "symbols": ["D", "boundary", "nu", "v", "m"], "sources": ["fem-weak"]},
-    {"id": "eq-bulk-dmi-exchange-boundary", "symbols": ["A", "D", "nu", "m"], "sources": ["fem-weak"]},
+    {"id": "eq-bulk-dmi-effective-field", "symbols": ["Hb", "D", "mu0", "Ms", "m"], "sources": ["fdm-field", "fem-project", "fem-gpu-csr-kernel"]},
+    {"id": "eq-bulk-dmi-boundary-term", "symbols": ["D", "boundary", "nu", "v", "m"], "sources": ["fem-weak", "fem-gpu-csr-op"]},
+    {"id": "eq-bulk-dmi-exchange-boundary", "symbols": ["A", "D", "nu", "m"], "sources": ["fem-weak", "fem-gpu-csr-op"]},
     {"id": "eq-bulk-dmi-fdm-derivative", "symbols": ["delta", "alpha", "i", "dx", "dy", "dz"], "sources": ["fdm-density"]},
     {"id": "eq-bulk-dmi-fdm-field", "symbols": ["curlh", "m", "delta", "Hb", "D", "mu0", "Ms", "i"], "sources": ["fdm-field", "fdm-gpu"]},
     {"id": "eq-bulk-dmi-fdm-energy", "symbols": ["Eb", "D", "m", "curlh", "i", "active", "Vi"], "sources": ["fdm-energy"]},
-    {"id": "eq-bulk-dmi-fem-weak-residual", "symbols": ["Dbe", "Omegae", "vh", "mh"], "sources": ["fem-weak", "fem-cpu"]},
-    {"id": "eq-bulk-dmi-fem-energy", "symbols": ["Eb", "Dbe", "q", "mq", "wq"], "sources": ["fem-cpu", "fem-gpu-kernel"]},
-    {"id": "eq-bulk-dmi-fem-projection", "symbols": ["Ha", "gb", "mu0", "Msa", "Mlump"], "sources": ["fem-project"]}
+    {"id": "eq-bulk-dmi-fem-weak-residual", "symbols": ["Dbe", "Omegae", "vh", "mh"], "sources": ["fem-weak", "fem-cpu", "fem-gpu-csr-op"]},
+    {"id": "eq-bulk-dmi-fem-energy", "symbols": ["Eb", "Dbe", "q", "mq", "wq"], "sources": ["fem-cpu", "fem-gpu-csr-kernel", "fem-gpu-kernel"]},
+    {"id": "eq-bulk-dmi-fem-projection", "symbols": ["Ha", "gb", "mu0", "Msa", "Mlump"], "sources": ["fem-project", "fem-gpu-csr-kernel"]}
   ],
   "public_api": {
     "parameters": [

@@ -72,7 +72,7 @@ preview.
 
 - **Workspace (`home`)**: `Project` (`Save Field`, `Load Field`) and `Workspace` (`Rotation mode`: Free camera / Object orbit; `Panel` visibility checkboxes for Explorer, Inspector, Bottom dock).
 - **View (`view`)**: Global 3D display quality profiles (`Interactive Lite`, `Interactive`, `Balanced`, `Figure`, `Capture`), **Capture current frame** export (including viewport/transparent background and super-sampled scale), `Surface`, `Texture` (`Solid`, `HSL orientation`, component X/Y/Z, Magnitude $|m|$, colormap), `Quantity`, `Vectors` density/component/domain/color, `Airbox`, `Mesh View` + 3D trim (`X`, `Y`, `Z`), orientation widgets (`3D Box`, `HSL Sphere`), 2D slice monitor controls (`Monitor`, `Open`, 16 planar toolbar actions, `Export`, `Data`), selected-object display overrides, manipulation (`Control`, `Inspect`, `Gizmo`), view snapshot export, and `Display` (`Mode`, `Camera settings`, `Ortho`, `Panels`, `Frame`, `Topography`).
-- **Geometry (`geometry`)**: `Create` shapes (`Box`, `Cylinder`, `Sphere`, `Microstrip`, `CPW`, `Thin Film`), `Transform` (`Move` shortcut `W`; rigid `Rotate`/`Scale` remain disabled with `PROBLEM_IR_03_RIGID_TRANSFORM_REASON`), `Lifecycle` (`Build Geometry`, `Apply Draft`, `Build Mesh` [hidden on FDM sessions], `Validate`), and camera focus (`Focus Selected` `F`, `Frame All` `Shift+F`).
+- **Geometry (`geometry`)**: `Create Object / Shape` (`Box` split-button with Block / Thin film / Cuboid from bounds, `Thin Film`, `Cylinder`, `Sphere`, `Ellipsoid`, `Cone`, `Torus`, `Polygon Prism`, `Import STL…`), `AC/DC · Antennas` (`Microstrip`, `CPW`), `Boolean` (`Union A ∪ B`, `Subtract A − B`, `Intersect A ∩ B`, `Imprint Regions`), `Modify` (`Duplicate` `Ctrl+D`, `Array 3D`, `Split by Plane`, `Extract Operand`), `Transform` (`Move` `W`; ribbon `Rotate`/`Scale` buttons remain disabled with `PROBLEM_IR_03_RIGID_TRANSFORM_REASON`, while Euler XYZ rotation, pivot, and scale/bake are authored in the Geometry Inspector Placement tab), `Lifecycle` (`Realize Geometry`, `Mesh Selected` [hidden on FDM sessions], `Validate`), and `Focus` (`Focus Selected` `F`, `Frame All` `Shift+F`).
 
 ```{image} /_static/images/ui/ribbon-tabs-geometry.png
 :alt: Control Room Ribbon Geometry tab showing primitive creation, transform Move tool, lifecycle build/validate actions, and focus controls
@@ -82,7 +82,7 @@ preview.
 
 ### Materials and Mesh
 
-- **Materials (`materials`)**: Initial magnetization presets (`Uniform`, `Random`, `Vortex`; `Bloch Sky` and `Néel Sky` are presently `preview`-gated). Core scalar material and anisotropy parameters are authored in the Semantic Inspector (`ObjectMaterialPanel`).
+- **Materials (`materials`)**: `Magnetic Texture` group (`Inspector`, `Uniform`, `Random`, `Vortex`, `Bloch Sky`, `Néel Sky`, plus `More Presets` covering all 20 texture presets and `Load from field file…` for OVF/NPZ import) and `Texture Transform` group (`Scope`: Object vs. Texture transform, `Tool`: View `Q` / Translate `W` / Rotate `E` / Scale `R`, `Fit Size`, `Reset`). Core scalar material and anisotropy parameters are authored in the Semantic Inspector (`ObjectMaterialInspectorPanel`).
 - **Mesh (`mesh`)**: Discretization-aware `Build` group (`Build Grid` in FDM sessions; `Build` for selected object, `Build All` shared domain, and `Statistics` in FEM sessions), `Element Size`, `Quality`, and `Mesh View` toggles (`Inspector`, `3D View`, `Pipeline`).
 
 ```{image} /_static/images/ui/ribbon-tabs-materials-and-mesh.png
@@ -93,7 +93,7 @@ preview.
 
 ### Physics
 
-- **Physics (`physics`)**: Dynamically populated from `interactionSpecsForDiscretization` and active lane capabilities (`resolveActiveLaneOperation`), offering **Add Physics** (including `Spin Transport / SHE`, `Spin Interface`, and active micromagnetic interactions), **Global Physics** (including `Field Drive`), and **Frozen Spins**.
+- **Physics (`physics`)**: Dynamically populated from `interactionSpecsForDiscretization` and active lane capabilities (`resolveActiveLaneOperation`), offering **Core Terms** (`Add Physics` including `Spin Transport / SHE`, `Spin Interface`, and active micromagnetic interactions; `Global Physics` including `Field Drive` and `Mask Antenna`) and **Optional Terms** (`Add ABL` for spatial absorbing boundaries and `Frozen Spins`).
 
 ```{image} /_static/images/ui/ribbon-tabs-physics.png
 :alt: Control Room Ribbon Physics tab displaying lane-aware micromagnetic interactions, global field drives, spin transport, and frozen spins
@@ -120,18 +120,20 @@ preview.
 :width: 100%
 ```
 
-## Five-Tab Semantic Explorer
+## Seven-Tab Semantic Explorer
 
-`ExplorerModule` (`apps/control-room/src/modules/explorer/ExplorerModule.tsx`) and `ExplorerTabBar`
-(`ExplorerTabBar.tsx`) organize project entities across five tabs on the left dock:
+`ExplorerModule` (`apps/control-room/src/modules/explorer/ExplorerModule.tsx`), `ExplorerTabBar`
+(`ExplorerTabBar.tsx`), and `EXPLORER_TABS` (`explorerTabs.ts`) organize project entities across
+seven tabs on the left dock:
 
 ### 1. Model Tab
 
 The `Model` tree (`ModelTree`) mirrors the canonical semantic hierarchy: study root, global runtime,
-`Universe / Airbox`, geometry `Objects` (with nested `Geometry`, `Material`, `Physics`,
-`Magnetization`, `Mesh`, `Boundary Faces`, `Regions`, and per-object `Frozen Spins` / `Transport` /
-`Antennas`), global `Couplings`, `Planar Monitors`, and the ordered `Stages` pipeline. Selecting
-any node routes the right-hand Semantic Inspector to that resource owner.
+`Universe / Airbox`, geometry `Objects` (with nested `Geometry` & CSG operand trees, `Material`,
+`Physics`, `Magnetization`, `Mesh`, `Boundary Faces`, `Regions`, and per-object `Frozen Spins` /
+`Transport` / `Antennas` / `Topological Charge`), global `Couplings`, `Planar Monitors`, and the
+ordered `Stages` pipeline. Selecting any node routes the right-hand Semantic Inspector to that
+resource owner.
 
 ```{image} /_static/images/ui/explorer-tree-structure.png
 :alt: Model Explorer tree displaying semantic hierarchy across objects, materials, physics, regions, couplings, monitors, and study stages
@@ -177,16 +179,20 @@ frames.
 :width: 100%
 ```
 
+### 6. Helper and 7. Errors Tabs
+
+The left side rail also exposes dedicated **Helper** (guided workflow assistance and readiness checks) and **Errors** (`ExplorerErrorsPanel`, backed by `sessionErrorStore`, persisting diagnostic error history across browser reloads with direct navigation to failing objects, stages, or diagnostics) tabs alongside the five primary resource families.
+
 ## Footer Dock and Status Bar
 
-`FooterModule` (`apps/control-room/src/modules/footer/FooterModule.tsx`) hosts seven dockable
+`FooterModule` (`apps/control-room/src/modules/footer/FooterModule.tsx`) hosts seven collapsible
 operational tabs at the bottom of the workspace:
 
 - **Logs**: Command audit (`CommandAuditTable`) and HTTP/WS transport log (`TransportLogTable`) filterable by `All`/`RX`/`TX` and `HTTP+WS`/`HTTP`/`WS`/`Perf`.
-- **Telemetry**: Overview telemetry plus an auto-switching **Antenna** sub-tab when an `antenna_field_solve` stage runs.
+- **Telemetry**: Overview telemetry plus auto-switching **Antenna** (`antenna_field_solve`) and **Eigensolve** (`eigenmodes`) sub-tabs when those stages are active.
 - **Diagnostics**: `DiagnosticRecorderFooterPanel` for trace recording and performance export.
 - **Engine**: `FooterDiagnostics` showing solver engine metrics and profiler readout.
-- **Operations**: `OperationsPanel` paired with `MeshJobsPanel` (published operations and FEM mesh job progress).
+- **Operations**: `RunProgressPanel` showing live stage/step execution progress, timings, commands, and errors.
 - **Problems**: `ProblemsPanel` aggregating preparation blockers, geometry diagnostics, and failed mesh/command notices.
 - **Quick Chart**: Embedded `QuickChartResourceView` for immediate scalar inspection without leaving the main canvas.
 
@@ -198,7 +204,7 @@ progress readout with conditional **Compute** action when awaiting compute, and 
 method/device label.
 
 ```{image} /_static/images/ui/status-bar-footer.png
-:alt: Control Room Status Bar and Footer Dock displaying Logs, Telemetry, Operations/Mesh Jobs, Problems, and live session telemetry
+:alt: Control Room Status Bar and Footer Dock displaying Logs, Telemetry, Operations, Problems, and live session telemetry
 :align: center
 :width: 100%
 ```
@@ -207,7 +213,7 @@ method/device label.
 
 - **Navigation**: `InstanceTabStrip` (`/home`, `/session/<slug>`, `?port=`, `/instance/<port>`), `AppMenuBar`, and `CommandPaletteModule` (`Ctrl+Shift+P`).
 - **Command authoring**: `RibbonModule` renders verified commands from `ribbonContributions.tsx` / `ribbonTabViews.tsx` after `stripRibbonPlaceholders`.
-- **Selection routing**: `ExplorerModule` (`Model`, `Resources`, `Results`, `Jobs`, `Diagnostics`) drives `Selection` into `InspectorRegistry`, while `FooterModule` and `StatusBarModule` remain observational and diagnostic docks.
+- **Selection routing**: `ExplorerModule` (`Model`, `Resources`, `Results`, `Jobs`, `Diagnostics`, `Helper`, `Errors`) drives `Selection` into `resolveInspectorPanel` (`inspectorRegistry.tsx`), while `FooterModule` and `StatusBarModule` remain observational and diagnostic docks.
 - **OpenAPI v2 & Python alignment**: Every Ribbon geometry, material, physics, mesh, and stage action commits via OpenAPI v2 session endpoints mirrored in `packages/fullmag-py`. `File -> Save canonical copy as…` exports an equivalent script, whereas two-way script diffing in the hidden `automation` tab remains `Python-only` (gated behind `preview: true`).
 
 ## Source-code index
@@ -221,8 +227,9 @@ method/device label.
 | Palette manifest & shortcut | `apps/control-room/src/modules/overlay/manifest.ts` | `overlayManifest` |
 | Ribbon tab definitions & placeholder stripping | `apps/control-room/src/modules/ribbon/ribbonContributions.tsx` | `stripRibbonPlaceholders`, `ribbonTabHasContent` |
 | Workspace & View ribbon definitions | `apps/control-room/src/modules/ribbon/ribbonTabViews.tsx` | `homeTab`, `viewTab` |
-| Five-tab Semantic Explorer | `apps/control-room/src/modules/explorer/ExplorerModule.tsx` | `ExplorerModule` |
-| Explorer tab switcher | `apps/control-room/src/modules/explorer/ExplorerTabBar.tsx` | `ExplorerTabBar` |
-| Bottom dock tabs & antenna auto-focus | `apps/control-room/src/modules/footer/FooterModule.tsx` | `FooterModule` |
-| Operations & Mesh Jobs dock panel | `apps/control-room/src/modules/footer/OperationsProblemsPanel.tsx` | `OperationsPanel`, `ProblemsPanel` |
+| Seven-tab Semantic Explorer | `apps/control-room/src/modules/explorer/ExplorerModule.tsx` | `ExplorerModule` |
+| Explorer tab definitions & bar | `apps/control-room/src/modules/explorer/explorerTabs.ts` | `EXPLORER_TABS` |
+| Bottom dock tabs & telemetry sub-tabs | `apps/control-room/src/modules/footer/FooterModule.tsx` | `FooterModule` |
+| Operations run progress panel | `apps/control-room/src/modules/footer/RunProgressPanel.tsx` | `RunProgressPanel` |
+| Problems dock panel | `apps/control-room/src/modules/footer/OperationsProblemsPanel.tsx` | `ProblemsPanel` |
 | Bottom telemetry & state bar | `apps/control-room/src/modules/status-bar/StatusBarModule.tsx` | `StatusBarModule` |

@@ -1,7 +1,7 @@
 {
   "document": {
     "path": "public_docs/site/python-api/runtime/simulation.md",
-    "reviewed_revision": "ab3c8802a691a535063102c12f9a79bb0043b367"
+    "reviewed_revision": "752450f8d259ab97c76c36fe666d5474b02abe9a"
   },
   "backend_matrix": [
     {
@@ -41,9 +41,9 @@
         "python": "Simulation.problem",
         "type": "`Problem`",
         "default": "`required`",
-        "si_unit": "1",
-        "validation": "Canonical problem",
-        "meaning": "Problem to execute",
+        "si_unit": "$1$",
+        "validation": "Canonical `Problem` instance",
+        "meaning": "Problem to lower, plan, or execute",
         "backend_support": "FEM/FDM CPU/GPU; planner and runtime capability checks remain authoritative",
         "problem_ir": "problem body"
       },
@@ -51,31 +51,111 @@
         "python": "Simulation.backend",
         "type": "`BackendTarget | str | None`",
         "default": "problem runtime",
-        "si_unit": "1",
-        "validation": "Auto/cpu/gpu as enum",
-        "meaning": "Resolved backend",
+        "si_unit": "$1$",
+        "validation": "`BackendTarget`: `auto`, `fdm`, `fem`, or `hybrid`",
+        "meaning": "Requested solver backend family",
         "backend_support": "FEM/FDM CPU/GPU; planner and runtime capability checks remain authoritative",
-        "problem_ir": "`requested_backend`"
+        "problem_ir": "`backend_policy.requested_backend`"
       },
       {
         "python": "Simulation.mode",
         "type": "`ExecutionMode | str | None`",
         "default": "problem runtime",
-        "si_unit": "1",
-        "validation": "strict/extended/hybrid",
-        "meaning": "Execution policy",
+        "si_unit": "$1$",
+        "validation": "`ExecutionMode`: `strict`, `extended`, or `hybrid`",
+        "meaning": "Requested execution policy",
         "backend_support": "FEM/FDM CPU/GPU; planner and runtime capability checks remain authoritative",
-        "problem_ir": "`execution_mode`"
+        "problem_ir": "`validation_profile.execution_mode`"
       },
       {
         "python": "Simulation.precision",
         "type": "`ExecutionPrecision | str | None`",
         "default": "problem runtime",
-        "si_unit": "1",
-        "validation": "single/double",
-        "meaning": "Floating-point precision",
+        "si_unit": "$1$",
+        "validation": "`ExecutionPrecision`: `single` or `double`",
+        "meaning": "Requested floating-point precision",
         "backend_support": "FEM/FDM CPU/GPU; planner and runtime capability checks remain authoritative",
-        "problem_ir": "`execution_precision`"
+        "problem_ir": "`backend_policy.execution_precision`"
+      },
+      {
+        "python": "Simulation.to_ir.script_source",
+        "type": "`str | None`",
+        "default": "`None`",
+        "si_unit": "$1$",
+        "validation": "Optional source text hashed for provenance",
+        "meaning": "Source script embedded in lowered metadata",
+        "backend_support": "FEM/FDM CPU/GPU authoring",
+        "problem_ir": "`problem_meta.script_source`"
+      },
+      {
+        "python": "Simulation.to_ir.entrypoint_kind",
+        "type": "`str`",
+        "default": "`\"direct\"`",
+        "si_unit": "$1$",
+        "validation": "Non-empty entrypoint identifier",
+        "meaning": "Origin tag forwarded to `Problem.to_ir`",
+        "backend_support": "FEM/FDM CPU/GPU authoring",
+        "problem_ir": "`problem_meta.entrypoint_kind`"
+      },
+      {
+        "python": "Simulation.run.until",
+        "type": "`float | None`",
+        "default": "`None`",
+        "si_unit": "$\\mathrm{s}$",
+        "validation": "Positive finite stop time for execution; `None` returns `status=\"planned\"`",
+        "meaning": "Simulation stop time",
+        "backend_support": "Executable native runner subset",
+        "problem_ir": "runner stop time"
+      },
+      {
+        "python": "Simulation.run.output_dir",
+        "type": "`str | None`",
+        "default": "`None`",
+        "si_unit": "$1$",
+        "validation": "Optional explicit output directory path",
+        "meaning": "Overrides `study.storage.output_dir` or script-derived default",
+        "backend_support": "FEM/FDM CPU/GPU runtime",
+        "problem_ir": "`resolved_output_storage.output_dir`"
+      },
+      {
+        "python": "Simulation.run.temp_dir",
+        "type": "`str | None`",
+        "default": "`None`",
+        "si_unit": "$1$",
+        "validation": "Optional parent directory for private run scratch (never removed itself)",
+        "meaning": "Scratch parent directory override",
+        "backend_support": "FEM/FDM CPU/GPU runtime",
+        "problem_ir": "`output_storage.temp_dir`"
+      },
+      {
+        "python": "Simulation.run.data_format",
+        "type": "`str | None`",
+        "default": "`None`",
+        "si_unit": "$1$",
+        "validation": "Optional `\"zarr\"` or `\"hdf5\"` override",
+        "meaning": "Persisted field/table archive format override",
+        "backend_support": "FEM/FDM CPU/GPU runtime",
+        "problem_ir": "`output_storage.data_format`"
+      },
+      {
+        "python": "Simulation.run.cleanup",
+        "type": "`str | None`",
+        "default": "`None`",
+        "si_unit": "$1$",
+        "validation": "Optional private-scratch cleanup policy (`\"on_success\"`, `\"always\"`, `\"never\"`)",
+        "meaning": "Controls removal of private scratch after a run",
+        "backend_support": "FEM/FDM CPU/GPU runtime",
+        "problem_ir": "`output_storage.cleanup`"
+      },
+      {
+        "python": "Simulation.run.existing_output",
+        "type": "`str | None`",
+        "default": "`None`",
+        "si_unit": "$1$",
+        "validation": "Optional collision policy (`\"timestamp\"`, `\"overwrite\"`, `\"fail\"`)",
+        "meaning": "Behavior when the output directory already exists",
+        "backend_support": "FEM/FDM CPU/GPU runtime",
+        "problem_ir": "`output_storage.existing_output`"
       }
     ]
   }
