@@ -6433,6 +6433,53 @@ class ProblemApiTests(unittest.TestCase):
             policy,
         )
 
+    def test_frequency_response_gpu_sparse_direct_solver_method_round_trips_from_python_stage(
+        self,
+    ) -> None:
+        script = """
+        import fullmag as fm
+
+        study = fm.study("frequency_response_gpu_sparse_direct")
+        study.engine("fem")
+        study.device("gpu", precision="double")
+        film = study.geometry(fm.Box(size=(2e-7, 2e-7, 1e-8), name="film"), name="film")
+        film.Ms = 800e3
+        film.Aex = 13e-12
+        film.m = fm.init.UniformMagnetization((1.0, 0.0, 0.0))
+        study.stages.add_frequency_response(
+            frequencies_hz=[2.0e9, 4.0e9],
+            solver_method="gpu_sparse_direct",
+            solver_rtol=1e-10,
+            excitation_field_au_per_m=(0.0, 0.0, 1.0),
+            include_demag=True,
+            equilibrium_source="relax",
+            damping_policy="include",
+        )
+        """
+
+        with TemporaryDirectory() as tmp_dir:
+            script_path = Path(tmp_dir) / "frequency_response_gpu_sparse_direct.py"
+            script_path.write_text(textwrap.dedent(script), encoding="utf-8")
+            loaded = fm.load_problem_from_script(script_path, lightweight_assets=True)
+            rewritten = rewrite_loaded_problem_script(loaded)["rendered_source"]
+            rewrite_path = Path(tmp_dir) / "frequency_response_gpu_sparse_direct_rewritten.py"
+            rewrite_path.write_text(rewritten, encoding="utf-8")
+            reloaded = fm.load_problem_from_script(rewrite_path, lightweight_assets=True)
+
+        policy = loaded.stages[0].problem.study.to_ir()["solver_policy"]
+        self.assertEqual(
+            policy,
+            {
+                "method": "gpu_sparse_direct",
+                "rtol": 1e-10,
+            },
+        )
+        self.assertIn('solver_method="gpu_sparse_direct"', rewritten)
+        self.assertEqual(
+            reloaded.stages[0].problem.study.to_ir()["solver_policy"],
+            policy,
+        )
+
     def test_eigen_solver_policy_lowers_from_python_stage(self) -> None:
         script = """
         import fullmag as fm

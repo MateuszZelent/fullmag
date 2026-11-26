@@ -1,0 +1,555 @@
+{
+  "document": {
+    "path": "docs/physics/1000-fem-gpu-driven-response-cudss.md",
+    "reviewed_revision": "ee943449fd"
+  },
+  "backend_matrix": [
+    {
+      "solver": "FEM",
+      "device": "CPU",
+      "status": "unsupported",
+      "reason": "The cuDSS direct driven-response solver targets GPU device execution only; FEM CPU retains host GMRES and Schur-reduced Krylov solvers."
+    },
+    {
+      "solver": "FEM",
+      "device": "GPU",
+      "status": "implemented / VRAM-guarded / pending RTX 4080 SUPER qualification"
+    },
+    {
+      "solver": "FDM",
+      "device": "CPU",
+      "status": "not-applicable",
+      "reason": "FDM uses structured-grid operators rather than FEM sparse CSR magnetic-Poisson assembly."
+    },
+    {
+      "solver": "FDM",
+      "device": "GPU",
+      "status": "not-applicable",
+      "reason": "FDM uses structured-grid operators rather than FEM sparse CSR magnetic-Poisson assembly."
+    }
+  ],
+  "equations": [
+    {
+      "id": "eq-driven-augmented-system",
+      "symbols": [
+        "Zaug",
+        "omegak",
+        "sigmaconv",
+        "Kqq",
+        "Mqq",
+        "Kqphi",
+        "Rphiq",
+        "P",
+        "q",
+        "dphi",
+        "f"
+      ],
+      "sources": [
+        "poisson-export",
+        "cudss-solver",
+        "gpu-driver",
+        "periodic-driver"
+      ]
+    },
+    {
+      "id": "eq-driven-ruiz-equilibration",
+      "symbols": [
+        "Zhat",
+        "Dr",
+        "Zaug",
+        "Dc",
+        "y",
+        "b",
+        "x"
+      ],
+      "sources": [
+        "cudss-solver",
+        "kernel-omega"
+      ]
+    },
+    {
+      "id": "eq-driven-static-periodic-reduction",
+      "symbols": [
+        "Zred",
+        "Cper",
+        "Zaug",
+        "Lper",
+        "q",
+        "qred",
+        "dphi",
+        "Ppbc",
+        "dphired"
+      ],
+      "sources": [
+        "poisson-export",
+        "cudss-solver",
+        "periodic-driver"
+      ]
+    },
+    {
+      "id": "eq-driven-memory-budget",
+      "symbols": [
+        "Mmargin",
+        "M0",
+        "Mtotal",
+        "Bcap",
+        "Bbytes",
+        "Bmib",
+        "B",
+        "Mfree",
+        "Mpeak"
+      ],
+      "sources": [
+        "cudss-solver"
+      ]
+    },
+    {
+      "id": "eq-driven-residual-certification",
+      "symbols": [
+        "rq",
+        "f",
+        "Kqq",
+        "sigmaconv",
+        "omegak",
+        "Mqq",
+        "q",
+        "Kqphi",
+        "dphi",
+        "rphi",
+        "Rphiq",
+        "P",
+        "rhoq",
+        "tauabs",
+        "taurel",
+        "rhophi",
+        "aphi"
+      ],
+      "sources": [
+        "cudss-solver",
+        "kernel-cert"
+      ]
+    },
+    {
+      "id": "eq-driven-poisson-atol-floor",
+      "symbols": [
+        "aphi",
+        "P",
+        "dphi",
+        "Rphiq",
+        "q"
+      ],
+      "sources": [
+        "cudss-solver",
+        "kernel-cert"
+      ]
+    }
+  ],
+  "symbols": [
+    {
+      "id": "Zaug",
+      "latex": "Z_{\\mathrm{aug}}(\\omega_k)",
+      "meaning": "Unscaled coupled frequency-domain linear operator at angular frequency $\\omega_k$",
+      "si_unit": "\\mathrm{rad\\,s^{-1}}"
+    },
+    {
+      "id": "Zred",
+      "latex": "Z_{\\mathrm{red}}(\\omega_k)",
+      "meaning": "Static-periodic reduced coupled operator formed by $C_{\\mathrm{per}}$ and $L_{\\mathrm{per}}$",
+      "si_unit": "\\mathrm{rad\\,s^{-1}}"
+    },
+    {
+      "id": "Zhat",
+      "latex": "\\hat{Z}_{\\mathrm{aug}}(\\omega_k)",
+      "meaning": "Ruiz-equilibrated complex sparse matrix passed to `cuDSS`",
+      "si_unit": "1"
+    },
+    {
+      "id": "omegak",
+      "latex": "\\omega_k",
+      "meaning": "Drive angular frequency $2\\pi f_k$ at sweep index $k$",
+      "si_unit": "\\mathrm{rad\\,s^{-1}}"
+    },
+    {
+      "id": "sigmaconv",
+      "latex": "\\sigma_{\\mathrm{conv}}",
+      "meaning": "Harmonic phase convention sign ($+1$ for $\\mathrm{e}^{+\\mathrm{i}\\omega t}$, $-1$ for $\\mathrm{e}^{-\\mathrm{i}\\omega t}$)",
+      "si_unit": "1"
+    },
+    {
+      "id": "Kqq",
+      "latex": "K_{qq}",
+      "meaning": "Linearized magnetic tangent stiffness operator (exchange, Zeeman, anisotropy, DMI)",
+      "si_unit": "\\mathrm{rad\\,s^{-1}}"
+    },
+    {
+      "id": "Mqq",
+      "latex": "M_{qq}",
+      "meaning": "Block-diagonal LLG precession and Gilbert damping mass operator",
+      "si_unit": "1"
+    },
+    {
+      "id": "Kqphi",
+      "latex": "K_{q\\phi}",
+      "meaning": "Magnetostatic-to-magnetic coupling block $R_{\\gamma_0} E_{\\mathrm{lift}}^{\\mathsf T} G_{\\mathrm{rec}}$",
+      "si_unit": "\\mathrm{rad\\,s^{-1}\\,A^{-1}}"
+    },
+    {
+      "id": "Rphiq",
+      "latex": "R_{\\phi q}",
+      "meaning": "Magnetization-to-Poisson right-hand side operator with `ess_tdofs` rows explicitly zeroed",
+      "si_unit": "\\mathrm{A\\,m}"
+    },
+    {
+      "id": "P",
+      "latex": "P",
+      "meaning": "Boundary-conditioned or periodic-reduced FEM magnetostatic Poisson stiffness matrix",
+      "si_unit": "\\mathrm{m}"
+    },
+    {
+      "id": "q",
+      "latex": "q",
+      "meaning": "Complex magnetic tangent perturbation vector in the local $(e_1, e_2)$ basis",
+      "si_unit": "1"
+    },
+    {
+      "id": "qred",
+      "latex": "q_{\\mathrm{red}}",
+      "meaning": "Static-periodic reduced magnetic tangent perturbation vector",
+      "si_unit": "1"
+    },
+    {
+      "id": "dphi",
+      "latex": "\\delta\\phi",
+      "meaning": "Complex dynamic magnetostatic scalar potential perturbation vector",
+      "si_unit": "\\mathrm{A}"
+    },
+    {
+      "id": "dphired",
+      "latex": "\\delta\\phi_{\\mathrm{red}}",
+      "meaning": "Reduced periodic scalar potential perturbation vector",
+      "si_unit": "\\mathrm{A}"
+    },
+    {
+      "id": "f",
+      "latex": "f",
+      "meaning": "Complex tangent drive vector in LLG frequency-domain units",
+      "si_unit": "\\mathrm{rad\\,s^{-1}}"
+    },
+    {
+      "id": "b",
+      "latex": "b",
+      "meaning": "Stacked augmented right-hand side vector $[f;\\, 0]$",
+      "si_unit": "\\mathrm{rad\\,s^{-1}}"
+    },
+    {
+      "id": "x",
+      "latex": "x",
+      "meaning": "Unscaled augmented solution vector $[q;\\, \\delta\\phi] = D_c y$",
+      "si_unit": "1"
+    },
+    {
+      "id": "y",
+      "latex": "y",
+      "meaning": "Equilibrated solution vector returned by `cuDSS`",
+      "si_unit": "1"
+    },
+    {
+      "id": "Dr",
+      "latex": "D_r",
+      "meaning": "Positive real diagonal left Ruiz equilibration matrix",
+      "si_unit": "1"
+    },
+    {
+      "id": "Dc",
+      "latex": "D_c",
+      "meaning": "Positive real diagonal right Ruiz equilibration matrix",
+      "si_unit": "1"
+    },
+    {
+      "id": "Cper",
+      "latex": "C_{\\mathrm{per}}",
+      "meaning": "Static-periodic row-averaging restriction matrix (weight $1/|C_r|$ per equivalence class)",
+      "si_unit": "1"
+    },
+    {
+      "id": "Lper",
+      "latex": "L_{\\mathrm{per}}",
+      "meaning": "Static-periodic prolongation matrix mapping class representatives to magnetic nodes",
+      "si_unit": "1"
+    },
+    {
+      "id": "Ppbc",
+      "latex": "P_{\\mathrm{pbc}}",
+      "meaning": "Periodic prolongation matrix mapping reduced Poisson DOFs to full airbox nodes",
+      "si_unit": "1"
+    },
+    {
+      "id": "rq",
+      "latex": "r_q",
+      "meaning": "Unscaled magnetic block algebraic residual vector",
+      "si_unit": "\\mathrm{rad\\,s^{-1}}"
+    },
+    {
+      "id": "rphi",
+      "latex": "r_\\phi",
+      "meaning": "Unscaled Poisson block algebraic residual vector",
+      "si_unit": "\\mathrm{A\\,m}"
+    },
+    {
+      "id": "rhoq",
+      "latex": "\\rho_q",
+      "meaning": "Relative Euclidean residual of the magnetic block",
+      "si_unit": "1"
+    },
+    {
+      "id": "rhophi",
+      "latex": "\\rho_\\phi",
+      "meaning": "Relative Euclidean residual of the Poisson block",
+      "si_unit": "1"
+    },
+    {
+      "id": "taurel",
+      "latex": "\\tau_{\\mathrm{rel}}",
+      "meaning": "Relative residual tolerance certifying both magnetic and Poisson blocks",
+      "si_unit": "1"
+    },
+    {
+      "id": "tauabs",
+      "latex": "\\tau_{\\mathrm{abs}}",
+      "meaning": "Absolute residual floor for the magnetic residual denominator",
+      "si_unit": "\\mathrm{rad\\,s^{-1}}"
+    },
+    {
+      "id": "aphi",
+      "latex": "a_\\phi",
+      "meaning": "Scale-aware divergence-free floor for the Poisson residual denominator",
+      "si_unit": "\\mathrm{A\\,m}"
+    },
+    {
+      "id": "Mfree",
+      "latex": "M_{\\mathrm{free}}",
+      "meaning": "Free GPU memory reported by `cudaMemGetInfo` after symbolic analysis",
+      "si_unit": "\\mathrm{B}"
+    },
+    {
+      "id": "Mtotal",
+      "latex": "M_{\\mathrm{total}}",
+      "meaning": "Total GPU memory reported by `cudaMemGetInfo`",
+      "si_unit": "\\mathrm{B}"
+    },
+    {
+      "id": "M0",
+      "latex": "M_0",
+      "meaning": "Minimum safety margin, $536\\,870\\,912$ bytes (512 MiB)",
+      "si_unit": "\\mathrm{B}"
+    },
+    {
+      "id": "Mmargin",
+      "latex": "M_{\\mathrm{margin}}",
+      "meaning": "Device memory margin reserved for runtime allocations and display stability",
+      "si_unit": "\\mathrm{B}"
+    },
+    {
+      "id": "Bbytes",
+      "latex": "B_{\\mathrm{bytes}}",
+      "meaning": "Optional byte cap from `FULLMAG_FEM_DRIVEN_CUDSS_BUDGET_BYTES`; $+\\infty$ when unset",
+      "si_unit": "\\mathrm{B}"
+    },
+    {
+      "id": "Bmib",
+      "latex": "B_{\\mathrm{MiB}}",
+      "meaning": "Optional MiB cap from `FULLMAG_FEM_DRIVEN_CUDSS_MAX_VRAM_MIB`; $+\\infty$ when unset",
+      "si_unit": "1"
+    },
+    {
+      "id": "Bcap",
+      "latex": "B_{\\mathrm{cap}}",
+      "meaning": "Combined optional VRAM cap $\\min(B_{\\mathrm{bytes}},\\, 2^{20} B_{\\mathrm{MiB}})$",
+      "si_unit": "\\mathrm{B}"
+    },
+    {
+      "id": "B",
+      "latex": "B",
+      "meaning": "Effective device memory budget available to `cuDSS` factorization",
+      "si_unit": "\\mathrm{B}"
+    },
+    {
+      "id": "Mpeak",
+      "latex": "\\hat{M}_{\\mathrm{peak}}",
+      "meaning": "Peak device memory estimated by `cuDSS` after `CUDSS_PHASE_ANALYSIS`",
+      "si_unit": "\\mathrm{B}"
+    }
+  ],
+  "sources": [
+    {
+      "id": "poisson-export",
+      "path": "backends/fem/cpu/mfem/interactions/demag_poisson_sparse_export.cpp",
+      "symbol": "export_demag_poisson_sparse_blocks",
+      "responsibility": "Exports open or periodic-reduced Poisson matrix P, ess_tdofs-zeroed R_{phi m}, G_rec, and node maps as sorted CSR.",
+      "evidence_status": "contract_test"
+    },
+    {
+      "id": "poisson-destroy",
+      "path": "backends/fem/cpu/mfem/interactions/demag_poisson_sparse_export.cpp",
+      "symbol": "destroy_demag_poisson_sparse_blocks",
+      "responsibility": "Releases owned CSR buffers attached to exported Poisson sparse blocks.",
+      "evidence_status": "contract_test"
+    },
+    {
+      "id": "cudss-solver",
+      "path": "backends/fem/gpu/frequency_domain/driven_response_cudss.cpp",
+      "symbol": "solve_driven_response_gpu_cudss",
+      "responsibility": "Coupled CSR assembly, Ruiz equilibration, 1x cuDSS analysis, VRAM preflight, per-frequency LU solve, certification, and lifting.",
+      "evidence_status": "contract_test"
+    },
+    {
+      "id": "kernel-omega",
+      "path": "backends/fem/gpu/frequency_domain/driven_response_cudss_kernels.cu",
+      "symbol": "launch_driven_response_update_omega_entries",
+      "responsibility": "In-place GPU update of the 4*N_m_eff frequency-dependent diagonal mass/damping entries.",
+      "evidence_status": "contract_test"
+    },
+    {
+      "id": "kernel-cert",
+      "path": "backends/fem/gpu/frequency_domain/driven_response_cudss_kernels.cu",
+      "symbol": "launch_driven_response_unscaled_residual_cert",
+      "responsibility": "Fused multi-block GPU unscaling x = D_c y and Blue-norm residual certification for magnetic and Poisson blocks.",
+      "evidence_status": "contract_test"
+    },
+    {
+      "id": "gpu-driver",
+      "path": "backends/fem/src/frequency_domain/driven_response_solver.cpp",
+      "symbol": "solve_mfem_production_gpu_problem",
+      "responsibility": "Routes open and no-demag production GPU sweeps through cuDSS before Krylov fallback with explicit diagnostics.",
+      "evidence_status": "contract_test"
+    },
+    {
+      "id": "periodic-driver",
+      "path": "backends/fem/src/frequency_domain/driven_response_solver.cpp",
+      "symbol": "solve_periodic_airbox_dynamic_demag_mfem_phi_consistency_schur",
+      "responsibility": "Routes periodic_airbox_k0 GPU sweeps through cuDSS with periodic lifting and G_rec demag recovery.",
+      "evidence_status": "contract_test"
+    },
+    {
+      "id": "abi-solve-v14",
+      "path": "backends/fem/src/api.cpp",
+      "symbol": "fullmag_fem_frequency_domain_solve_driven_response_v14",
+      "responsibility": "C ABI entry point delivering gpu_direct_policy and optional exported Poisson sparse blocks.",
+      "evidence_status": "abi"
+    },
+    {
+      "id": "abi-export",
+      "path": "backends/fem/src/api.cpp",
+      "symbol": "fullmag_fem_backend_export_demag_poisson_sparse_blocks",
+      "responsibility": "C ABI entry point exporting sparse Poisson CSR blocks from an initialized FEM backend.",
+      "evidence_status": "abi"
+    },
+    {
+      "id": "abi-header",
+      "path": "native/include/fullmag_fem.h",
+      "symbol": "fullmag_fem_frequency_domain_solve_driven_response_v14",
+      "responsibility": "Public C ABI declaration of v14 driven response solve, direct options, and sparse Poisson block export.",
+      "evidence_status": "abi"
+    },
+    {
+      "id": "ffi-mirror",
+      "path": "crates/fullmag-fem-sys/src/lib.rs",
+      "symbol": "fullmag_fem_demag_poisson_sparse_blocks",
+      "responsibility": "Rust FFI layout-verified mirror of exported Poisson CSR blocks and v14 direct options.",
+      "evidence_status": "mirror_test"
+    },
+    {
+      "id": "ir-method",
+      "path": "crates/fullmag-ir/src/study.rs",
+      "symbol": "FrequencyResponseSolverMethodIR",
+      "responsibility": "Canonical ProblemIR solver method enum including GpuSparseDirect.",
+      "evidence_status": "unit_test"
+    },
+    {
+      "id": "runner-ffi",
+      "path": "crates/fullmag-runner/src/native_fem/frequency_domain.rs",
+      "symbol": "export_demag_poisson_sparse_blocks_raw",
+      "responsibility": "Invokes C ABI Poisson sparse-block export on NativeFemBackend and wires v14 solve dispatch.",
+      "evidence_status": "unit_test"
+    },
+    {
+      "id": "runner-policy",
+      "path": "crates/fullmag-runner/src/frequency_response.rs",
+      "symbol": "frequency_response_solver_method_rejection_reason",
+      "responsibility": "Validates gpu_sparse_direct GPU-only and non-Floquet requirements fail-closed.",
+      "evidence_status": "unit_test"
+    },
+    {
+      "id": "runner-provenance",
+      "path": "crates/fullmag-runner/src/frequency_response.rs",
+      "symbol": "resolve_native_frequency_response_solver_provenance",
+      "responsibility": "Extracts resolved solver method, cuDSS telemetry, and auto-fallback reason for artifact patching.",
+      "evidence_status": "unit_test"
+    },
+    {
+      "id": "py-policy",
+      "path": "packages/fullmag-py/src/fullmag/model/study.py",
+      "symbol": "class FrequencyResponseSolverPolicy",
+      "responsibility": "Public Python frequency-response solver policy accepting gpu_sparse_direct.",
+      "evidence_status": "unit_test"
+    }
+  ],
+  "public_api": {
+    "parameters": [
+      {
+        "python": "FrequencyResponseSolverPolicy.method",
+        "type": "str | None",
+        "default": "None",
+        "si_unit": "1",
+        "validation": "auto, dense_reference, cpu_sparse_direct, full_coupled_field_split, schur_reduced, modal_reduced, gpu_operator_host_krylov, gpu_device_krylov, or gpu_sparse_direct",
+        "meaning": "Linear solver method selection (`auto` prefers GPU cuDSS when eligible and within VRAM budget; `gpu_sparse_direct` forces cuDSS with hard failure on unavailability or over-budget)",
+        "backend_support": "FEM GPU (`gpu_sparse_direct`), FEM CPU/GPU (`auto`)",
+        "problem_ir": "stages[*].solver_policy.method"
+      },
+      {
+        "python": "FrequencyResponseSolverPolicy.preconditioner",
+        "type": "str | None",
+        "default": "None",
+        "si_unit": "1",
+        "validation": "auto, graph_demag_coarse, demag_coarse, block_jacobi, or none",
+        "meaning": "Krylov preconditioner used on CPU or on GPU Krylov fallback (unused when `gpu_sparse_direct_cudss` executes)",
+        "backend_support": "FEM CPU/GPU",
+        "problem_ir": "stages[*].solver_policy.preconditioner"
+      },
+      {
+        "python": "FrequencyResponseSolverPolicy.rtol",
+        "type": "float | None",
+        "default": "None",
+        "si_unit": "1",
+        "validation": "positive finite value",
+        "meaning": "Relative Euclidean residual tolerance certifying both magnetic and Poisson blocks (defaults to $10^{-10}$ for `cuDSS` direct certification when unspecified)",
+        "backend_support": "FEM CPU/GPU",
+        "problem_ir": "stages[*].solver_policy.rtol"
+      },
+      {
+        "python": "FrequencyResponseSolverPolicy.max_iterations",
+        "type": "int | None",
+        "default": "None",
+        "si_unit": "1",
+        "validation": "at least 1",
+        "meaning": "Krylov iteration limit (direct solves complete in one factorization and solve per frequency)",
+        "backend_support": "FEM CPU/GPU",
+        "problem_ir": "stages[*].solver_policy.max_iterations"
+      },
+      {
+        "python": "FrequencyResponseSolverPolicy.restart_iterations",
+        "type": "int | None",
+        "default": "None",
+        "si_unit": "1",
+        "validation": "at least 1",
+        "meaning": "GMRES restart basis size for Krylov fallback",
+        "backend_support": "FEM CPU/GPU",
+        "problem_ir": "stages[*].solver_policy.restart_iterations"
+      }
+    ]
+  },
+  "validation": {
+    "plan": "Contract suite driven_response_cudss_contract.cpp covering policy and env-cap fail-closed checks, no-demag 10-frequency sweep parity with DMI and pageable readback, coupled airbox 10^20 scaling and ess_tdofs zeroing against dense Schur oracle, divergence-free Poisson residual floor, VRAM budget=1 auto fallback vs required refusal, singular alpha=0 resonance hard solve_error, and periodic_airbox_k0 lifting and G_rec recovery; Rust policy and provenance unit tests in frequency_response.rs; Python ProblemIR round-trip test in test_api.py; RTX 4080 SUPER Docker DEV qualification pending.",
+    "results": "Contract, Rust unit, and Python round-trip tests implemented on branch codex/fem-pgbb-kernels-dr-20261126; RTX 4080 SUPER qualification results pending."
+  }
+}

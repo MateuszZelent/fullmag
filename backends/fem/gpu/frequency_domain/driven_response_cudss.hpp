@@ -6,7 +6,7 @@
  * Performs one-time symbolic analysis and Ruiz equilibration across an RF
  * frequency sweep, updating only the 4*N_m diagonal frequency entries on GPU
  * per frequency point and certifying unscaled residuals for both magnetic and
- * Poisson blocks.
+ * Poisson blocks without duplicating the CSR matrix in VRAM.
  */
 
 #include "frequency_domain/driven_response_solver.hpp"
@@ -15,6 +15,11 @@
 #include <string>
 
 namespace fullmag::fem::frequency_domain {
+
+constexpr const char *kDrivenCudssBudgetBytesEnv =
+    "FULLMAG_FEM_DRIVEN_CUDSS_BUDGET_BYTES";
+constexpr const char *kDrivenCudssMaxVramMibEnv =
+    "FULLMAG_FEM_DRIVEN_CUDSS_MAX_VRAM_MIB";
 
 struct DrivenResponseCudssOutcome {
     FrequencyDomainStatus status = FrequencyDomainStatus::unavailable;
