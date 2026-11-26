@@ -12,7 +12,8 @@
 
 namespace fullmag::fem {
 
-/// Uniaxial anisotropy field and per-block energy partials.
+/// Uniaxial anisotropy field and optional per-block energy partials.
+/// Passing block_sums == nullptr skips energy accumulation and block reduction.
 void fullmag_cuda_uniaxial_anisotropy_field_energy_blocks(
     const double *mx,
     const double *my,
@@ -40,7 +41,8 @@ void fullmag_cuda_uniaxial_anisotropy_field_energy_blocks(
     int N,
     cudaStream_t stream = nullptr);
 
-/// Cubic anisotropy field and per-block energy partials.
+/// Cubic anisotropy field and optional per-block energy partials.
+/// Passing block_sums == nullptr skips energy accumulation and block reduction.
 void fullmag_cuda_cubic_anisotropy_field_energy_blocks(
     const double *mx,
     const double *my,

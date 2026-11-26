@@ -24,7 +24,10 @@ pub(crate) use direct_minimizer_reference::{
     DirectMinimizerAcceptedSample, DirectMinimizerAcceptedStateObserver,
 };
 #[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
-pub(crate) use provenance::apply_fem_direct_minimizer_policy_provenance;
+pub(crate) use provenance::{
+    apply_fem_direct_minimizer_policy_provenance,
+    apply_native_fem_gpu_bb_preconditioner_runtime_provenance,
+};
 pub(crate) use provenance::NATIVE_LLG_TIME_INTEGRATOR_REALIZATION;
 #[cfg(test)]
 pub(crate) use provenance::CUDA_FDM_HOST_DIRECT_MINIMIZER_REALIZATION;

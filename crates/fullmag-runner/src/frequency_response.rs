@@ -162,6 +162,7 @@ fn frequency_response_solver_method_name(
             "gpu_operator_host_krylov"
         }
         fullmag_ir::FrequencyResponseSolverMethodIR::GpuDeviceKrylov => "gpu_device_krylov",
+        fullmag_ir::FrequencyResponseSolverMethodIR::GpuSparseDirect => "gpu_sparse_direct",
     }
 }
 
@@ -233,10 +234,31 @@ fn frequency_response_solver_method_rejection_reason(
     let uses_periodic_airbox_schur = plan.magnetostatic_bc
         == fullmag_ir::MagnetostaticBoundaryConditionIR::PeriodicAirboxK0
         || plan.magnetostatic_bc == fullmag_ir::MagnetostaticBoundaryConditionIR::FloquetAirbox;
+    let has_nonzero_k = plan
+        .k_sampling
+        .as_ref()
+        .is_some_and(|k_sampling| !k_sampling.is_single_gamma());
+    let uses_nonzero_k_floquet = plan.magnetostatic_bc
+        == fullmag_ir::MagnetostaticBoundaryConditionIR::FloquetAirbox
+        || (has_nonzero_k
+            && frequency_response_effective_spin_wave_bc_kind(plan)
+                == fullmag_ir::SpinWaveBoundaryKindIR::Floquet);
 
     match method {
         fullmag_ir::FrequencyResponseSolverMethodIR::Auto => None,
         fullmag_ir::FrequencyResponseSolverMethodIR::GpuOperatorHostKrylov if requested_gpu => None,
+        fullmag_ir::FrequencyResponseSolverMethodIR::GpuSparseDirect
+            if requested_gpu && !uses_nonzero_k_floquet =>
+        {
+            None
+        }
+        fullmag_ir::FrequencyResponseSolverMethodIR::GpuSparseDirect if !requested_gpu => Some(
+            "solver_method=gpu_sparse_direct requires requested device gpu".to_string(),
+        ),
+        fullmag_ir::FrequencyResponseSolverMethodIR::GpuSparseDirect => Some(
+            "solver_method=gpu_sparse_direct does not support nonzero-k Floquet boundaries"
+                .to_string(),
+        ),
         fullmag_ir::FrequencyResponseSolverMethodIR::SchurReduced if uses_periodic_airbox_schur => {
             None
         }
@@ -1434,12 +1456,78 @@ fn patch_frequency_response_periodic_airbox_flux_diagnostics(
 }
 
 #[cfg(any(feature = "fem-gpu", test))]
+#[derive(Debug, Clone, PartialEq)]
+struct NativeFrequencyResponseSolverRuntimeProvenance {
+    resolved_solver_method: String,
+    extra_fields: serde_json::Map<String, serde_json::Value>,
+}
+
+#[cfg(any(feature = "fem-gpu", test))]
+fn resolve_native_frequency_response_solver_provenance(
+    native_diagnostics_json: &str,
+    default_resolved_solver_method: &str,
+) -> NativeFrequencyResponseSolverRuntimeProvenance {
+    let mut resolved_solver_method = default_resolved_solver_method.to_string();
+    let mut extra_fields = serde_json::Map::new();
+    if let Ok(serde_json::Value::Object(map)) =
+        serde_json::from_str::<serde_json::Value>(native_diagnostics_json)
+    {
+        if let Some(method) = map
+            .get("resolved_solver_method")
+            .and_then(serde_json::Value::as_str)
+            .filter(|value| !value.trim().is_empty())
+        {
+            resolved_solver_method = method.to_string();
+        }
+        for key in [
+            "solver_fallback_reason",
+            "direct_solver_package",
+            "matrix_type",
+            "symbolic_analysis_count",
+            "numeric_factorization_count",
+            "estimated_peak_device_bytes",
+            "device_budget_bytes",
+            "max_magnetic_relative_residual_l2",
+            "max_poisson_relative_residual_l2",
+            "gpu_device_resident_solver",
+        ] {
+            if let Some(value) = map.get(key) {
+                extra_fields.insert(key.to_string(), value.clone());
+            }
+        }
+    }
+    NativeFrequencyResponseSolverRuntimeProvenance {
+        resolved_solver_method,
+        extra_fields,
+    }
+}
+
+#[cfg(any(feature = "fem-gpu", test))]
 fn patch_frequency_response_solver_diagnostics(
     output_dir: &Path,
     demag_solver_policy: Option<&fullmag_ir::FemLinearSolverPolicy>,
     input_preflight: Option<&serde_json::Value>,
     requested_solver_method: Option<&str>,
     resolved_solver_method: Option<&str>,
+) -> std::io::Result<()> {
+    patch_frequency_response_solver_diagnostics_with_native_provenance(
+        output_dir,
+        demag_solver_policy,
+        input_preflight,
+        requested_solver_method,
+        resolved_solver_method,
+        None,
+    )
+}
+
+#[cfg(any(feature = "fem-gpu", test))]
+fn patch_frequency_response_solver_diagnostics_with_native_provenance(
+    output_dir: &Path,
+    demag_solver_policy: Option<&fullmag_ir::FemLinearSolverPolicy>,
+    input_preflight: Option<&serde_json::Value>,
+    requested_solver_method: Option<&str>,
+    resolved_solver_method: Option<&str>,
+    native_provenance_fields: Option<&serde_json::Map<String, serde_json::Value>>,
 ) -> std::io::Result<()> {
     let mut paths = vec![
         output_dir.join("response/diagnostics/solver.v1.json"),
@@ -1523,6 +1611,40 @@ fn patch_frequency_response_solver_diagnostics(
                     requested_solver_method,
                     resolved_solver_method,
                 );
+            }
+        }
+        if let Some(fields) = native_provenance_fields.filter(|fields| !fields.is_empty()) {
+            if path.ends_with("response/diagnostics/solver.v1.json")
+                || path.ends_with("response/diagnostics.v1.json")
+            {
+                if let Some(object) = value.as_object_mut() {
+                    for (key, val) in fields {
+                        object.insert(key.clone(), val.clone());
+                        changed = true;
+                    }
+                }
+            } else if path.ends_with("frequency_domain/manifest.v1.json") {
+                if let Some(object) = value
+                    .as_object_mut()
+                    .and_then(|object| object.get_mut("diagnostics"))
+                    .and_then(serde_json::Value::as_object_mut)
+                {
+                    for (key, val) in fields {
+                        object.insert(key.clone(), val.clone());
+                        changed = true;
+                    }
+                }
+            } else if let Some(object) = value.as_object_mut() {
+                for key in [
+                    "solver_fallback_reason",
+                    "direct_solver_package",
+                    "gpu_device_resident_solver",
+                ] {
+                    if let Some(val) = fields.get(key) {
+                        object.insert(key.to_string(), val.clone());
+                        changed = true;
+                    }
+                }
             }
         }
         if let Some(policy) = demag_solver_policy {
@@ -1967,6 +2089,85 @@ fn try_execute_fem_frequency_response_native_production_cpu(
     } else {
         None
     };
+    let gpu_direct_policy = if !requested_gpu {
+        ffi::FULLMAG_FEM_FREQUENCY_DOMAIN_GPU_DIRECT_POLICY_DISABLED
+    } else {
+        match plan.solver_policy.as_ref().and_then(|policy| policy.method) {
+            None | Some(fullmag_ir::FrequencyResponseSolverMethodIR::Auto) => {
+                ffi::FULLMAG_FEM_FREQUENCY_DOMAIN_GPU_DIRECT_POLICY_AUTO
+            }
+            Some(fullmag_ir::FrequencyResponseSolverMethodIR::GpuSparseDirect) => {
+                ffi::FULLMAG_FEM_FREQUENCY_DOMAIN_GPU_DIRECT_POLICY_REQUIRED
+            }
+            Some(_) => ffi::FULLMAG_FEM_FREQUENCY_DOMAIN_GPU_DIRECT_POLICY_DISABLED,
+        }
+    };
+    let poisson_demag_realization = matches!(
+        plan.demag_realization,
+        Some(
+            fullmag_ir::ResolvedFemDemagIR::PoissonDirichlet
+                | fullmag_ir::ResolvedFemDemagIR::PoissonRobin
+        )
+    );
+    let exported_demag_sparse_blocks = if requested_gpu
+        && plan.enable_demag
+        && gpu_direct_policy != ffi::FULLMAG_FEM_FREQUENCY_DOMAIN_GPU_DIRECT_POLICY_DISABLED
+        && !payload.requires_floquet_airbox_dynamic_demag
+    {
+        if !poisson_demag_realization {
+            if gpu_direct_policy == ffi::FULLMAG_FEM_FREQUENCY_DOMAIN_GPU_DIRECT_POLICY_REQUIRED {
+                return Err(RunError {
+                    message: "solver_method=gpu_sparse_direct requires a Poisson demag realization"
+                        .to_string(),
+                });
+            }
+            None
+        } else if let Some(provider) = demag_tangent_provider.as_mut() {
+            match provider.backend.export_demag_poisson_sparse_blocks_raw() {
+                Ok(blocks) => {
+                    let guard = DemagPoissonSparseBlocksGuard(blocks);
+                    if guard.0.magnetic_node_count as usize != payload.magnetic_node_indices.len() {
+                        if gpu_direct_policy
+                            == ffi::FULLMAG_FEM_FREQUENCY_DOMAIN_GPU_DIRECT_POLICY_REQUIRED
+                        {
+                            return Err(RunError {
+                                message: format!(
+                                    "exported FEM demag Poisson sparse blocks magnetic_node_count ({}) does not match compact magnetic node count ({})",
+                                    guard.0.magnetic_node_count,
+                                    payload.magnetic_node_indices.len()
+                                ),
+                            });
+                        }
+                        None
+                    } else {
+                        Some(guard)
+                    }
+                }
+                Err(err) => {
+                    if gpu_direct_policy
+                        == ffi::FULLMAG_FEM_FREQUENCY_DOMAIN_GPU_DIRECT_POLICY_REQUIRED
+                    {
+                        return Err(RunError {
+                            message: format!(
+                                "solver_method=gpu_sparse_direct failed to export FEM demag Poisson sparse blocks: {}",
+                                err.message
+                            ),
+                        });
+                    }
+                    None
+                }
+            }
+        } else {
+            if gpu_direct_policy == ffi::FULLMAG_FEM_FREQUENCY_DOMAIN_GPU_DIRECT_POLICY_REQUIRED {
+                return Err(RunError {
+                    message: "solver_method=gpu_sparse_direct requires an active FEM demag backend to export Poisson sparse blocks".to_string(),
+                });
+            }
+            None
+        }
+    } else {
+        None
+    };
     let demag_tangent_provider_user_data = demag_tangent_provider
         .as_mut()
         .map_or(std::ptr::null_mut(), |provider| {
@@ -2039,6 +2240,8 @@ fn try_execute_fem_frequency_response_native_production_cpu(
                 .periodic_airbox_magnetostatic_periodic_node_pairs,
             periodic_airbox_coupled_block_problem,
             tiny_validation_problem: None,
+            gpu_direct_policy,
+            demag_sparse_blocks: exported_demag_sparse_blocks.as_ref().map(|guard| &guard.0),
             mfem_operator_problem: Some(NativeDrivenFrequencyResponseMfemOperatorProblem {
                 equilibrium_m: &payload.equilibrium_magnetization,
                 h_ext_a_per_m: &payload.h_ext_a_per_m,
@@ -2072,18 +2275,25 @@ fn try_execute_fem_frequency_response_native_production_cpu(
             if requested_gpu { "GPU" } else { "CPU" }
         ),
     })?;
-    patch_frequency_response_solver_diagnostics(
+    let default_resolved_solver_method = resolved_frequency_response_solver_method_name(
+        requested_gpu,
+        payload.requires_periodic_airbox_dynamic_demag
+            || payload.requires_floquet_airbox_dynamic_demag,
+    );
+    let runtime_solver_provenance = resolve_native_frequency_response_solver_provenance(
+        &native_result.diagnostics_json,
+        default_resolved_solver_method,
+    );
+    patch_frequency_response_solver_diagnostics_with_native_provenance(
         output_dir,
         effective_frequency_response_demag_solver_policy.as_ref(),
         Some(&input_preflight),
         Some(requested_frequency_response_solver_method_name(
             plan.solver_policy.as_ref(),
         )),
-        Some(resolved_frequency_response_solver_method_name(
-            requested_gpu,
-            payload.requires_periodic_airbox_dynamic_demag
-                || payload.requires_floquet_airbox_dynamic_demag,
-        )),
+        Some(runtime_solver_provenance.resolved_solver_method.as_str()),
+        (!runtime_solver_provenance.extra_fields.is_empty())
+            .then_some(&runtime_solver_provenance.extra_fields),
     )
     .map_err(|err| RunError {
         message: format!(
@@ -2374,6 +2584,18 @@ struct FloquetPeriodicPairMetadata {
     node_b: u64,
     translation_m: [f64; 3],
     phase_rad: f64,
+}
+
+#[cfg(feature = "fem-gpu")]
+struct DemagPoissonSparseBlocksGuard(ffi::fullmag_fem_demag_poisson_sparse_blocks);
+
+#[cfg(feature = "fem-gpu")]
+impl Drop for DemagPoissonSparseBlocksGuard {
+    fn drop(&mut self) {
+        unsafe {
+            ffi::fullmag_fem_demag_poisson_sparse_blocks_destroy(&mut self.0);
+        }
+    }
 }
 
 #[cfg(feature = "fem-gpu")]
@@ -7399,5 +7621,218 @@ mod tests {
             payload.dmi_lumped_mass.as_deref(),
             Some([1.0 / 24.0; 4].as_slice())
         );
+    }
+
+    #[test]
+    fn frequency_response_solver_method_policy_accepts_gpu_sparse_direct_only_on_gpu() {
+        let mut cpu_plan = minimal_frequency_response_plan();
+        cpu_plan.requested_device = fullmag_ir::ExecutionDevice::Cpu;
+        cpu_plan.solver_policy = Some(fullmag_ir::FrequencyResponseSolverPolicyIR {
+            method: Some(fullmag_ir::FrequencyResponseSolverMethodIR::GpuSparseDirect),
+            preconditioner: None,
+            rtol: None,
+            max_iterations: None,
+            restart_iterations: None,
+        });
+        let cpu_reason = super::frequency_response_solver_method_rejection_reason(&cpu_plan)
+            .expect("gpu_sparse_direct must be rejected on CPU");
+        assert!(
+            cpu_reason.contains("requires requested device gpu"),
+            "unexpected CPU rejection reason: {cpu_reason}"
+        );
+
+        let mut gpu_plan = cpu_plan.clone();
+        gpu_plan.requested_device = fullmag_ir::ExecutionDevice::Gpu;
+        assert!(
+            super::frequency_response_solver_method_rejection_reason(&gpu_plan).is_none(),
+            "gpu_sparse_direct must be accepted on GPU without nonzero-k Floquet"
+        );
+
+        let mut gpu_periodic_airbox = gpu_plan.clone();
+        gpu_periodic_airbox.magnetostatic_bc =
+            fullmag_ir::MagnetostaticBoundaryConditionIR::PeriodicAirboxK0;
+        assert!(
+            super::frequency_response_solver_method_rejection_reason(&gpu_periodic_airbox)
+                .is_none(),
+            "gpu_sparse_direct must be accepted on GPU periodic_airbox_k0"
+        );
+
+        let mut gpu_floquet_airbox = gpu_plan.clone();
+        gpu_floquet_airbox.magnetostatic_bc =
+            fullmag_ir::MagnetostaticBoundaryConditionIR::FloquetAirbox;
+        let floquet_airbox_reason =
+            super::frequency_response_solver_method_rejection_reason(&gpu_floquet_airbox)
+                .expect("gpu_sparse_direct must reject floquet_airbox");
+        assert!(
+            floquet_airbox_reason.contains("nonzero-k Floquet"),
+            "unexpected floquet_airbox rejection reason: {floquet_airbox_reason}"
+        );
+
+        let mut gpu_nonzero_k_floquet = gpu_plan.clone();
+        gpu_nonzero_k_floquet.spin_wave_bc = fullmag_ir::SpinWaveBoundaryConditionIR::Config(
+            fullmag_ir::SpinWaveBoundaryConfigIR {
+                kind: fullmag_ir::SpinWaveBoundaryKindIR::Floquet,
+                boundary_pair_id: Some("x_faces".to_string()),
+                pair_ids: Vec::new(),
+                phase_convention: fullmag_ir::PhaseConventionIR::default(),
+                surface_anisotropy_ks: None,
+                surface_anisotropy_axis: None,
+            },
+        );
+        gpu_nonzero_k_floquet.k_sampling = Some(fullmag_ir::KSamplingIR::Single {
+            k_vector: [1.0e6, 0.0, 0.0],
+        });
+        let floquet_k_reason =
+            super::frequency_response_solver_method_rejection_reason(&gpu_nonzero_k_floquet)
+                .expect("gpu_sparse_direct must reject nonzero-k Floquet spin_wave_bc");
+        assert!(
+            floquet_k_reason.contains("nonzero-k Floquet"),
+            "unexpected nonzero-k Floquet rejection reason: {floquet_k_reason}"
+        );
+    }
+
+    #[test]
+    fn frequency_response_diagnostics_preserve_cudss_and_auto_fallback_provenance() {
+        let unique_suffix = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock drift")
+            .as_nanos();
+        let output_dir = std::env::temp_dir().join(format!(
+            "fullmag-runner-cudss-diag-provenance-{}-{}",
+            std::process::id(),
+            unique_suffix
+        ));
+        let diagnostics_dir = output_dir.join("response/diagnostics");
+        let point_dir = output_dir.join("response/frequency_points");
+        let manifest_dir = output_dir.join("frequency_domain");
+        std::fs::create_dir_all(&diagnostics_dir).expect("create diagnostics dir");
+        std::fs::create_dir_all(&point_dir).expect("create point dir");
+        std::fs::create_dir_all(&manifest_dir).expect("create manifest dir");
+
+        let seed_artifacts = || {
+            std::fs::write(
+                diagnostics_dir.join("solver.v1.json"),
+                r#"{"schema_version":"frequency_domain_response_diagnostics.v1","status":"ok"}"#,
+            )
+            .expect("write solver.v1.json");
+            std::fs::write(
+                output_dir.join("response/diagnostics.v1.json"),
+                r#"{"schema_version":"frequency_domain_response_diagnostics.v1","status":"ok"}"#,
+            )
+            .expect("write diagnostics.v1.json");
+            std::fs::write(
+                manifest_dir.join("manifest.v1.json"),
+                r#"{"schema_version":"frequency_domain_manifest.v1","diagnostics":{"status":"ok"}}"#,
+            )
+            .expect("write manifest.v1.json");
+            std::fs::write(
+                point_dir.join("frequency_0000.json"),
+                r#"{"frequency_hz":2.0e9}"#,
+            )
+            .expect("write frequency_0000.json");
+        };
+
+        seed_artifacts();
+        let cudss_native_json = r#"{
+            "resolved_solver_method": "gpu_sparse_direct_cudss",
+            "direct_solver_package": "nvidia_cudss",
+            "matrix_type": "general_complex_f64",
+            "symbolic_analysis_count": 1,
+            "numeric_factorization_count": 4,
+            "estimated_peak_device_bytes": 1048576,
+            "device_budget_bytes": 1073741824,
+            "max_magnetic_relative_residual_l2": 1.2e-14,
+            "max_poisson_relative_residual_l2": 3.4e-15,
+            "gpu_device_resident_solver": true
+        }"#;
+        let cudss_prov = super::resolve_native_frequency_response_solver_provenance(
+            cudss_native_json,
+            "gpu_operator_host_krylov",
+        );
+        assert_eq!(cudss_prov.resolved_solver_method, "gpu_sparse_direct_cudss");
+        super::patch_frequency_response_solver_diagnostics_with_native_provenance(
+            &output_dir,
+            None,
+            None,
+            Some("auto"),
+            Some(cudss_prov.resolved_solver_method.as_str()),
+            Some(&cudss_prov.extra_fields),
+        )
+        .expect("patch cuDSS diagnostics");
+        let solver_doc: serde_json::Value = serde_json::from_slice(
+            &std::fs::read(diagnostics_dir.join("solver.v1.json")).expect("read solver.v1.json"),
+        )
+        .expect("parse solver.v1.json");
+        assert_eq!(solver_doc["requested_solver_method"], "auto");
+        assert_eq!(solver_doc["resolved_solver_method"], "gpu_sparse_direct_cudss");
+        assert_eq!(solver_doc["direct_solver_package"], "nvidia_cudss");
+        assert_eq!(solver_doc["symbolic_analysis_count"], 1);
+        assert_eq!(solver_doc["numeric_factorization_count"], 4);
+        assert_eq!(solver_doc["gpu_device_resident_solver"], true);
+        let manifest_doc: serde_json::Value = serde_json::from_slice(
+            &std::fs::read(manifest_dir.join("manifest.v1.json")).expect("read manifest"),
+        )
+        .expect("parse manifest");
+        assert_eq!(
+            manifest_doc["diagnostics"]["resolved_solver_method"],
+            "gpu_sparse_direct_cudss"
+        );
+        assert_eq!(
+            manifest_doc["diagnostics"]["direct_solver_package"],
+            "nvidia_cudss"
+        );
+        let point_doc: serde_json::Value = serde_json::from_slice(
+            &std::fs::read(point_dir.join("frequency_0000.json")).expect("read point"),
+        )
+        .expect("parse point");
+        assert_eq!(point_doc["resolved_solver_method"], "gpu_sparse_direct_cudss");
+        assert_eq!(point_doc["direct_solver_package"], "nvidia_cudss");
+        assert_eq!(point_doc["gpu_device_resident_solver"], true);
+
+        seed_artifacts();
+        let fallback_native_json = r#"{
+            "resolved_solver_method": "gpu_operator_host_krylov",
+            "solver_fallback_reason": "vram_budget_exceeded"
+        }"#;
+        let fallback_prov = super::resolve_native_frequency_response_solver_provenance(
+            fallback_native_json,
+            "gpu_operator_host_krylov",
+        );
+        assert_eq!(
+            fallback_prov.resolved_solver_method,
+            "gpu_operator_host_krylov"
+        );
+        super::patch_frequency_response_solver_diagnostics_with_native_provenance(
+            &output_dir,
+            None,
+            None,
+            Some("auto"),
+            Some(fallback_prov.resolved_solver_method.as_str()),
+            Some(&fallback_prov.extra_fields),
+        )
+        .expect("patch fallback diagnostics");
+        let solver_fb: serde_json::Value = serde_json::from_slice(
+            &std::fs::read(diagnostics_dir.join("solver.v1.json")).expect("read solver.v1.json"),
+        )
+        .expect("parse solver.v1.json");
+        assert_eq!(
+            solver_fb["resolved_solver_method"],
+            "gpu_operator_host_krylov"
+        );
+        assert_eq!(solver_fb["solver_fallback_reason"], "vram_budget_exceeded");
+        let point_fb: serde_json::Value = serde_json::from_slice(
+            &std::fs::read(point_dir.join("frequency_0000.json")).expect("read point"),
+        )
+        .expect("parse point");
+        assert_eq!(point_fb["solver_fallback_reason"], "vram_budget_exceeded");
+
+        let default_prov = super::resolve_native_frequency_response_solver_provenance(
+            "{}",
+            "schur_reduced",
+        );
+        assert_eq!(default_prov.resolved_solver_method, "schur_reduced");
+        assert!(default_prov.extra_fields.is_empty());
+
+        let _ = std::fs::remove_dir_all(output_dir);
     }
 }

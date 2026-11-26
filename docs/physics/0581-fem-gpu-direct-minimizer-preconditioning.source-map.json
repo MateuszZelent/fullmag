@@ -11,7 +11,7 @@
     {
       "solver": "FEM",
       "device": "GPU",
-      "status": "implemented-unvalidated"
+      "status": "qualified-rtx4080-super"
     },
     {
       "solver": "FDM",
@@ -281,6 +281,24 @@
       "responsibility": "Przygotowuje i cache'uje workspace z assembled MFEM mass i exchange forms."
     },
     {
+      "id": "gpu-resolve",
+      "path": "backends/fem/gpu/cuda/relaxation/bb_exchange_mass.hpp",
+      "symbol": "gpu_bb_exchange_mass_resolve",
+      "responsibility": "Deklaruje rozstrzyganie polityki auto/none/exchange_mass oraz jawnego powodu fallbacku w runtime."
+    },
+    {
+      "id": "gpu-solve-project",
+      "path": "backends/fem/gpu/cuda/relaxation/bb_exchange_mass.cpp",
+      "symbol": "gpu_bb_exchange_mass_solve_and_project",
+      "responsibility": "Laczy PCG, opcjonalna projekcje okresowa, projekcje styczna i iloczyn spadku z jednym syncem hosta."
+    },
+    {
+      "id": "gpu-reuse-energy-finalize",
+      "path": "backends/fem/gpu/cuda/integrators/rk/rk_step_stats.cu",
+      "symbol": "gpu_rk_finalize_step_stats_control_readback_with_scalar_tail_reuse_energy",
+      "responsibility": "Finalizuje zaakceptowany krok PGBB z ponownym uzyciem slotow energii i ogonem krzywizny BB."
+    },
+    {
       "id": "gpu-tangent",
       "path": "backends/fem/gpu/cuda/relaxation/pgbb_kernels.cu",
       "symbol": "fullmag_cuda_relax_project_tangent_field",
@@ -317,10 +335,16 @@
       "responsibility": "Odrzuca kombinacje bez explicit GPU projected_gradient_bb."
     },
     {
+      "id": "runner-runtime-provenance",
+      "path": "crates/fullmag-runner/src/relaxation/provenance.rs",
+      "symbol": "apply_native_fem_gpu_bb_preconditioner_runtime_provenance",
+      "responsibility": "Atestuje status runtime preconditionera GPU BB w proweniencji bez nadpisywania intencji."
+    },
+    {
       "id": "gpu-kernel-launch",
       "path": "backends/fem/gpu/cuda/relaxation/bb_exchange_mass_kernels.cu",
       "symbol": "gpu_bb_pcg_launch",
-      "responsibility": "Realizuje persistent cooperative device PCG launch na immutable MFEM CSR."
+      "responsibility": "Realizuje 3-skladowy skalowany D^{-1/2} cooperative device PCG launch z certyfikatem bez underflow."
     },
     {
       "id": "python-study-policy",
@@ -333,6 +357,12 @@
       "path": "backends/fem/src/api.cpp",
       "symbol": "fullmag_fem_backend_set_gpu_bb_preconditioner",
       "responsibility": "Ustawia typowaną politykę BB w kontekście natywnym FEM."
+    },
+    {
+      "id": "native-cabi-status",
+      "path": "backends/fem/src/api.cpp",
+      "symbol": "fullmag_fem_backend_get_gpu_bb_preconditioner_status",
+      "responsibility": "Udostepnia atestowany status runtime preconditionera GPU BB przez C ABI."
     }
   ],
   "public_api": {

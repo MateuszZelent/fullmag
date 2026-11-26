@@ -57,6 +57,84 @@ __global__ void accumulate_heff_kernel(
     }
 }
 
+__global__ void accumulate_heff_fused_xyz_kernel(
+    FemGpuHeffAccumulateTerms terms,
+    double *__restrict__ h_eff_x,
+    double *__restrict__ h_eff_y,
+    double *__restrict__ h_eff_z,
+    int N)
+{
+    const int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i >= N) {
+        return;
+    }
+    const uint32_t mask = terms.active_mask;
+    double sx = terms.h_ex_x[i] + terms.h_demag_x[i];
+    double sy = terms.h_ex_y[i] + terms.h_demag_y[i];
+    double sz = terms.h_ex_z[i] + terms.h_demag_z[i];
+    if ((mask & FEM_GPU_HEFF_TERM_EXT) != 0u) {
+        sx += terms.h_ext_x[i];
+        sy += terms.h_ext_y[i];
+        sz += terms.h_ext_z[i];
+    }
+    if ((mask & FEM_GPU_HEFF_TERM_DRIVE) != 0u) {
+        sx += terms.h_drive_x[i];
+        sy += terms.h_drive_y[i];
+        sz += terms.h_drive_z[i];
+    }
+    if ((mask & FEM_GPU_HEFF_TERM_ANI) != 0u) {
+        sx += terms.h_ani_x[i];
+        sy += terms.h_ani_y[i];
+        sz += terms.h_ani_z[i];
+    }
+    if ((mask & FEM_GPU_HEFF_TERM_CUBIC) != 0u) {
+        sx += terms.h_cubic_x[i];
+        sy += terms.h_cubic_y[i];
+        sz += terms.h_cubic_z[i];
+    }
+    if ((mask & FEM_GPU_HEFF_TERM_DMI) != 0u) {
+        sx += terms.h_dmi_x[i];
+        sy += terms.h_dmi_y[i];
+        sz += terms.h_dmi_z[i];
+    }
+    if ((mask & FEM_GPU_HEFF_TERM_BULK_DMI) != 0u) {
+        sx += terms.h_bulk_dmi_x[i];
+        sy += terms.h_bulk_dmi_y[i];
+        sz += terms.h_bulk_dmi_z[i];
+    }
+    if ((mask & FEM_GPU_HEFF_TERM_OE_SCALED) != 0u) {
+        // Use explicit IEEE-754 rounded mul+add so nvcc FP contraction cannot
+        // turn scale*src + sx into an FMA that differs by 1 ULP from the
+        // split scale_field + add_scaled_field_inplace sequence.
+        const double oe_x = __dmul_rn(terms.h_oe_scale, terms.h_oe_src_x[i]);
+        const double oe_y = __dmul_rn(terms.h_oe_scale, terms.h_oe_src_y[i]);
+        const double oe_z = __dmul_rn(terms.h_oe_scale, terms.h_oe_src_z[i]);
+        terms.h_oe_out_x[i] = oe_x;
+        terms.h_oe_out_y[i] = oe_y;
+        terms.h_oe_out_z[i] = oe_z;
+        sx = __dadd_rn(sx, oe_x);
+        sy = __dadd_rn(sy, oe_y);
+        sz = __dadd_rn(sz, oe_z);
+    } else if ((mask & FEM_GPU_HEFF_TERM_OE_EXPLICIT) != 0u) {
+        sx += terms.h_oe_src_x[i];
+        sy += terms.h_oe_src_y[i];
+        sz += terms.h_oe_src_z[i];
+    }
+    if ((mask & FEM_GPU_HEFF_TERM_MEL) != 0u) {
+        sx += terms.h_mel_x[i];
+        sy += terms.h_mel_y[i];
+        sz += terms.h_mel_z[i];
+    }
+    if ((mask & FEM_GPU_HEFF_TERM_THERM) != 0u) {
+        sx += terms.h_therm_x[i];
+        sy += terms.h_therm_y[i];
+        sz += terms.h_therm_z[i];
+    }
+    h_eff_x[i] = sx;
+    h_eff_y[i] = sy;
+    h_eff_z[i] = sz;
+}
+
 __global__ void zero_indexed_values_kernel(
     double *__restrict__ values,
     const uint32_t *__restrict__ indices,
@@ -165,6 +243,22 @@ void fullmag_cuda_accumulate_heff(
     const int num_blocks = (N + kBlockSize - 1) / kBlockSize;
     accumulate_heff_kernel<<<num_blocks, kBlockSize, 0, stream>>>(
         h_ex, h_demag, h_ext, h_eff, N, has_ext);
+}
+
+void fullmag_cuda_accumulate_heff_fused_xyz(
+    const FemGpuHeffAccumulateTerms &terms,
+    double *h_eff_x,
+    double *h_eff_y,
+    double *h_eff_z,
+    int N,
+    cudaStream_t stream)
+{
+    if (N <= 0) {
+        return;
+    }
+    const int num_blocks = (N + kBlockSize - 1) / kBlockSize;
+    accumulate_heff_fused_xyz_kernel<<<num_blocks, kBlockSize, 0, stream>>>(
+        terms, h_eff_x, h_eff_y, h_eff_z, N);
 }
 
 void fullmag_cuda_zero_indexed_values(

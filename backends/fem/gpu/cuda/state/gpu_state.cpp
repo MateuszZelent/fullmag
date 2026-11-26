@@ -175,6 +175,56 @@ bool gpu_state_upload_magnetization_aos(
     return true;
 }
 
+bool gpu_state_upload_magnetization_aos_packed(
+    FemGpuState &state,
+    const double *m_xyz,
+    uint64_t len,
+    TransferAudit &audit,
+    void *raw_stream,
+    std::string &error)
+{
+    gpu_relax_invalidate_accepted_evaluation(state.relaxation);
+    if (!state.lifecycle.allocated) {
+        return true;
+    }
+    if (m_xyz == nullptr) {
+        error = "FemGpuState magnetization upload received a null pointer";
+        return false;
+    }
+    if (len != state.lifecycle.dof_len) {
+        error = "FemGpuState magnetization upload length mismatch";
+        return false;
+    }
+    if (state.packed_field_download.aos_device == nullptr ||
+        state.packed_field_download.dof_len != state.lifecycle.dof_len) {
+        error = "FemGpuState magnetization packed upload buffer is missing or has the wrong capacity";
+        return false;
+    }
+
+    if (!gpu_component_upload_aos_packed(
+            state.lifecycle,
+            state.magnetization.m,
+            state.packed_field_download.aos_device,
+            state.packed_field_download.dof_len,
+            raw_stream,
+            m_xyz,
+            len,
+            "magnetization",
+            audit,
+            error)) {
+        return false;
+    }
+    state.residency.device_state = FemGpuSyncState::DeviceClean;
+    state.residency.host_state = FemGpuSyncState::HostClean;
+    state.residency.source_of_truth = FULLMAG_FEM_RESIDENCY_HOST_SOURCE_OF_TRUTH;
+    state.rk.fsal_valid = false;
+    invalidate_rk_endpoint(state);
+    state.fields.accepted_observables_valid = false;
+    state.relaxation.nonlinear_cg_direction_valid = false;
+    gpu_relax_note_external_state_change(state.relaxation);
+    return true;
+}
+
 bool gpu_state_download_magnetization_aos(
     FemGpuState &state,
     std::vector<double> &out_m_xyz,
@@ -194,6 +244,35 @@ bool gpu_state_download_magnetization_aos(
             state.magnetization,
             out_m_xyz,
             audit,
+            error)) {
+        return false;
+    }
+
+    state.residency.host_state = FemGpuSyncState::HostClean;
+    return true;
+}
+
+bool gpu_state_download_magnetization_aos_packed(
+    FemGpuState &state,
+    std::vector<double> &out_m_xyz,
+    TransferAudit &audit,
+    void *raw_stream,
+    std::string &error)
+{
+    if (!state.lifecycle.allocated) {
+        return true;
+    }
+    if (state.magnetization.m.x == nullptr || state.magnetization.m.y == nullptr || state.magnetization.m.z == nullptr) {
+        error = "FemGpuState magnetization readback requires allocated device buffers";
+        return false;
+    }
+    if (!gpu_state_download_component_aos_packed(
+            state,
+            state.magnetization.m,
+            out_m_xyz,
+            audit,
+            raw_stream,
+            "magnetization",
             error)) {
         return false;
     }

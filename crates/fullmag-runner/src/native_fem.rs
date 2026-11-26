@@ -77,6 +77,20 @@ pub(crate) use plan::resolved_native_fem_demag_solver_policy;
 pub(crate) use plan::{
     native_fem_mfem_device_string_requests_gpu, native_fem_plan_requests_gpu_mfem_device,
 };
+
+#[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct NativeFemGpuBbPreconditionerStatus {
+    pub(crate) requested_policy: &'static str,
+    pub(crate) resolved_enabled: bool,
+    #[allow(dead_code)]
+    pub(crate) last_iterations: u64,
+    #[allow(dead_code)]
+    pub(crate) last_relative_residual: f64,
+    pub(crate) solver_kind: String,
+    pub(crate) preconditioner_kind: String,
+    pub(crate) fallback_reason: Option<String>,
+}
 #[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
 pub(crate) use runtime_info::{
     stage_completion_from_ffi, stage_completion_is_representability_stationary,
@@ -4594,6 +4608,79 @@ impl NativeFemBackend {
             return Err(self.last_error_or("FEM GPU demag linear-solver provenance query failed"));
         }
         NativeFemGpuDemagLinearSolverProvenance::from_ffi(raw)
+    }
+
+    /// Runtime resolution and certification status of the native GPU
+    /// projected-gradient BB exchange-mass preconditioner.
+    pub(crate) fn gpu_bb_preconditioner_status(
+        &self,
+    ) -> Result<NativeFemGpuBbPreconditionerStatus, RunError> {
+        let mut raw = ffi::fullmag_fem_gpu_bb_preconditioner_status {
+            abi_version: ffi::FULLMAG_FEM_GPU_BB_PRECONDITIONER_STATUS_ABI_VERSION,
+            struct_size: std::mem::size_of::<ffi::fullmag_fem_gpu_bb_preconditioner_status>()
+                as u32,
+            requested_policy: 0,
+            resolved_enabled: 0,
+            last_iterations: 0,
+            last_relative_residual: 0.0,
+            solver_kind: std::ptr::null(),
+            preconditioner_kind: std::ptr::null(),
+            fallback_reason: std::ptr::null(),
+        };
+        let rc = unsafe {
+            ffi::fullmag_fem_backend_get_gpu_bb_preconditioner_status(
+                self.handle as *const _,
+                &mut raw,
+            )
+        };
+        if rc != ffi::FULLMAG_FEM_OK {
+            return Err(self.last_error_or("FEM GPU BB preconditioner status query failed"));
+        }
+        if raw.abi_version != ffi::FULLMAG_FEM_GPU_BB_PRECONDITIONER_STATUS_ABI_VERSION
+            || raw.struct_size
+                != std::mem::size_of::<ffi::fullmag_fem_gpu_bb_preconditioner_status>() as u32
+        {
+            return Err(RunError {
+                message: format!(
+                    "FEM GPU BB preconditioner status ABI mismatch (version={}, size={})",
+                    raw.abi_version, raw.struct_size
+                ),
+            });
+        }
+        let requested_policy = match raw.requested_policy {
+            0 => "auto",
+            1 => "none",
+            2 => "exchange_mass",
+            other => {
+                return Err(RunError {
+                    message: format!(
+                        "FEM GPU BB preconditioner status returned unknown policy {other}"
+                    ),
+                });
+            }
+        };
+        let read_c_str = |ptr: *const std::os::raw::c_char, fallback: &str| -> String {
+            if ptr.is_null() {
+                fallback.to_string()
+            } else {
+                unsafe { std::ffi::CStr::from_ptr(ptr) }
+                    .to_string_lossy()
+                    .into_owned()
+            }
+        };
+        let solver_kind = read_c_str(raw.solver_kind, "not_used");
+        let preconditioner_kind = read_c_str(raw.preconditioner_kind, "not_used");
+        let fallback_reason_raw = read_c_str(raw.fallback_reason, "");
+        let fallback_reason = (!fallback_reason_raw.is_empty()).then_some(fallback_reason_raw);
+        Ok(NativeFemGpuBbPreconditionerStatus {
+            requested_policy,
+            resolved_enabled: raw.resolved_enabled != 0,
+            last_iterations: raw.last_iterations,
+            last_relative_residual: raw.last_relative_residual,
+            solver_kind,
+            preconditioner_kind,
+            fallback_reason,
+        })
     }
 
     pub(crate) fn gpu_state_info(&self) -> Result<NativeFemGpuStateInfo, RunError> {

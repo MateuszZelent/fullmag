@@ -45,7 +45,8 @@ bool gpu_rk_compute_legacy_sparse_exchange(
     cudaStream_t stream,
     std::string &reason,
     FemGpuExecutionReceiptRuntimeState *execution_receipt,
-    GpuPerformanceCounterState *performance_counters)
+    GpuPerformanceCounterState *performance_counters,
+    bool compensated_accumulation)
 {
     if (!gpu.legacy_exchange.uploaded ||
         gpu.legacy_exchange.csr_row_offsets == nullptr ||
@@ -111,7 +112,8 @@ bool gpu_rk_compute_legacy_sparse_exchange(
             gpu.fields.h_ex.z,
             rows,
             static_cast<int>(gpu.legacy_exchange.periodic_reduced_rows),
-            stream);
+            stream,
+            compensated_accumulation);
         periodic_reduced_path = true;
     } else {
         if (gpu.legacy_exchange.row_scale == nullptr) {
@@ -127,7 +129,8 @@ bool gpu_rk_compute_legacy_sparse_exchange(
                 gpu.mesh_regions.magnetic_node_mask,
                 gpu.fields.h_ex.x,
                 rows,
-                stream);
+                stream,
+                compensated_accumulation);
             fullmag_cuda_legacy_sparse_exchange(
                 gpu.legacy_exchange.csr_row_offsets,
                 gpu.legacy_exchange.csr_col_indices,
@@ -138,7 +141,8 @@ bool gpu_rk_compute_legacy_sparse_exchange(
                 gpu.mesh_regions.magnetic_node_mask,
                 gpu.fields.h_ex.y,
                 rows,
-                stream);
+                stream,
+                compensated_accumulation);
             fullmag_cuda_legacy_sparse_exchange(
                 gpu.legacy_exchange.csr_row_offsets,
                 gpu.legacy_exchange.csr_col_indices,
@@ -149,7 +153,8 @@ bool gpu_rk_compute_legacy_sparse_exchange(
                 gpu.mesh_regions.magnetic_node_mask,
                 gpu.fields.h_ex.z,
                 rows,
-                stream);
+                stream,
+                compensated_accumulation);
         } else {
             if (!gpu.legacy_exchange.row_scale_ready) {
                 fullmag_cuda_prepare_exchange_row_scale(
@@ -174,7 +179,8 @@ bool gpu_rk_compute_legacy_sparse_exchange(
                 gpu.fields.h_ex.y,
                 gpu.fields.h_ex.z,
                 rows,
-                stream);
+                stream,
+                compensated_accumulation);
         }
     }
     if (!cuda_launch_ok("launch GPU legacy sparse exchange", reason)) {

@@ -86,10 +86,25 @@ bool gpu_state_upload_magnetization_aos(
     TransferAudit &audit,
     std::string &error);
 
+bool gpu_state_upload_magnetization_aos_packed(
+    FemGpuState &state,
+    const double *m_xyz,
+    uint64_t len,
+    TransferAudit &audit,
+    void *raw_stream,
+    std::string &error);
+
 bool gpu_state_download_magnetization_aos(
     FemGpuState &state,
     std::vector<double> &out_m_xyz,
     TransferAudit &audit,
+    std::string &error);
+
+bool gpu_state_download_magnetization_aos_packed(
+    FemGpuState &state,
+    std::vector<double> &out_m_xyz,
+    TransferAudit &audit,
+    void *raw_stream,
     std::string &error);
 
 bool gpu_state_download_component_aos(

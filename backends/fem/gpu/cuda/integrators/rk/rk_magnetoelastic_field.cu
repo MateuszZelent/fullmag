@@ -83,7 +83,7 @@ bool gpu_rk_compute_magnetoelastic_field_contribution(
         gpu.fields.h_mel.x,
         gpu.fields.h_mel.y,
         gpu.fields.h_mel.z,
-        gpu.reductions.scalar_workspace,
+        nullptr,
         ctx.magnetoelastic.b1,
         ctx.magnetoelastic.b2,
         eps[0],

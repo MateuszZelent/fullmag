@@ -112,6 +112,9 @@ pub(crate) struct NativeDrivenFrequencyResponseRequest<'a> {
         Option<NativeDrivenFrequencyResponsePeriodicAirboxCoupledBlockProblem<'a>>,
     pub tiny_validation_problem: Option<NativeDrivenFrequencyResponseTinyValidationProblem<'a>>,
     pub mfem_operator_problem: Option<NativeDrivenFrequencyResponseMfemOperatorProblem<'a>>,
+    pub gpu_direct_policy: u32,
+    #[cfg(feature = "fem-gpu")]
+    pub demag_sparse_blocks: Option<&'a ffi::fullmag_fem_demag_poisson_sparse_blocks>,
 }
 
 #[derive(Debug, Clone)]
@@ -1663,27 +1666,27 @@ fn solve_native_driven_frequency_response_impl(
     };
     let mfem_apply_demag_tangent_with_potential =
         mfem_operator.and_then(|problem| problem.apply_demag_tangent_with_potential);
+    let direct_options = ffi::fullmag_fem_frequency_domain_gpu_direct_options {
+        abi_version: ffi::FULLMAG_FEM_FREQUENCY_DOMAIN_GPU_DIRECT_OPTIONS_ABI_VERSION,
+        struct_size: std::mem::size_of::<ffi::fullmag_fem_frequency_domain_gpu_direct_options>()
+            as u32,
+        gpu_direct_policy: request.gpu_direct_policy,
+        reserved: 0,
+        demag_sparse_blocks: request
+            .demag_sparse_blocks
+            .map_or(std::ptr::null(), |blocks| {
+                blocks as *const ffi::fullmag_fem_demag_poisson_sparse_blocks
+            }),
+    };
     let mut ffi_result = NativeDrivenFrequencyResponseFfiResult::default();
     let rc = unsafe {
-        if let Some(identity) = ffi_identity.as_ref() {
-            ffi::fullmag_fem_frequency_domain_solve_driven_response_with_identity_v1(
-                &ffi_request,
-                identity,
-                mfem_apply_demag_tangent_with_potential,
-                &mut ffi_result.inner,
-            )
-        } else if mfem_apply_demag_tangent_with_potential.is_some() {
-            ffi::fullmag_fem_frequency_domain_solve_driven_response_v10(
-                &ffi_request,
-                mfem_apply_demag_tangent_with_potential,
-                &mut ffi_result.inner,
-            )
-        } else {
-            ffi::fullmag_fem_frequency_domain_solve_driven_response(
-                &ffi_request,
-                &mut ffi_result.inner,
-            )
-        }
+        ffi::fullmag_fem_frequency_domain_solve_driven_response_v14(
+            &ffi_request,
+            ffi_identity.as_ref().map_or(std::ptr::null(), |v| v),
+            mfem_apply_demag_tangent_with_potential,
+            &direct_options,
+            &mut ffi_result.inner,
+        )
     };
     if rc != ffi::FULLMAG_FEM_OK {
         return Err(format!(
@@ -1691,6 +1694,25 @@ fn solve_native_driven_frequency_response_impl(
         ));
     }
     Ok(ffi_result.to_owned_result())
+}
+
+#[cfg(feature = "fem-gpu")]
+impl super::NativeFemBackend {
+    pub(crate) fn export_demag_poisson_sparse_blocks_raw(
+        &mut self,
+    ) -> Result<ffi::fullmag_fem_demag_poisson_sparse_blocks, crate::types::RunError> {
+        let mut blocks: ffi::fullmag_fem_demag_poisson_sparse_blocks =
+            unsafe { std::mem::zeroed() };
+        let status = unsafe {
+            ffi::fullmag_fem_backend_export_demag_poisson_sparse_blocks(self.handle, &mut blocks)
+        };
+        if status != ffi::FULLMAG_FEM_OK {
+            return Err(self.last_error_or(
+                "failed to export FEM demag Poisson sparse blocks for GPU direct solver",
+            ));
+        }
+        Ok(blocks)
+    }
 }
 
 #[cfg(any(feature = "fem-gpu", feature = "fem-native", test))]
@@ -5422,6 +5444,7 @@ mod tests {
                     periodic_airbox_coupled_block_problem: None,
                     tiny_validation_problem: None,
                     mfem_operator_problem: None,
+                    gpu_direct_policy: 0,
                 })
                 .expect_err("native solve should require fem-gpu feature");
             assert!(err.contains("fem-gpu"));
@@ -6234,6 +6257,9 @@ mod tests {
             periodic_airbox_magnetostatic_periodic_node_pairs: &[],
             periodic_airbox_coupled_block_problem: None,
             tiny_validation_problem: None,
+            gpu_direct_policy: 0,
+            #[cfg(feature = "fem-gpu")]
+            demag_sparse_blocks: None,
             mfem_operator_problem: Some(NativeDrivenFrequencyResponseMfemOperatorProblem {
                 equilibrium_m: &equilibrium_m,
                 h_ext_a_per_m: &h_ext_a_per_m,
@@ -6305,6 +6331,9 @@ mod tests {
             periodic_airbox_magnetostatic_periodic_node_pairs: &[],
             periodic_airbox_coupled_block_problem: None,
             tiny_validation_problem: None,
+            gpu_direct_policy: 0,
+            #[cfg(feature = "fem-gpu")]
+            demag_sparse_blocks: None,
             mfem_operator_problem: Some(NativeDrivenFrequencyResponseMfemOperatorProblem {
                 equilibrium_m: &equilibrium_m,
                 h_ext_a_per_m: &h_ext_a_per_m,
@@ -6410,6 +6439,9 @@ mod tests {
             periodic_airbox_magnetostatic_periodic_node_pairs: &[],
             periodic_airbox_coupled_block_problem: None,
             tiny_validation_problem: None,
+            gpu_direct_policy: 0,
+            #[cfg(feature = "fem-gpu")]
+            demag_sparse_blocks: None,
             mfem_operator_problem: Some(NativeDrivenFrequencyResponseMfemOperatorProblem {
                 equilibrium_m: &equilibrium_m,
                 h_ext_a_per_m: &h_ext_a_per_m,
@@ -6533,6 +6565,9 @@ mod tests {
             periodic_airbox_magnetostatic_periodic_node_pairs: &[],
             periodic_airbox_coupled_block_problem: None,
             tiny_validation_problem: None,
+            gpu_direct_policy: 0,
+            #[cfg(feature = "fem-gpu")]
+            demag_sparse_blocks: None,
             mfem_operator_problem: Some(NativeDrivenFrequencyResponseMfemOperatorProblem {
                 equilibrium_m: &equilibrium_m,
                 h_ext_a_per_m: &h_ext_a_per_m,
@@ -6638,6 +6673,9 @@ mod tests {
             periodic_airbox_magnetostatic_periodic_node_pairs: &[],
             periodic_airbox_coupled_block_problem: None,
             mfem_operator_problem: None,
+            gpu_direct_policy: 0,
+            #[cfg(feature = "fem-gpu")]
+            demag_sparse_blocks: None,
             tiny_validation_problem: Some(NativeDrivenFrequencyResponseTinyValidationProblem {
                 tangent_dof_count: 2,
                 stiffness_matrix_row_major: None,
@@ -6700,6 +6738,9 @@ mod tests {
             periodic_airbox_magnetostatic_periodic_node_pairs: &[],
             periodic_airbox_coupled_block_problem: None,
             mfem_operator_problem: None,
+            gpu_direct_policy: 0,
+            #[cfg(feature = "fem-gpu")]
+            demag_sparse_blocks: None,
             tiny_validation_problem: Some(NativeDrivenFrequencyResponseTinyValidationProblem {
                 tangent_dof_count: 2,
                 stiffness_matrix_row_major: None,
@@ -6762,6 +6803,9 @@ mod tests {
             periodic_airbox_magnetostatic_periodic_node_pairs: &[],
             periodic_airbox_coupled_block_problem: None,
             mfem_operator_problem: None,
+            gpu_direct_policy: 0,
+            #[cfg(feature = "fem-gpu")]
+            demag_sparse_blocks: None,
             tiny_validation_problem: Some(NativeDrivenFrequencyResponseTinyValidationProblem {
                 tangent_dof_count: 2,
                 stiffness_matrix_row_major: None,
@@ -6812,6 +6856,9 @@ mod tests {
                 periodic_airbox_magnetostatic_periodic_node_pairs: &[],
                 periodic_airbox_coupled_block_problem: None,
                 mfem_operator_problem: None,
+                gpu_direct_policy: 0,
+                #[cfg(feature = "fem-gpu")]
+                demag_sparse_blocks: None,
                 tiny_validation_problem: Some(NativeDrivenFrequencyResponseTinyValidationProblem {
                     tangent_dof_count: 2,
                     stiffness_matrix_row_major: None,
@@ -6995,6 +7042,9 @@ mod tests {
             periodic_airbox_magnetostatic_periodic_node_pairs: &[],
             periodic_airbox_coupled_block_problem: None,
             tiny_validation_problem: None,
+            gpu_direct_policy: 0,
+            #[cfg(feature = "fem-gpu")]
+            demag_sparse_blocks: None,
             mfem_operator_problem: Some(NativeDrivenFrequencyResponseMfemOperatorProblem {
                 equilibrium_m: &equilibrium_m,
                 h_ext_a_per_m: &h_ext_a_per_m,
@@ -7105,6 +7155,9 @@ mod tests {
             periodic_airbox_magnetostatic_periodic_node_pairs: &[],
             periodic_airbox_coupled_block_problem: None,
             tiny_validation_problem: None,
+            gpu_direct_policy: 0,
+            #[cfg(feature = "fem-gpu")]
+            demag_sparse_blocks: None,
             mfem_operator_problem: Some(NativeDrivenFrequencyResponseMfemOperatorProblem {
                 equilibrium_m: &equilibrium_m,
                 h_ext_a_per_m: &h_ext_a_per_m,
@@ -7206,6 +7259,9 @@ mod tests {
             periodic_airbox_magnetostatic_periodic_node_pairs: &[],
             periodic_airbox_coupled_block_problem: None,
             tiny_validation_problem: None,
+            gpu_direct_policy: 0,
+            #[cfg(feature = "fem-gpu")]
+            demag_sparse_blocks: None,
             mfem_operator_problem: Some(NativeDrivenFrequencyResponseMfemOperatorProblem {
                 equilibrium_m: &equilibrium_m,
                 h_ext_a_per_m: &h_ext_a_per_m,

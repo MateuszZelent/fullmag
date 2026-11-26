@@ -38,5 +38,15 @@ cudaError_t fullmag_cuda_pack_soa_to_aos(
     int N,
     cudaStream_t stream);
 
+/// Unpack a device AoS buffer into device SoA components on an explicit stream.
+/// The caller must provide a non-default stream and persistent input storage.
+cudaError_t fullmag_cuda_unpack_aos_to_soa(
+    const double *aos_xyz,
+    double *x,
+    double *y,
+    double *z,
+    int N,
+    cudaStream_t stream);
+
 } // namespace fullmag::fem
 #endif // FULLMAG_HAS_CUDA_RUNTIME

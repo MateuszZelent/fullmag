@@ -436,6 +436,7 @@ bool finalize_step_stats_impl(
     bool control_scalar_readback,
     double *tail_scalars,
     size_t tail_count,
+    bool skip_energy_reduction,
     std::string &reason)
 {
     if (tail_count > 0 &&
@@ -461,7 +462,8 @@ bool finalize_step_stats_impl(
         return true;
     }
 
-    if (!gpu_rk_reduce_final_energy_terms(ctx, stream, n, blocks, reason)) {
+    if (!skip_energy_reduction &&
+        !gpu_rk_reduce_final_energy_terms(ctx, stream, n, blocks, reason)) {
         return false;
     }
 
@@ -470,7 +472,7 @@ bool finalize_step_stats_impl(
     }
 
     const size_t read_count =
-        tail_count > 0 ? FEM_GPU_SCALAR_RESULT_SLOTS : kGpuFinalScalarSlots;
+        tail_count > 0 ? (kGpuFinalScalarSlots + tail_count) : kGpuFinalScalarSlots;
     const bool read_ok = control_scalar_readback
         ? gpu_rk_read_control_scalar_results(
               ctx,
@@ -527,7 +529,7 @@ bool gpu_rk_finalize_step_stats(
     fullmag_fem_step_stats &stats,
     std::string &reason)
 {
-    if (!finalize_step_stats_impl(ctx, stats, false, nullptr, 0, reason)) {
+    if (!finalize_step_stats_impl(ctx, stats, false, nullptr, 0, false, reason)) {
         return false;
     }
     gpu_rk_note_completed_final_reductions(ctx);
@@ -539,7 +541,7 @@ bool gpu_rk_finalize_step_stats_control_readback(
     fullmag_fem_step_stats &stats,
     std::string &reason)
 {
-    return finalize_step_stats_impl(ctx, stats, true, nullptr, 0, reason);
+    return finalize_step_stats_impl(ctx, stats, true, nullptr, 0, false, reason);
 }
 
 bool gpu_rk_finalize_step_stats_control_readback_with_scalar_tail(
@@ -549,7 +551,19 @@ bool gpu_rk_finalize_step_stats_control_readback_with_scalar_tail(
     size_t tail_count,
     std::string &reason)
 {
-    return finalize_step_stats_impl(ctx, stats, true, tail_scalars, tail_count, reason);
+    return finalize_step_stats_impl(
+        ctx, stats, true, tail_scalars, tail_count, false, reason);
+}
+
+bool gpu_rk_finalize_step_stats_control_readback_with_scalar_tail_reuse_energy(
+    Context &ctx,
+    fullmag_fem_step_stats &stats,
+    double *tail_scalars,
+    size_t tail_count,
+    std::string &reason)
+{
+    return finalize_step_stats_impl(
+        ctx, stats, true, tail_scalars, tail_count, true, reason);
 }
 
 } // namespace fullmag::fem

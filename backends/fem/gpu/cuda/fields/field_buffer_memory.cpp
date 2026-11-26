@@ -17,6 +17,7 @@ bool gpu_field_buffers_allocate(
     uint64_t &device_bytes,
     std::string &error)
 {
+    fields.h_drive_zeroed = false;
     return gpu_device_allocate_component(fields.h_ex, node_count, device_bytes, error) &&
            gpu_device_allocate_component(fields.h_demag, node_count, device_bytes, error) &&
            gpu_device_allocate_component(fields.h_ext, node_count, device_bytes, error) &&
@@ -41,6 +42,7 @@ void gpu_field_buffers_free(FemGpuFieldBufferDeviceState &fields)
     fields.regional_drive_count = 0;
     fields.regional_drive_point_count = 0;
     fields.regional_drive_device_bytes = 0;
+    fields.h_drive_zeroed = false;
     gpu_device_free_component(fields.h_ex);
     gpu_device_free_component(fields.h_demag);
     gpu_device_free_component(fields.h_ext);

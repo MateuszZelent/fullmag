@@ -12,7 +12,8 @@
 
 namespace fullmag::fem {
 
-/// Prescribed-strain magnetoelastic field and per-block energy partials.
+/// Prescribed-strain magnetoelastic field and optional per-block energy partials.
+/// Passing block_sums == nullptr skips energy accumulation and block reduction.
 void fullmag_cuda_magnetoelastic_field_energy_blocks(
     const double *mx,
     const double *my,

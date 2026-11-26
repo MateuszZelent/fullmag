@@ -10,6 +10,7 @@
 #include "gpu/cuda/integrators/rk/rk_oersted_field.hpp"
 
 #include "context.hpp"
+#include "gpu/cuda/fields/vector_field_kernels.hpp"
 #include "gpu/cuda/interactions/oersted/oersted_kernels.hpp"
 
 #include <cuda_runtime.h>
@@ -63,6 +64,46 @@ double gpu_rk_oersted_scale(const Context &ctx, double evaluation_time_s)
 }
 
 } // namespace
+
+bool gpu_rk_prepare_oersted_heff_term(
+    Context &ctx,
+    double evaluation_time_s,
+    FemGpuHeffAccumulateTerms &terms,
+    std::string &reason)
+{
+    if (!ctx.oersted.has_cylinder && !ctx.oersted.has_explicit_field) {
+        return true;
+    }
+
+    auto &gpu = ctx.gpu_state.device;
+    if (gpu.fields.h_oe.x == nullptr || gpu.fields.h_oe.y == nullptr || gpu.fields.h_oe.z == nullptr) {
+        reason = "GPU RK Oersted field requires device-resident H_oe buffers";
+        return false;
+    }
+    if (ctx.oersted.has_cylinder) {
+        if (gpu.fields.h_oe_basis_per_ampere.x == nullptr ||
+            gpu.fields.h_oe_basis_per_ampere.y == nullptr ||
+            gpu.fields.h_oe_basis_per_ampere.z == nullptr) {
+            reason = "GPU RK Oersted cylinder field requires device-resident H_oe basis buffers";
+            return false;
+        }
+        terms.h_oe_src_x = gpu.fields.h_oe_basis_per_ampere.x;
+        terms.h_oe_src_y = gpu.fields.h_oe_basis_per_ampere.y;
+        terms.h_oe_src_z = gpu.fields.h_oe_basis_per_ampere.z;
+        terms.h_oe_out_x = gpu.fields.h_oe.x;
+        terms.h_oe_out_y = gpu.fields.h_oe.y;
+        terms.h_oe_out_z = gpu.fields.h_oe.z;
+        terms.h_oe_scale = gpu_rk_oersted_scale(ctx, evaluation_time_s);
+        terms.active_mask |= FEM_GPU_HEFF_TERM_OE_SCALED;
+    } else {
+        terms.h_oe_src_x = gpu.fields.h_oe.x;
+        terms.h_oe_src_y = gpu.fields.h_oe.y;
+        terms.h_oe_src_z = gpu.fields.h_oe.z;
+        terms.h_oe_scale = 1.0;
+        terms.active_mask |= FEM_GPU_HEFF_TERM_OE_EXPLICIT;
+    }
+    return true;
+}
 
 bool gpu_rk_accumulate_oersted_field(
     Context &ctx,

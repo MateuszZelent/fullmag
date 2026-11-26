@@ -101,6 +101,7 @@ SUPPORTED_FREQUENCY_RESPONSE_SOLVER_METHODS = {
     "modal_reduced",
     "gpu_operator_host_krylov",
     "gpu_device_krylov",
+    "gpu_sparse_direct",
 }
 
 SUPPORTED_FREQUENCY_RESPONSE_PRECONDITIONERS = {
