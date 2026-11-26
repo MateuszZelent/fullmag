@@ -104,18 +104,6 @@ and intentionally rejected or deferred rather than shipped:
 | Automated CPU/GPU runtime crossover dispatch (`rtx4080-sm89.json`) | `FEM CPU/GPU` | **Unqualified (`qualified: false`)** | Dispatch infrastructure exists, but crossover profiles are intentionally unqualified; availability-first explicit device selection remains canonical. |
 | Distributed `ParMesh` MPI / OpenMP / libCEED partial assembly for main magnetic FEM | `FEM CPU` | **Not implemented** | Main magnetic `FEM CPU` lane runs on `MPI_COMM_SELF` with legacy sparse CSR assembly. |
 
-## Related multiphysics HPC architecture
-
-For coupled bidirectional magnon–phonon numerical methods, elastodynamic time integrators
-(`Velocity-Verlet` + Hermite multirate, `HEVI IMEX-z PC2`, Chung–Hulbert Generalized-$\alpha$),
-`GpuElasticCudssSolver` Frozen-Factor PCG, `libCEED` Partial Assembly + `Hypre 3.1.0` GPU
-`BoomerAMG`, `oneMKL PARDISO` (`mkl_gnu_thread` + `libgomp`), `MUMPS` exact Sylvester inertia,
-`ParMETIS` `ncon = 3` partitioning, and CUDA 3.5D ping-pong / AVX-512 / OpenMPI acceleration, see
-{doc}`/physics/interactions/magnetoelastic/numerical-methods-and-libraries` (and
-{doc}`/physics/interactions/magnetoelastic/index` for the currently executable FEM GPU
-prescribed-strain kernel with `ComputeEnergy` gating, fused $\mathbf{H}_{\mathrm{eff}}$, and
-0-ULP FP64 parity).
-
 ## Optimization reference pages
 
 ```{toctree}
