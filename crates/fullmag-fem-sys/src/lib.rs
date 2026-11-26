@@ -972,6 +972,54 @@ pub struct fullmag_fem_gpu_demag_linear_solver_provenance_v1 {
     pub factor_device_bytes: u64,
 }
 
+pub const FULLMAG_FEM_GPU_BB_PRECONDITIONER_STATUS_ABI_VERSION: u32 = 1;
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct fullmag_fem_gpu_bb_preconditioner_status {
+    pub abi_version: u32,
+    pub struct_size: u32,
+    pub requested_policy: u32,
+    pub resolved_enabled: u32,
+    pub last_iterations: u64,
+    pub last_relative_residual: f64,
+    pub solver_kind: *const c_char,
+    pub preconditioner_kind: *const c_char,
+    pub fallback_reason: *const c_char,
+}
+
+const _: () = {
+    assert!(std::mem::size_of::<fullmag_fem_gpu_bb_preconditioner_status>() == 56);
+    assert!(std::mem::align_of::<fullmag_fem_gpu_bb_preconditioner_status>() == 8);
+    assert!(std::mem::offset_of!(fullmag_fem_gpu_bb_preconditioner_status, abi_version) == 0);
+    assert!(std::mem::offset_of!(fullmag_fem_gpu_bb_preconditioner_status, struct_size) == 4);
+    assert!(
+        std::mem::offset_of!(fullmag_fem_gpu_bb_preconditioner_status, requested_policy) == 8
+    );
+    assert!(
+        std::mem::offset_of!(fullmag_fem_gpu_bb_preconditioner_status, resolved_enabled) == 12
+    );
+    assert!(
+        std::mem::offset_of!(fullmag_fem_gpu_bb_preconditioner_status, last_iterations) == 16
+    );
+    assert!(
+        std::mem::offset_of!(
+            fullmag_fem_gpu_bb_preconditioner_status,
+            last_relative_residual
+        ) == 24
+    );
+    assert!(std::mem::offset_of!(fullmag_fem_gpu_bb_preconditioner_status, solver_kind) == 32);
+    assert!(
+        std::mem::offset_of!(
+            fullmag_fem_gpu_bb_preconditioner_status,
+            preconditioner_kind
+        ) == 40
+    );
+    assert!(
+        std::mem::offset_of!(fullmag_fem_gpu_bb_preconditioner_status, fallback_reason) == 48
+    );
+};
+
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum fullmag_fem_host_thread_policy_reason {
@@ -2301,6 +2349,90 @@ const _: () = {
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
+pub struct fullmag_fem_sparse_csr_f64_view {
+    pub num_rows: u64,
+    pub num_cols: u64,
+    pub nnz: u64,
+    pub row_ptr: *const u32,
+    pub col_indices: *const u32,
+    pub values: *const f64,
+}
+
+pub const FULLMAG_FEM_DEMAG_POISSON_SPARSE_BLOCKS_ABI_VERSION: u32 = 1;
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct fullmag_fem_demag_poisson_sparse_blocks {
+    pub abi_version: u32,
+    pub struct_size: u32,
+    pub is_periodic_reduced: u32,
+    pub reserved: u32,
+    pub full_node_count: u64,
+    pub phi_dof_count: u64,
+    pub magnetic_node_count: u64,
+    pub ess_tdof_count: u64,
+    pub poisson_matrix: fullmag_fem_sparse_csr_f64_view,
+    pub rhs_x: fullmag_fem_sparse_csr_f64_view,
+    pub rhs_y: fullmag_fem_sparse_csr_f64_view,
+    pub rhs_z: fullmag_fem_sparse_csr_f64_view,
+    pub recovery_x: fullmag_fem_sparse_csr_f64_view,
+    pub recovery_y: fullmag_fem_sparse_csr_f64_view,
+    pub recovery_z: fullmag_fem_sparse_csr_f64_view,
+    pub magnetic_node_indices: *const u32,
+    pub ess_tdofs: *const u32,
+    pub periodic_reduced_node: *const u32,
+    pub owner_state: *mut c_void,
+}
+
+pub const FULLMAG_FEM_FREQUENCY_DOMAIN_GPU_DIRECT_POLICY_AUTO: u32 = 0;
+pub const FULLMAG_FEM_FREQUENCY_DOMAIN_GPU_DIRECT_POLICY_DISABLED: u32 = 1;
+pub const FULLMAG_FEM_FREQUENCY_DOMAIN_GPU_DIRECT_POLICY_REQUIRED: u32 = 2;
+
+pub const FULLMAG_FEM_FREQUENCY_DOMAIN_GPU_DIRECT_OPTIONS_ABI_VERSION: u32 = 1;
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct fullmag_fem_frequency_domain_gpu_direct_options {
+    pub abi_version: u32,
+    pub struct_size: u32,
+    pub gpu_direct_policy: u32,
+    pub reserved: u32,
+    pub demag_sparse_blocks: *const fullmag_fem_demag_poisson_sparse_blocks,
+}
+
+const _: () = {
+    assert!(std::mem::size_of::<fullmag_fem_sparse_csr_f64_view>() == 48);
+    assert!(std::mem::align_of::<fullmag_fem_sparse_csr_f64_view>() == 8);
+    assert!(std::mem::size_of::<fullmag_fem_demag_poisson_sparse_blocks>() == 416);
+    assert!(std::mem::align_of::<fullmag_fem_demag_poisson_sparse_blocks>() == 8);
+    assert!(
+        std::mem::offset_of!(fullmag_fem_demag_poisson_sparse_blocks, poisson_matrix) == 48
+    );
+    assert!(
+        std::mem::offset_of!(
+            fullmag_fem_demag_poisson_sparse_blocks,
+            magnetic_node_indices
+        ) == 384
+    );
+    assert!(std::mem::offset_of!(fullmag_fem_demag_poisson_sparse_blocks, owner_state) == 408);
+    assert!(std::mem::size_of::<fullmag_fem_frequency_domain_gpu_direct_options>() == 24);
+    assert!(std::mem::align_of::<fullmag_fem_frequency_domain_gpu_direct_options>() == 8);
+    assert!(
+        std::mem::offset_of!(
+            fullmag_fem_frequency_domain_gpu_direct_options,
+            gpu_direct_policy
+        ) == 8
+    );
+    assert!(
+        std::mem::offset_of!(
+            fullmag_fem_frequency_domain_gpu_direct_options,
+            demag_sparse_blocks
+        ) == 16
+    );
+};
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
 pub struct fullmag_fem_frequency_domain_driven_response_request {
     pub node_count: u64,
     pub tangent_dof_count: u64,
@@ -3553,6 +3685,13 @@ extern "C" {
         mfem_apply_demag_tangent_with_potential: fullmag_fem_frequency_domain_apply_with_potential_callback,
         out_result: *mut fullmag_fem_frequency_domain_solve_result,
     ) -> i32;
+    pub fn fullmag_fem_frequency_domain_solve_driven_response_v14(
+        request: *const fullmag_fem_frequency_domain_driven_response_request,
+        identity: *const FullmagFemFrequencyDomainArtifactIdentityV1,
+        mfem_apply_demag_tangent_with_potential: fullmag_fem_frequency_domain_apply_with_potential_callback,
+        direct_options: *const fullmag_fem_frequency_domain_gpu_direct_options,
+        out_result: *mut fullmag_fem_frequency_domain_solve_result,
+    ) -> i32;
 
     pub fn fullmag_fem_frequency_domain_validate_artifact_identity_v1(
         identity: *const FullmagFemFrequencyDomainArtifactIdentityV1,
@@ -3634,6 +3773,17 @@ extern "C" {
         handle: *mut fullmag_fem_backend,
         policy: u32,
     ) -> i32;
+    pub fn fullmag_fem_backend_get_gpu_bb_preconditioner_status(
+        handle: *const fullmag_fem_backend,
+        out_status: *mut fullmag_fem_gpu_bb_preconditioner_status,
+    ) -> i32;
+    pub fn fullmag_fem_backend_export_demag_poisson_sparse_blocks(
+        handle: *mut fullmag_fem_backend,
+        out_blocks: *mut fullmag_fem_demag_poisson_sparse_blocks,
+    ) -> i32;
+    pub fn fullmag_fem_demag_poisson_sparse_blocks_destroy(
+        blocks: *mut fullmag_fem_demag_poisson_sparse_blocks,
+    );
     pub fn fullmag_fem_backend_set_gpu_execution_request_v1(
         handle: *mut fullmag_fem_backend,
         request: fullmag_fem_gpu_execution_request_v1,

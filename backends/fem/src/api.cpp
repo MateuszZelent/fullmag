@@ -14,6 +14,7 @@
 #include "backend_handle.hpp"
 #include "context.hpp"
 #include "cpu/mfem/interactions/demag.hpp"
+#include "cpu/mfem/interactions/demag_poisson_sparse_export.hpp"
 #include "cpu/mfem/interactions/dmi.hpp"
 #include "cpu/mfem/interactions/magnetoelastic.hpp"
 #include "cpu/mfem/interactions/transport_stage.hpp"
@@ -51,6 +52,7 @@
 #include "gpu/cuda/demag_poisson/stage_compute.hpp"
 #include "gpu/cuda/fields/vector_field_kernels.hpp"
 #include "gpu/cuda/integrators/rk/rk.hpp"
+#include "gpu/cuda/relaxation/bb_exchange_mass.hpp"
 #include "gpu/cuda/runtime/execution_receipt.hpp"
 #include "gpu/cuda/runtime/gpu_state_runtime.hpp"
 #include "gpu/cuda/runtime/performance_counters.hpp"
@@ -2559,7 +2561,8 @@ static int fullmag_fem_frequency_domain_solve_driven_response_from_c_abi(
     const fullmag_fem_frequency_domain_driven_response_request *request,
     fullmag_fem_frequency_domain_apply_with_potential_callback mfem_apply_demag_tangent_with_potential,
     fullmag_fem_frequency_domain_solve_result *out_result,
-    const FullmagFemFrequencyDomainArtifactIdentityV1 *artifact_identity = nullptr
+    const FullmagFemFrequencyDomainArtifactIdentityV1 *artifact_identity = nullptr,
+    const fullmag_fem_frequency_domain_gpu_direct_options *direct_options = nullptr
 ) {
     if (request == nullptr || out_result == nullptr) {
         fullmag_fem_set_global_error(
@@ -2632,6 +2635,55 @@ static int fullmag_fem_frequency_domain_solve_driven_response_from_c_abi(
     }
     fd::DrivenFrequencyResponseSolveRequest native_request{};
     native_request.artifact_identity = artifact_identity;
+    fd::DrivenFrequencyResponseDemagSparseBlocks native_demag_sparse_blocks{};
+    if (direct_options != nullptr) {
+        if (direct_options->abi_version != FULLMAG_FEM_FREQUENCY_DOMAIN_GPU_DIRECT_OPTIONS_ABI_VERSION ||
+            direct_options->struct_size != sizeof(fullmag_fem_frequency_domain_gpu_direct_options) ||
+            direct_options->gpu_direct_policy > FULLMAG_FEM_FREQUENCY_DOMAIN_GPU_DIRECT_POLICY_REQUIRED) {
+            fullmag_fem_set_global_error(
+                "fullmag_fem_frequency_domain_solve_driven_response_v14 received invalid direct_options");
+            return FULLMAG_FEM_ERR_INVALID;
+        }
+        native_request.gpu_direct_policy =
+            static_cast<fd::DrivenFrequencyResponseGpuDirectPolicy>(
+                direct_options->gpu_direct_policy);
+        if (direct_options->demag_sparse_blocks != nullptr) {
+            const auto &src = *direct_options->demag_sparse_blocks;
+            if (src.abi_version != FULLMAG_FEM_DEMAG_POISSON_SPARSE_BLOCKS_ABI_VERSION ||
+                src.struct_size != sizeof(fullmag_fem_demag_poisson_sparse_blocks)) {
+                fullmag_fem_set_global_error(
+                    "fullmag_fem_frequency_domain_solve_driven_response_v14 received invalid demag_sparse_blocks");
+                return FULLMAG_FEM_ERR_INVALID;
+            }
+            const auto copy_csr = [](const fullmag_fem_sparse_csr_f64_view &v) {
+                return fd::DrivenFrequencyResponseSparseCsrView{
+                    v.num_rows,
+                    v.num_cols,
+                    v.nnz,
+                    v.row_ptr,
+                    v.col_indices,
+                    v.values,
+                };
+            };
+            native_demag_sparse_blocks.is_periodic_reduced = src.is_periodic_reduced;
+            native_demag_sparse_blocks.reserved = src.reserved;
+            native_demag_sparse_blocks.full_node_count = src.full_node_count;
+            native_demag_sparse_blocks.phi_dof_count = src.phi_dof_count;
+            native_demag_sparse_blocks.magnetic_node_count = src.magnetic_node_count;
+            native_demag_sparse_blocks.ess_tdof_count = src.ess_tdof_count;
+            native_demag_sparse_blocks.poisson_matrix = copy_csr(src.poisson_matrix);
+            native_demag_sparse_blocks.rhs_x = copy_csr(src.rhs_x);
+            native_demag_sparse_blocks.rhs_y = copy_csr(src.rhs_y);
+            native_demag_sparse_blocks.rhs_z = copy_csr(src.rhs_z);
+            native_demag_sparse_blocks.recovery_x = copy_csr(src.recovery_x);
+            native_demag_sparse_blocks.recovery_y = copy_csr(src.recovery_y);
+            native_demag_sparse_blocks.recovery_z = copy_csr(src.recovery_z);
+            native_demag_sparse_blocks.magnetic_node_indices = src.magnetic_node_indices;
+            native_demag_sparse_blocks.ess_tdofs = src.ess_tdofs;
+            native_demag_sparse_blocks.periodic_reduced_node = src.periodic_reduced_node;
+            native_request.demag_sparse_blocks = &native_demag_sparse_blocks;
+        }
+    }
     std::vector<fd::TangentFrameNode> frequency_domain_tangent_nodes;
     std::vector<fd::TangentOperatorEdgeBlock> frequency_domain_exchange_edges;
     std::vector<fd::MfemDmiElementTangentData> frequency_domain_dmi_elements;
@@ -2649,7 +2701,7 @@ static int fullmag_fem_frequency_domain_solve_driven_response_from_c_abi(
     native_request.struct_size = request->struct_size == 0
         ? 0
         : sizeof(fd::DrivenFrequencyResponseSolveRequest);
-    if (artifact_identity != nullptr) {
+    if (artifact_identity != nullptr || direct_options != nullptr) {
         native_request.abi_version = fd::kDrivenFrequencyResponseSolveRequestAbiVersion;
         native_request.struct_size = sizeof(fd::DrivenFrequencyResponseSolveRequest);
     }
@@ -2895,7 +2947,8 @@ static int fullmag_fem_frequency_domain_solve_driven_response_from_c_abi(
         const bool has_mfem_demag_tangent =
             request->mfem_apply_demag_tangent != nullptr ||
             mfem_apply_demag_tangent_with_potential != nullptr ||
-            request->mfem_demag_tangent_matrix_row_major != nullptr;
+            request->mfem_demag_tangent_matrix_row_major != nullptr ||
+            native_request.demag_sparse_blocks != nullptr;
         native_request.mfem_validation_problem.descriptor.demag_enabled =
             has_mfem_demag_tangent;
         native_request.mfem_validation_problem.descriptor.demag_kind =
@@ -3091,6 +3144,25 @@ int fullmag_fem_frequency_domain_solve_driven_response_with_identity_v1(
     }
     return fullmag_fem_frequency_domain_solve_driven_response_from_c_abi(
         request, mfem_apply_demag_tangent_with_potential, out_result, identity);
+}
+
+int fullmag_fem_frequency_domain_solve_driven_response_v14(
+    const fullmag_fem_frequency_domain_driven_response_request *request,
+    const FullmagFemFrequencyDomainArtifactIdentityV1 *identity,
+    fullmag_fem_frequency_domain_apply_with_potential_callback mfem_apply_demag_tangent_with_potential,
+    const fullmag_fem_frequency_domain_gpu_direct_options *direct_options,
+    fullmag_fem_frequency_domain_solve_result *out_result)
+{
+    if (identity != nullptr &&
+        fullmag_fem_frequency_domain_validate_artifact_identity_v1(identity) != FULLMAG_FEM_OK) {
+        return FULLMAG_FEM_ERR_INVALID;
+    }
+    return fullmag_fem_frequency_domain_solve_driven_response_from_c_abi(
+        request,
+        mfem_apply_demag_tangent_with_potential,
+        out_result,
+        identity,
+        direct_options);
 }
 
 int fullmag_fem_frequency_domain_solve_driven_response(
@@ -6181,6 +6253,75 @@ int fullmag_fem_backend_set_gpu_bb_preconditioner(
     state.bb_preconditioner_policy = policy;
     fullmag::fem::gpu_relax_invalidate_accepted_evaluation(state);
     return FULLMAG_FEM_OK;
+}
+
+int fullmag_fem_backend_get_gpu_bb_preconditioner_status(
+    const fullmag_fem_backend *handle,
+    fullmag_fem_gpu_bb_preconditioner_status *out_status)
+{
+    if (out_status == nullptr) {
+        fullmag_fem_set_global_error(
+            "fullmag_fem_backend_get_gpu_bb_preconditioner_status received null out_status");
+        return FULLMAG_FEM_ERR_INVALID;
+    }
+    if (handle == nullptr) {
+        fullmag_fem_set_global_error(
+            "fullmag_fem_backend_get_gpu_bb_preconditioner_status received null handle");
+        return FULLMAG_FEM_ERR_INVALID;
+    }
+    fullmag::fem::GpuBbExchangeMassStatus resolved{};
+    fullmag::fem::gpu_bb_exchange_mass_resolve(handle->context, resolved);
+    *out_status = {};
+    out_status->abi_version = FULLMAG_FEM_GPU_BB_PRECONDITIONER_STATUS_ABI_VERSION;
+    out_status->struct_size =
+        static_cast<uint32_t>(sizeof(fullmag_fem_gpu_bb_preconditioner_status));
+    out_status->requested_policy = resolved.requested_policy;
+    out_status->resolved_enabled = resolved.resolved_enabled ? 1u : 0u;
+    out_status->last_iterations = resolved.last_iterations;
+    out_status->last_relative_residual = resolved.last_relative_residual;
+    out_status->solver_kind = resolved.solver_kind;
+    out_status->preconditioner_kind = resolved.preconditioner_kind;
+    out_status->fallback_reason = resolved.fallback_reason;
+    return FULLMAG_FEM_OK;
+}
+
+int fullmag_fem_backend_export_demag_poisson_sparse_blocks(
+    fullmag_fem_backend *handle,
+    fullmag_fem_demag_poisson_sparse_blocks *out_blocks)
+{
+    if (out_blocks == nullptr) {
+        fullmag_fem_set_global_error(
+            "fullmag_fem_backend_export_demag_poisson_sparse_blocks received null out_blocks");
+        return FULLMAG_FEM_ERR_INVALID;
+    }
+    *out_blocks = {};
+    if (handle == nullptr) {
+        fullmag_fem_set_global_error(
+            "fullmag_fem_backend_export_demag_poisson_sparse_blocks received null handle");
+        return FULLMAG_FEM_ERR_INVALID;
+    }
+#if FULLMAG_HAS_MFEM_STACK
+    std::string error;
+    if (!fullmag::fem::export_demag_poisson_sparse_blocks(
+            handle->context, *out_blocks, error)) {
+        fullmag_fem_set_handle_error(handle, error);
+        return FULLMAG_FEM_ERR_UNAVAILABLE;
+    }
+    handle->last_error.clear();
+    return FULLMAG_FEM_OK;
+#else
+    fullmag_fem_set_handle_error(handle, kUnavailableMessage);
+    return FULLMAG_FEM_ERR_UNAVAILABLE;
+#endif
+}
+
+void fullmag_fem_demag_poisson_sparse_blocks_destroy(
+    fullmag_fem_demag_poisson_sparse_blocks *blocks)
+{
+    if (blocks == nullptr) {
+        return;
+    }
+    fullmag::fem::destroy_demag_poisson_sparse_blocks(*blocks);
 }
 
 int fullmag_fem_backend_set_step_profile(

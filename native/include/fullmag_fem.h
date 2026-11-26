@@ -4043,6 +4043,66 @@ FULLMAG_FEM_API int fullmag_fem_frequency_domain_solve_driven_response_with_iden
     fullmag_fem_frequency_domain_solve_result *out_result
 );
 
+typedef struct fullmag_fem_sparse_csr_f64_view {
+    uint64_t num_rows;
+    uint64_t num_cols;
+    uint64_t nnz;
+    const uint32_t *row_ptr;     /* length num_rows + 1 */
+    const uint32_t *col_indices; /* length nnz */
+    const double *values;        /* length nnz */
+} fullmag_fem_sparse_csr_f64_view;
+
+#define FULLMAG_FEM_DEMAG_POISSON_SPARSE_BLOCKS_ABI_VERSION 1u
+
+typedef struct fullmag_fem_demag_poisson_sparse_blocks {
+    uint32_t abi_version;         /* FULLMAG_FEM_DEMAG_POISSON_SPARSE_BLOCKS_ABI_VERSION */
+    uint32_t struct_size;         /* sizeof(fullmag_fem_demag_poisson_sparse_blocks) */
+    uint32_t is_periodic_reduced; /* 0=open-airbox, 1=periodic_airbox_k0 */
+    uint32_t reserved;            /* 0 */
+    uint64_t full_node_count;     /* total mesh scalar potential DOFs */
+    uint64_t phi_dof_count;       /* poisson_matrix.num_rows */
+    uint64_t magnetic_node_count;
+    uint64_t ess_tdof_count;
+    fullmag_fem_sparse_csr_f64_view poisson_matrix; /* periodic_matrix or poisson_bc_op */
+    fullmag_fem_sparse_csr_f64_view rhs_x;          /* ess_tdofs rows explicitly zeroed */
+    fullmag_fem_sparse_csr_f64_view rhs_y;          /* ess_tdofs rows explicitly zeroed */
+    fullmag_fem_sparse_csr_f64_view rhs_z;          /* ess_tdofs rows explicitly zeroed */
+    fullmag_fem_sparse_csr_f64_view recovery_x;
+    fullmag_fem_sparse_csr_f64_view recovery_y;
+    fullmag_fem_sparse_csr_f64_view recovery_z;
+    const uint32_t *magnetic_node_indices; /* length magnetic_node_count */
+    const uint32_t *ess_tdofs;             /* length ess_tdof_count */
+    const uint32_t *periodic_reduced_node; /* length full_node_count if periodic, else NULL */
+    void *owner_state;                     /* opaque allocation freed by destroy() */
+} fullmag_fem_demag_poisson_sparse_blocks;
+
+typedef enum {
+    FULLMAG_FEM_FREQUENCY_DOMAIN_GPU_DIRECT_POLICY_AUTO = 0,
+    FULLMAG_FEM_FREQUENCY_DOMAIN_GPU_DIRECT_POLICY_DISABLED = 1,
+    FULLMAG_FEM_FREQUENCY_DOMAIN_GPU_DIRECT_POLICY_REQUIRED = 2,
+} fullmag_fem_frequency_domain_gpu_direct_policy;
+
+#define FULLMAG_FEM_FREQUENCY_DOMAIN_GPU_DIRECT_OPTIONS_ABI_VERSION 1u
+
+typedef struct fullmag_fem_frequency_domain_gpu_direct_options {
+    uint32_t abi_version;        /* FULLMAG_FEM_FREQUENCY_DOMAIN_GPU_DIRECT_OPTIONS_ABI_VERSION */
+    uint32_t struct_size;        /* sizeof(fullmag_fem_frequency_domain_gpu_direct_options) */
+    uint32_t gpu_direct_policy;  /* fullmag_fem_frequency_domain_gpu_direct_policy */
+    uint32_t reserved;           /* 0 */
+    const fullmag_fem_demag_poisson_sparse_blocks *demag_sparse_blocks; /* nullable */
+} fullmag_fem_frequency_domain_gpu_direct_options;
+
+/* Additive ABI v14 entrypoint carrying optional GPU sparse-direct (cuDSS)
+ * policy and pre-exported Poisson demag CSR blocks without mutating the
+ * layout of fullmag_fem_frequency_domain_driven_response_request. */
+FULLMAG_FEM_API int fullmag_fem_frequency_domain_solve_driven_response_v14(
+    const fullmag_fem_frequency_domain_driven_response_request *request,
+    const FullmagFemFrequencyDomainArtifactIdentityV1 *identity,
+    fullmag_fem_frequency_domain_apply_with_potential_callback mfem_apply_demag_tangent_with_potential,
+    const fullmag_fem_frequency_domain_gpu_direct_options *direct_options,
+    fullmag_fem_frequency_domain_solve_result *out_result
+);
+
 FULLMAG_FEM_API int fullmag_fem_frequency_domain_solve_driven_response(
     const fullmag_fem_frequency_domain_driven_response_request *request,
     fullmag_fem_frequency_domain_solve_result *out_result
@@ -4178,10 +4238,36 @@ FULLMAG_FEM_API int fullmag_fem_backend_set_interrupt_poll(
 );
 
 /* Per-context FEM GPU projected-gradient BB direction. Set before stepping.
- * 0=auto (raw tangent gradient), 1=raw tangent gradient, 2=exchange mass.
+ * 0=auto (qualified cooperative exchange-mass PCG when eligible),
+ * 1=raw tangent gradient, 2=exchange mass (fail closed if unavailable).
  * This does not alter Poisson policy, physical gradients or convergence. */
 FULLMAG_FEM_API int fullmag_fem_backend_set_gpu_bb_preconditioner(
     fullmag_fem_backend *handle, uint32_t policy);
+
+#define FULLMAG_FEM_GPU_BB_PRECONDITIONER_STATUS_ABI_VERSION 1u
+
+typedef struct fullmag_fem_gpu_bb_preconditioner_status {
+    uint32_t abi_version;         /* FULLMAG_FEM_GPU_BB_PRECONDITIONER_STATUS_ABI_VERSION */
+    uint32_t struct_size;         /* sizeof(fullmag_fem_gpu_bb_preconditioner_status) */
+    uint32_t requested_policy;    /* 0=auto, 1=none, 2=exchange_mass */
+    uint32_t resolved_enabled;    /* 0=false, 1=true */
+    uint64_t last_iterations;
+    double last_relative_residual;
+    const char *solver_kind;         /* static literal: "cooperative_device_pcg" | "not_used" */
+    const char *preconditioner_kind; /* static literal: "device_jacobi" | "not_used" */
+    const char *fallback_reason;     /* static literal: "" | "policy_none" | ... */
+} fullmag_fem_gpu_bb_preconditioner_status;
+
+FULLMAG_FEM_API int fullmag_fem_backend_get_gpu_bb_preconditioner_status(
+    const fullmag_fem_backend *handle,
+    fullmag_fem_gpu_bb_preconditioner_status *out_status);
+
+FULLMAG_FEM_API int fullmag_fem_backend_export_demag_poisson_sparse_blocks(
+    fullmag_fem_backend *handle,
+    fullmag_fem_demag_poisson_sparse_blocks *out_blocks);
+
+FULLMAG_FEM_API void fullmag_fem_demag_poisson_sparse_blocks_destroy(
+    fullmag_fem_demag_poisson_sparse_blocks *blocks);
 
 FULLMAG_FEM_API int fullmag_fem_backend_set_step_profile(
     fullmag_fem_backend *handle,

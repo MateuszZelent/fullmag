@@ -1017,7 +1017,8 @@ bool validate_exactly_one_operator_source(
 }
 
 // Check the fixed header before reading or copying a versioned request.
-// Legacy native callers own only the prefix preceding artifact_identity.
+// Legacy native callers (ABI 0/9/12) own only the prefix preceding
+// artifact_identity; ABI 13 callers own up to gpu_direct_policy.
 bool validate_driven_response_request_header(
     const DrivenFrequencyResponseSolveRequest &request,
     char error_message[128]) noexcept
@@ -1025,14 +1026,18 @@ bool validate_driven_response_request_header(
     if (request.abi_version != 0 &&
         request.abi_version != 9u &&
         request.abi_version != 12u &&
+        request.abi_version != 13u &&
         request.abi_version != kDrivenFrequencyResponseSolveRequestAbiVersion) {
         std::snprintf(error_message, 128, "unsupported driven response request ABI version");
         return false;
     }
     const auto legacy_size = offsetof(DrivenFrequencyResponseSolveRequest, artifact_identity);
+    const auto v13_size = offsetof(DrivenFrequencyResponseSolveRequest, gpu_direct_policy);
     if (request.struct_size != 0 &&
         request.struct_size != sizeof(DrivenFrequencyResponseSolveRequest) &&
-        !(request.abi_version != kDrivenFrequencyResponseSolveRequestAbiVersion &&
+        !(request.abi_version == 13u && request.struct_size == v13_size) &&
+        !(request.abi_version != 13u &&
+          request.abi_version != kDrivenFrequencyResponseSolveRequestAbiVersion &&
           request.struct_size == legacy_size)) {
         std::snprintf(error_message, 128, "unsupported driven response request struct_size");
         return false;
@@ -1047,7 +1052,7 @@ bool validate_driven_response_solve_contract(
     if (!validate_driven_response_request_header(request, error_message)) {
         return false;
     }
-    if (request.abi_version == kDrivenFrequencyResponseSolveRequestAbiVersion &&
+    if (request.abi_version >= 13u &&
         request.artifact_identity != nullptr &&
         !validate_artifact_identity_v1(request.artifact_identity, error_message)) {
         return false;
@@ -6768,8 +6773,8 @@ FrequencyDomainStatus write_owned_response_manifest(
     const char *path, const std::string &source_json, char error_message[128]) noexcept
 {
     try {
-        // Old native ABI prefixes must never read the appended context pointer.
-        const auto *identity = request.abi_version == kDrivenFrequencyResponseSolveRequestAbiVersion
+        // Old native ABI prefixes (< 13) must never read the appended context pointer.
+        const auto *identity = request.abi_version >= 13u
             ? request.artifact_identity : nullptr;
         if (identity == nullptr) return write_text_artifact(path, source_json.c_str(), error_message);
         std::string json = source_json;
@@ -16924,11 +16929,17 @@ FrequencyDomainStatus solve_driven_frequency_response(
     const std::size_t copy_size =
         incoming_request.abi_version == kDrivenFrequencyResponseSolveRequestAbiVersion
         ? sizeof(request)
-        : offsetof(DrivenFrequencyResponseSolveRequest, artifact_identity);
+        : (incoming_request.abi_version == 13u
+               ? offsetof(DrivenFrequencyResponseSolveRequest, gpu_direct_policy)
+               : offsetof(DrivenFrequencyResponseSolveRequest, artifact_identity));
     std::memcpy(&request, &incoming_request, copy_size);
-    // A legacy prefix never carries ownership, even when supplied in a new buffer.
-    if (incoming_request.abi_version != kDrivenFrequencyResponseSolveRequestAbiVersion) {
+    // Legacy prefixes never carry trailing fields, even when supplied in a new buffer.
+    if (incoming_request.abi_version < 13u) {
         request.artifact_identity = nullptr;
+    }
+    if (incoming_request.abi_version < kDrivenFrequencyResponseSolveRequestAbiVersion) {
+        request.gpu_direct_policy = DrivenFrequencyResponseGpuDirectPolicy::Auto;
+        request.demag_sparse_blocks = nullptr;
     }
     out_result->total_frequency_count = request.solve_request.frequency_count;
 

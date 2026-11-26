@@ -15,6 +15,38 @@
 #endif
 
 namespace fullmag::fem {
+void gpu_bb_exchange_mass_resolve(const Context &ctx, GpuBbExchangeMassStatus &out)
+{
+    out = {};
+    const uint32_t policy = ctx.gpu_state.device.relaxation.bb_preconditioner_policy;
+    out.requested_policy = policy;
+    if (policy == 1u) {
+        out.resolved_enabled = false;
+        out.fallback_reason = "policy_none";
+        return;
+    }
+#if FULLMAG_HAS_MFEM_STACK && FULLMAG_HAS_CUDA_RUNTIME
+    if (gpu_bb_exchange_mass_enabled(ctx)) {
+        out.resolved_enabled = true;
+        out.solver_kind = "cooperative_device_pcg";
+        out.preconditioner_kind = "device_jacobi";
+        out.fallback_reason = "";
+        if (ctx.gpu_state.device.relaxation.bb_exchange_mass != nullptr) {
+            out.last_iterations = gpu_bb_exchange_mass_last_iterations(
+                *ctx.gpu_state.device.relaxation.bb_exchange_mass);
+            out.last_relative_residual = gpu_bb_exchange_mass_last_relative_residual(
+                *ctx.gpu_state.device.relaxation.bb_exchange_mass);
+        }
+        return;
+    }
+    out.resolved_enabled = false;
+    out.fallback_reason = policy == 0u ? "policy_auto_deferred" : "mfem_forms_unavailable";
+#else
+    out.resolved_enabled = false;
+    out.fallback_reason = "mfem_forms_unavailable";
+#endif
+}
+
 bool gpu_bb_exchange_mass_enabled(const Context &ctx)
 {
     return ctx.gpu_state.device.relaxation.bb_preconditioner_policy == 2u;

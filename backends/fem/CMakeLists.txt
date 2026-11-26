@@ -231,6 +231,8 @@ set(FEM_SOURCES
     src/frequency_domain/canonical_digest.cpp
     src/frequency_domain/dense_full_coupled_oracle.cpp
     src/frequency_domain/driven_response_solver.cpp
+    gpu/frequency_domain/driven_response_cudss.cpp
+    cpu/mfem/interactions/demag_poisson_sparse_export.cpp
     src/frequency_domain/equilibrium_state.cpp
     src/frequency_domain/excitation.cpp
     src/frequency_domain/frequency_domain_contract.cpp
@@ -483,13 +485,15 @@ if(UNIX AND NOT APPLE AND FULLMAG_USE_MFEM_STACK AND FULLMAG_ENABLE_CUDA AND
         gpu/frequency_domain/modal_augmented_ritz.cu
         gpu/frequency_domain/modal_augmented_window.cpp
         gpu/frequency_domain/modal_augmented_window_count.cpp
+        gpu/frequency_domain/driven_response_cudss_kernels.cu
     )
     target_include_directories(fullmag_fem PRIVATE "${FULLMAG_CUDSS_INCLUDE_DIR}")
     target_link_libraries(fullmag_fem PRIVATE
         "${FULLMAG_CUDSS_LIBRARY}" CUDA::cublas CUDA::cusparse CUDA::cusolver
     )
     target_compile_definitions(fullmag_fem PRIVATE FULLMAG_FEM_CUDSS_SHIFT_ENABLED=1
-        FULLMAG_FEM_CUDSS_POISSON_ENABLED=1)
+        FULLMAG_FEM_CUDSS_POISSON_ENABLED=1
+        FULLMAG_FEM_CUDSS_DRIVEN_ENABLED=1)
     set(FULLMAG_FEM_CUDSS_SHIFT_SUPPORTED TRUE)
 endif()
 if(FULLMAG_FEM_CUPTI_TRACE_SUPPORTED)
@@ -924,6 +928,16 @@ if(FULLMAG_USE_MFEM_STACK AND FULLMAG_ENABLE_CUDA AND FULLMAG_ENABLE_FEM_GPU)
     target_include_directories(fem_cuda_object_average_contract PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_SOURCE_DIR}/include)
     add_test(NAME fem_cuda_object_average_contract COMMAND fem_cuda_object_average_contract)
+    add_executable(fem_cuda_shortrange_kernels_contract tests/cuda_shortrange_kernels_contract.cpp)
+    target_link_libraries(fem_cuda_shortrange_kernels_contract PRIVATE fullmag_fem CUDA::cudart)
+    if(TARGET MFEM::mfem)
+        target_link_libraries(fem_cuda_shortrange_kernels_contract PRIVATE MFEM::mfem)
+    else()
+        target_link_libraries(fem_cuda_shortrange_kernels_contract PRIVATE mfem)
+    endif()
+    target_include_directories(fem_cuda_shortrange_kernels_contract PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_SOURCE_DIR}/include)
+    add_test(NAME fem_cuda_shortrange_kernels_contract COMMAND fem_cuda_shortrange_kernels_contract)
 endif()
 
 add_executable(fem_cuda_sot_contract tests/cuda_sot_contract.cpp)
@@ -1609,6 +1623,20 @@ add_fem_source_facade_contract(
     fem_driven_response_contract
     tests/frequency_domain/driven_response_contract_test.cpp
 )
+add_fem_source_facade_contract(
+    fem_driven_response_cudss_contract
+    tests/frequency_domain/driven_response_cudss_contract.cpp
+)
+if(FULLMAG_FEM_CUDSS_SHIFT_SUPPORTED)
+    target_compile_definitions(fem_driven_response_cudss_contract
+        PRIVATE FULLMAG_FEM_CUDSS_DRIVEN_ENABLED=1)
+    target_link_libraries(fem_driven_response_cudss_contract PRIVATE CUDA::cudart)
+    if(TARGET MFEM::mfem)
+        target_link_libraries(fem_driven_response_cudss_contract PRIVATE MFEM::mfem)
+    else()
+        target_link_libraries(fem_driven_response_cudss_contract PRIVATE mfem)
+    endif()
+endif()
 add_fem_source_facade_contract(
     fem_window_partition_contract
     tests/frequency_domain/window_partition_test.cpp
