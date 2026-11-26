@@ -1,13 +1,13 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import type { DecodedFieldVector } from "@/kernel/api/codecs";
 import { memoryBudgetRegistry } from "@/kernel/performance/MemoryBudgetRegistry";
 import type { FdmGridRenderDomain } from "../viewport3dDomainAdapter";
 import { buildFdmPointPositions, buildFdmCuboidInstanceModel as buildFdmCuboidInstanceModelWithMembership, resolveFdmCuboidPassPlan, resolveFdmVectorGlyphScale } from "./FdmCuboidLayer";
-import { FDM_CUBOID_UPLOAD_BATCH_SIZE, buildFdmCuboidUploadBatches, buildFdmCuboidColorUploadBatchesForView, fdmCuboidUsesInstanceColors, fdmCuboidVectorPassCanRenderWithoutCellModel, buildFdmVectorSegments, evictFdmVectorSegmentCacheEntriesForTests, fdmCuboidSurfaceMeshKey, hasAnyEffectiveFdmPass, handleFdmCuboidContextLost, recordFdmCuboidSurfaceAdoption, resolveFdmCuboidGeometryScopeInstanceOrdinals, resolveFdmCuboidSourceInstanceOrdinal, resolveFdmCuboidPreparedSourceOrdinal, prepareFdmCuboidInstanceMatrices, estimateFdmCuboidCarrierPeakBytes, uploadFdmCuboidAttribute, disposeFdmCuboidInstanceColorBeforeReplace, visibleFdmCuboidInspectTargets, resolveFdmCuboidColorUploadRevision, shouldAttachFdmCuboidInspectListener, createFdmInspectClearArbitrator } from "./FdmCuboidLayer.model";
+import { FDM_CUBOID_UPLOAD_BATCH_SIZE, buildFdmCuboidUploadBatches, buildFdmCuboidColorUploadBatchesForView, fdmCuboidUsesInstanceColors, fdmCuboidVectorPassCanRenderWithoutCellModel, buildFdmVectorSegments, evictFdmVectorSegmentCacheEntriesForTests, fdmCuboidSurfaceMeshKey, hasAnyEffectiveFdmPass, handleFdmCuboidContextLost, recordFdmCuboidSurfaceAdoption, resolveFdmCuboidGeometryScopeInstanceOrdinals, resolveFdmCuboidSourceInstanceOrdinal, resolveFdmCuboidPreparedSourceOrdinal, prepareFdmCuboidInstanceMatrices, estimateFdmCuboidCarrierPeakBytes, uploadFdmCuboidAttribute, disposeFdmCuboidInstanceColorBeforeReplace, visibleFdmCuboidInspectTargets, resolveFdmCuboidColorUploadRevision, shouldAttachFdmCuboidInspectListener, createFdmInspectClearArbitrator, FDM_CUBOID_INSPECT_STATIONARY_HOVER_DELAY_MS, FDM_CUBOID_INSPECT_STATIONARY_HOVER_THRESHOLD, shouldUseStationaryFdmCuboidInspectHover, shouldAttachFdmCuboidNativeInspectHover, createFdmCuboidInspectHoverDebouncer } from "./FdmCuboidLayer.model";
 import { resolveFdmCuboidSurfaceMaterialPlan } from "./viewport3DSurfaceMaterialPlans";
 import {
   BoxGeometry,
@@ -90,6 +90,58 @@ const viewport3DSceneModelPath = join(
 );
 
 describe("FdmCuboidLayer model", () => {
+  it("keeps immediate native hover below the large-mesh threshold", () => {
+    const smallCount = FDM_CUBOID_INSPECT_STATIONARY_HOVER_THRESHOLD - 1;
+    const largeCount = FDM_CUBOID_INSPECT_STATIONARY_HOVER_THRESHOLD;
+
+    expect(shouldUseStationaryFdmCuboidInspectHover(smallCount)).toBe(false);
+    expect(shouldUseStationaryFdmCuboidInspectHover(largeCount)).toBe(true);
+    expect(
+      shouldAttachFdmCuboidNativeInspectHover({
+        inspectEnabled: true,
+        instanceCount: smallCount,
+      }),
+    ).toBe(true);
+    expect(
+      shouldAttachFdmCuboidNativeInspectHover({
+        inspectEnabled: true,
+        instanceCount: largeCount,
+      }),
+    ).toBe(false);
+    expect(
+      shouldAttachFdmCuboidNativeInspectHover({
+        inspectEnabled: false,
+        instanceCount: smallCount,
+      }),
+    ).toBe(false);
+  });
+
+  it("samples only the latest large-mesh pointer position after the idle delay", () => {
+    vi.useFakeTimers();
+    try {
+      const onInspect = vi.fn();
+      const hover = createFdmCuboidInspectHoverDebouncer(onInspect);
+      const first = { x: 10, y: 20 };
+      const latest = { x: 30, y: 40 };
+
+      hover.schedule(first);
+      vi.advanceTimersByTime(FDM_CUBOID_INSPECT_STATIONARY_HOVER_DELAY_MS - 1);
+      expect(onInspect).not.toHaveBeenCalled();
+
+      hover.schedule(latest);
+      vi.advanceTimersByTime(FDM_CUBOID_INSPECT_STATIONARY_HOVER_DELAY_MS - 1);
+      expect(onInspect).not.toHaveBeenCalled();
+      vi.advanceTimersByTime(1);
+      expect(onInspect).toHaveBeenCalledExactlyOnceWith(latest);
+
+      hover.schedule({ x: 50, y: 60 });
+      hover.cancel();
+      vi.advanceTimersByTime(FDM_CUBOID_INSPECT_STATIONARY_HOVER_DELAY_MS);
+      expect(onInspect).toHaveBeenCalledExactlyOnceWith(latest);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
   it("evicts vector segments by byte budget before the count limit", () => {
     const entries = new Map([
       ["oldest", new Float32Array(4)],
@@ -320,11 +372,17 @@ describe("FdmCuboidLayer model", () => {
 
     expect(source).toContain("visible={renderPlan.surface.visible}");
     expect(source).toContain("visible={renderPlan.wireframe.visible}");
+    expect(source).toContain("onPointerOut={nativeInspectHoverEnabled && renderPlan.surface.visible ? onPointerOut : undefined}");
+    expect(source).toContain("onPointerOut={nativeInspectHoverEnabled && renderPlan.wireframe.visible ? onPointerOut : undefined}");
+    expect(source).toContain("stationaryHover.schedule(event);");
+    expect(source).toContain("canvas.addEventListener(\"pointerdown\", handleInspectPointerDown");
+    expect(source).toContain("cancelPendingInspectWork();");
+    expect(source).toContain("group onPointerDown={handlePointerDown}");
     expect(source).toContain(
-      "onPointerMove={renderPlan.surface.visible ? onPointerMove : undefined}",
+      "onPointerMove={nativeInspectHoverEnabled && renderPlan.surface.visible ? onPointerMove : undefined}",
     );
     expect(source).toContain(
-      "onPointerMove={renderPlan.wireframe.visible ? onPointerMove : undefined}",
+      "onPointerMove={nativeInspectHoverEnabled && renderPlan.wireframe.visible ? onPointerMove : undefined}",
     );
     expect(source).not.toContain("mesh.setMatrixAt(");
     expect(source).not.toContain("mesh.setColorAt(");
@@ -1228,6 +1286,8 @@ describe("FdmCuboidLayer model", () => {
     expect(layerSource).toContain("passive: true");
     expect(layerSource).toContain("requestAnimationFrame");
     expect(layerSource).toContain("cancelAnimationFrame(rafId)");
+    expect(layerSource).toContain("stationaryHover.schedule(event);");
+    expect(layerSource).toContain("stationaryHover?.cancel()");
     expect(layerSource).toContain("cachedRect = canvas.getBoundingClientRect();");
     expect(layerSource).toContain("new ResizeObserver");
     expect(layerSource).toContain("raycaster.setFromCamera");

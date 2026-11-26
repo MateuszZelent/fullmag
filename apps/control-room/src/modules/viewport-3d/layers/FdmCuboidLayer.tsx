@@ -68,7 +68,7 @@ import { buildFdmPointPositions, type FdmCuboidBuildRequest, type FdmCuboidInsta
 import { buildViewport3DFdmCuboidOffMainThread } from "./fdmCuboidBuildScheduler";
 import { createFdmCuboidBuildStateController, EMPTY_FDM_CUBOID_BUILD_SNAPSHOT, resolveFdmCuboidBuildState, type FdmCuboidBuildState } from "./fdmCuboidBuildState";
 import { resolveFdmCuboidPassPlan } from "./fdmCuboidPasses";
-import { fdmVectorSegmentCacheCounter, FDM_VECTOR_SEGMENT_CACHE_MAX_BYTES_PER_FIELD, resolveFdmCuboidSourceInstanceOrdinal, type FdmCuboidAsyncBuildEntry, createFdmCuboidBatchBuildController, EMPTY_FDM_CUBOID_BUILD_RESULTS, type FdmCuboidAsyncBuildInput, type FdmCuboidPreparedInstances, fdmCuboidUsesInstanceColors, recordFdmCuboidSurfaceAdoption, fdmCuboidSurfaceAdoptionIdentity, uploadFdmCuboidAttribute, disposeFdmCuboidInstanceColorBeforeReplace, resolveFdmCuboidColorUploadRevision, handleFdmCuboidContextLost, resolveFdmCuboidGeometryScopeInstanceOrdinals, prepareFdmCuboidInstanceMatrices, shouldAttachFdmCuboidInspectListener, visibleFdmCuboidInspectTargets, resolveFdmCuboidPreparedSourceOrdinal, fdmCuboidVectorPassCanRenderWithoutCellModel } from "./FdmCuboidLayer.model";
+import { fdmVectorSegmentCacheCounter, FDM_VECTOR_SEGMENT_CACHE_MAX_BYTES_PER_FIELD, resolveFdmCuboidSourceInstanceOrdinal, type FdmCuboidAsyncBuildEntry, createFdmCuboidBatchBuildController, EMPTY_FDM_CUBOID_BUILD_RESULTS, type FdmCuboidAsyncBuildInput, type FdmCuboidPreparedInstances, fdmCuboidUsesInstanceColors, recordFdmCuboidSurfaceAdoption, fdmCuboidSurfaceAdoptionIdentity, uploadFdmCuboidAttribute, disposeFdmCuboidInstanceColorBeforeReplace, resolveFdmCuboidColorUploadRevision, handleFdmCuboidContextLost, resolveFdmCuboidGeometryScopeInstanceOrdinals, prepareFdmCuboidInstanceMatrices, shouldAttachFdmCuboidInspectListener, visibleFdmCuboidInspectTargets, resolveFdmCuboidPreparedSourceOrdinal, fdmCuboidVectorPassCanRenderWithoutCellModel, createFdmCuboidInspectHoverDebouncer, shouldAttachFdmCuboidNativeInspectHover, shouldUseStationaryFdmCuboidInspectHover } from "./FdmCuboidLayer.model";
 
 export {
   buildFdmCuboidInstanceModel,
@@ -343,6 +343,7 @@ const FdmCuboidSurfacePass = memo(function FdmCuboidSurfacePass({
   fieldBufferId,
   onPointerMove,
   onPointerOut,
+  nativeInspectHoverEnabled,
   renderSettings,
   renderPlan,
   sessionIdentity,
@@ -359,6 +360,7 @@ const FdmCuboidSurfacePass = memo(function FdmCuboidSurfacePass({
   fieldBufferId: string | null;
   onPointerMove: (event: ThreeEvent<PointerEvent>) => void;
   onPointerOut: () => void;
+  nativeInspectHoverEnabled: boolean;
   renderSettings: VisualizationTargetSettings;
   renderPlan: Viewport3DTargetRenderPlan;
   sessionIdentity?: SessionResourceIdentity | null;
@@ -743,8 +745,8 @@ const FdmCuboidSurfacePass = memo(function FdmCuboidSurfacePass({
         args={[geometry, undefined, renderCount]}
         castShadow={surfaceMaterialPlan.castShadow}
         frustumCulled={false}
-        onPointerMove={renderPlan.surface.visible ? onPointerMove : undefined}
-        onPointerOut={renderPlan.surface.visible ? onPointerOut : undefined}
+        onPointerMove={nativeInspectHoverEnabled && renderPlan.surface.visible ? onPointerMove : undefined}
+        onPointerOut={nativeInspectHoverEnabled && renderPlan.surface.visible ? onPointerOut : undefined}
         receiveShadow={surfaceMaterialPlan.receiveShadow}
         ref={surfaceRef}
         renderOrder={surfacePolicy.renderOrder}
@@ -759,8 +761,8 @@ const FdmCuboidSurfacePass = memo(function FdmCuboidSurfacePass({
       <instancedMesh
         args={[geometry, undefined, renderCount]}
         frustumCulled={false}
-        onPointerMove={renderPlan.wireframe.visible ? onPointerMove : undefined}
-        onPointerOut={renderPlan.wireframe.visible ? onPointerOut : undefined}
+        onPointerMove={nativeInspectHoverEnabled && renderPlan.wireframe.visible ? onPointerMove : undefined}
+        onPointerOut={nativeInspectHoverEnabled && renderPlan.wireframe.visible ? onPointerOut : undefined}
         ref={wireframeRef}
         renderOrder={wireframePolicy.renderOrder}
         visible={renderPlan.wireframe.visible}
@@ -934,6 +936,13 @@ export const FdmCuboidLayer = memo(function FdmCuboidLayer({
         : null,
     [carrierId, geometryScopeOrdinals, model],
   );
+  const stationaryInspectHoverEnabled =
+    inspectEnabled &&
+    shouldUseStationaryFdmCuboidInspectHover(preparedInstances?.count ?? 0);
+  const nativeInspectHoverEnabled = shouldAttachFdmCuboidNativeInspectHover({
+    inspectEnabled,
+    instanceCount: preparedInstances?.count ?? 0,
+  });
   const rawInspectListenerEnabled = shouldAttachFdmCuboidInspectListener({
     inspectEnabled,
     prepared: Boolean(preparedInstances),
@@ -941,23 +950,14 @@ export const FdmCuboidLayer = memo(function FdmCuboidLayer({
     targetVisible: renderSettings.visible,
     wireframeVisible: targetRenderPlan.wireframe.visible,
   });
-  useEffect(() => {
-    if (!rawInspectListenerEnabled || !model || !preparedInstances) {
-      return undefined;
-    }
-
-    const canvas = gl.domElement;
-    let cachedRect = canvas.getBoundingClientRect();
-    let pendingEvent: PointerEvent | null = null;
-    let pendingFrame = 0;
-    let rafId: number | null = null;
-    const resizeObserver = new ResizeObserver(() => {
-      cachedRect = canvas.getBoundingClientRect();
-    });
-
-    const processInspectPointerMove = (event: PointerEvent) => {
-      const rect = cachedRect;
-      if (rect.width <= 0 || rect.height <= 0) return;
+  const clearInspectPointerSample = useEffectEvent(() => {
+    onInspectClear?.();
+  });
+  const processInspectPointerMove = useEffectEvent(
+    (event: PointerEvent, rect: DOMRect) => {
+      if (!model || !preparedInstances || rect.width <= 0 || rect.height <= 0) {
+        return;
+      }
 
       inspectRaycastState.pointer.set(
         ((event.clientX - rect.left) / rect.width) * 2 - 1,
@@ -1021,9 +1021,56 @@ export const FdmCuboidLayer = memo(function FdmCuboidLayer({
           y: pointerY,
         },
       );
+    },
+  );
+  useEffect(() => {
+    if (!rawInspectListenerEnabled || !model || !preparedInstances) {
+      return undefined;
+    }
+
+    const canvas = gl.domElement;
+    let cachedRect = canvas.getBoundingClientRect();
+    let pendingEvent: PointerEvent | null = null;
+    let pendingFrame = 0;
+    let rafId: number | null = null;
+    const resizeObserver = new ResizeObserver(() => {
+      cachedRect = canvas.getBoundingClientRect();
+    });
+
+    let stationaryHoverNeedsClear = false;
+    const stationaryHover = stationaryInspectHoverEnabled
+      ? createFdmCuboidInspectHoverDebouncer((event) => {
+          processInspectPointerMove(event, cachedRect);
+          stationaryHoverNeedsClear = false;
+        })
+      : null;
+    const clearForStationaryMotion = () => {
+      if (stationaryHoverNeedsClear) return;
+      stationaryHoverNeedsClear = true;
+      clearInspectPointerSample();
+    };
+    const cancelPendingInspectWork = () => {
+      pendingEvent = null;
+      stationaryHover?.cancel();
+      if (rafId !== null) {
+        cancelAnimationFrame(rafId);
+        rafId = null;
+      }
+    };
+    const handleInspectPointerDown = () => {
+      cancelPendingInspectWork();
     };
     const handleInspectPointerMove = (event: PointerEvent) => {
-      if (event.buttons !== 0) return;
+      if (event.buttons !== 0) {
+        cancelPendingInspectWork();
+        if (stationaryHover) clearForStationaryMotion();
+        return;
+      }
+      if (stationaryHover) {
+        clearForStationaryMotion();
+        stationaryHover.schedule(event);
+        return;
+      }
 
       pendingEvent = event;
       inspectFrameRef.current += 1;
@@ -1037,16 +1084,20 @@ export const FdmCuboidLayer = memo(function FdmCuboidLayer({
         pendingEvent = null;
         if (!eventToProcess) return;
         if (r3fInspectHitFrameRef.current === eventFrame) return;
-        processInspectPointerMove(eventToProcess);
+        processInspectPointerMove(eventToProcess, cachedRect);
       });
     };
     const handleInspectPointerLeave = () => {
-      pendingEvent = null;
-      onInspectClear?.();
+      cancelPendingInspectWork();
+      stationaryHoverNeedsClear = false;
+      clearInspectPointerSample();
     };
 
     resizeObserver.observe(canvas);
     canvas.addEventListener("pointermove", handleInspectPointerMove, {
+      passive: true,
+    });
+    canvas.addEventListener("pointerdown", handleInspectPointerDown, {
       passive: true,
     });
     canvas.addEventListener("pointerleave", handleInspectPointerLeave, {
@@ -1054,23 +1105,20 @@ export const FdmCuboidLayer = memo(function FdmCuboidLayer({
     });
     return () => {
       canvas.removeEventListener("pointermove", handleInspectPointerMove);
+      canvas.removeEventListener("pointerdown", handleInspectPointerDown);
       canvas.removeEventListener("pointerleave", handleInspectPointerLeave);
       resizeObserver.disconnect();
-      if (rafId !== null) {
-        cancelAnimationFrame(rafId);
-      }
+      cancelPendingInspectWork();
     };
   }, [
     camera,
-    fieldVector,
     gl,
     inspectQuantityId,
     inspectRaycastState,
     model,
-    onInspectClear,
-    onInspectSample,
     preparedInstances,
     rawInspectListenerEnabled,
+    stationaryInspectHoverEnabled,
   ]);
 
   const handlePointerMove = useCallback((event: ThreeEvent<PointerEvent>) => {
@@ -1183,6 +1231,7 @@ export const FdmCuboidLayer = memo(function FdmCuboidLayer({
           preparedInstances={preparedInstances}
           onPointerMove={handlePointerMove}
           onPointerOut={handlePointerOut}
+          nativeInspectHoverEnabled={nativeInspectHoverEnabled}
           renderSettings={renderSettings}
           renderPlan={targetRenderPlan}
           sessionIdentity={sessionIdentity}
