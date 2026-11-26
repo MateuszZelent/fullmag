@@ -383,6 +383,14 @@ coefficient, conflicting realization, or unsigned source is rejected.
 
 ### 3.1 FDM
 
+On a single grid, CUDA FP64 RK45 can apply the local Slonczewski and prescribed
+SOT contributions in the same kernel that combines the effective field and
+evaluates the LLG right-hand side. Both fused and separate kernels call the
+same local torque implementation. The field is still published at the normal
+evaluation boundary, and a time-dependent Slonczewski drive uses the existing
+scalar and one-sided event rules at each RK substep. Zhang–Li requires the
+separate stencil path. Frozen-cell projection remains after torque assembly.
+
 `m`, torque, and material coefficients are cell-centred; current originates as
 oriented face flux. Zhang–Li uses the advective, not conservative, operator
 

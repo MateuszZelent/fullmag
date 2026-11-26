@@ -8,6 +8,7 @@
  */
 
 #include "context.hpp"
+#include "../integrators/prescribed_spin_torques_fp64.cuh"
 #include "dmi_boundary.cuh"
 #include "kernels.hpp"
 #include "regional_field_drive.cuh"
@@ -241,6 +242,7 @@ __global__ void unpack_demag_fft_fp64_kernel(
     hz[idx] = hz_value;
 }
 
+template<bool with_local_spin_torques>
 __global__ void combine_effective_field_fp64_kernel(
     const double * __restrict__ m_x,
     const double * __restrict__ m_y,
@@ -324,7 +326,9 @@ __global__ void combine_effective_field_fp64_kernel(
     double gamma,
     const double * __restrict__ alpha_field,
     int disable_precession,
-    int write_rhs)
+    int write_rhs,
+    SttParams stt,
+    SotParams sot)
 {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx >= n) return;
@@ -554,9 +558,16 @@ __global__ void combine_effective_field_fp64_kernel(
             rhs_y[idx] = 0.0;
             rhs_z[idx] = 0.0;
         } else {
-            rhs_x[idx] = -gamma_bar * (precession_scale * px + alpha * dx);
-            rhs_y[idx] = -gamma_bar * (precession_scale * py + alpha * dy);
-            rhs_z[idx] = -gamma_bar * (precession_scale * pz + alpha * dz);
+            double local_rhs_x = -gamma_bar * (precession_scale * px + alpha * dx);
+            double local_rhs_y = -gamma_bar * (precession_scale * py + alpha * dy);
+            double local_rhs_z = -gamma_bar * (precession_scale * pz + alpha * dz);
+            if constexpr (with_local_spin_torques) {
+                add_prescribed_spin_torques_fp64(
+                    idx, mx, my, mz, alpha, stt, sot, local_rhs_x, local_rhs_y, local_rhs_z);
+            }
+            rhs_x[idx] = local_rhs_x;
+            rhs_y[idx] = local_rhs_y;
+            rhs_z[idx] = local_rhs_z;
         }
     }
 }
@@ -826,11 +837,14 @@ void launch_demag_field_fp64(Context &ctx) {
 }
 
 /* ── Axpy kernel: dst += scale * src  (for Oersted field addition) ── */
+template<bool with_local_spin_torques = false>
 static void launch_effective_field_fp64_impl(
     Context &ctx,
     double evaluation_time,
     cudaStream_t stream,
-    DeviceVectorField *rhs_out) {
+    DeviceVectorField *rhs_out,
+    const SttParams &stt = {},
+    const SotParams &sot = {}) {
     int n = static_cast<int>(ctx.cell_count);
     int grid = (n + BLOCK_SIZE - 1) / BLOCK_SIZE;
 
@@ -854,7 +868,8 @@ static void launch_effective_field_fp64_impl(
     const bool write_rhs = rhs_out != nullptr;
     const double gamma_bar = ctx.gamma / (1.0 + ctx.alpha * ctx.alpha);
 
-    combine_effective_field_fp64_kernel<<<grid, BLOCK_SIZE, 0, stream>>>(
+    combine_effective_field_fp64_kernel<with_local_spin_torques><<<
+        grid, BLOCK_SIZE, 0, stream>>>(
         static_cast<const double*>(ctx.m.x),
         static_cast<const double*>(ctx.m.y),
         static_cast<const double*>(ctx.m.z),
@@ -937,7 +952,9 @@ static void launch_effective_field_fp64_impl(
         ctx.gamma,
         ctx.alpha_field,
         ctx.disable_precession ? 1 : 0,
-        write_rhs ? 1 : 0);
+        write_rhs ? 1 : 0,
+        stt,
+        sot);
     const cudaError_t launch_error = cudaGetLastError();
     if (launch_error != cudaSuccess) {
         set_cuda_error(ctx, "launch_effective_field_fp64", launch_error);
@@ -996,6 +1013,18 @@ bool launch_effective_field_and_base_llg_rhs_fp64(
     return ctx.last_error.empty();
 }
 
+bool launch_effective_field_and_local_spin_rhs_fp64(
+    Context &ctx,
+    double evaluation_time,
+    DeviceVectorField &rhs_out,
+    const SttParams &stt,
+    const SotParams &sot,
+    cudaStream_t stream) {
+    launch_effective_field_fp64_impl<true>(
+        ctx, evaluation_time, stream, &rhs_out, stt, sot);
+    return ctx.last_error.empty();
+}
+
 void launch_effective_field_fp64(Context &ctx, double evaluation_time) {
     launch_effective_field_fp64(ctx, evaluation_time, nullptr);
 }
@@ -1005,7 +1034,7 @@ cudaError_t query_local_pipeline_kernel_resources_fp64(
     if (out_resources == nullptr) return cudaErrorInvalidValue;
     cudaFuncAttributes attributes{};
     cudaError_t status = cudaFuncGetAttributes(
-        &attributes, combine_effective_field_fp64_kernel);
+        &attributes, combine_effective_field_fp64_kernel<false>);
     if (status != cudaSuccess) return status;
     int device = 0;
     status = cudaGetDevice(&device);
@@ -1021,7 +1050,7 @@ cudaError_t query_local_pipeline_kernel_resources_fp64(
     int max_active_blocks_per_sm = 0;
     status = cudaOccupancyMaxActiveBlocksPerMultiprocessor(
         &max_active_blocks_per_sm,
-        combine_effective_field_fp64_kernel,
+        combine_effective_field_fp64_kernel<false>,
         BLOCK_SIZE,
         0);
     if (status != cudaSuccess) return status;
