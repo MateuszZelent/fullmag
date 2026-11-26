@@ -1,6 +1,6 @@
 # FEM GPU pure-prism P2 thin-film discretization, unified CSR DMI, and layered conformity repair
 
-- Status: `implemented` (source, mesher, IR/planner/runner, and C++/CUDA contract tests in branch; Docker DEV GPU CTest and 300×300×5 nm Aharoni A/B runtime qualification pending)
+- Status: `verified` (Docker DEV GPU CTest, `compute-sanitizer --tool memcheck`, Rust/Python suites, and 300×300×5 nm Permalloy Aharoni + CSR GPU DMI A/B benchmarks verified on RTX 4080 SUPER; see `docs/audits/2026-11-26-fem-prism-p2-gpu-ab.md`)
 - Owners: Fullmag FEM GPU & Meshing
 - Last updated: 2026-11-26
 - Related physics:
@@ -12,6 +12,7 @@
   - `docs/physics/fem_dmi.md`
 - Related audits:
   - `docs/audits/2026-11-24-fem-gpu-cudss-film-validation.md`
+  - `docs/audits/2026-11-26-fem-prism-p2-gpu-ab.md`
 - Related specs and plans:
   - `docs/superpowers/specs/2026-11-26-fem-prism-p2-gpu-design.md`
   - `docs/superpowers/plans/2026-11-26-fem-prism-p2-gpu-plan.md`
@@ -23,12 +24,13 @@ Thin-film micromagnetic FEM simulations face a sharp discretization trade-off
 documented in `docs/audits/2026-11-24-fem-gpu-cudss-film-validation.md`:
 
 - An all-tetrahedral mesh with P2 scalar potential (`tet P2`) resolves thin-film
-  demagnetization within 0.2% of the analytic Aharoni energy, but inflates the
+  demagnetization within `-0.63%` of the analytic Aharoni energy, but inflates the
   3D mesh and P2 Cholesky factor far beyond single-GPU VRAM budgets
-  (4.08M P2 DOFs / 59.4 GB cuDSS factor on a 300×300×5 nm Permalloy film).
+  (`4.08M` P2 DOFs / `59.4 GiB` cuDSS factor on a 300×300×5 nm Permalloy film).
 - A mixed `prism6 + pyramid5 + tet4` domain (`mixed_p1`) slashes DOF counts, but
-  MFEM pyramids force the scalar potential down to P1, incurring a −15.14%
-  demagnetization deficit on the same 300×300×5 nm film.
+  MFEM pyramids force the scalar potential down to P1, incurring a `-30.11%`
+  uniform demagnetization deficit (`-19.36%` in relaxed total energy) on the
+  same 300×300×5 nm film.
 - Legacy GPU DMI kernels (`dmi_kernels.cu`) hardcoded flat 4-node tetrahedral
   connectivity (`gpu.mesh_geometry`), forcing GPU DMI to fail closed on both
   `mixed_p1` and `pure_prism_p2`.
@@ -373,26 +375,56 @@ study.stages.add_relax(stage_id="relax", algorithm="projected_gradient_bb", tolT
 (validation)=
 ## 10. Validation
 
-- **Executed Python contract tests:**
-  - `packages/fullmag-py/tests/test_mixed_element_meshing.py`: verified
-    `300×300×5 nm` ($h=2.5\text{ nm}$, `layers=1,2,3`) and SP4 `500×125×3 nm`
-    (`layers=1,2,3`) `pyramid_to_tetrahedra` conformity (`same_side: 6 -> 0` on
-    `layers=2`, `nonconforming_face_count == 0`, `certificate_status == "accepted"`),
-    plus synthetic bipyramid untangling (`scipy_highs` + NumPy fallback).
-  - `packages/fullmag-py/tests/test_pure_prism_shared_domain_meshing.py`:
-    verified `L = 1..4`, rotated sweep axes (`x`, `y`, `auto`), `300×300×5 nm L=2`,
-    and JSON/NPZ/IR persistence round-trip (`10/10 PASSED`).
-  - `packages/fullmag-py/tests/test_mixed_p1_preflight.py` (`19/19 PASSED`) and
-    `packages/fullmag-py/tests/test_script_builder_roundtrip.py` (`15/15 PASSED`).
-- **Pending managed Docker DEV GPU verification & A/B benchmark:**
-  - Non-MFEM build (`-DFULLMAG_USE_MFEM_STACK=OFF -DFULLMAG_ENABLE_CUDA=OFF`),
-  - GPU CTests (`fem_cuda_csr_dmi_prism_contract`, `fem_pure_prism_p2_gpu_contract`,
-    `fem_mesh_contract`, `fem_mixed_p1_contract`, and all 6 source-facade/relaxation
-    contracts),
-  - Rust `cargo test -p fullmag-ir -p fullmag-authoring -p fullmag-api -p fullmag-plan -p fullmag-runner`,
-  - Flagship 300×300×5 nm Permalloy A/B benchmark (`scripts/benchmarks/relax_film_compare_case.py`
-    with `FILM_FEM_MESH=pure_prism`, `FILM_FEM_LAYERS=1|2`, `FILM_FEM_GPU_STRATEGY=cudss`)
-    against analytic Aharoni ($4.632850 \times 10^{-18}\text{ J}$), `tet P2`, and `mixed_p1`.
+Full managed Docker DEV verification and RTX 4080 SUPER A/B benchmarks are
+archived in `docs/audits/2026-11-26-fem-prism-p2-gpu-ab.md`:
+
+- **Native C++/CUDA, Rust, Python, and static gates (Docker DEV, `c401f28b90`):**
+  - Non-MFEM CI profile (`-DFULLMAG_USE_MFEM_STACK=OFF -DFULLMAG_ENABLE_CUDA=OFF`):
+    **8/8 PASS** (`0.07 s`).
+  - `fem_cuda_csr_dmi_prism_contract`: **PASS** (`1.02 s`) and
+    `compute-sanitizer --tool memcheck`: **0 errors**.
+  - `fem_pure_prism_p2_gpu_contract`: **PASS** (subprocess-isolated CPU MFEM
+    vs GPU `cg_amg` and `cuDSS` on RK4 `<= 1e-10` and 3 PGBB steps `<= 1e-9`
+    with exchange, P2 Poisson-Robin demag, interfacial DMI, and bulk DMI).
+  - `fem_dmi_weak_residual`, `fem_dmi_contract`, `fem_gpu_state_runtime_contract`,
+    `fem_source_facade_gpu_state_contract`, `fem_relaxation_energy_derivative_contract`,
+    and all Wave 1 assertions in `fem_mesh_contract` / `fem_gpu_rk_plan` /
+    source-facade contracts: **PASS**.
+  - Rust: `fullmag-ir` **290/290 PASS**, `fullmag-api` **2/2 PASS**,
+    `fullmag-plan` **12/12 PASS**, `fullmag-runner` **9/9 PASS** (default and
+    `--features fem-gpu`).
+  - Python Wave 1: **103/103 PASS** (`test_pure_prism_shared_domain_meshing.py`
+    10/10, `test_mixed_p1_preflight.py` 19/19, `test_script_builder_roundtrip.py`
+    67/67, and `test_mixed_element_meshing.py` untangler/`layers=1..3`/legacy
+    slice 7/7).
+- **Flagship 300×300×5 nm Permalloy thin-film A/B benchmark (RTX 4080 SUPER,
+  analytic Aharoni $4.632850 \times 10^{-18}\;\mathrm{J}$, FDM relaxed
+  $3.109921 \times 10^{-18}\;\mathrm{J}$, MuMax3 $3.08758 \times 10^{-18}\;\mathrm{J}$):**
+  - `pure_prism_p2`, $L=1$, $h=5.0\;\mathrm{nm}$, GPU `cuDSS`: mesh `0.50 s`
+    (`594,239` P2 DOFs, `5.52 GB` / `5.14 GiB` device bytes, `9.48 GB` VRAM
+    free), uniform $4.595727 \times 10^{-18}\;\mathrm{J}$ (**`-0.80%`** vs
+    Aharoni), full PGBB relax (`7,807` steps, `tolT = 1e-7 T`)
+    $3.094433 \times 10^{-18}\;\mathrm{J}$ (**`-0.50%`** vs FDM, **`+0.22%`**
+    vs MuMax3), **`38.53 ms/step`** (**`144.8×` faster** than `cg_amg`
+    `5,579.74 ms/step` on the same mesh).
+  - `pure_prism_p2`, $L=2$, $h=5.0\;\mathrm{nm}$, GPU `cuDSS`: mesh `0.51 s`
+    (`709,253` P2 DOFs, `5.76×` fewer than `tet P2`, `7.23 GB` / `6.73 GiB`
+    device bytes, `7.59 GB` VRAM free), uniform $4.605080 \times 10^{-18}\;\mathrm{J}$
+    (**`-0.60%`** vs Aharoni), full PGBB relax (`8,153` steps)
+    $3.096700 \times 10^{-18}\;\mathrm{J}$ (**`-0.43%`** vs FDM, **`+0.30%`**
+    vs MuMax3; $E_{\mathrm{ex}}$ `-0.06%` vs FDM), **`51.88 ms/step`**.
+- **Mixed `layers=2` conformity repair (`300×300×5 nm`, $h=2.5\;\mathrm{nm}$):**
+  `_untangle_same_side_mixed_tetrahedra` reduces `same_side_two_owner_face`
+  `6 -> 0` (node `53465`, `reoriented_tets = 2`, margin `4.452e-04`),
+  producing a certified conforming mesh (`54,016` nodes, `159,714` cells,
+  `p05(prism6) = 0.8616`) executing on GPU `cuDSS` (`180 MB`, `7.52 ms/step`).
+- **Unified CSR GPU DMI parity and throughput (15 configurations across `tet4`,
+  periodic 2D `tet4`, `prism6 60×60×2`, `prism6 120×120×2`, `mixed 30×30×2`):**
+  field parity $h_{\mathrm{rel}} \le 1.12 \times 10^{-15}$ and energy parity
+  $E_{\mathrm{rel}} \le 4.76 \times 10^{-14}$ vs CPU MFEM; **`1.67–2.51×` faster**
+  than legacy `tet4` GPU DMI with energy (**`3.33–4.80×`** on field-only RK
+  stages) and **`1,953–4,812×` faster** than CPU MFEM on `prism6_120x120x2`
+  (`0.035–0.091 ms` field-only vs `168.5–190.8 ms` CPU).
 
 (limitations)=
 ## 11. Limitations
@@ -405,8 +437,14 @@ study.stages.add_relax(stage_id="relax", algorithm="projected_gradient_bb", tolT
   is not yet qualified and fails closed.
 - Zhang-Li STT on GPU still requires tetrahedral `gpu.mesh_geometry` and remains
   fail-closed on `pure_prism_p2` and `mixed_p1`.
-- Managed Docker DEV GPU CTest and 300×300×5 nm Aharoni A/B runtime numbers are
-  pending execution by the Wave 1 verifier.
+- Because columnar extrusion propagates in-plane density vertically through the
+  air slabs, very fine in-plane grids such as $h = 2.5\;\mathrm{nm}$ on
+  `300×300×5 nm` (`2.21M` P2 DOFs, `21.18 GiB` cuDSS estimate) exceed a 16 GB
+  GPU's `cuDSS` budget (`> 9.10 GiB` available) and cleanly trigger either the
+  VRAM preflight error (forced `cudss`) or fallback to `cg_amg` (`auto`); for
+  Permalloy ($l_{\mathrm{ex}} \approx 5.69\;\mathrm{nm}$) on 16 GB GPUs,
+  $h \approx 5.0\;\mathrm{nm}$ is the recommended `pure_prism_p2` + `cuDSS`
+  operating point (`< 0.6–0.8%` Aharoni error, `< 7 GiB` VRAM, `38–52 ms/step`).
 
 (scientific-bibliography)=
 ## 12. Scientific bibliography

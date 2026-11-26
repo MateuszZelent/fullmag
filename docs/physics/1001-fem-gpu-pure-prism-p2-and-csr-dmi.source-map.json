@@ -6,14 +6,14 @@
     {
       "solver": "FEM",
       "device": "CPU",
-      "status": "documented",
-      "reason": "Pure-prism P2 shared-domain execution (P1 magnetization + P2 H1_WedgeElement(2) potential) and MFEM CPU DMI are implemented across C++, Rust, and Python; Docker DEV test execution pending."
+      "status": "verified",
+      "reason": "Pure-prism P2 shared-domain execution (P1 magnetization + P2 H1_WedgeElement(2) potential) and MFEM CPU DMI are verified across C++, Rust, Python, and Docker DEV subprocess parity contracts (docs/audits/2026-11-26-fem-prism-p2-gpu-ab.md)."
     },
     {
       "solver": "FEM",
       "device": "GPU",
-      "status": "documented",
-      "reason": "Pure-prism P2 GPU demag (CG+AMG and cuDSS) and unified preassembled skew-symmetric CSR GPU DMI (tet4, prism6, mixed) are implemented with unit/E2E contract tests; Docker DEV GPU CTest and 300x300x5 nm Aharoni A/B benchmark pending."
+      "status": "verified",
+      "reason": "Pure-prism P2 GPU demag (CG+AMG and cuDSS) and unified preassembled skew-symmetric CSR GPU DMI (tet4, prism6, mixed, periodic 2D) are verified via Docker DEV GPU CTests, compute-sanitizer memcheck (0 errors), and RTX 4080 SUPER 300x300x5 nm Aharoni + CSR DMI A/B benchmarks (docs/audits/2026-11-26-fem-prism-p2-gpu-ab.md)."
     },
     {
       "solver": "FDM",
@@ -219,6 +219,6 @@
   },
   "validation": {
     "plan": "Python meshing and preflight tests (test_mixed_element_meshing.py, test_pure_prism_shared_domain_meshing.py, test_mixed_p1_preflight.py, test_script_builder_roundtrip.py); managed Docker DEV non-MFEM build (-DFULLMAG_USE_MFEM_STACK=OFF -DFULLMAG_ENABLE_CUDA=OFF); GPU CTests (fem_cuda_csr_dmi_prism_contract, fem_pure_prism_p2_gpu_contract, fem_mesh_contract, fem_mixed_p1_contract, source-facade and relaxation contracts); Rust cargo test across fullmag-{ir,authoring,api,plan,runner}; and RTX 4080 SUPER 300x300x5 nm Permalloy Aharoni A/B benchmark (scripts/benchmarks/relax_film_compare_case.py with FILM_FEM_MESH=pure_prism).",
-    "results": "docs/audits/2026-11-24-fem-gpu-cudss-film-validation.md"
+    "results": "docs/audits/2026-11-26-fem-prism-p2-gpu-ab.md"
   }
 }
