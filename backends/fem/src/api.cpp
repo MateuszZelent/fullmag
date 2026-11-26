@@ -5778,7 +5778,11 @@ static fullmag_fem_backend *create_versioned_plan_backend(
         base.rotated_interfacial_dmi_constant);
     // Must be recorded BEFORE initialize_backend_runtime triggers
     // gpu_demag_poisson_initialize inside create.
+#if FULLMAG_HAS_MFEM_STACK
     handle->context.poisson_demag.gpu_solver_strategy = gpu_demag_solver_strategy;
+#else
+    (void)gpu_demag_solver_strategy;
+#endif
     fullmag_fem_plan_desc native_plan = base.base;
     if (adaptive_config != nullptr) {
         native_plan.adaptive_config = &adaptive_config->base;
@@ -7555,8 +7559,12 @@ int fullmag_fem_backend_get_gpu_demag_linear_solver_provenance_v1(
             resolution.factor_nnz > 0 ? static_cast<uint64_t>(resolution.factor_nnz) : 0u;
         out_provenance->factor_device_bytes = resolution.factor_device_bytes;
     } else {
+#if FULLMAG_HAS_MFEM_STACK
         out_provenance->requested_strategy =
             static_cast<uint32_t>(handle->context.poisson_demag.gpu_solver_strategy);
+#else
+        out_provenance->requested_strategy = FULLMAG_FEM_GPU_DEMAG_SOLVER_STRATEGY_AUTO;
+#endif
         out_provenance->fallback_reason = FULLMAG_FEM_GPU_DEMAG_FALLBACK_NONE;
     }
     return FULLMAG_FEM_OK;
