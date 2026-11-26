@@ -408,8 +408,8 @@ void validate_affine_tetrahedral_mesh(const mfem::Mesh &mesh, bool local_shape_o
             a[0] * (b[1] * c[2] - b[2] * c[1]) -
             a[1] * (b[0] * c[2] - b[2] * c[0]) +
             a[2] * (b[0] * c[1] - b[1] * c[0]);
-        const double scale = std::max({a.Norml2(), b.Norml2(), c.Norml2(), 1.0});
-        require(std::isfinite(determinant) &&
+        const double scale = std::max({a.Norml2(), b.Norml2(), c.Norml2()});
+        require(std::isfinite(determinant) && std::isfinite(scale) && scale > 0.0 &&
                 std::abs(determinant) > kGeometryTolerance * scale * scale * scale,
             "OE-T0 rejects degenerate tetrahedra");
     }
@@ -2301,15 +2301,9 @@ WeightedRt0Result solve_weighted_rt0_projection(
             mass_config.kind = fullmag::fem::multiphysics::SparseMatrixKind::Spd;
             mass_config.execution_target =
                 fullmag::fem::multiphysics::SparseExecutionTarget::Cpu;
-#if defined(MFEM_USE_MPI) && !defined(FULLMAG_OET0_DISABLE_MPI)
             mass_config.cpu_backend = pin_mpi_single_rank_backend
-                ? fullmag::fem::multiphysics::SparseCpuBackendPolicy::Hypre
+                ? fullmag::fem::multiphysics::SparseCpuBackendPolicy::MfemSerial
                 : fullmag::fem::multiphysics::SparseCpuBackendPolicy::Auto;
-#else
-            (void)pin_mpi_single_rank_backend;
-            mass_config.cpu_backend =
-                fullmag::fem::multiphysics::SparseCpuBackendPolicy::Auto;
-#endif
             mass_config.relative_tolerance = 1.0e-12;
             mass_config.absolute_tolerance = 1.0e-14;
             mass_config.maximum_iterations = static_cast<int>(max_iterations);
@@ -2866,15 +2860,9 @@ std::unique_ptr<mfem::GridFunction> solve_external_lead_potential(
     lead_config.kind = fullmag::fem::multiphysics::SparseMatrixKind::Spd;
     lead_config.execution_target =
         fullmag::fem::multiphysics::SparseExecutionTarget::Cpu;
-#if defined(MFEM_USE_MPI) && !defined(FULLMAG_OET0_DISABLE_MPI)
     lead_config.cpu_backend = pin_mpi_single_rank_backend
-        ? fullmag::fem::multiphysics::SparseCpuBackendPolicy::Hypre
+        ? fullmag::fem::multiphysics::SparseCpuBackendPolicy::MfemSerial
         : fullmag::fem::multiphysics::SparseCpuBackendPolicy::Auto;
-#else
-    (void)pin_mpi_single_rank_backend;
-    lead_config.cpu_backend =
-        fullmag::fem::multiphysics::SparseCpuBackendPolicy::Auto;
-#endif
     lead_config.relative_tolerance = std::min(algebraic_relative_tolerance, 1.0e-13);
     lead_config.absolute_tolerance = 0.0;
     lead_config.maximum_iterations = std::max(1000, free_size * 20);

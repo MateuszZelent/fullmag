@@ -180,10 +180,12 @@ the preconditioner only:
   are neither linked nor called; all solves execute on the TSan-clean Tier-3
   MFEM serial lane.
 - Under multi-rank MPI (`mpiexec -n 2`), `reference_mpi_gather_*_broadcast`
-  explicitly pins `SparseCpuBackendPolicy::Hypre` on `MPI_COMM_SELF` for both
-  `n=1` and `n=2` to preserve bit-exact MPI byte identity, while
-  `SparseLinearSolver` additionally guards against collective
-  `PetscInitializeNoArguments()` when `MPI_COMM_WORLD` has size $> 1$.
+  explicitly pins single-threaded deterministic `SparseCpuBackendPolicy::MfemSerial`
+  for rank-0 SPD charge/lead solves (preventing OpenMP `HypreBoomerAMG` thread-count
+  nondeterminism) and `MPI_COMM_SELF` Tier-2 Schur-AMG `MINRES` for constrained
+  sparse KKT across both `n=1` and `n=2`, while `SparseLinearSolver` additionally
+  guards against collective `PetscInitializeNoArguments()` when `MPI_COMM_WORLD`
+  has size $> 1$.
 - Under CUDA-enabled HYPRE builds, CPU Tier-2 calls `configure_hypre_host_policy()`
   and requires both `memory_location_host && execution_policy_host` before
   instantiating any HYPRE object.
@@ -270,14 +272,16 @@ governed by their existing cell-integrated and FFT convolution contracts.
   `petsc_slepc_process_mutex()` with live-graph registration and up to
   `max_refinement_sweeps` `long double` refinement steps.
 - **Tier 2 (HYPRE CPU on `MPI_COMM_SELF`):** active when `FULLMAG_FEM_WITH_SLEPC=0`,
-  or pinned by `reference_mpi_gather_*_broadcast`. Uses cached `HypreBoomerAMG`
-  + `HyprePCG` for SPD, `byNODES` Block-Diagonal `HypreBoomerAMG` + GMRES with
-  deterministic `HypreILU(1)` escalation for nonsymmetric M1/M2, `HypreAMS` +
-  `HypreBoomerAMG` `MINRES` for OE-F2, and degree-64-guarded Schur-AMG `MINRES`
-  for OE-T0 KKT.
-- **Tier 3 (MFEM serial):** TSan-safe (`FULLMAG_OET0_DISABLE_MPI=1`) fallback
-  with per-call stack-allocated `CGSolver`/`GMRESSolver`/`MINRESSolver` +
-  `GSSmoother` / zero-diagonal-safe `SafeAbsDiagPreconditioner`.
+  or when `SparseCpuBackendPolicy::Hypre` is explicitly selected. Uses cached
+  `HypreBoomerAMG` + `HyprePCG` for SPD, `byNODES` Block-Diagonal `HypreBoomerAMG`
+  + GMRES with deterministic `HypreILU(1)` escalation for nonsymmetric M1/M2,
+  `HypreAMS` + `HypreBoomerAMG` `MINRES` for OE-F2, and degree-64-guarded
+  Schur-AMG `MINRES` for OE-T0 KKT.
+- **Tier 3 (MFEM serial):** TSan-safe (`FULLMAG_OET0_DISABLE_MPI=1`) and
+  `OMP_NUM_THREADS`-independent deterministic fallback (also pinned for rank-0
+  SPD charge/lead solves under `reference_mpi_gather_*_broadcast`) with per-call
+  stack-allocated `CGSolver`/`GMRESSolver`/`MINRESSolver` + `GSSmoother` /
+  zero-diagonal-safe `SafeAbsDiagPreconditioner`.
 
 OE-F1 (`DirectTetraQuadrature`) pre-extracts flat `QuadratureRuleTable` arrays
 once on the main thread and executes 2-level `std::thread` parallelism

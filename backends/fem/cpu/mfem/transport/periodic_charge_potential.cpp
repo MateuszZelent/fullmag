@@ -1230,14 +1230,9 @@ PeriodicChargePotentialSolver::Solve(
         128.0 * std::numeric_limits<double>::epsilon();
     trace_request.algebraic_relative_tolerance = request.algebraic_relative_tolerance;
     trace_request.maximum_iterations = request.maximum_iterations;
-#if defined(MFEM_USE_MPI) && !defined(FULLMAG_OET0_DISABLE_MPI)
     trace_request.cpu_backend = request.reference_mpi_gather_rank0_broadcast
-        ? fullmag::fem::multiphysics::SparseCpuBackendPolicy::Hypre
+        ? fullmag::fem::multiphysics::SparseCpuBackendPolicy::MfemSerial
         : fullmag::fem::multiphysics::SparseCpuBackendPolicy::Auto;
-#else
-    trace_request.cpu_backend =
-        fullmag::fem::multiphysics::SparseCpuBackendPolicy::Auto;
-#endif
     const auto charge = antenna_field_solve::solve_charge_trace_workspace(trace_request);
     if (coincident && charge->component_ids.size() != 1)
         throw std::runtime_error("coincident cut v2 requires one accepted electrical component");

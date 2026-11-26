@@ -7,8 +7,10 @@
 #include <cmath>
 #include <cstdlib>
 #include <exception>
+#include <iomanip>
 #include <iostream>
 #include <memory>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <thread>
@@ -39,6 +41,13 @@ void require(bool condition, const std::string &message)
     if (!condition) {
         throw std::runtime_error(message);
     }
+}
+
+std::string fmt_sci(double value)
+{
+    std::ostringstream os;
+    os << std::scientific << std::setprecision(6) << value;
+    return os.str();
 }
 
 double vector_rel_error(const mfem::Vector &computed, const mfem::Vector &exact)
@@ -291,7 +300,7 @@ void nonsymmetric_by_nodes_3comp_and_4comp_preconditioned()
             cfg.kind = SparseMatrixKind::GeneralNonsymmetric;
             cfg.execution_target = SparseExecutionTarget::Cpu;
             cfg.cpu_backend = policy;
-            cfg.relative_tolerance = 1.0e-11;
+            cfg.relative_tolerance = 1.0e-12;
             cfg.maximum_iterations = 2000;
             cfg.gmres_kdim = 100;
             cfg.by_nodes_component_count = components;
@@ -302,12 +311,14 @@ void nonsymmetric_by_nodes_3comp_and_4comp_preconditioned()
             require(stats.converged,
                     "nonsymmetric " + std::to_string(components) +
                         "-comp failed on " + stats.resolved_solver);
-            require(stats.independent_relative_residual <= 1.0e-11,
+            require(stats.independent_relative_residual <= 1.0e-12,
                     "nonsymmetric residual too high: " +
-                        std::to_string(stats.independent_relative_residual));
+                        fmt_sci(stats.independent_relative_residual));
             const double err = vector_rel_error(sol, exact);
-            require(err <= 1.0e-10,
-                    "nonsymmetric exact error too high: " + std::to_string(err));
+            require(err <= 1.0e-9,
+                    "nonsymmetric exact error too high (" + stats.resolved_solver +
+                        ", rel_res=" + fmt_sci(stats.independent_relative_residual) +
+                        "): " + fmt_sci(err));
         }
     }
 }

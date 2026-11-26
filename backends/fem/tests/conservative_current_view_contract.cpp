@@ -3782,8 +3782,11 @@ void sparse_kkt_matches_reference_and_handles_dependent_and_terminal_rows()
     }
     require(max_field_diff <= 1.0e-10 * max_field_scale,
         "sparse KKT Tier-1 MUMPS and Tier-2 Schur-AMG RT0 fields disagree");
-    require(std::abs(view_auto->balance().correction_norm_mw -
-                view_tier2->balance().correction_norm_mw) <= 1.0e-10,
+    const double auto_corr_sq =
+        view_auto->balance().correction_norm_mw * view_auto->balance().correction_norm_mw;
+    const double tier2_corr_sq =
+        view_tier2->balance().correction_norm_mw * view_tier2->balance().correction_norm_mw;
+    require(std::abs(auto_corr_sq - tier2_corr_sq) <= 1.0e-10,
         "sparse KKT Tier-1 MUMPS and Tier-2 Schur-AMG correction energies disagree");
 #endif
 }

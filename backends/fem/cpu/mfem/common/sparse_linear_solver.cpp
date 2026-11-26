@@ -1105,8 +1105,31 @@ struct SparseLinearSolver::Impl {
 
         if (!cudss_check(cudssCreate(&cudss_handle), "handle creation", err) ||
             !cudss_check(cudssConfigCreate(&cudss_config), "config creation", err) ||
-            !cudss_check(cudssDataCreate(cudss_handle, &cudss_data), "data creation", err) ||
-            !cudss_check(cudssMatrixCreateCsr(
+            !cudss_check(cudssDataCreate(cudss_handle, &cudss_data), "data creation", err)) {
+            fail(err);
+        }
+
+        if (config.kind == SparseMatrixKind::SymmetricIndefinite) {
+            // Enable MC64 maximum-diagonal-product matching/scaling and scaled
+            // pivot epsilon so zero-diagonal saddle-point matrices (OE-F2, OE-T0)
+            // factor accurately without silent zero-pivot perturbation.
+            const auto matching_alg = CUDSS_MATCHING_ALG_MAX_DIAG_PRODUCT;
+            const auto pivot_eps_alg = CUDSS_PIVOT_EPSILON_ALG_SCALED;
+            if (!cudss_check(
+                    cudssConfigSet(
+                        cudss_config, CUDSS_CONFIG_MATCHING_ALG,
+                        &matching_alg, sizeof(matching_alg)),
+                    "matching algorithm configuration", err) ||
+                !cudss_check(
+                    cudssConfigSet(
+                        cudss_config, CUDSS_CONFIG_PIVOT_EPSILON_ALG,
+                        &pivot_eps_alg, sizeof(pivot_eps_alg)),
+                    "pivot epsilon algorithm configuration", err)) {
+                fail(err);
+            }
+        }
+
+        if (!cudss_check(cudssMatrixCreateCsr(
                              &cudss_matrix,
                              static_cast<std::int64_t>(n),
                              static_cast<std::int64_t>(n),

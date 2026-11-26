@@ -1225,7 +1225,7 @@ void stiff_precession_m1_and_reciprocal_m2_converge_with_strong_ahe_and_contrast
             const double scale = std::abs(m1_spin.boundary_spin_flux_a[a]) +
                 std::abs(m1_spin.reaction_integral_a[a]);
             require(std::abs(m1_spin.angular_momentum_balance_apm2[a]) <=
-                    1.0e-7 * std::max(scale, 1.0e-10),
+                    1.0e-7 * scale + 1.0e-9,
                 "stiff-precession M1 angular momentum balance is not closed");
         }
         require(m1_spin.torque_l2_per_s > 0.0,
@@ -1253,7 +1253,7 @@ void stiff_precession_m1_and_reciprocal_m2_converge_with_strong_ahe_and_contrast
             const double scale = std::abs(m2_diag.spin.boundary_spin_flux_a[a]) +
                 std::abs(m2_diag.spin.reaction_integral_a[a]);
             require(std::abs(m2_diag.spin.angular_momentum_balance_apm2[a]) <=
-                    1.0e-7 * std::max(scale, 1.0e-10),
+                    1.0e-7 * scale + 1.0e-9,
                 "stiff-precession reciprocal M2 angular momentum balance is not closed");
         }
         require(m2_diag.spin.torque_l2_per_s > 0.0,

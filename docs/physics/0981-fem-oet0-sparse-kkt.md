@@ -221,12 +221,14 @@ via Tier 1 (PETSc+MUMPS LU + `long double` iterative refinement), Tier 2
 (TSan-safe serial Schur `MINRES` with `GSSmoother`). No unconstrained
 projection or dense fallback is allowed. When
 `reference_mpi_gather_broadcast` or `reference_mpi_gather_rank0_broadcast` is
-enabled, both `n=1` and `n=2` MPI runs pin the same single-rank HYPRE policy
-on `MPI_COMM_SELF` (`ChargeTraceWorkspace`, `solve_external_lead_potential`,
-and Tier-2 Schur-AMG `MINRES`) to preserve bit-exact MPI byte identity across
-`FULLMAG_FEM_WITH_SLEPC=0` and `FULLMAG_FEM_WITH_SLEPC=1`. The `7\times7\times7`
-Cartesian tetrahedral fixture has more than 4096 RT0 DOFs and exercises this
-lane.
+enabled, both `n=1` and `n=2` MPI runs pin single-threaded deterministic
+`SparseCpuBackendPolicy::MfemSerial` for SPD charge/mass solves
+(`ChargeTraceWorkspace`, `solve_external_lead_potential`, and unconstrained
+RT0 mass solves) so bit-exact MPI byte identity holds regardless of
+`OMP_NUM_THREADS` and across `FULLMAG_FEM_WITH_SLEPC=0`/`1`, while large
+constrained sparse KKT solves use Tier-2 Schur-AMG `MINRES` on `MPI_COMM_SELF`.
+The `7\times7\times7` Cartesian tetrahedral fixture has more than 4096 RT0 DOFs
+and exercises this lane.
 
 ### 5.3 FEM GPU and hybrid
 
@@ -245,8 +247,8 @@ refinement, Tier 2 degree-64-guarded Schur-AMG `MINRES`, or Tier 3 TSan serial
 Schur `MINRES`), and computes the same independent residual and
 correction-energy diagnostics as the dense reference. `solve_external_lead_potential`
 and `PeriodicChargePotentialSolver` delegate SPD charge solves to
-`SparseLinearSolver` / `ChargeTraceWorkspace` with single-rank HYPRE pinning
-when `reference_mpi_gather_*_broadcast` is enabled.
+`SparseLinearSolver` / `ChargeTraceWorkspace` with single-threaded deterministic
+`MfemSerial` pinning when `reference_mpi_gather_*_broadcast` is enabled.
 
 | Claim | Source path | Symbol |
 |---|---|---|
@@ -320,7 +322,7 @@ full dynamic Oersted capability.
 | `backends/fem/cpu/mfem/transport/conservative_current_view.cpp` | `build_degree_guarded_schur_approx` | construct the degree-64-guarded SPD Schur approximation for Tier-2/Tier-3 MINRES |
 | `backends/fem/cpu/mfem/transport/conservative_current_view.cpp` | `solve_dense_kkt` | bounded small-mesh reference solve |
 | `backends/fem/cpu/mfem/common/sparse_linear_solver.hpp` | `class SparseLinearSolver` | shared 3-tier CPU sparse linear solver and saddle-point CSR equilibration helpers |
-| `backends/fem/cpu/mfem/transport/periodic_charge_potential.cpp` | `PeriodicChargePotentialSolver::Solve` | delegate periodic charge solve to `ChargeTraceWorkspace` with single-rank HYPRE pin under MPI gather/broadcast |
+| `backends/fem/cpu/mfem/transport/periodic_charge_potential.cpp` | `PeriodicChargePotentialSolver::Solve` | delegate periodic charge solve to `ChargeTraceWorkspace` with deterministic `MfemSerial` pin under MPI gather/broadcast |
 | `backends/fem/tests/conservative_current_view_contract.cpp` | `main` | dispatches the OE-T0 serial, MPI, TSan, and sparse KKT runtime gates |
 | `backends/fem/tests/conservative_current_view_contract.cpp` | `large_tetrahedral_projection_uses_sparse_kkt_lane` | managed large-mesh sparse runtime check |
 | `backends/fem/tests/conservative_current_view_contract.cpp` | `sparse_kkt_matches_reference_and_handles_dependent_and_terminal_rows` | 7x7x7 sparse KKT Tier-1 vs Tier-2 parity and dependent-row check (source-implemented; Phase 2 verification pending) |
