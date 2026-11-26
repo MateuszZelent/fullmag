@@ -1184,7 +1184,7 @@ void fem_bem_gpu_solver_helpers_are_guarded_from_cpu_builds() {
             solve_helper < guard_end,
         "GPU FEM/BEM Hypre helpers must be enclosed by the CUDA/MFEM/MPI guard");
     check(
-        gpu_fem_bem.find("cudaStreamSynchronize(", solve_helper) < guard_end,
+        gpu_fem_bem.find("hypre_wait_for_fullmag(", solve_helper) < guard_end,
         "GPU FEM/BEM stream synchronization must not enter CPU compilation");
 }
 

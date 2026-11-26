@@ -10416,16 +10416,35 @@ mod tests {
         }
 
         let cases = [
-            (IntegratorChoice::Heun, 3, 3, false),
-            (IntegratorChoice::Rk4, 5, 5, false),
-            (IntegratorChoice::Rk23, 4, 3, true),
-            (IntegratorChoice::Rk45, 7, 6, true),
+            (IntegratorChoice::Heun, 3u32, 3u32, 2u32, false, true),
+            (IntegratorChoice::Rk4, 5u32, 5u32, 4u32, false, true),
+            (IntegratorChoice::Rk23, 4u32, 3u32, 3u32, true, true),
+            (IntegratorChoice::Rk45, 7u32, 6u32, 6u32, true, true),
         ];
 
-        for (integrator, expected_first_rhs, expected_second_rhs, expected_second_fsal) in cases {
+        for (
+            integrator,
+            expected_first_rhs,
+            expected_second_rhs_cpu,
+            expected_second_rhs_gpu,
+            expected_second_fsal_cpu,
+            expected_second_fsal_gpu,
+        ) in cases
+        {
             let mut plan = make_exchange_only_plan();
             plan.integrator = Some(integrator);
             let mut backend = NativeFemBackend::create(&plan).expect("native fem create");
+            let gpu_lane = backend.device_info().expect("device info").is_gpu_enabled;
+            let expected_second_rhs = if gpu_lane {
+                expected_second_rhs_gpu
+            } else {
+                expected_second_rhs_cpu
+            };
+            let expected_second_fsal = if gpu_lane {
+                expected_second_fsal_gpu
+            } else {
+                expected_second_fsal_cpu
+            };
 
             let first = backend
                 .step(plan.fixed_timestep.expect("fixed dt"))
