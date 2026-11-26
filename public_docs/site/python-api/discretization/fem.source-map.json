@@ -1,20 +1,20 @@
 {
   "document": {
     "path": "public_docs/site/python-api/discretization/fem.md",
-    "reviewed_revision": "ab3c8802a691a535063102c12f9a79bb0043b367"
+    "reviewed_revision": "752450f8d259ab97c76c36fe666d5474b02abe9a"
   },
   "backend_matrix": [
     {
       "solver": "FEM",
       "device": "CPU",
       "status": "source-backed",
-      "reason": "Shared-domain Gmsh generation, native extraction, and CPU FEM consumers are source-backed."
+      "reason": "Shared-domain Gmsh generation, native extraction, and CPU FEM consumers (including pure_prism_p2) are source-backed."
     },
     {
       "solver": "FEM",
       "device": "GPU",
       "status": "partial",
-      "reason": "The mesh asset is shared with the GPU lane, but element-family, order, interaction, and auxiliary-operator coverage remain capability-gated."
+      "reason": "The mesh asset is shared with the GPU lane (with qualified exchange_mass BB preconditioning, cg_amg/cudss Poisson, and pure_prism_p2), while element-family, order, and auxiliary-operator coverage remain capability-gated."
     },
     {
       "solver": "FDM",
@@ -36,7 +36,13 @@
       "id": "fem_schema",
       "path": "packages/fullmag-py/src/fullmag/model/discretization.py",
       "symbol": "class FEM",
-      "responsibility": "Study-level FEM constructor, validation, aliases, and IR lowering."
+      "responsibility": "Study-level FEM constructor, validation, aliases, GPU BB policy, and IR lowering."
+    },
+    {
+      "id": "fem_linear_solver_policy",
+      "path": "packages/fullmag-py/src/fullmag/model/discretization.py",
+      "symbol": "class FemLinearSolverPolicy",
+      "responsibility": "Native FEM Poisson linear-solver policy including atol, print_level, and gpu_strategy."
     },
     {
       "id": "object_recipe",
@@ -93,17 +99,17 @@
         "python": "FEM.order",
         "type": "`int`",
         "default": "required",
-        "si_unit": "1",
-        "validation": "integer >= 1; production planners require 1",
+        "si_unit": "$1$",
+        "validation": "integer >= 1; production planners require 1 (`pure_prism_p2` automatically uses P2 `H1_WedgeElement(2)` scalar potential on certified pure-prism meshes)",
         "meaning": "study-level finite-element field order",
-        "backend_support": "FEM CPU/GPU production: P1 only; higher order planned",
+        "backend_support": "FEM CPU/GPU production: P1 magnetization (`pure_prism_p2` potential on pure-prism meshes); higher user-authored order planned",
         "problem_ir": "`backend_policy.discretization_hints.fem.order`"
       },
       {
         "python": "FEM.maximum_element_size",
         "type": "`float`",
         "default": "required unless `hmax` is supplied",
-        "si_unit": "\\mathrm{m}",
+        "si_unit": "$\\mathrm{m}$",
         "validation": "finite and > 0",
         "meaning": "canonical study-level maximum-size target",
         "backend_support": "FEM",
@@ -111,9 +117,9 @@
       },
       {
         "python": "FEM.hmax",
-        "type": "`float or None`",
+        "type": "`float | None`",
         "default": "`None`",
-        "si_unit": "\\mathrm{m}",
+        "si_unit": "$\\mathrm{m}$",
         "validation": "alias; must equal `maximum_element_size` when both are present",
         "meaning": "compatibility spelling of the same target",
         "backend_support": "FEM",
@@ -121,9 +127,9 @@
       },
       {
         "python": "FEM.mesh",
-        "type": "`str or None`",
+        "type": "`str | None`",
         "default": "`None`",
-        "si_unit": "1",
+        "si_unit": "$1$",
         "validation": "nonempty when present",
         "meaning": "imported/prebuilt mesh reference",
         "backend_support": "FEM import/extraction path",
@@ -131,13 +137,93 @@
       },
       {
         "python": "FEM.demag_solver_policy",
-        "type": "`FemLinearSolverPolicy or None`",
+        "type": "`FemLinearSolverPolicy | None`",
         "default": "`None`",
-        "si_unit": "1",
+        "si_unit": "$1$",
         "validation": "typed policy",
         "meaning": "Poisson/demag algebraic solver request; does not alter mesh geometry",
         "backend_support": "FEM demag lanes",
         "problem_ir": "`backend_policy.discretization_hints.fem.demag_solver_policy`"
+      },
+      {
+        "python": "FEM.gpu_bb_preconditioner",
+        "type": "`Literal[\"auto\", \"none\", \"exchange_mass\"] | None`",
+        "default": "`None`",
+        "si_unit": "$1$",
+        "validation": "`None`, `\"auto\"`, `\"none\"`, or `\"exchange_mass\"`; explicit values require FEM GPU `projected_gradient_bb` relaxation",
+        "meaning": "GPU BB search-direction preconditioner; `\"auto\"` and omission resolve to qualified `exchange_mass` default",
+        "backend_support": "FEM GPU `projected_gradient_bb` qualified",
+        "problem_ir": "`backend_policy.discretization_hints.fem.gpu_bb_preconditioner`"
+      },
+      {
+        "python": "FemLinearSolverPolicy.solver",
+        "type": "`Literal[\"CG\", \"GMRES\"]`",
+        "default": "`\"CG\"`",
+        "si_unit": "$1$",
+        "validation": "`\"CG\"` or `\"GMRES\"`",
+        "meaning": "Krylov linear solver for the FEM Poisson system",
+        "backend_support": "FEM CPU/GPU demag lanes",
+        "problem_ir": "`backend_policy.discretization_hints.fem.demag_solver_policy.solver`"
+      },
+      {
+        "python": "FemLinearSolverPolicy.preconditioner",
+        "type": "`Literal[\"AMG\", \"JACOBI\", \"NONE\"]`",
+        "default": "`\"AMG\"`",
+        "si_unit": "$1$",
+        "validation": "`\"AMG\"`, `\"JACOBI\"`, or `\"NONE\"`",
+        "meaning": "Krylov preconditioner for the FEM Poisson system",
+        "backend_support": "FEM CPU/GPU demag lanes",
+        "problem_ir": "`backend_policy.discretization_hints.fem.demag_solver_policy.preconditioner`"
+      },
+      {
+        "python": "FemLinearSolverPolicy.rtol",
+        "type": "`float`",
+        "default": "`1e-8`",
+        "si_unit": "$1$",
+        "validation": "finite and > 0",
+        "meaning": "relative residual tolerance",
+        "backend_support": "FEM CPU/GPU demag lanes",
+        "problem_ir": "`backend_policy.discretization_hints.fem.demag_solver_policy.rtol`"
+      },
+      {
+        "python": "FemLinearSolverPolicy.atol",
+        "type": "`float | None`",
+        "default": "`None`",
+        "si_unit": "$1$",
+        "validation": "finite and > 0 when supplied",
+        "meaning": "optional absolute residual floor",
+        "backend_support": "FEM CPU/GPU demag lanes",
+        "problem_ir": "`backend_policy.discretization_hints.fem.demag_solver_policy.atol`"
+      },
+      {
+        "python": "FemLinearSolverPolicy.max_iterations",
+        "type": "`int`",
+        "default": "`500`",
+        "si_unit": "$1$",
+        "validation": "integer >= 1",
+        "meaning": "maximum Krylov iteration count",
+        "backend_support": "FEM CPU/GPU demag lanes",
+        "problem_ir": "`backend_policy.discretization_hints.fem.demag_solver_policy.max_iterations`"
+      },
+      {
+        "python": "FemLinearSolverPolicy.print_level",
+        "type": "`int`",
+        "default": "`0`",
+        "si_unit": "$1$",
+        "validation": "integer >= 0",
+        "meaning": "native linear-solver diagnostic verbosity level",
+        "backend_support": "FEM CPU/GPU demag lanes",
+        "problem_ir": "`backend_policy.discretization_hints.fem.demag_solver_policy.print_level`"
+      },
+      {
+        "python": "FemLinearSolverPolicy.gpu_strategy",
+        "type": "`Literal[\"auto\", \"cg_amg\", \"cudss\"]`",
+        "default": "`\"auto\"`",
+        "si_unit": "$1$",
+        "validation": "`\"auto\"`, `\"cg_amg\"`, or `\"cudss\"`",
+        "meaning": "GPU Poisson realization strategy (`\"auto\"` chooses cuDSS when available within VRAM budget, else hypre CG+AMG; `\"cg_amg\"` forces Krylov; `\"cudss\"` forces direct cuDSS)",
+        "backend_support": "FEM GPU demag lanes",
+        "problem_ir": "`backend_policy.discretization_hints.fem.demag_solver_policy.gpu_strategy`"
       }
     ]
   }

@@ -1,7 +1,7 @@
 {
   "document": {
     "path": "public_docs/site/python-api/boundary-conditions/floquet-boundary-conditions.md",
-    "reviewed_revision": "5e99782acbb7fb3f65d0cad872e102bf67733103"
+    "reviewed_revision": "752450f8d259ab97c76c36fe666d5474b02abe9a"
   },
   "backend_matrix": [
     {
@@ -14,19 +14,19 @@
       "solver": "FEM",
       "device": "GPU",
       "status": "partial",
-      "reason": "Floquet/Bloch constraint sets planned and supported on qualified FEM GPU modal/response paths"
+      "reason": "Floquet/Bloch constraint sets and single-k / guarded GPU cuDSS shift-invert paths supported on qualified FEM GPU lanes"
     },
     {
       "solver": "FDM",
       "device": "CPU",
-      "status": "documented",
-      "reason": "authoring and IR documented; runtime qualification separate"
+      "status": "unsupported",
+      "reason": "FDM CPU does not implement complex Bloch/Floquet eigenmode or frequency-response operators and fails closed at planning"
     },
     {
       "solver": "FDM",
       "device": "GPU",
-      "status": "documented",
-      "reason": "authoring and IR documented; runtime qualification separate"
+      "status": "unsupported",
+      "reason": "FDM GPU does not implement complex Bloch/Floquet eigenmode or frequency-response operators and fails closed at planning"
     }
   ],
   "equations": [
@@ -84,33 +84,33 @@
     },
     {
       "id": "r_minus",
-      "latex": "\\mathbf{r}_-, \\mathbf{r}_+",
-      "meaning": "paired master and slave boundary coordinates",
+      "latex": "\\mathbf{r}_-",
+      "meaning": "master boundary coordinate",
       "si_unit": "\\mathrm{m}"
     },
     {
       "id": "r_plus",
+      "latex": "\\mathbf{r}_+",
+      "meaning": "slave boundary coordinate",
+      "si_unit": "\\mathrm{m}"
+    },
+    {
+      "id": "delta_r",
       "latex": "\\Delta\\mathbf{r}",
       "meaning": "periodic lattice translation vector $\\mathbf{r}_+ - \\mathbf{r}_-$",
       "si_unit": "\\mathrm{m}"
     },
     {
-      "id": "delta_r",
+      "id": "k_vec",
       "latex": "\\mathbf{k}",
       "meaning": "Bloch wave vector",
       "si_unit": "\\mathrm{rad\\,m^{-1}}"
     },
     {
-      "id": "k_vec",
+      "id": "theta",
       "latex": "\\theta",
       "meaning": "Bloch phase angle $\\mathbf{k}\\cdot\\Delta\\mathbf{r}$ across the boundary pair",
       "si_unit": "\\mathrm{rad}"
-    },
-    {
-      "id": "theta",
-      "latex": "\\varepsilon_\\Gamma",
-      "meaning": "planner $\\Gamma$-point classification threshold ($10^{-12}$)",
-      "si_unit": "\\mathrm{rad\\,m^{-1}}"
     },
     {
       "id": "eps_gamma",
@@ -161,7 +161,7 @@
         "si_unit": "$1$",
         "validation": "non-empty sequence; IDs non-empty",
         "meaning": "boundary pairs carrying the Bloch phase",
-        "backend_support": "FEM/FDM CPU/GPU: IR; resolved support required",
+        "backend_support": "FEM CPU/GPU: implemented/partial; FDM CPU/GPU: IR only (fails closed at planning)",
         "problem_ir": "pair_ids"
       },
       {
@@ -171,7 +171,7 @@
         "si_unit": "$1$",
         "validation": "non-empty string",
         "meaning": "phase sign convention",
-        "backend_support": "FEM/FDM CPU/GPU: IR; resolved support required",
+        "backend_support": "FEM CPU/GPU: implemented/partial; FDM CPU/GPU: IR only (fails closed at planning)",
         "problem_ir": "phase_convention"
       }
     ],

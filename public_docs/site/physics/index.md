@@ -71,8 +71,10 @@ FDM/FEM and CPU/GPU branches.
 - {doc}`interactions/thermal-noise/index` — thermal stochastic field and reproducibility policy.
 - {doc}`interactions/magnetoelastic/index` — magnetoelastic energy and strain coupling.
 - {doc}`interactions/oersted-field/index` — current-generated Oersted fields.
-- {doc}`interactions/spin-transfer-torque/index` — Zhang–Li and related spin-transfer terms.
-- {doc}`interactions/spin-orbit-torque/index` — spin Hall and other spin-orbit torque models.
-- {doc}`interactions/drift-diffusion-spin-torque/index` — drift–diffusion spin transport coupling.
-- {doc}`interactions/inter-region-couplings/index` — coupling terms across material regions.
+- {doc}`interactions/spin-transfer-torque/index` — Slonczewski and Zhang–Li spin-transfer terms.
+- {doc}`interactions/spin-orbit-torque/index` — prescribed local spin–orbit torque models.
+- {doc}`interactions/drift-diffusion-spin-torque/index` — solved drift–diffusion spin Hall transport coupling.
+- {doc}`interactions/inter-region-couplings/index` — exchange and chiral coupling terms across material regions.
 :::
+
+For GPU and CPU computational optimizations across these interactions, see {ref}`numerical-methods-performance`.

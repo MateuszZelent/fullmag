@@ -96,8 +96,15 @@ script directly with `just docker-dev-script first_fem_simulation.py`, or attach
 The runtime records the resolved backend, device, and precision in the result provenance. To
 request the FEM GPU lane instead, change the script to `study.device("gpu", precision="double")`,
 start the DEV group with GPU access (`--gpu-access auto` or `gpu`), and verify the device identity
-in the produced provenance. Dedicated release/qualification FEM gates preserve their own managed
-`justfile` recipes (`fem-managed-headless`).
+and linear-solver realization in the produced provenance. On FEM GPU, `FemLinearSolverPolicy`
+defaults to `gpu_strategy="auto"` (selecting VRAM-guarded `cuDSS` direct Cholesky when the factor
+fits and falling back cleanly to `CG`/`AMG` with an explicit fallback reason otherwise), and
+projected-gradient BB relaxation defaults to exchange-mass preconditioning
+(`study.fem_bb_preconditioner(policy="auto")`) when exchange is active. For thin-film geometries,
+see `pure_prism_p2` swept-prism meshing ({ref}`numerical-methods-performance-fem-gpu-demag`) and
+FEM GPU relaxation/kernel acceleration ({ref}`numerical-methods-performance-fem-gpu-kernels`).
+Dedicated release/qualification FEM gates preserve their own managed `justfile` recipes
+(`fem-managed-headless`).
 
 ## Reading the result
 

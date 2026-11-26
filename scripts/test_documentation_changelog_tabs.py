@@ -72,6 +72,7 @@ class DocumentationChangelogTabsContractTests(unittest.TestCase):
             ":(exclude)packages/fullmag-py/tests/test_material_dmi_units.py",
             ":(exclude)scripts/public_docs_information_architecture.py",
             ":(exclude)scripts/check_public_docs_information_architecture.py",
+            ":(exclude)scripts/test_public_docs_information_architecture.py",
             ":(exclude)scripts/check_public_doc_examples.py",
             ":(exclude)scripts/test_documentation_changelog_tabs.py",
         )

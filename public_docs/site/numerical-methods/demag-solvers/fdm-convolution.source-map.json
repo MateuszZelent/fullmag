@@ -1,19 +1,19 @@
 {
   "document": {
     "path": "public_docs/site/numerical-methods/demag-solvers/fdm-convolution.md",
-    "reviewed_revision": "f79d34a22373377322421b0f44934e08aa3edf0c",
+    "reviewed_revision": "752450f8d259ab97c76c36fe666d5474b02abe9a",
     "source_of_truth": "Current repository source declarations and public Python API contracts."
   },
   "backend_matrix": [
     {"solver": "FEM", "device": "CPU", "status": "not-applicable", "reason": "FDM tensor convolution is not the FEM scalar-potential realization."},
     {"solver": "FEM", "device": "GPU", "status": "not-applicable", "reason": "FDM tensor convolution is not the FEM scalar-potential realization."},
     {"solver": "FDM", "device": "CPU", "status": "reference"},
-    {"solver": "FDM", "device": "GPU", "status": "source-backed", "reason": "CUDA kernels are source-visible; executed-device qualification is separate."}
+    {"solver": "FDM", "device": "GPU", "status": "implemented"}
   ],
   "equations": [
-    {"id": "eq-numerical-demag-fdm-field", "symbols": ["Hdi", "N", "Mqj", "pq", "ij"], "sources": ["multiply", "cpu-field"]},
-    {"id": "eq-numerical-demag-fdm-energy", "symbols": ["Ed", "mu0", "Vp", "M", "Hd"], "sources": ["cpu-field"]},
-    {"id": "eq-numerical-demag-fdm-fft", "symbols": ["Hhat", "Nhat", "Mhat", "F"], "sources": ["multiply", "cpu-spectrum"]}
+    {"id": "eq-numerical-demag-fdm-field", "symbols": ["Hdi", "N", "Mqj", "pq", "ij"], "sources": ["newell", "mixed-single-layer", "multiply", "cpu-field"]},
+    {"id": "eq-numerical-demag-fdm-energy", "symbols": ["Ed", "mu0", "Vp", "M", "Hd"], "sources": ["cpu-field", "cuda64", "cuda32"]},
+    {"id": "eq-numerical-demag-fdm-fft", "symbols": ["Hhat", "Nhat", "Mhat", "F"], "sources": ["multiply", "cpu-spectrum", "cuda-preflight", "cuda64", "cuda32"]}
   ],
   "symbols": [
     {"id": "Hdi", "latex": "$H_{\\mathrm d,p,i}$", "meaning": "field component $i$ in destination cell $p$", "si_unit": "$\\mathrm{A\\,m^{-1}}$"},
@@ -34,12 +34,15 @@
   "sources": [
     {"id": "fdm-policy", "path": "packages/fullmag-py/src/fullmag/model/discretization.py", "symbol": "class FDMDemag", "responsibility": "Legacy FDM demagnetization strategy adapter."},
     {"id": "mesh-authoring", "path": "packages/fullmag-py/src/fullmag/world.py", "symbol": "class GeometryMeshHandle", "responsibility": "Canonical object-owned cell-size authoring."},
+    {"id": "python-stage", "path": "packages/fullmag-py/src/fullmag/world.py", "symbol": "relax_stage", "responsibility": "Stage-first example lowering."},
     {"id": "newell", "path": "crates/fullmag-fdm-demag/src/newell.rs", "symbol": "compute_newell_kernels", "responsibility": "Newell cell-averaged tensor construction."},
+    {"id": "mixed-single-layer", "path": "crates/fullmag-fdm-demag/src/newell/mixed_single_layer.rs", "symbol": "compute_single_layer_mixed_newell_kernels", "responsibility": "Mixed-boundary single-layer dipolar image tensor with far point-dipole transition."},
     {"id": "multiply", "path": "crates/fullmag-fdm-demag/src/multiply.rs", "symbol": "accumulate_tensor_convolution", "responsibility": "Tensor-vector convolution and sign convention."},
     {"id": "cpu-spectrum", "path": "crates/fullmag-engine/src/fdm/cpu/fft.rs", "symbol": "compute_newell_kernel_spectra", "responsibility": "CPU FFT kernel spectra."},
     {"id": "cpu-field", "path": "crates/fullmag-engine/src/fdm/cpu/fields/demag.rs", "symbol": "demag_field_from_vectors", "responsibility": "CPU demagnetizing field and energy path."},
-    {"id": "cuda64", "path": "backends/fdm/gpu/cuda/interactions/demag_fp64.cu", "symbol": "launch_demag_field_fp64", "responsibility": "CUDA FP64 field dispatch."},
-    {"id": "python-stage", "path": "packages/fullmag-py/src/fullmag/world.py", "symbol": "relax_stage", "responsibility": "Stage-first example lowering."}
+    {"id": "cuda-preflight", "path": "backends/fdm/gpu/cuda/runtime/context.cu", "symbol": "context_preflight_single_grid_workspace", "responsibility": "Exact cuFFT workspace memory preflight for single-grid CUDA contexts."},
+    {"id": "cuda64", "path": "backends/fdm/gpu/cuda/interactions/demag_fp64.cu", "symbol": "launch_demag_field_fp64", "responsibility": "CUDA FP64 D2Z/Z2D half-spectrum field dispatch."},
+    {"id": "cuda32", "path": "backends/fdm/gpu/cuda/interactions/demag_fp32.cu", "symbol": "launch_demag_field_fp32", "responsibility": "CUDA FP32 R2C/C2R half-spectrum field dispatch."}
   ],
   "public_api": {
     "parameters": [

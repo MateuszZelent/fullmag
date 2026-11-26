@@ -1,7 +1,7 @@
 {
   "document": {
     "path": "public_docs/site/python-api/runtime/artifacts.md",
-    "reviewed_revision": "ab3c8802a691a535063102c12f9a79bb0043b367"
+    "reviewed_revision": "752450f8d259ab97c76c36fe666d5474b02abe9a"
   },
   "backend_matrix": [
     {
@@ -39,6 +39,18 @@
       "path": "packages/fullmag-py/src/fullmag/init/state_io.py",
       "symbol": "save_magnetization",
       "responsibility": "Magnetization artifact serialization."
+    },
+    {
+      "id": "source-3",
+      "path": "packages/fullmag-py/src/fullmag/init/state_io.py",
+      "symbol": "class FieldState",
+      "responsibility": "General field state container and multi-format I/O."
+    },
+    {
+      "id": "source-4",
+      "path": "packages/fullmag-py/src/fullmag/model/output_storage.py",
+      "symbol": "class OutputStorage",
+      "responsibility": "Output directory, scratch, data format, cleanup, and collision policies."
     }
   ],
   "public_api": {
@@ -47,71 +59,191 @@
         "python": "Result.output_dir",
         "type": "`str | None`",
         "default": "`None`",
-        "si_unit": "1",
-        "validation": "Directory path",
-        "meaning": "Directory for run artifacts",
-        "backend_support": "FEM/FDM CPU/GPU; planner and runtime capability checks remain authoritative",
-        "problem_ir": "output dir"
+        "si_unit": "$1$",
+        "validation": "Resolved run directory path",
+        "meaning": "Directory holding persisted run artifacts",
+        "backend_support": "FEM/FDM CPU/GPU runtime output",
+        "problem_ir": "`resolved_output_storage.output_dir`"
       },
       {
-        "python": "Result.save_state(path",
-        "type": "method",
-        "default": "`format=\"auto\"`, `dataset=\"values\"`",
-        "si_unit": "1",
-        "validation": "Requires `final_magnetization`",
-        "meaning": "Persist final state",
-        "backend_support": "FEM/FDM CPU/GPU; planner and runtime capability checks remain authoritative",
-        "problem_ir": "n/a (runtime output)"
+        "python": "Result.save_state.path",
+        "type": "`str | Path`",
+        "default": "`required`",
+        "si_unit": "$1$",
+        "validation": "Non-empty filesystem path; requires `final_magnetization`",
+        "meaning": "Destination path for final magnetization state",
+        "backend_support": "FEM/FDM CPU/GPU runtime output",
+        "problem_ir": "none (runtime output)"
       },
       {
-        "python": "format=...",
-        "type": "method",
-        "default": "`format=\"auto\"`, `dataset=\"values\"`",
-        "si_unit": "1",
-        "validation": "Requires `final_magnetization`",
-        "meaning": "Persist final state",
-        "backend_support": "FEM/FDM CPU/GPU; planner and runtime capability checks remain authoritative",
-        "problem_ir": "n/a (runtime output)"
+        "python": "Result.save_state.format",
+        "type": "`str`",
+        "default": "`\"auto\"`",
+        "si_unit": "$1$",
+        "validation": "`\"auto\"` or member of `MAGNETIZATION_STATE_FORMATS` (`json`, `zarr`, `h5`, `ovf`, `npz`, `npy`)",
+        "meaning": "Serialization format selector",
+        "backend_support": "FEM/FDM CPU/GPU runtime output",
+        "problem_ir": "none (runtime output)"
       },
       {
-        "python": "dataset=...)",
-        "type": "method",
-        "default": "`format=\"auto\"`, `dataset=\"values\"`",
-        "si_unit": "1",
-        "validation": "Requires `final_magnetization`",
-        "meaning": "Persist final state",
-        "backend_support": "FEM/FDM CPU/GPU; planner and runtime capability checks remain authoritative",
-        "problem_ir": "n/a (runtime output)"
+        "python": "Result.save_state.dataset",
+        "type": "`str`",
+        "default": "`\"values\"`",
+        "si_unit": "$1$",
+        "validation": "Dataset key for hierarchical formats (`zarr`, `h5`, `npz`)",
+        "meaning": "Target dataset name inside archive",
+        "backend_support": "FEM/FDM CPU/GPU runtime output",
+        "problem_ir": "none (runtime output)"
       },
       {
-        "python": "save_magnetization(path",
-        "type": "function",
-        "default": "`format=\"auto\"`",
-        "si_unit": "1",
-        "validation": "`json`, `zarr`, or `h5`",
-        "meaning": "Low-level state writer",
-        "backend_support": "FEM/FDM CPU/GPU; planner and runtime capability checks remain authoritative",
-        "problem_ir": "n/a"
+        "python": "load_magnetization.path",
+        "type": "`str | Path`",
+        "default": "`required`",
+        "si_unit": "$1$",
+        "validation": "Existing readable file/directory path",
+        "meaning": "Source state file to load as `SampledMagnetization`",
+        "backend_support": "FEM/FDM CPU/GPU authoring/runtime",
+        "problem_ir": "`magnets[].initial_magnetization`"
       },
       {
-        "python": "values",
-        "type": "function",
-        "default": "`format=\"auto\"`",
-        "si_unit": "1",
-        "validation": "`json`, `zarr`, or `h5`",
-        "meaning": "Low-level state writer",
-        "backend_support": "FEM/FDM CPU/GPU; planner and runtime capability checks remain authoritative",
-        "problem_ir": "n/a"
+        "python": "load_magnetization.format",
+        "type": "`str`",
+        "default": "`\"auto\"`",
+        "si_unit": "$1$",
+        "validation": "`\"auto\"` or `MAGNETIZATION_STATE_FORMATS`",
+        "meaning": "Explicit or extension-inferred reader format",
+        "backend_support": "FEM/FDM CPU/GPU authoring/runtime",
+        "problem_ir": "`magnets[].initial_magnetization.source_format`"
       },
       {
-        "python": "...)",
-        "type": "function",
-        "default": "`format=\"auto\"`",
-        "si_unit": "1",
-        "validation": "`json`, `zarr`, or `h5`",
-        "meaning": "Low-level state writer",
-        "backend_support": "FEM/FDM CPU/GPU; planner and runtime capability checks remain authoritative",
-        "problem_ir": "n/a"
+        "python": "load_magnetization.dataset",
+        "type": "`str | None`",
+        "default": "`None`",
+        "si_unit": "$1$",
+        "validation": "Optional dataset/key inside archive",
+        "meaning": "Selects dataset in `zarr`/`h5`/`npz` files",
+        "backend_support": "FEM/FDM CPU/GPU authoring/runtime",
+        "problem_ir": "`magnets[].initial_magnetization.dataset`"
+      },
+      {
+        "python": "load_magnetization.sample",
+        "type": "`int`",
+        "default": "`-1`",
+        "si_unit": "$1$",
+        "validation": "Frame index (`-1` selects final frame)",
+        "meaning": "Sample index extracted from time-series state archive",
+        "backend_support": "FEM/FDM CPU/GPU authoring/runtime",
+        "problem_ir": "`magnets[].initial_magnetization.sample_index`"
+      },
+      {
+        "python": "save_magnetization.format",
+        "type": "`str`",
+        "default": "`\"auto\"`",
+        "si_unit": "$1$",
+        "validation": "`\"auto\"` or `MAGNETIZATION_STATE_FORMATS` (`json`, `zarr`, `h5`, `ovf`, `npz`, `npy`)",
+        "meaning": "Low-level magnetization state writer format",
+        "backend_support": "FEM/FDM CPU/GPU runtime I/O",
+        "problem_ir": "none (file output)"
+      },
+      {
+        "python": "infer_magnetization_state_format.path",
+        "type": "`str | Path`",
+        "default": "`required`",
+        "si_unit": "$1$",
+        "validation": "Path with recognized suffix (`.json`, `.zarr`, `.h5`, `.hdf5`, `.ovf`, `.omf`, `.npz`, `.npy`)",
+        "meaning": "Returns canonical format token from file extension",
+        "backend_support": "FEM/FDM CPU/GPU authoring/runtime",
+        "problem_ir": "none (helper)"
+      },
+      {
+        "python": "load_field_state.path",
+        "type": "`str | Path`",
+        "default": "`required`",
+        "si_unit": "$1$",
+        "validation": "Readable path in `FIELD_STATE_FORMATS` (`zarr`, `h5`, `ovf`, `npz`, `npy`, `json`)",
+        "meaning": "Loads arbitrary scalar or vector `FieldState` with metadata and optional grid geometry",
+        "backend_support": "FEM/FDM CPU/GPU authoring/runtime",
+        "problem_ir": "external field state asset"
+      },
+      {
+        "python": "load_field_state.sample",
+        "type": "`int`",
+        "default": "`-1`",
+        "si_unit": "$1$",
+        "validation": "Frame index (`-1` selects last sample)",
+        "meaning": "Sample index for multi-frame field archives",
+        "backend_support": "FEM/FDM CPU/GPU authoring/runtime",
+        "problem_ir": "`FieldState.sample_index`"
+      },
+      {
+        "python": "load_field_state.source_origin",
+        "type": "`Sequence[float] | None`",
+        "default": "`None`",
+        "si_unit": "$\\mathrm{m}$",
+        "validation": "Optional finite 3-vector overriding grid origin",
+        "meaning": "Explicit spatial origin when absent from file header",
+        "backend_support": "FEM/FDM CPU/GPU authoring/runtime",
+        "problem_ir": "`FieldState.grid_origin`"
+      },
+      {
+        "python": "save_field_state.path",
+        "type": "`str | Path`",
+        "default": "`required`",
+        "si_unit": "$1$",
+        "validation": "Writable destination path in `FIELD_STATE_FORMATS`",
+        "meaning": "Persists a `FieldState`, `SampledMagnetization`, or array with quantity/target/unit metadata",
+        "backend_support": "FEM/FDM CPU/GPU runtime I/O",
+        "problem_ir": "none (file output)"
+      },
+      {
+        "python": "OutputStorage.output_dir",
+        "type": "`str | None`",
+        "default": "`None`",
+        "si_unit": "$1$",
+        "validation": "Optional non-empty directory path",
+        "meaning": "Explicit output directory for study/run artifacts",
+        "backend_support": "FEM/FDM CPU/GPU authoring and runtime",
+        "problem_ir": "`output_storage.output_dir`"
+      },
+      {
+        "python": "OutputStorage.temp_dir",
+        "type": "`str | None`",
+        "default": "`None`",
+        "si_unit": "$1$",
+        "validation": "Optional non-empty parent directory for run scratch",
+        "meaning": "Private scratch parent directory (never deleted itself)",
+        "backend_support": "FEM/FDM CPU/GPU authoring and runtime",
+        "problem_ir": "`output_storage.temp_dir`"
+      },
+      {
+        "python": "OutputStorage.data_format",
+        "type": "`str`",
+        "default": "`\"zarr\"`",
+        "si_unit": "$1$",
+        "validation": "`\"zarr\"` or `\"hdf5\"`",
+        "meaning": "Primary archive format for run outputs",
+        "backend_support": "FEM/FDM CPU/GPU authoring and runtime",
+        "problem_ir": "`output_storage.data_format`"
+      },
+      {
+        "python": "OutputStorage.cleanup",
+        "type": "`str`",
+        "default": "`\"on_success\"`",
+        "si_unit": "$1$",
+        "validation": "`\"on_success\"`, `\"always\"`, or `\"never\"`",
+        "meaning": "Private scratch cleanup policy",
+        "backend_support": "FEM/FDM CPU/GPU authoring and runtime",
+        "problem_ir": "`output_storage.cleanup`"
+      },
+      {
+        "python": "OutputStorage.existing_output",
+        "type": "`str`",
+        "default": "`\"timestamp\"`",
+        "si_unit": "$1$",
+        "validation": "`\"timestamp\"`, `\"overwrite\"`, or `\"fail\"`",
+        "meaning": "Policy when `output_dir` already exists",
+        "backend_support": "FEM/FDM CPU/GPU authoring and runtime",
+        "problem_ir": "`output_storage.existing_output`"
       }
     ]
   }

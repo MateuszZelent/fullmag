@@ -1,8 +1,61 @@
 {
-  "document": {"reviewed_revision": "ab3c8802a691a535063102c12f9a79bb0043b367", "path": "public_docs/site/physics/interactions/demagnetization/periodic-demag.md", "title": "Periodic Demag", "interaction": "demagnetization"},
-  "backend_matrix": [{"solver":"FDM","device":"CPU","status":"partial","reason":"Finite truncated-image approximation."},{"solver":"FDM","device":"GPU","status":"partial","reason":"Finite truncated-image CUDA path needs qualification."},{"solver":"FEM","device":"CPU","status":"partial","reason":"Reduced periodic Poisson path is source-visible."},{"solver":"FEM","device":"GPU","status":"partial","reason":"Device periodic path is separately qualified."}],
-  "sources": [{"id":"pbc","path":"packages/fullmag-py/src/fullmag/model/problem.py","symbol":"class FdmPbc","responsibility":"Periodic policy validation."},{"id":"fdm","path":"crates/fullmag-engine/src/fdm/cpu/fft.rs","symbol":"compute_periodic_newell_kernel_spectra","responsibility":"FDM periodic spectra."},{"id":"fem","path":"backends/fem/cpu/mfem/interactions/demag_poisson_periodic.cpp","symbol":"solve_demag_periodic_poisson_reduced","responsibility":"FEM periodic reduction."}],
-  "symbols": [{"id":"Ap","latex":"$A_p$","meaning":"reduced periodic FEM stiffness operator","si_unit":"$\\mathrm{m}$"},{"id":"Ao","latex":"$A_{\\mathrm{open}}$","meaning":"unreduced FEM stiffness operator","si_unit":"$\\mathrm{m}$"},{"id":"P","latex":"$P$","meaning":"periodic representative prolongation","si_unit":"$1$"},{"id":"bp","latex":"$b_p$","meaning":"reduced Poisson right-hand side","si_unit":"$\\mathrm{A\\,m}$"},{"id":"up","latex":"$u_p$","meaning":"reduced scalar potential","si_unit":"$\\mathrm{A}$"},{"id":"Hd","latex":"$\\mathbf H_{\\mathrm d}$","meaning":"demagnetizing field","si_unit":"$\\mathrm{A\\,m^{-1}}$"}],
-  "equations": [{"id":"eq-periodic-demag-reduction","symbols":["Ap","Ao","P","bp","up"],"sources":["fem"]},{"id":"eq-periodic-demag-field","symbols":["Hd","P","up"],"sources":["fem"]}],
-  "public_api":{"constructors":["fullmag.FdmPbc"],"parameters":[{"python":"FdmPbc.axes","type":"tuple[bool,bool,bool]","default":"required","si_unit":"$1$","validation":"Exactly three booleans.","meaning":"Periodic status of x, y, z.","backend_support":"FDM planner.","problem_ir":"`pbc.axes`"},{"python":"FdmPbc.demag","type":"str","default":"open","si_unit":"$1$","validation":"`open`, `truncated_images`, or `periodic_airbox_k0`.","meaning":"Demag boundary policy.","backend_support":"Solver-specific.","problem_ir":"`pbc.demag`"}]}
+  "document": {
+    "reviewed_revision": "752450f8d259ab97c76c36fe666d5474b02abe9a",
+    "reviewed_at": "2026-11-26",
+    "path": "public_docs/site/physics/interactions/demagnetization/periodic-demag.md",
+    "title": "Periodic Demag",
+    "interaction": "demagnetization"
+  },
+  "backend_matrix": [
+    {"solver": "FDM", "device": "CPU", "status": "reference", "reason": "Finite truncated-image spectra plus single-layer mixed-boundary dipole cutoff (r >= 40 h_max) eliminating binary64 Newell cancellation."},
+    {"solver": "FDM", "device": "GPU", "status": "implemented", "reason": "FP64 Hermitian D2Z/Z2D cuFFT verified on RTX 4080 SUPER (pbcxy rel dE_demag = 0.00e+00, -12.0% VRAM); FP32+PBC intentionally rejected by qualification gate."},
+    {"solver": "FEM", "device": "CPU", "status": "implemented", "reason": "Reduced periodic P1 Poisson path (1-D Robin, 2-D film with singleton gauge pin, 1-D/2-D Dirichlet); pure unpinned 3-D Neumann fails closed."},
+    {"solver": "FEM", "device": "GPU", "status": "implemented", "reason": "PBC-reduced 1-D Robin and 2-D film (Neumann + gauge pin) cuDSS direct solves with FSAL k0 reuse verified on RTX 4080 SUPER (26.8x-35.5x speedup, residual <= 1.87e-14, max|dm| <= 3.51e-11); unpinned 3-D Neumann and periodic pure_prism_p2 fail closed."}
+  ],
+  "sources": [
+    {"id": "pbc", "path": "packages/fullmag-py/src/fullmag/model/problem.py", "symbol": "class FdmPbc", "responsibility": "Periodic policy validation and ProblemIR serialization."},
+    {"id": "ir-images", "path": "crates/fullmag-ir/src/execution.rs", "symbol": "resolve_periodic_images", "responsibility": "Resolves explicit/default periodic replica counts."},
+    {"id": "mixed-layer", "path": "crates/fullmag-fdm-demag/src/newell/mixed_single_layer.rs", "symbol": "compute_single_layer_mixed_newell_kernels", "responsibility": "Folds finite periodic replicas into single-layer mixed-boundary tensor with r >= 40 h_max cutoff."},
+    {"id": "dipole-limit", "path": "crates/fullmag-fdm-demag/src/newell.rs", "symbol": "point_dipole_pair_tensor", "responsibility": "Evaluates the distant equal-cell point-dipole tensor limit eliminating binary64 cancellation."},
+    {"id": "fdm", "path": "crates/fullmag-engine/src/fdm/cpu/fft.rs", "symbol": "compute_periodic_newell_kernel_spectra", "responsibility": "FDM periodic tensor spectra builder."},
+    {"id": "fdm-test", "path": "crates/fullmag-engine/src/fdm/cpu/fft.rs", "symbol": "one_layer_periodic_images_preserve_demag_tensor_at_long_lags", "responsibility": "Regression checking distant periodic diagonal and off-diagonal tensor accuracy."},
+    {"id": "fem", "path": "backends/fem/cpu/mfem/interactions/demag_poisson_periodic.cpp", "symbol": "solve_demag_periodic_poisson_reduced", "responsibility": "FEM CPU reduced periodic Poisson solve."},
+    {"id": "fem-gpu-cudss", "path": "backends/fem/gpu/cuda/demag_poisson/cudss_direct_solver.cpp", "symbol": "try_initialize_demag_cudss_direct", "responsibility": "Three-state VRAM-guarded cuDSS admission for PBC-reduced 1-D Robin and 2-D film operators."},
+    {"id": "fem-gpu-dispatch", "path": "backends/fem/gpu/cuda/demag_poisson/hypre_device_solver.cpp", "symbol": "initialize_demag_poisson_hypre_device_solver", "responsibility": "Dispatches PBC-reduced GPU Poisson between cuDSS direct Cholesky and hypre_krylov."},
+    {"id": "ui-object-physics", "path": "apps/control-room/src/modules/inspector/inspectors/objects/physics/ObjectPhysicsSpec.tsx", "symbol": "ObjectPhysicsInspectorPanel", "responsibility": "Object-level physics inspector exposing demagnetization controls."}
+  ],
+  "symbols": [
+    {"id": "Ap", "latex": "$A_p$", "meaning": "reduced periodic FEM stiffness operator", "si_unit": "$\\mathrm{m}$"},
+    {"id": "Ao", "latex": "$A_{\\mathrm{open}}$", "meaning": "unreduced FEM stiffness operator", "si_unit": "$\\mathrm{m}$"},
+    {"id": "P", "latex": "$P$", "meaning": "periodic representative prolongation", "si_unit": "$1$"},
+    {"id": "bp", "latex": "$b_p$", "meaning": "reduced Poisson right-hand side", "si_unit": "$\\mathrm{A\\,m}$"},
+    {"id": "up", "latex": "$u_p$", "meaning": "reduced scalar potential", "si_unit": "$\\mathrm{A}$"},
+    {"id": "Hd", "latex": "$\\mathbf H_{\\mathrm d}$", "meaning": "demagnetizing field", "si_unit": "$\\mathrm{A\\,m^{-1}}$"},
+    {"id": "M", "latex": "$\\mathbf M$", "meaning": "magnetization field", "si_unit": "$\\mathrm{A\\,m^{-1}}$"},
+    {"id": "Ed", "latex": "$E_{\\mathrm d}$", "meaning": "demagnetization energy", "si_unit": "$\\mathrm{J}$"},
+    {"id": "mu0", "latex": "$\\mu_0$", "meaning": "vacuum permeability", "si_unit": "$\\mathrm{N\\,A^{-2}}$"},
+    {"id": "NP", "latex": "$N^{P}_{ij}$", "meaning": "periodically folded FDM demagnetizing tensor component", "si_unit": "$1$"},
+    {"id": "Nij", "latex": "$N_{ij}$", "meaning": "open equal-cell demagnetizing tensor component", "si_unit": "$1$"},
+    {"id": "r", "latex": "$\\mathbf r$", "meaning": "displacement vector between cell centers", "si_unit": "$\\mathrm{m}$"},
+    {"id": "I", "latex": "$I$", "meaning": "number of periodic replicas per side", "si_unit": "$1$"},
+    {"id": "Lp", "latex": "$L_p$", "meaning": "physical period along periodic axis $p$", "si_unit": "$\\mathrm{m}$"},
+    {"id": "ep", "latex": "$\\hat{\\mathbf e}_p$", "meaning": "unit vector along periodic axis $p$", "si_unit": "$1$"},
+    {"id": "V", "latex": "$V$", "meaning": "single FDM cell volume", "si_unit": "$\\mathrm{m^3}$"},
+    {"id": "hmax", "latex": "$h_{\\max}$", "meaning": "maximum FDM cell pitch $\\max(h_x, h_y, h_z)$", "si_unit": "$\\mathrm{m}$"},
+    {"id": "delta", "latex": "$\\delta_{ij}$", "meaning": "Kronecker delta", "si_unit": "$1$"}
+  ],
+  "equations": [
+    {"id": "eq-periodic-demag-reduction", "symbols": ["Ap", "Ao", "P", "bp", "up"], "sources": ["fem", "fem-gpu-cudss", "fem-gpu-dispatch"]},
+    {"id": "eq-periodic-demag-field", "symbols": ["Hd", "P", "up", "Ed", "mu0", "M"], "sources": ["fem", "fem-gpu-dispatch"]},
+    {"id": "eq-periodic-demag-fdm-images", "symbols": ["NP", "Nij", "r", "I", "Lp", "ep", "Hd", "M"], "sources": ["fdm", "mixed-layer"]},
+    {"id": "eq-periodic-demag-distant-dipole", "symbols": ["Nij", "r", "V", "delta", "hmax"], "sources": ["dipole-limit", "mixed-layer"]}
+  ],
+  "public_api": {
+    "constructors": ["fullmag.FdmPbc"],
+    "parameters": [
+      {"python": "FdmPbc.axes", "type": "tuple[bool,bool,bool]", "default": "required", "si_unit": "$1$", "validation": "Exactly three booleans.", "meaning": "Periodic status of x, y, z.", "backend_support": "FDM and FEM planners.", "problem_ir": "`pbc.axes`"},
+      {"python": "FdmPbc.demag", "type": "str", "default": "open", "si_unit": "$1$", "validation": "`open`, `truncated_images`, or `periodic_airbox_k0`.", "meaning": "Demag boundary policy (`periodic_airbox_k0` requires x/y periodic and open z).", "backend_support": "Solver-specific (FDM rejects `periodic_airbox_k0`).", "problem_ir": "`pbc.demag`"},
+      {"python": "FdmPbc.image_counts", "type": "optional tuple[int,int,int]", "default": "None", "si_unit": "$1$", "validation": "Non-negative; only with `truncated_images`.", "meaning": "Finite image count per axis.", "backend_support": "FDM CPU and FDM GPU FP64.", "problem_ir": "`pbc.image_counts`"}
+    ]
+  }
 }

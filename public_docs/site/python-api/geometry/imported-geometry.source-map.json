@@ -1,7 +1,7 @@
 {
   "document": {
     "path": "public_docs/site/python-api/geometry/imported-geometry.md",
-    "reviewed_revision": "ab3c8802a691a535063102c12f9a79bb0043b367"
+    "reviewed_revision": "752450f8d259ab97c76c36fe666d5474b02abe9a"
   },
   "backend_matrix": [
     {
@@ -36,59 +36,65 @@
       "id": "source_imported_geometry",
       "path": "packages/fullmag-py/src/fullmag/model/geometry.py",
       "symbol": "class ImportedGeometry",
-      "responsibility": "public constructor and IR lowering"
+      "responsibility": "public constructor, unit-scale combination, and IR lowering"
+    },
+    {
+      "id": "source_infer_format",
+      "path": "packages/fullmag-py/src/fullmag/_validation.py",
+      "symbol": "infer_geometry_format",
+      "responsibility": "suffix-to-format inference for .step/.stp, .stl, .msh, and .npz"
     }
   ],
   "public_api": {
     "owner": "fm.ImportedGeometry(source, scale=1.0, units=None, name=None, volume=\"full\")",
     "parameters": [
       {
-        "python": "source",
-        "type": "str or PathLike",
+        "python": "ImportedGeometry.source",
+        "type": "str",
         "default": "required",
         "si_unit": "$1$",
-        "validation": "non-empty",
+        "validation": "non-empty; extension inferred as `.step`/`.stp`, `.stl`, `.msh`, or `.npz`",
         "meaning": "source asset path or identifier",
         "backend_support": "FEM CPU/GPU: IR; FDM CPU/GPU: resolver-specific",
         "problem_ir": "source"
       },
       {
-        "python": "scale",
-        "type": "float or tuple[float,float,float]",
+        "python": "ImportedGeometry.scale",
+        "type": "float | tuple[float, float, float]",
         "default": "1.0",
         "si_unit": "$1$",
-        "validation": "positive scalar/vector",
-        "meaning": "import scale",
+        "validation": "strictly positive scalar or 3-vector; multiplied by `units` factor",
+        "meaning": "explicit import scale factor",
         "backend_support": "FEM CPU/GPU: IR; FDM CPU/GPU: resolver-specific",
         "problem_ir": "scale"
       },
       {
-        "python": "units",
-        "type": "str or None",
+        "python": "ImportedGeometry.units",
+        "type": "str | None",
         "default": "None",
         "si_unit": "$1$",
-        "validation": "recognized unit when supplied",
-        "meaning": "source units",
+        "validation": "recognized unit (`\"m\"`, `\"mm\"`, `\"um\"`, `\"nm\"`) or `None`",
+        "meaning": "source coordinate units converted into effective `scale`",
         "backend_support": "FEM CPU/GPU: IR; FDM CPU/GPU: resolver-specific",
-        "problem_ir": "units"
+        "problem_ir": "scale"
       },
       {
-        "python": "name",
-        "type": "str or None",
+        "python": "ImportedGeometry.name",
+        "type": "str | None",
         "default": "None",
         "si_unit": "$1$",
-        "validation": "non-empty when supplied",
-        "meaning": "stable name",
+        "validation": "non-empty when supplied; defaults to file stem",
+        "meaning": "stable geometry name",
         "backend_support": "FEM/FDM CPU/GPU: IR; resolver-specific",
         "problem_ir": "name"
       },
       {
-        "python": "volume",
-        "type": "str",
-        "default": "full",
+        "python": "ImportedGeometry.volume",
+        "type": "Literal[\"full\", \"surface\"]",
+        "default": "\"full\"",
         "si_unit": "$1$",
-        "validation": "current supported value `full`",
-        "meaning": "surface/volume import policy",
+        "validation": "`\"full\"` or `\"surface\"`",
+        "meaning": "volumetric vs surface-only import policy",
         "backend_support": "FEM/FDM CPU/GPU: IR; resolver-specific",
         "problem_ir": "volume"
       }

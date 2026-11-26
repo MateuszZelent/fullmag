@@ -1,11 +1,11 @@
 ---
 title: Bulk DMI Python API
-status: partial
+status: implemented
 doc_kind: reference
 audience: user
 owner: fullmag-public-docs
-last_updated: 2026-08-31
-reviewed_revision: ab3c8802a691a535063102c12f9a79bb0043b367
+last_updated: 2026-11-26
+reviewed_revision: 752450f8d259ab97c76c36fe666d5474b02abe9a
 ---
 
 # Bulk DMI
@@ -14,7 +14,7 @@ reviewed_revision: ab3c8802a691a535063102c12f9a79bb0043b367
 (python-api-interactions-bulk-dmi-problem-statement)=
 ## Problem statement
 
-The signed bulk DMI constant is passed through unchanged.
+`fm.BulkDMI` records the signed bulk Dzyaloshinskii–Moriya interaction constant $D$ for canonical `ProblemIR` lowering, while stage-first study scripts configure per-magnet bulk DMI directly through `MagnetHandle.Dbulk` (alias `dbulk`) or `fm.Material(..., Dbulk=...)`.
 
 This page covers the Python authoring contract: construction validates the signed bulk DMI constant in Python, while `to_ir()` emits the canonical `ProblemIR` record before mesh discretization.
 
@@ -26,76 +26,93 @@ Bulk Dzyaloshinskii–Moriya interaction contributes the chiral energy density $
 (python-api-interactions-bulk-dmi-symbols-and-si-units)=
 ## Symbols and SI units
 
-`fm.BulkDMI.D` is authored in joules per square metre ($\mathrm{J\,m^{-2}}$). Vector magnetization $\mathbf{m}$ is dimensionless unit length ($1$), and spatial gradients use inverse metres ($\mathrm{m^{-1}}$).
+`fm.BulkDMI.D` and `MagnetHandle.Dbulk` are authored in joules per square metre ($\mathrm{J\,m^{-2}}$). Vector magnetization $\mathbf{m}$ is dimensionless unit length ($1$), and spatial gradients use inverse metres ($\mathrm{m^{-1}}$).
 
 (python-api-interactions-bulk-dmi-assumptions-and-validity)=
 ## Assumptions and validity
 
-`D` must be a finite real scalar; positive, negative, and zero values are preserved with their sign intact. Non-finite or non-numeric constants fail closed during construction.
+`D` must be a finite real scalar validated via `require_finite(self.D, "D")`; positive, negative, and zero values are preserved with their sign intact. Non-finite or non-numeric constants fail closed during construction.
 
 (python-api-interactions-bulk-dmi-python-api)=
 ## Python API
 
-### Constructor or function
+### Constructor and stage-first handle attributes
 
-`fm.BulkDMI(D)`
+- `fm.BulkDMI(D)`
+- Direct per-magnet property on `MagnetHandle` (returned by `study.geometry(...)`): `film.Dbulk` (lowercase alias `film.dbulk`), which activates bulk DMI on the object's `fm.Material` record. Setting `film.Dbulk = None` clears active bulk DMI on that magnet.
 
 ### Parameters
 
 | Python name | Type | Default | SI unit | Validation | Meaning | FEM/FDM CPU/GPU support | ProblemIR destination |
 |---|---|---|---|---|---|---|---|
-| `fm.BulkDMI.D` | `float` | `required` | $\mathrm{J\,m^{-2}}$ | finite; sign preserved | bulk DMI constant | FEM/FDM CPU/GPU: IR; resolved support required | `D` |
+| `fm.BulkDMI.D` | `float` | `required` | $\mathrm{J\,m^{-2}}$ | finite scalar via `require_finite`; sign preserved | bulk DMI constant | FEM/FDM CPU/GPU: IR and chiral exchange/DMI kernels | `D` |
+| `MagnetHandle.Dbulk` | `float \| None` | `None` | $\mathrm{J\,m^{-2}}$ | finite scalar when set; `None` deactivates material bulk DMI | per-magnet bulk DMI constant in stage-first scripts | FEM/FDM CPU/GPU: lowers onto `materials[].dmi_bulk` | `materials[].dmi_bulk` |
 
 ### Stage-first example
 
 ```python
-# %%
+# %% Stage-first bulk DMI authoring on a chiral helimagnet
 import fullmag as fm
 
-study = fm.study("public-api-example")
-study.objects.mesh.defaults(maximum_element_size=5e-9)
-body = study.geometry(fm.Box(size=(100e-9, 20e-9, 5e-9)), name="film")
-body.Ms = 800.0e3
-body.Aex = 13.0e-12
-body.alpha = 0.02
-body.m = fm.texture.uniform(1.0, 0.0, 0.0)
-study.stages.add_relax(stage_id="api-example", dt=5e-13, max_steps=1)
-# Author the documented object after the stage exists.
-value = fm.BulkDMI(D=1.0e-3)
-canonical_ir = value.to_ir()
-```
+study = fm.study("bulk_dmi_bloch_skyrmion")
+study.engine("fem")
+study.device("cpu", precision="double")
+study.objects.mesh.defaults(maximum_element_size=4.0e-9)
 
-In a complete simulation script, set bulk DMI on the owning material or attach the interaction term through the study energy/material API.
+film = study.geometry(fm.Box(size=(80.0e-9, 80.0e-9, 10.0e-9)), name="fegem")
+film.Ms = 384.0e3
+film.Aex = 8.78e-12
+film.alpha = 0.2
+film.Dbulk = 1.58e-3
+film.m = fm.texture.bloch_skyrmion(radius=18.0e-9, wall_width=5.0e-9)
+
+study.exchange()
+study.demag(model="airbox", variant="robin")
+study.b_ext(0.0, 0.0, 0.2)
+study.stages.add_relax(stage_id="relax_bloch_skyrmion", dt=5.0e-13, max_steps=100)
+
+# %% Canonical BulkDMI energy-term IR inspection
+term = fm.BulkDMI(D=1.58e-3)
+canonical_ir = term.to_ir()
+```
 
 (python-api-interactions-bulk-dmi-problem-ir)=
 ## ProblemIR
 
-`value.to_ir()` emits `{"kind": "bulk_dmi", "D": ...}`, preserving the signed `D` value in $\mathrm{J\,m^{-2}}$.
+`term.to_ir()` emits `{"kind": "bulk_dmi", "D": ...}`, preserving the signed `D` value in $\mathrm{J\,m^{-2}}$. Assigning `film.Dbulk` serializes the bulk DMI coefficient onto the object's `materials[]` record and activates bulk DMI for that magnet.
 
 (python-api-interactions-bulk-dmi-round-trip-and-failure-semantics)=
 ## Round-trip and failure semantics
 
-`requested intent` preserves the exact signed `D` constant in `ProblemIR` independently of `resolved execution`. `Validation errors` reject non-finite or missing inputs, while `unsupported combinations` fail closed if a selected solver path or boundary mode lacks bulk-DMI support.
+`requested intent` preserves the exact signed `D` constant in `ProblemIR` independently of `resolved execution`. `Validation errors` reject non-finite or missing inputs at Python construction, while `unsupported combinations` fail closed if a selected solver path or boundary mode lacks bulk-DMI support.
 
 (python-api-interactions-bulk-dmi-discrete-realization)=
 ## Discrete realization
 
-The Python contract supplies the signed bulk-DMI constant and canonical `ProblemIR` only; chiral finite-difference stencils, FEM weak-form boundary terms, and CPU/GPU kernels are implemented by the solver backends.
+The Python contract supplies the signed bulk-DMI constant and canonical `ProblemIR` only; chiral finite-difference stencils, FEM weak-form boundary terms, and unified preassembled CSR GPU DMI kernels (PR `#577`) are implemented by the solver backends. See {ref}`numerical-methods-performance-fem-gpu-kernels` and {ref}`numerical-methods-performance-fdm-core`.
+
+| Solver | Device | Bulk DMI realization | Performance reference |
+|---|---|---|---|
+| `FDM` | `CPU` | Chiral finite-difference bulk-DMI stencil + open boundary condition | {ref}`numerical-methods-performance-fdm-core` |
+| `FDM` | `GPU` | CUDA chiral finite-difference bulk-DMI kernel | {ref}`numerical-methods-performance-fdm-core` |
+| `FEM` | `CPU` | Nodal/weak-form CSR assembly with chiral boundary variation | {doc}`../../physics/interactions/dmi/bulk` |
+| `FEM` | `GPU` | Unified preassembled CSR GPU DMI kernel (PR `#577`) | {ref}`numerical-methods-performance-fem-gpu-kernels` |
 
 (python-api-interactions-bulk-dmi-implementation-mapping)=
 ## Implementation mapping
 
-The authoritative implementation is `packages/fullmag-py/src/fullmag/model/energy.py` (`class BulkDMI`). Constructor parameters, validation branches, and `to_ir()` keys come directly from that module.
+- Typed energy term: `packages/fullmag-py/src/fullmag/model/energy.py` (`class BulkDMI`).
+- Per-magnet handle property (`Dbulk` / `dbulk`): `packages/fullmag-py/src/fullmag/world.py` (`class MagnetHandle`).
 
 (python-api-interactions-bulk-dmi-validation)=
 ## Validation
 
-Focused repository unit tests covering signed DMI IR lowering include `test_dmi_terms_preserve_signed_constants_in_ir`. Live solver runtime and Control Room browser behavior require separate qualification.
+Focused repository unit tests covering signed DMI IR lowering and unit warnings include `test_dmi_terms_preserve_signed_constants_in_ir` and `test_bulk_dmi_warning_uses_joules_per_square_metre`. Live solver runtime parity and Control Room browser behavior require separate qualification.
 
 (python-api-interactions-bulk-dmi-limitations)=
 ## Limitations and Control Room
 
-Control Room has no standalone form route for `fm.BulkDMI`; bulk DMI coefficients are edited via owning object/region material panels (`Dbulk`) when exposed or authored in Python scripts. See {doc}`/frontend/capability-register`.
+Control Room has no standalone form route for `fm.BulkDMI`; bulk DMI coefficients (`Dbulk`) are edited via owning object/region material panels (`apps/control-room/src/modules/inspector/inspectors/objects/material/ObjectMaterialSpec.tsx`) when exposed, or authored in Python scripts. See {doc}`/frontend/capability-register`.
 
 (python-api-interactions-bulk-dmi-scientific-bibliography)=
 ## Scientific bibliography
@@ -109,4 +126,5 @@ Control Room has no standalone form route for `fm.BulkDMI`; bulk DMI coefficient
 
 | Source path | Symbol | Responsibility |
 |---|---|---|
-| `packages/fullmag-py/src/fullmag/model/energy.py` | `class BulkDMI` | public constructor and IR lowering |
+| [`packages/fullmag-py/src/fullmag/model/energy.py`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/model/energy.py#L186) | `class BulkDMI` | public constructor and IR lowering |
+| [`packages/fullmag-py/src/fullmag/world.py`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/world.py#L570) | `class MagnetHandle` | per-magnet `Dbulk` / `dbulk` authoring facade |

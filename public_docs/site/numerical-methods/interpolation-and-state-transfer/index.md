@@ -278,9 +278,9 @@ location or interpolation itself executed on the GPU.
 
 | Responsibility | Repository path | Stable symbol |
 |---|---|---|
-| FEM field evaluated on FDM grid | `crates/fullmag-engine/src/fem_solution_transfer.rs` | `transfer_fem_field_to_grid` |
-| Vector-field interpolation primitive | `crates/fullmag-engine/src/fem_solution_transfer.rs` | `transfer_vector_field` |
-| Direction selection and reporting | `crates/fullmag-cli/src/step_utils.rs` | `resample_continuation_if_cross_backend` |
+| FEM field evaluated on FDM grid | [`crates/fullmag-engine/src/fem_solution_transfer.rs`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-engine/src/fem_solution_transfer.rs#L357) | [`transfer_fem_field_to_grid`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-engine/src/fem_solution_transfer.rs#L357) |
+| Vector-field interpolation primitive | [`crates/fullmag-engine/src/fem_solution_transfer.rs`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-engine/src/fem_solution_transfer.rs#L284) | [`transfer_vector_field`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-engine/src/fem_solution_transfer.rs#L284) |
+| Direction selection and reporting | [`crates/fullmag-cli/src/step_utils.rs`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-cli/src/step_utils.rs#L1284) | [`resample_continuation_if_cross_backend`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-cli/src/step_utils.rs#L1284) |
 
 ## Validation programme
 
@@ -299,6 +299,7 @@ location or interpolation itself executed on the GPU.
 ## Limitations
 
 - The documented transfers are pointwise interpolation, not conservative projection.
+- The current FEM point-location BVH (`crates/fullmag-engine/src/fem_solution_transfer.rs`) indexes tetrahedral (`tet4`) elements; mixed prism–pyramid–tetrahedron and `pure_prism_p2` meshes are not directly indexed by the tetrahedral BVH transfer primitive.
 - P1 FEM transfer does not reproduce arbitrary higher-order source fields exactly.
 - FDM trilinear interpolation depends on the cell-centre convention and explicit boundary policy.
 - Renormalization is nonlinear and changes averages and interpolation order near cancellation.

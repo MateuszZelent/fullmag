@@ -1,7 +1,7 @@
 {
   "document": {
     "path": "public_docs/site/python-api/meshing/fem/ferromagnet/boundary-layers.md",
-    "reviewed_revision": "ab3c8802a691a535063102c12f9a79bb0043b367"
+    "reviewed_revision": "752450f8d259ab97c76c36fe666d5474b02abe9a"
   },
   "backend_matrix": [
     {
@@ -34,7 +34,25 @@
       "id": "source-1",
       "path": "packages/fullmag-py/src/fullmag/model/discretization.py",
       "symbol": "class PerObjectMeshRecipe",
-      "responsibility": "Object boundary-layer policy and lowering."
+      "responsibility": "Object boundary-layer policy validation and lowering."
+    },
+    {
+      "id": "source-2",
+      "path": "packages/fullmag-py/src/fullmag/model/discretization.py",
+      "symbol": "class MeshOperation",
+      "responsibility": "Mesh operation schema (fails closed at shared-domain build)."
+    },
+    {
+      "id": "source-3",
+      "path": "packages/fullmag-py/src/fullmag/meshing/_gmsh_fields.py",
+      "symbol": "_add_boundary_layer_field",
+      "responsibility": "Gmsh BoundaryLayer field construction using first-layer thickness (hwall_n) and explicit targets."
+    },
+    {
+      "id": "source-4",
+      "path": "packages/fullmag-py/src/fullmag/meshing/asset_pipeline.py",
+      "symbol": "_validate_declared_mesh_operations",
+      "responsibility": "Fail-closed rejection of authored MeshOperation sequences during shared-domain realization."
     }
   ],
   "public_api": {
@@ -43,8 +61,8 @@
         "python": "boundary_layer_count",
         "type": "`int | None`",
         "default": "`None`",
-        "si_unit": "1",
-        "validation": "positive",
+        "si_unit": "$1$",
+        "validation": "integer >= 1",
         "meaning": "layer count",
         "backend_support": "FEM CPU/GPU; FDM not applicable to this mesh policy",
         "problem_ir": "`mesh_workflow`"
@@ -53,9 +71,9 @@
         "python": "boundary_layer_thickness",
         "type": "`float | None`",
         "default": "`None`",
-        "si_unit": "\\mathrm{m}",
-        "validation": "positive",
-        "meaning": "total package thickness",
+        "si_unit": "$\\mathrm{m}$",
+        "validation": "positive finite float",
+        "meaning": "first-layer wall thickness (`hwall_n`)",
         "backend_support": "FEM CPU/GPU; FDM not applicable to this mesh policy",
         "problem_ir": "`mesh_workflow`"
       },
@@ -63,29 +81,29 @@
         "python": "boundary_layer_stretching",
         "type": "`float | None`",
         "default": "`None`",
-        "si_unit": "1",
-        "validation": "in $(1, 2]$",
-        "meaning": "thickness growth between layers",
+        "si_unit": "$1$",
+        "validation": "positive finite float (runtime fallback 1.2)",
+        "meaning": "thickness growth ratio between layers",
         "backend_support": "FEM CPU/GPU; FDM not applicable to this mesh policy",
         "problem_ir": "`mesh_workflow`"
       },
       {
         "python": "boundary_layer_target_surface_selectors",
-        "type": "`Sequence[Mapping] | None`",
+        "type": "`Sequence[Mapping[str, object]] | None`",
         "default": "`None`",
-        "si_unit": "1",
-        "validation": "semantic selectors",
-        "meaning": "target surfaces",
+        "si_unit": "$1$",
+        "validation": "semantic selector dicts",
+        "meaning": "target surfaces (converted to boundary curves)",
         "backend_support": "FEM CPU/GPU; FDM not applicable to this mesh policy",
         "problem_ir": "`mesh_workflow`"
       },
       {
         "python": "boundary_layer_target_curve_selectors",
-        "type": "`Sequence[Mapping] | None`",
+        "type": "`Sequence[Mapping[str, object]] | None`",
         "default": "`None`",
-        "si_unit": "1",
-        "validation": "semantic selectors",
-        "meaning": "target edges",
+        "si_unit": "$1$",
+        "validation": "semantic selector dicts",
+        "meaning": "target edges / curves",
         "backend_support": "FEM CPU/GPU; FDM not applicable to this mesh policy",
         "problem_ir": "`mesh_workflow`"
       },
@@ -93,19 +111,19 @@
         "python": "boundary_layer_target_surface_tags",
         "type": "`Sequence[int] | None`",
         "default": "`None`",
-        "si_unit": "1",
-        "validation": "Gmsh tags",
-        "meaning": "raw numeric targets",
+        "si_unit": "$1$",
+        "validation": "Gmsh surface tags",
+        "meaning": "raw numeric surface targets",
         "backend_support": "FEM CPU/GPU; FDM not applicable to this mesh policy",
         "problem_ir": "`mesh_workflow`"
       },
       {
-        "python": "_curve_tags",
+        "python": "boundary_layer_target_curve_tags",
         "type": "`Sequence[int] | None`",
         "default": "`None`",
-        "si_unit": "1",
-        "validation": "Gmsh tags",
-        "meaning": "raw numeric targets",
+        "si_unit": "$1$",
+        "validation": "Gmsh curve tags",
+        "meaning": "raw numeric curve targets",
         "backend_support": "FEM CPU/GPU; FDM not applicable to this mesh policy",
         "problem_ir": "`mesh_workflow`"
       }

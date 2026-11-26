@@ -155,14 +155,14 @@ film.m = fm.texture.bimeron(
     plane="xy",
 )
 
-# %% Rotated DMI, relaxation, and zero-current hold
+# %% Rotated DMI, fixed-step RK4 relaxation, and zero-current hold
 study.terms.add(fm.RotatedInterfacialDMI(D=3e-3))
 study.demag(realization="auto")
-study.solver(fix_dt=2.5e-15, integrator="rk45")
+study.solver(fix_dt=2.5e-15, integrator="rk4")
 study.stages.add_relax(
     stage_id="relax",
     algorithm="llg_overdamped",
-    solver="rk45",
+    solver="rk4",
     dt=2.5e-15,
     relax_alpha=0.3,
     max_steps=8_000,
@@ -223,9 +223,9 @@ advertise its quantities.
 ## Discrete realization and backend status
 
 FDM CPU is the double-precision reference and uses centered interior differences
-with exchange+rDMI ghost values at open faces. FDM CUDA implements the same field,
-energy, and boundary correction in FP64 and FP32. FEM assembles the complete weak
-residual and projects the field using
+with exchange+rDMI ghost values at open faces (`crates/fullmag-engine/src/fdm/cpu/fields/dmi.rs`).
+FDM CUDA implements the same field, energy, and boundary correction in FP64 and FP32. FEM CPU
+assembles the complete weak residual (`dmi_weak_residual.cpp`) and projects the field using
 
 ```{math}
 :label: eq-rotated-interfacial-dmi-fem-projection
@@ -233,10 +233,22 @@ residual and projects the field using
 {\mu_0M_{s,a}M_a^{\mathrm{lump}}}.
 ```
 
-FEM GPU uses the same element residual in device kernels. Nonzero static-periodic FEM rDMI
-is rejected until residual and mass reduction over periodic node classes is
-implemented; the periodic Göbel qualification therefore uses FDM. Source
-implementation or a successful build is not scientific runtime qualification.
+FEM GPU uses the **unified preassembled skew-symmetric CSR GPU DMI operator**
+(`dmi_csr_operator.cpp::build_gpu_dmi_csr_from_mfem` and
+`dmi_csr_kernels.cu::fullmag_cuda_dmi_csr_field_energy`) with edge vectors
+$\mathbf d_{ij}^{\mathrm{rot}} = (0, -g_{ij,x}^{\mathrm{rot}}, -g_{ij,y}^{\mathrm{rot}})$
+covering `tet4`, 2D periodic `tet4` ($P^{\mathsf T} D P$), `prism6` (including `pure_prism_p2`),
+and `mixed` (`prism6 + pyramid5 + tet4`) meshes with zero global `atomicAdd` on field
+evaluation, compensated double-double (`gpu_relax_dd`) Armijo increments, predicated
+`cub::BlockReduce` energy reductions, and intermediate RK `energy_out=nullptr` gating. On an
+RTX 4080 SUPER (SM `89-real`), CSR GPU rotated DMI achieves machine-precision parity against
+CPU MFEM ($h_{\mathrm{rel}} \le 1.12 \times 10^{-15}$, $E_{\mathrm{rel}} \le 3.87 \times 10^{-14}$
+across `tet4`, 2D periodic `tet4`, `prism6`, and `mixed` meshes; `0.0891 ms` field-only on
+`prism6_120x120x2`, `1,953×` faster than CPU MFEM, `1.72×–4.80×` faster than legacy `tet4` GPU;
+`compute-sanitizer --tool memcheck` 0 errors). See
+{ref}`numerical-methods-performance-fem-gpu-demag` and
+{ref}`numerical-methods-performance-fem-gpu-kernels`. Source implementation or operator parity
+does not replace end-to-end Göbel bimeron trajectory verification.
 
 The FDM planner validates resolved cellwise exchange stiffness, but native CUDA
 still rejects cellwise material fields. This validation does not add native
@@ -246,8 +258,8 @@ CUDA support for spatially varying exchange coefficients.
 |---|---|---|---|
 | FDM | CPU | implemented and operator-tested | Göbel bimeron run **not verified** |
 | FDM | GPU | FP64/FP32 implemented and operator-tested | historical 15-check report; current 19-check run **not verified** |
-| FEM | CPU | MFEM weak form implemented and tested | Göbel bimeron run **not verified** |
-| FEM | GPU | CUDA residual implemented; historical operator tests | current cancellation-bound CUDA regression and Göbel bimeron run **not verified** |
+| FEM | CPU | MFEM weak form implemented and tested across `tet4`/`prism6`/`mixed` | Göbel bimeron run **not verified** |
+| FEM | GPU | unified CSR GPU DMI (`dmi_csr_*`) qualified on RTX 4080 SUPER across `tet4`, 2D periodic `tet4`, `prism6`, and `mixed` (`h_rel <= 1.12e-15`, `E_rel <= 3.87e-14`, 0 memcheck errors) | full Göbel 19-check bimeron trajectory **not verified** |
 
 (rotated-interfacial-dmi-implementation-mapping)=
 ## Implementation mapping
@@ -290,14 +302,15 @@ report by `scripts/render_goebel_2019_bimeron_figure.py`; current 19-check
 qualification remains **NOT VERIFIED** until a fresh run.
 ```
 
-See {doc}`validation` for the cross-variant DMI validation matrix. A fresh
-19-check report is required before this artifact can qualify the stated FDM
-CUDA FP64 case; FDM CPU and both FEM bimeron runtimes remain **not verified**.
+See {doc}`validation` for the cross-variant DMI validation matrix and the unified CSR GPU DMI
+machine-precision parity results. A fresh 19-check report is required before this artifact can
+qualify the stated FDM CUDA FP64 case; FDM CPU and both FEM bimeron trajectories remain
+**not verified**.
 
 (rotated-interfacial-dmi-limitations)=
 ## Limitations
 
-Spatially varying $D$, a general $3\times3$ DMI tensor, FEM orders above P1,
+Spatially varying $D$, a general $3\times3$ DMI tensor, FEM magnetization orders above P1,
 atomistic frustrated exchange, and Göbel's current-driven SOT motion are not
 qualified by this result. A stabilized initial state is not evidence for the
 velocity results in Fig. 3 of the paper.
@@ -315,19 +328,21 @@ velocity results in Fig. 3 of the paper.
 
 | Contract | Repository path | Stable symbol | Responsibility |
 |---|---|---|---|
-| Python API | [`packages/fullmag-py/src/fullmag/model/energy.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/energy.py#L150) | [`class RotatedInterfacialDMI`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/energy.py#L150) | validation and ProblemIR lowering |
-| ProblemIR | [`crates/fullmag-ir/src/study.rs`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-ir/src/study.rs#L603) | [`EnergyTermIR`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-ir/src/study.rs#L603) | distinct serialized interaction variant |
-| ProblemIR validation | [`crates/fullmag-ir/src/validation.rs`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-ir/src/validation.rs#L2110) | [`validate_dmi_energy_terms`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-ir/src/validation.rs#L2110) | finite-value and duplicate-term validation |
-| FDM planning | [`crates/fullmag-plan/src/fdm.rs`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-plan/src/fdm.rs#L2385) | [`plan_fdm`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-plan/src/fdm.rs#L2385) | legality, boundary, and runtime selection |
-| FEM planning | [`crates/fullmag-plan/src/fem.rs`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-plan/src/fem.rs#L3583) | [`plan_fem`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-plan/src/fem.rs#L3583) | legality and backend plan |
-| Scalar artifacts | [`crates/fullmag-api/src/quantities.rs`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-api/src/quantities.rs#L211) | [`run_manifest_scalar_value`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-api/src/quantities.rs#L211) | plan-guarded completed-run energy fallback |
-| Modal capabilities | [`crates/fullmag-runner/src/capabilities.rs`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-runner/src/capabilities.rs#L1024) | [`capabilities_for_fem_eigen_engine`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-runner/src/capabilities.rs#L1024) | reject unsupported rDMI modal quantities |
-| FDM CPU | `crates/fullmag-engine/src/fdm/cpu/fields.rs` | `rotated_interfacial_dmi_field` | reference field and energy |
-| FDM CPU energy | `crates/fullmag-engine/src/fdm/cpu/fields.rs` | `rotated_interfacial_dmi_energy_from_vectors` | reference interaction energy |
-| FDM CUDA | [`backends/fdm/gpu/cuda/interactions/demag_fp64.cu`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/backends/fdm/gpu/cuda/interactions/demag_fp64.cu#L240) | [`combine_effective_field_fp64_kernel`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/backends/fdm/gpu/cuda/interactions/demag_fp64.cu#L240) | FP64 field and boundary correction |
-| FDM CUDA boundary | [`backends/fdm/gpu/cuda/interactions/dmi_boundary.cuh`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/backends/fdm/gpu/cuda/interactions/dmi_boundary.cuh#L92) | [`add_rotated_interfacial_dmi_boundary_correction`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/backends/fdm/gpu/cuda/interactions/dmi_boundary.cuh#L92) | rotated exchange+DMI ghost correction |
-| FEM weak residual | [`backends/fem/src/dmi_weak_residual.cpp`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/backends/fem/src/dmi_weak_residual.cpp#L90) | [`dmi_accumulate_rotated_interfacial_residual`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/backends/fem/src/dmi_weak_residual.cpp#L90) | first variation shared by FEM realizations |
-| FEM plan import | [`backends/fem/cpu/mfem/interactions/dmi.cpp`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/backends/fem/cpu/mfem/interactions/dmi.cpp#L38) | [`initialize_rotated_dmi_plan_fields`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/backends/fem/cpu/mfem/interactions/dmi.cpp#L38) | import the rotated coefficient from the extended ABI into the MFEM context |
-| FEM CUDA | [`backends/fem/gpu/cuda/interactions/dmi/dmi_kernels.cu`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/backends/fem/gpu/cuda/interactions/dmi/dmi_kernels.cu#L115) | [`dmi_element_residual_kernel`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/backends/fem/gpu/cuda/interactions/dmi/dmi_kernels.cu#L115) | device element residual |
-| Göbel scenario | [`tests/standard_problems/bimeron/goebel_2019/scenario_fdm.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/tests/standard_problems/bimeron/goebel_2019/scenario_fdm.py#L29) | [`study`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/tests/standard_problems/bimeron/goebel_2019/scenario_fdm.py#L29) | canonical public reproduction |
-| Göbel verifier | [`tests/standard_problems/bimeron/goebel_2019/verify.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/tests/standard_problems/bimeron/goebel_2019/verify.py#L344) | [`verify_bundle`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/tests/standard_problems/bimeron/goebel_2019/verify.py#L344) | topology, energy, and execution receipt gates |
+| Python API | [`packages/fullmag-py/src/fullmag/model/energy.py`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/model/energy.py#L150) | [`class RotatedInterfacialDMI`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/model/energy.py#L150) | validation and ProblemIR lowering |
+| ProblemIR | [`crates/fullmag-ir/src/study.rs`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-ir/src/study.rs#L606) | [`EnergyTermIR`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-ir/src/study.rs#L606) | distinct serialized interaction variant |
+| ProblemIR validation | [`crates/fullmag-ir/src/validation.rs`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-ir/src/validation.rs#L2346) | [`validate_dmi_energy_terms`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-ir/src/validation.rs#L2346) | finite-value and duplicate-term validation |
+| FDM planning | [`crates/fullmag-plan/src/fdm.rs`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-plan/src/fdm.rs#L2512) | [`plan_fdm`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-plan/src/fdm.rs#L2512) | legality, boundary, and runtime selection |
+| FEM planning | [`crates/fullmag-plan/src/fem.rs`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-plan/src/fem.rs#L4287) | [`plan_fem`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-plan/src/fem.rs#L4287) | legality and backend plan |
+| Scalar artifacts | [`crates/fullmag-api/src/quantities.rs`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-api/src/quantities.rs#L224) | [`run_manifest_scalar_value`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-api/src/quantities.rs#L224) | plan-guarded completed-run energy fallback |
+| Modal capabilities | [`crates/fullmag-runner/src/capabilities.rs`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-runner/src/capabilities.rs#L1181) | [`capabilities_for_fem_eigen_engine`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-runner/src/capabilities.rs#L1181) | reject unsupported rDMI modal quantities |
+| FDM CPU field | [`crates/fullmag-engine/src/fdm/cpu/fields/dmi.rs`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-engine/src/fdm/cpu/fields/dmi.rs#L513) | [`rotated_interfacial_dmi_field`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-engine/src/fdm/cpu/fields/dmi.rs#L513) | reference field |
+| FDM CPU energy | [`crates/fullmag-engine/src/fdm/cpu/fields/dmi.rs`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-engine/src/fdm/cpu/fields/dmi.rs#L13) | [`rotated_interfacial_dmi_energy_from_vectors`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-engine/src/fdm/cpu/fields/dmi.rs#L13) | reference interaction energy |
+| FDM CUDA | [`backends/fdm/gpu/cuda/interactions/demag_fp64.cu`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/backends/fdm/gpu/cuda/interactions/demag_fp64.cu#L244) | [`combine_effective_field_fp64_kernel`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/backends/fdm/gpu/cuda/interactions/demag_fp64.cu#L244) | FP64 field and boundary correction |
+| FDM CUDA boundary | [`backends/fdm/gpu/cuda/interactions/dmi_boundary.cuh`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/backends/fdm/gpu/cuda/interactions/dmi_boundary.cuh#L92) | [`add_rotated_interfacial_dmi_boundary_correction`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/backends/fdm/gpu/cuda/interactions/dmi_boundary.cuh#L92) | rotated exchange+DMI ghost correction |
+| FEM weak residual | [`backends/fem/src/dmi_weak_residual.cpp`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/backends/fem/src/dmi_weak_residual.cpp#L90) | [`dmi_accumulate_rotated_interfacial_residual`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/backends/fem/src/dmi_weak_residual.cpp#L90) | first variation shared by FEM realizations |
+| FEM plan import | [`backends/fem/cpu/mfem/interactions/dmi.cpp`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/backends/fem/cpu/mfem/interactions/dmi.cpp#L38) | [`initialize_rotated_dmi_plan_fields`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/backends/fem/cpu/mfem/interactions/dmi.cpp#L38) | import rotated coefficient from extended ABI into MFEM context |
+| FEM CUDA CSR operator | [`backends/fem/gpu/cuda/interactions/dmi/dmi_csr_operator.cpp`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/backends/fem/gpu/cuda/interactions/dmi/dmi_csr_operator.cpp#L138) | [`build_gpu_dmi_csr_from_mfem`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/backends/fem/gpu/cuda/interactions/dmi/dmi_csr_operator.cpp#L138) | preassembled CSR edge-vector operator across `tet4`/`prism6`/`mixed`/periodic |
+| FEM CUDA CSR kernel | [`backends/fem/gpu/cuda/interactions/dmi/dmi_csr_kernels.cu`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/backends/fem/gpu/cuda/interactions/dmi/dmi_csr_kernels.cu#L331) | [`fullmag_cuda_dmi_csr_field_energy`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/backends/fem/gpu/cuda/interactions/dmi/dmi_csr_kernels.cu#L331) | zero-atomic CSR SpMV, CUB block energy, and `energy_out=nullptr` RK gating |
+| FEM CUDA `tet4` oracle | [`backends/fem/gpu/cuda/interactions/dmi/dmi_kernels.cu`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/backends/fem/gpu/cuda/interactions/dmi/dmi_kernels.cu#L116) | [`dmi_element_residual_kernel`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/backends/fem/gpu/cuda/interactions/dmi/dmi_kernels.cu#L116) | legacy standalone `tet4` device residual oracle |
+| Göbel scenario | [`tests/standard_problems/bimeron/goebel_2019/scenario_fdm.py`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/tests/standard_problems/bimeron/goebel_2019/scenario_fdm.py#L29) | [`study`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/tests/standard_problems/bimeron/goebel_2019/scenario_fdm.py#L29) | canonical public reproduction |
+| Göbel verifier | [`tests/standard_problems/bimeron/goebel_2019/verify.py`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/tests/standard_problems/bimeron/goebel_2019/verify.py#L344) | [`verify_bundle`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/tests/standard_problems/bimeron/goebel_2019/verify.py#L344) | topology, energy, and execution receipt gates |

@@ -4,33 +4,25 @@ status: partial
 doc_kind: reference
 audience: user
 owner: fullmag-public-docs
-reviewed_revision: a1de38b4d7dad275dccbdbfd937b757d6ca7ee99
+last_updated: 2026-11-26
+reviewed_revision: 752450f8d259ab97c76c36fe666d5474b02abe9a
 source_of_truth: /physics/foundations/llg-equation, /physics/foundations/micromagnetic-energy
 ---
 
 (public-docs-numerical-methods-relaxation-llg-relaxation)=
 # Overdamped LLG relaxation
 
+(numerical-methods-relaxation-llg-problem-statement)=
 ## Scope and purpose
 
-This page documents the source-backed overdamped LLG relaxation stage, its accepted-step
-integrators, adaptive error policy and independent equilibrium stop contract.
-
-## Scientific and numerical model
-
-The implemented model is pure damping of the LLG right-hand side with the complete active effective
-field; adaptive acceptance and accepted-state torque completion remain separate predicates.
-
-(numerical-methods-relaxation-llg-problem-statement)=
-## Physical problem
-
-`llg_overdamped` reuses the LLG right-hand-side and time-integration pipeline while disabling
-precession. It is a relaxation coordinate, not a physical switching experiment: its stage clock
-controls convergence and is not carried into a later `run` stage. The magnetization remains
-normalized pointwise, and the accepted state is tested using the effective-field torque.
+This page documents the overdamped Landau–Lifshitz–Gilbert relaxation stage (`llg_overdamped`),
+its accepted-step integrators, its history-aware adaptive error controller, and its independent
+accepted-state equilibrium stop contract. `llg_overdamped` reuses the LLG right-hand-side and
+time-integration pipeline while disabling precession; its stage relaxation coordinate controls
+convergence and is not carried into a subsequent `run` stage.
 
 (numerical-methods-relaxation-llg-governing-equations)=
-## Governing equations
+## Scientific and numerical model
 
 For reduced magnetization $\mathbf m=\mathbf M/M_s$ and effective field
 $\mathbf H_{\mathrm{eff}}$, the implemented pure-damping equation is
@@ -43,7 +35,7 @@ $\mathbf H_{\mathrm{eff}}$, the implemented pure-damping equation is
 \qquad \lVert\mathbf m\rVert_2=1.
 ```
 
-The effective field is assembled from the active energy terms:
+The effective field is assembled from all active energy terms:
 
 ```{math}
 :label: eq-relax-llg-effective-field
@@ -61,36 +53,30 @@ The stopping metric is the maximum accepted-state torque,
 \qquad \tau_{\max}\leq\varepsilon_\tau.
 ```
 
-The time integrator can be fixed-step, adaptive embedded RK23/RK45, or the FDM/reference ABM3
-multistep method. The adaptive error policy is distinct from the physical torque criterion: the
-local vector error controls step acceptance, while $\tau_{\max}$ controls relaxation completion.
+The time integrator can be fixed-step, adaptive embedded `rk23`/`rk45`, or fixed-step `abm3` on
+FDM/FEM-reference paths. Adaptive local error control governs step acceptance, whereas $\tau_{\max}$
+(plus optional energy plateau) governs relaxation completion.
 
 (numerical-methods-relaxation-llg-integrators)=
-## Integrator families and exact step control
-
-The following names are accepted by the Python `LLG` object and by the relaxation stage builder.
-The table describes the numerical method, not merely a label stored in metadata.
+### Integrator families and exact step control
 
 | Name | Canonicalization | Family and order | Adaptive? | Backend boundary |
 |---|---|---|---|---|
 | `heun` | unchanged | explicit RK2 | no | FEM CPU/GPU and FDM CPU/GPU fixed-step paths |
 | `rk4` | unchanged | explicit RK4 | no | FEM CPU/GPU and FDM CPU/GPU fixed-step paths |
-| `rk23` | `bs23` → `rk23` | Bogacki–Shampine embedded method | yes or fixed | FEM CPU/GPU and FDM CPU/GPU; multilayer CUDA restrictions still apply |
-| `rk45` | `dp54` → `rk45` | Dormand–Prince embedded method | yes or fixed | FEM CPU/GPU and FDM CPU/GPU; multilayer CUDA restrictions still apply |
-| `abm3` | unchanged | Adams–Bashforth–Moulton third-order multistep | no | FDM and reference FEM; rejected by native FEM GPU ABI |
+| `rk23` | `bs23`, `rk32` $\to$ `rk23` | Bogacki–Shampine embedded 3(2) | yes or fixed | FEM CPU/GPU and FDM CPU/GPU |
+| `rk45` | `dp54` $\to$ `rk45` | Dormand–Prince embedded 5(4) | yes or fixed | FEM CPU/GPU and FDM CPU/GPU |
+| `abm3` | unchanged | Adams–Bashforth–Moulton 3rd-order multistep | no | FDM CPU/GPU and FEM CPU reference; rejected by native FEM GPU ABI |
 | `coupled_imex_ark2` | unchanged | coupled spin-transport IMEX scheme | coupled adaptive transport only | valid only with a transient spin-transport module; not a standalone relaxation method |
 
 `solver=None` and `solver="auto"` resolve to `rk23` at the Python relaxation boundary. A fixed
-step is selected with `dt=<positive seconds>`. Adaptive stepping is selected with `dt="auto"`
-or with an explicit `AdaptiveTimestep`; executable adaptive stages require an explicit positive
-`dt_min` and `dt_max`. `dt="auto"`, `max_err`, and `max_error` reject fixed-only integrators.
-`coupled_imex_ark2` is not a fourth relaxation algorithm: ProblemIR rejects it for a plain
-relaxation problem unless the transient spin-transport contract is also present.
+step is selected with `dt=<positive seconds>`. Adaptive stepping is selected with `dt="auto"` or an
+explicit `AdaptiveTimestep`; executable adaptive stages require an explicit positive `dt_min` and
+`dt_max`. `dt="auto"`, `max_err`, and `max_error` reject fixed-only integrators.
 
-For an embedded method the implementation first forms a vector error at every active magnetic
-cell/node. If $k_{s,i}$ is the stage right-hand side at point $i$ and $b_s^{\mathrm{hi}}$ and
-$b_s^{\mathrm{lo}}$ are the two tableau weights, the error vector and its mixed tolerance scale
-are
+For an embedded method with stage derivatives $\mathbf k_{s,i}$ and tableau weights
+$b_s^{\mathrm{hi}}, b_s^{\mathrm{lo}}$, the local error vector, mixed scale, and active-set maximum
+ratio are
 
 ```{math}
 :label: eq-relax-llg-adaptive-error-norm
@@ -107,15 +93,9 @@ are
 =\max_{i\in\mathcal A}\frac{\lVert\mathbf e_i\rVert_2}{\sigma_i}.
 ```
 
-$\mathcal A$ is the active magnetic-node/cell mask; air or inactive FEM nodes do not enter the
-maximum. A trial is accepted exactly when $\rho\leq1$. When `rtol=0`, the scale is the absolute
-`atol` value. The optional `norm_tolerance` and `max_spin_rotation` guards are folded into the
-same acceptance metric by taking the maximum of their normalized defects. Non-finite vectors,
-non-positive scales, zero active norms, or a non-finite combined metric fail closed.
-
-The native FEM CPU/GPU and FDM CUDA controllers use the following shared scalar proposal. Let
-$\rho_{k-1}$ be the previous accepted non-zero error ratio, when history exists, and let
-$p$ be the embedded error-estimate order. The unclamped factor is
+$\mathcal A$ is the active magnetic-node/cell mask. A trial is accepted when $\rho\leq 1$ (and any
+configured `norm_tolerance` / `max_spin_rotation` guards pass). With previous accepted non-zero
+error ratio $\rho_{k-1}$ and embedded error order $p$, the shared history-aware PI controller sets
 
 ```{math}
 :label: eq-relax-llg-adaptive-controller
@@ -130,34 +110,22 @@ s\,\rho_k^{-0.7/(p+1)}\rho_{k-1}^{0.4/(p+1)},
 \\
 \widehat q_k&=\operatorname{clip}_{[q_{\min},q_{\max}]}(q_k),
 \qquad
-\Delta t_{k+1}&=\operatorname{clip}_{[\Delta t_{\min},\Delta t_{\max}]}
+\Delta t_{k+1}=\operatorname{clip}_{[\Delta t_{\min},\Delta t_{\max}]}
 \left(\Delta t_k\widehat q_k\right).
 \end{aligned}
 ```
 
-Here $s$ is `safety`, $q_{\min}$ is `shrink_limit`, and $q_{\max}$ is `growth_limit`. A rejected
-trial is restored and retried with the smaller proposal; it does not update accepted-state stop
-history or previous-error history. If the error is still above one at `dt_min`, the attempt fails
-with `dt_min_exhausted`. Native FEM receives a rejection budget of 50 from the runner; FDM lanes
-use the shared typed `dt_min_exhausted` decision and do not expose a separate public rejection
-counter. The older Rust FEM reference engine has an internal 128-attempt guard and is documented
-as a reference path, not as the native FEM contract.
+A rejected trial is restored atomically without advancing accepted-step or previous-error history.
+If $\rho > 1$ at `dt_min`, the attempt fails closed with `dt_min_exhausted`.
 
-The Rust helper `pi_controller_dt` is a stateless reference helper: it evaluates only the
-single-history-free branch. It is not a substitute for the native controller above. FDM CPU's
-engine implementation and native FEM/CUDA both retain the previous accepted error and use the
-history branch when available. FDM CPU's absolute-only mode compares the unscaled norm directly
-with `max_error`; its mixed mode uses the normalized $\rho$ definition above. The vector norm and
-reduction are lane-specific, but the resolved tolerance, controller branch, attempted/accepted
-steps, and actual backend/device must be recorded together.
-
-For the public stage builder, `solver=None` resolves to `rk23`; `solver="auto"` has the same
-resolution. An executable adaptive stage must provide an explicit `dt_min` and `dt_max`. The
-deprecated `max_error` spelling is accepted only as an alias for `max_err`, and neither may be
-combined with `adaptive_timestep` or fixed `dt` controls.
+On FEM GPU, `llg_overdamped` automatically shares the explicit-RK GPU optimizations: FSAL `k0`
+reuse for `heun`/`rk4`/PBC, two-step linear potential prediction $\phi^{(0)}$, `cuDSS` direct
+demagnetization (`19×–218×` open-airbox / `27×–36×` PBC), and fused short-range kernels (`1.80×`
+RK4 E2E speedup). See {ref}`numerical-methods-performance-fem-gpu-demag` and
+{ref}`numerical-methods-performance-fem-gpu-kernels`.
 
 (numerical-methods-relaxation-llg-symbols-and-si-units)=
-## Symbols and SI units
+### Symbols and SI units
 
 | Symbol | Meaning | SI unit |
 |---|---|---|
@@ -166,17 +134,17 @@ combined with `adaptive_timestep` or fixed `dt` controls.
 | $M_s$ | saturation magnetization | $\mathrm{A\,m^{-1}}$ |
 | $\mathbf H_{\mathrm{eff}}$ | total effective magnetic field | $\mathrm{A\,m^{-1}}$ |
 | $E$ | total micromagnetic energy | $\mathrm{J}$ |
-| $\gamma_0$ | Fullmag reduced gyromagnetic ratio | $\mathrm{m\,A^{-1}\,s^{-1}}$ |
+| $\gamma_0$ | FullMag reduced gyromagnetic ratio | $\mathrm{m\,A^{-1}\,s^{-1}}$ |
 | $\alpha$ | Gilbert damping parameter | $1$ |
 | $t$ | relaxation integration coordinate | $\mathrm{s}$ |
 | $\tau_{\max}$ | maximum accepted-state torque | $\mathrm{A\,m^{-1}}$ |
 | $\boldsymbol\tau_i$ | local effective-field torque residual | $\mathrm{A\,m^{-1}}$ |
-| $\varepsilon_\tau$ | canonical torque stopping threshold | $\mathrm{A\,m^{-1}}$; a public `tolT` request is converted from tesla |
-| $\Delta t$ | attempted integration step | $\mathrm{s}$ |
-| $\mu_0$ | vacuum permeability | $\mathrm{N\,A^{-2}}$ |
+| $\varepsilon_\tau$ | canonical torque stopping threshold | $\mathrm{A\,m^{-1}}$ |
 | $\Delta t_k$ | attempted or proposed adaptive integration step | $\mathrm{s}$ |
+| $\mu_0$ | vacuum permeability | $\mathrm{N\,A^{-2}}$ |
 | $s$ | adaptive controller safety factor | $1$ |
 | $\rho_k$ | normalized local-error ratio | $1$ |
+| $\rho_{k-1}$ | previous accepted non-zero error ratio | $1$ |
 | $p$ | order of the embedded error estimate | $1$ |
 | $\Delta t_{\min}$ | adaptive lower timestep bound | $\mathrm{s}$ |
 | $\Delta t_{\max}$ | adaptive upper timestep bound | $\mathrm{s}$ |
@@ -193,60 +161,76 @@ combined with `adaptive_timestep` or fixed `dt` controls.
 | $\mathrm{rtol}$ | relative normalized-state error scale | $1$ |
 | $\sigma_i$ | mixed absolute/relative local error scale | $1$ |
 | $\mathcal A$ | active magnetic cell/node index set | $1$ |
-| $\rho_{k-1}$ | previous accepted non-zero error ratio | $1$ |
 | $q_k$ | raw adaptive step-size factor | $1$ |
 | $\widehat q_k$ | clamped adaptive step-size factor | $1$ |
 
-The reduced gyromagnetic ratio is `gamma` in the Python `LLG` object. The damping coefficient in
-the equation is the resolved stage-local `relax_alpha` when supplied; otherwise the material
-damping is used. The stage default is `relax_alpha=1.0`, which is a numerical pure-damping
-choice, not a claim that the material's physical $\alpha$ has changed globally.
+The stage default `relax_alpha=1.0` overrides damping only inside the pure-damping relaxation stage
+without mutating the material's physical $\alpha$ for subsequent dynamic stages.
 
 (numerical-methods-relaxation-llg-assumptions-and-validity)=
-## Assumptions and validity
+### Assumptions and validity
 
-- The stage is deterministic and has no thermal noise unless another explicitly supported
-  interaction changes the model.
-- `llg_overdamped` disables only precession; it does not remove the effective-field terms.
-- A fixed step is not unconditionally stable. An adaptive error pass is not a proof of physical
-  convergence, so both adaptive acceptance and the torque stop contract are recorded.
-- `tolT` and `tolA` are mutually exclusive. `tolT` is the public default in tesla and is converted
-  to the canonical field residual in A/m using $\tau_{\mathrm{A/m}}=\tau_{\mathrm T}/\mu_0$.
-- A failed step, exhausted adaptive floor, invalid field solve, or non-finite state is a failure;
-  it must not be published as a converged relaxation.
+- The stage is deterministic with no thermal noise unless explicitly configured on a supported lane.
+- `llg_overdamped` disables only precession; all active effective-field terms remain active.
+- An adaptive error pass bounds single-step truncation error only; equilibrium certification relies
+  exclusively on the accepted-state torque (and optional energy window) in {doc}`stopping-criteria`.
+- `tolT` and `tolA` are mutually exclusive; `tolT` converts via $\tau_{\mathrm{A/m}}=\tau_{\mathrm T}/\mu_0$.
 
 (numerical-methods-relaxation-llg-iteration)=
-## One accepted LLG relaxation step
+### One accepted LLG relaxation step
 
-For each attempt the backend follows this ownership sequence:
+1. Assemble the complete effective field from the active interaction list on the current normalized
+   magnetization.
+2. Evaluate the pure-damping right-hand side using `relax_alpha` (when supplied) or material $\alpha$.
+3. Advance one step with the resolved integrator (`heun`, `rk4`, `rk23`, `rk45`, or `abm3`),
+   atomically rolling back and retrying rejected adaptive attempts.
+4. Commit the normalized accepted state, refresh fields as required, and update torque confirmation,
+   energy window, and work/time budgets.
 
-1. Read the current normalized magnetization and assemble the complete effective field from the
-   interaction list. Relaxation does not remove demagnetization, exchange, anisotropy, DMI or
-   applied-field terms.
-2. Evaluate the pure-damping right-hand side. The precession term is disabled by the resolved
-   relaxation mode; `relax_alpha` is a stage-local damping coefficient and does not mutate the
-   material model stored for later stages.
-3. Execute the selected tableau (Heun, RK4, RK23, RK45 or ABM3). For RK23/RK45, compare the
-   embedded estimates, reject and retry when the normalized error exceeds one, and clamp the next
-   step to `dt_min`/`dt_max`. For ABM3, retain the required history and use the FDM/reference path;
-   native FEM GPU fails closed before dispatch.
-4. Normalize the committed spin state, refresh the field required by the resolved field policy,
-   and publish accepted-step observables. Only now are the torque confirmation counter, energy
-   plateau and `max_steps`/time budgets advanced.
+(numerical-methods-relaxation-llg-discrete-realization)=
+### Discrete realization
 
-The adaptive error test controls local integration error. It cannot certify an equilibrium: the
-accepted state must still pass the independent torque and optional energy criteria in
-{doc}`stopping-criteria`.
+| Solver | Device | Status | Realization and evidence boundary |
+|---|---|---|---|
+| FDM | CPU | `implemented` | Reference Cartesian grid runner (`execute_reference_fdm_with_coupled_checkpoint`) and active-cell error reduction (`max_error_norm_buf`). |
+| FDM | GPU | `implemented` | CUDA pure-damping execution path with device reductions (`reduce_adaptive_error_policy`) and Hermitian D2Z/R2C cuFFT demag. |
+| FEM | CPU | `implemented` | Native MFEM LLG relaxation lane (`execute_llg_overdamped`) with active-node maximum mixed error norm (`compute_adaptive_error_norm`). |
+| FEM | GPU | `implemented` | Native CUDA/MFEM device-resident LLG lane with `adaptive_error_norm_blocks_kernel`, `gpu_rk_adaptive_pi_step`, FSAL/predictor, `cuDSS`/`CG-AMG` demag, and fused short-range kernels; native ABI rejects `abm3`. |
+
+(numerical-methods-relaxation-llg-implementation-mapping)=
+### Implementation mapping
+
+The Python stage builder calls `relax_stage`; `Relaxation` and `RelaxStop` validate and serialize
+the shared contract. Backend runners resolve pure damping via `llg_overdamped_uses_pure_damping`
+and delegate step integration to their lane-specific explicit RK/multistep implementations.
+
+(numerical-methods-relaxation-llg-problem-ir)=
+## Parameters
+
+| Python | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR |
+|---|---|---|---|---|---|---|---|
+| `StudyStagesBuilder.add_relax(algorithm=...)` | `str` | `"llg_overdamped"` | $1$ | supported algorithm identifier | selects relaxation realization | FEM/FDM CPU/GPU | `study.algorithm` |
+| `StudyStagesBuilder.add_relax(solver=...)` | `str \| None` | `None` $\to$ `rk23` | $1$ | `heun`, `rk4`, `rk23` (`bs23`/`rk32`), `rk45` (`dp54`), `abm3`; `coupled_imex_ark2` only with transient spin transport | selects LLG integrator | lane-dependent; native FEM GPU rejects `abm3` | `study.dynamics.integrator` |
+| `StudyStagesBuilder.add_relax(dt=...)` | `float \| "auto" \| None` | `None` | $\mathrm{s}$ | fixed step or `"auto"`; cannot mix with adaptive fields | fixed or automatic step mode | RK23/RK45 for auto; fixed RK on all lanes | `dynamics.fixed_timestep` / resolved policy |
+| `StudyStagesBuilder.add_relax(dt_initial=...)` | `float \| None` | `None` | $\mathrm{s}$ | positive; requires `dt_min`, `dt_max` in executable adaptive stage | first adaptive step | RK23/RK45 lanes | `study.dynamics.adaptive_timestep.dt_initial` |
+| `StudyStagesBuilder.add_relax(dt_min=...)` | `float \| None` | required for adaptive stage | $\mathrm{s}$ | positive | adaptive lower bound | RK23/RK45 lanes | `study.dynamics.adaptive_timestep.dt_min` |
+| `StudyStagesBuilder.add_relax(dt_max=...)` | `float \| None` | required for adaptive stage | $\mathrm{s}$ | positive and $\ge$ `dt_min` | adaptive upper bound | RK23/RK45 lanes | `study.dynamics.adaptive_timestep.dt_max` |
+| `StudyStagesBuilder.add_relax(max_err=...)` | `float \| None` | `None` | $1$ | positive; adaptive RK only (`max_error` deprecated alias) | absolute embedded vector-error limit (`rtol=0`, `tolerance_mode="max_error"`) | RK23/RK45 lanes | `study.dynamics.adaptive_timestep.atol` |
+| `StudyStagesBuilder.add_relax(adaptive_timestep=...)` | `AdaptiveTimestep \| None` | `None` | $1$ | `rk23`/`rk45` only for standalone relaxation | full adaptive policy | FEM/FDM CPU/GPU | `dynamics.adaptive_timestep` |
+| `StudyStagesBuilder.add_relax(field_refresh=...)` | `FieldRefreshPolicy \| None` | `None` | $\mathrm{s}$ | positive cadence fields | expensive-field refresh cadence | backend-dependent | `dynamics.field_refresh` |
+| `StudyStagesBuilder.add_relax(relax_alpha=...)` | `float \| None` | $1$ for overdamped LLG | $1$ | `llg_overdamped` only; `None` keeps material damping | stage-local damping override | FEM/FDM LLG relaxation | resolved LLG provenance |
+| `StudyStagesBuilder.add_relax(tolT=...)` | `float` | $10^{-6}$ | $\mathrm{T}$ | finite and positive; exclusive with `tolA` | user torque threshold | FEM/FDM lanes | `study.stop.torque_tolerance_apm` |
+| `StudyStagesBuilder.add_relax(tolA=...)` | `float` | canonical equivalent | $\mathrm{A\,m^{-1}}$ | finite and positive; exclusive with `tolT` | field-residual threshold | FEM/FDM lanes | `study.stop.torque_tolerance_apm` |
+| `StudyStagesBuilder.add_relax(energy_tolerance=...)` | `float \| None` | `None` | $\mathrm{J}$ | positive when set | 50-sample accepted-energy plateau threshold | FEM/FDM lanes | `study.stop.energy_tolerance_j` |
+| `StudyStagesBuilder.add_relax(max_steps=...)` | `int` | $50{,}000$ | $1$ | positive integer | hard accepted-step budget | FEM/FDM lanes | `study.stop.max_steps` |
+| `StudyStagesBuilder.add_relax(max_relaxation_time_s=...)` | `float \| None` | `None` | $\mathrm{s}$ | positive; aliases `max_pseudotime_s`, `max_physical_time_s` must agree | relaxation-coordinate ceiling | `llg_overdamped` only | `study.stop.max_relaxation_time_s` |
+| `StudyStagesBuilder.add_relax(stop=...)` | `RelaxStop \| None` | `None` | $1$ | grouped stop; scalar aliases cannot conflict | canonical stopping object | FEM/FDM lanes | `study.stop` |
 
 (numerical-methods-relaxation-llg-python-api)=
 ## Python API
 
-This is the repository-owned stage pattern. The `solver`, timestep and adaptive controls below
-belong only to `llg_overdamped`. The direct minimizers do not accept an LLG dynamics object or
-these timestep controls; they select their line-search policy internally.
-
 ```python
-# %% Configure a FEM relaxation scenario
+# %% Configure an overdamped LLG FEM relaxation stage
 import fullmag as fm
 
 nm = 1.0e-9
@@ -263,7 +247,7 @@ film = study.geometry(
 film.Ms = 8.0e5
 film.Aex = 1.3e-11
 film.alpha = 0.02
-film.m = fm.init.UniformMagnetization((1.0, 0.1, 0.0))
+film.m = fm.texture.uniform(1.0, 0.1, 0.0)
 study.exchange()
 study.stages.add_relax(
     stage_id="relax",
@@ -279,79 +263,7 @@ study.stages.add_relax(
 )
 ```
 
-| Python | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR |
-|---|---|---|---|---|---|---|---|
-| `StudyStagesBuilder.add_relax(algorithm=...)` | `str` | `"llg_overdamped"` | $1$ | one supported algorithm identifier | selects relaxation realization | FEM/FDM; planner decides lane | `study.algorithm` |
-| `StudyStagesBuilder.add_relax(solver=...)` | `str \| None` | `None` → `rk23` | $1$ | `heun`, `rk4`, `rk23`, `rk45`, `abm3`; `bs23`/`dp54` aliases; `coupled_imex_ark2` only with transient spin transport | selects LLG integrator | lane-dependent; native FEM GPU rejects `abm3` | `study.dynamics.integrator` |
-| `StudyStagesBuilder.add_relax(dt_initial=...)` | `float \| None` | `None` | $\mathrm{s}$ | positive; requires `max_err`, `dt_min`, `dt_max` in executable adaptive stage | first adaptive step | RK23/RK45 lanes | `study.dynamics.adaptive_timestep.dt_initial` |
-| `StudyStagesBuilder.add_relax(dt_min=...)` | `float \| None` | required for executable adaptive stage | $\mathrm{s}$ | positive and not fixed-step | adaptive lower bound | RK23/RK45 lanes | `study.dynamics.adaptive_timestep.dt_min` |
-| `StudyStagesBuilder.add_relax(dt_max=...)` | `float \| None` | required for executable adaptive stage | $\mathrm{s}$ | positive and above `dt_min` | adaptive upper bound | RK23/RK45 lanes | `study.dynamics.adaptive_timestep.dt_max` |
-| `StudyStagesBuilder.add_relax(max_err=...)` | `float \| None` | `None` | $1$ | positive; adaptive RK only | absolute embedded vector-error limit | RK23/RK45 lanes | `study.dynamics.adaptive_timestep.atol` with max-error intent preserved |
-| `StudyStagesBuilder.add_relax(tolT=...)` | `float` | $10^{-6}$ | $\mathrm{T}$ | finite and positive; mutually exclusive with `tolA` | user torque threshold | FEM/FDM relaxation lanes | `study.stop.torque_tolerance_apm` after conversion |
-| `StudyStagesBuilder.add_relax(tolA=...)` | `float` | canonical default equivalent | $\mathrm{A\,m^{-1}}$ | finite and positive; mutually exclusive with `tolT` | field-residual threshold | FEM/FDM relaxation lanes | `study.stop.torque_tolerance_apm` |
-| `StudyStagesBuilder.add_relax(max_steps=...)` | `int` | $50,000$ | $1$ | positive integer | hard iteration budget | FEM/FDM relaxation lanes | `study.stop.max_steps` |
-| `StudyStagesBuilder.add_relax(relax_alpha=...)` | `float \| None` | $1$ for overdamped LLG | $1$ | only `llg_overdamped`; `None` keeps material damping | stage-local damping override | FEM/FDM LLG relaxation | resolved LLG/material provenance |
-| `StudyStagesBuilder.add_relax(tol=...)` | legacy object | unavailable | legacy | always rejected | removed tolerance spelling; use `tolT` or `tolA` | none | none |
-| `StudyStagesBuilder.add_relax(energy_tolerance=...)` | `float \| None` | `None` | $\mathrm{J}$ | positive when set | 50-accepted-energy plateau threshold | FEM/FDM lanes | `study.stop.energy_tolerance_j` |
-| `StudyStagesBuilder.add_relax(max_relaxation_time_s=...)` | `float \| None` | `None` | $\mathrm{s}$ | positive; LLG only | relaxation-coordinate ceiling | `llg_overdamped` only | `study.stop.max_relaxation_time_s` |
-| `StudyStagesBuilder.add_relax(max_pseudotime_s=...)` | `float \| None` | `None` | $\mathrm{s}$ | alias; must agree with other time names | same LLG ceiling | `llg_overdamped` only | canonical relaxation time |
-| `StudyStagesBuilder.add_relax(max_physical_time_s=...)` | `float \| None` | `None` | $\mathrm{s}$ | alias; must agree with other time names | same LLG ceiling; not a physical experiment clock | `llg_overdamped` only | canonical relaxation time |
-| `StudyStagesBuilder.add_relax(dt=...)` | positive float, `"auto"`, or `None` | `None` | $\mathrm{s}$ | fixed step or `"auto"`; cannot mix with adaptive fields | fixed or automatic step mode | RK23/RK45 for auto; backend may support fixed RK | `dynamics.fixed_timestep` / resolved policy |
-| `StudyStagesBuilder.add_relax(max_error=...)` | `float \| None` | `None` | $1$ | positive; deprecated alias for `max_err`; adaptive only | absolute embedded error bound | RK23/RK45 | adaptive `atol`, mode `max_error` |
-| `StudyStagesBuilder.add_relax(max_err=...)` | `float \| None` | `None` | $1$ | positive; adaptive only | absolute embedded error bound | RK23/RK45 | adaptive `atol`, mode `max_error` |
-| `StudyStagesBuilder.add_relax(adaptive_timestep=...)` | `AdaptiveTimestep \| None` | `None` | mixed | only `rk23`/`rk45` for standalone relaxation; explicit `dt_min` and `dt_max` required by executable stages | full adaptive policy | FEM/FDM lane-dependent | `dynamics.adaptive_timestep` |
-| `StudyStagesBuilder.add_relax(field_refresh=...)` | `FieldRefreshPolicy \| None` | `None` | mixed | positive cadence fields | expensive-field refresh cadence | backend-dependent | `dynamics.field_refresh` |
-| `StudyStagesBuilder.add_relax(stop=...)` | `RelaxStop \| None` | `None` | mixed | grouped stop; scalar aliases cannot conflict | canonical stopping object | FEM/FDM lanes | `study.stop` |
-
-`AdaptiveTimestep` itself has the complete fields `atol`, `rtol`, `dt_initial`, `dt_min`, `dt_max`,
-`safety`, `growth_limit`, `shrink_limit`, `max_spin_rotation`, and `norm_tolerance`. `atol` and
-`rtol` are dimensionless normalized-state error limits; `dt_*` are seconds; safety and growth or
-shrink limits are dimensionless; optional spin-rotation and norm limits are positive dimensionless
-guards. `dt_max` may not be below `dt_min`, and `dt_initial` must lie in the interval when set.
-`FieldRefreshPolicy.demag_interval_s` is a positive seconds cadence. These fields are not accepted
-by direct minimizer algorithms.
-
-### `fm.LLG`, `fm.AdaptiveTimestep`, and `fm.FieldRefreshPolicy`
-
-The stage convenience keywords lower into these exported objects. The objects can also be
-constructed directly for inspection or for a `Relaxation` model; they do not bypass stage or
-ProblemIR validation.
-
-| Object field | Type | Default | Unit | Contract |
-|---|---|---:|---|---|
-| `fm.LLG.gamma` | `float` | `2.211e5` | $\mathrm{m\,A^{-1}\,s^{-1}}$ | positive reduced gyromagnetic ratio |
-| `fm.LLG.integrator` | `str` | `"auto"` | $1$ | canonical integrator name; `dp54`/`bs23` are normalized |
-| `fm.LLG.fixed_timestep` | `float \| None` | `None` | $\mathrm{s}$ | positive fixed step; mutually exclusive with adaptive policy |
-| `fm.LLG.adaptive_timestep` | `AdaptiveTimestep \| None` | `None` | mixed | only adaptive-capable integrators; mutually exclusive with fixed step |
-| `fm.LLG.field_refresh` | `FieldRefreshPolicy \| None` | `None` | mixed | optional expensive-field cadence |
-| `fm.AdaptiveTimestep.atol` | `float` | `1e-6` | $1$ | non-negative absolute error scale |
-| `fm.AdaptiveTimestep.rtol` | `float` | `1e-3` | $1$ | non-negative relative error scale; not both zero with `atol` |
-| `fm.AdaptiveTimestep.dt_initial` | `float \| None` | `None` | $\mathrm{s}$ | positive and inside `[dt_min,dt_max]` |
-| `fm.AdaptiveTimestep.dt_min` | `float` | `1e-15` | $\mathrm{s}$ | positive lower bound; explicit for executable stages |
-| `fm.AdaptiveTimestep.dt_max` | `float \| None` | `None` | $\mathrm{s}$ | positive upper bound; explicit for executable stages |
-| `fm.AdaptiveTimestep.safety` | `float` | `0.9` | $1$ | in `(0,1]` |
-| `fm.AdaptiveTimestep.growth_limit` | `float` | `2.0` | $1$ | strictly greater than one |
-| `fm.AdaptiveTimestep.shrink_limit` | `float` | `0.2` | $1$ | in `(0,1)` |
-| `fm.AdaptiveTimestep.max_spin_rotation` | `float \| None` | `None` | $1$ | optional positive rotation guard |
-| `fm.AdaptiveTimestep.norm_tolerance` | `float \| None` | `None` | $1$ | optional positive norm guard |
-| `fm.FieldRefreshPolicy.demag_interval_s` | `float \| None` | `None` | $\mathrm{s}$ | positive cadence when supplied |
-
-The convenience `max_err`/`max_error` form creates an `AdaptiveTimestep` with `atol=max_err`,
-`rtol=0`, and `tolerance_mode="max_error"`. It is not interchangeable with an advanced relative
-policy. The serialized `tolerance_mode` preserves this distinction.
-
-(numerical-methods-relaxation-llg-problem-ir)=
-## Parameters
-
-The executable controls are the stage algorithm, integrator, fixed or adaptive timestep, damping
-override, stop criteria and work or time ceilings. The Python-to-ProblemIR table above is the
-authoritative parameter list.
-
-## ProblemIR
-
-The stage request lowers to the existing relaxation payload. The numeric values below are
-representative of the example and show the destination, not a hand-written substitute for the
-serializer:
+### `ProblemIR` excerpt
 
 ```json
 {
@@ -376,105 +288,66 @@ serializer:
 }
 ```
 
-`tolT` is retained as requested intent and normalized to `torque_tolerance_apm` for execution.
-The canonical `RelaxStop` payload also carries `energy_tolerance_j`, `max_steps`, and, only for
-this algorithm, `max_relaxation_time_s`.
-The resolved execution record additionally identifies FEM/FDM, CPU/GPU, precision, selected
-integrator, adaptive policy, and actual device. The serialized request alone is not runtime proof.
+## Control Room workflow
+
+Use the relaxation stage inspector to select `llg_overdamped`, choose the integrator (`heun`,
+`rk4`, `rk23`, `rk45`, `abm3`) and fixed/adaptive step controls, and monitor accepted steps,
+rejected trials, $\Delta t$, and accepted-state torque convergence.
 
 (numerical-methods-relaxation-llg-round-trip-and-failure-semantics)=
-## Round-trip and failure semantics
+## Diagnostics and failure semantics
 
-The script exporter emits the stage-first `study.stages.add_relax(...)` call and preserves the
-algorithm, integrator, stopping policy, and requested backend. Validation errors include unknown
-integrators, non-positive timestep bounds, mixed fixed/adaptive controls, missing adaptive bounds,
-both `tolT` and `tolA`, legacy `tol`, and LLG-only controls used with a direct minimizer.
-Unsupported combinations are rejected by the planner; there is no silent fallback to `rk23`, CPU, or a different
-algorithm after an explicit request. Requested intent, resolved execution, and provenance are three
-different records.
-
-Runtime diagnostics record attempted and accepted steps, local-error ratios, rejection causes, field refreshes,
-accepted-state torque confirmation, completion reason, and executed backend/device. A failed solve,
-non-finite state, or exhausted adaptive floor cannot be published as converged.
-
-(numerical-methods-relaxation-llg-discrete-realization)=
-## Discrete realization
-
-| Solver | Device | Status | Realization and evidence boundary |
-|---|---|---|---|
-| FDM | CPU | source-backed | reference grid runner and LLG relaxation path; numerical qualification is separate |
-| FDM | GPU | source-backed | CUDA execution path carries pure-damping selection; device tests are conditional |
-| FEM | CPU | source-backed | MFEM/native LLG relaxation lane; managed runtime evidence required for qualification |
-| FEM | GPU | source-backed | native CUDA/MFEM lane; source presence and compilation do not prove executed-device parity |
-
-FDM uses grid-local field evaluation. FEM uses the assembled finite-element field and the native
-MFEM/CUDA operator path. The equation and stop metric are shared; interpolation, mass weighting,
-field-solve refresh, precision, and runtime ownership are not.
-
-The FDM CPU/reference lane evaluates the effective field on the Cartesian grid and advances the
-same damping-only RHS through its grid integrator. The FDM CUDA lane keeps the state and field
-updates in CUDA-owned buffers when the selected plan permits it. FEM CPU assembles/evaluates the
-MFEM field on the magnetic-node space; FEM GPU uses the native device operator and records device
-residency. None of these descriptions is a claim that all four lanes have identical tolerances,
-reductions, or runtime qualification.
-
-(numerical-methods-relaxation-llg-implementation-mapping)=
-## Implementation mapping
-
-The Python stage builder calls `relax_stage`; the public `Relaxation` and `RelaxStop` objects
-validate and serialize the shared contract. Backend runners resolve pure damping through the
-relaxation convergence module and use their own time-step and field-evaluation realizations.
+- **Round-trip preservation**: Script export emits `study.stages.add_relax(...)` preserving the
+  algorithm, canonicalized integrator (`bs23`/`rk32` $\to$ `rk23`, `dp54` $\to$ `rk45`), stopping
+  policy, and requested intent (`study.engine`/`study.device`) separately from resolved execution
+  provenance.
+- **Validation errors**: Unknown integrators, non-positive timestep bounds, mixed fixed/adaptive
+  controls, missing adaptive bounds, simultaneous `tolT`/`tolA`, legacy `tol`, and LLG-only
+  controls attached to direct minimizers raise validation errors.
+- **Fail-closed execution**: Unsupported combinations (e.g., `abm3` on native FEM GPU) are rejected
+  by the planner with zero silent fallback. Non-finite states, failed field solves, or
+  `dt_min_exhausted` never publish as converged.
 
 (numerical-methods-relaxation-llg-validation)=
 ## Validation
 
-Required evidence is split into four gates: equation/sign and unit tests; stage-to-IR round-trip;
-algorithmic convergence and energy/torque metrics; and executed backend/device qualification. A
-passing Python capture proves authoring and lowering only. It does not prove an FEM solve, GPU
-execution, or parity.
+Required evidence spans four gates: pure-damping sign/unit contracts, stage-to-IR round-trip,
+adaptive PI and torque/energy convergence contracts, and executed backend/device parity runs
+({doc}`../../validation/cpu-gpu-parity`, {doc}`../../validation/qualification-status`).
 
 (numerical-methods-relaxation-llg-limitations)=
 ## Limitations
 
-This page does not claim a physical switching time, unconditional stability, universal GPU parity,
-or convergence to a global minimum. The result may be a metastable equilibrium. Direct minimizers
-and their line-search contracts are described separately.
+This page does not claim a physical switching time, unconditional stability, or convergence to a
+global energy minimum. The terminal state may be a local metastable equilibrium.
 
 (numerical-methods-relaxation-llg-scientific-bibliography)=
 ## Scientific bibliography
 
 - W. F. Brown, Jr., *Micromagnetics*, Wiley, 1963.
-- T. L. Gilbert, “A phenomenological theory of damping in ferromagnetic materials,” IEEE Transactions on Magnetics 40 (2004), DOI: [10.1109/TMAG.2004.836740](https://doi.org/10.1109/TMAG.2004.836740).
-- Fullmag public physics contracts: {doc}`/physics/foundations/llg-equation` and {doc}`/physics/foundations/micromagnetic-energy`.
+- T. L. Gilbert, “A phenomenological theory of damping in ferromagnetic materials,” *IEEE Transactions on Magnetics* **40**, 3443–3449 (2004), DOI: [10.1109/TMAG.2004.836740](https://doi.org/10.1109/TMAG.2004.836740).
+- FullMag public physics contracts: {doc}`/physics/foundations/llg-equation` and {doc}`/physics/foundations/micromagnetic-energy`.
 
 (numerical-methods-relaxation-llg-source-code-index)=
-## Source-code index
-
-The source-code index below records public validation, stage lowering, adaptive controllers, backend
-execution, and completion semantics.
+## Where this is implemented
 
 | Claim | Repository path | Stable symbol | Responsibility | Lane | Evidence |
 |---|---|---|---|---|---|
-| Stop defaults and validation | [`packages/fullmag-py/src/fullmag/model/study.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/study.py#L765) | [`class RelaxStop`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/study.py#L765) | canonical torque/energy/step stop contract | public API | Python contract tests |
-| Algorithm and IR validation | [`packages/fullmag-py/src/fullmag/model/study.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/study.py#L835) | [`class Relaxation`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/study.py#L835) | supported algorithms and serialized relaxation payload | public API | Python contract tests |
-| Stage lowering | [`packages/fullmag-py/src/fullmag/world.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/world.py#L3125) | [`relax_stage`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/world.py#L3125) | maps stage arguments into `RelaxStageSpec` | public API | stage export tests |
-| LLG object and adaptive policy | [`packages/fullmag-py/src/fullmag/model/dynamics.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/dynamics.py#L158) | [`class LLG`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/dynamics.py#L158) / [`class AdaptiveTimestep`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/dynamics.py#L30) / [`class FieldRefreshPolicy`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/dynamics.py#L141) | validates integrator names, aliases, timestep bounds and serialized dynamics | public API | Python dynamics contract tests |
-| Adaptive FEM controller | [`crates/fullmag-runner/src/fem/integrators/adaptive.rs`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-runner/src/fem/integrators/adaptive.rs#L74) | [`step_accepted` / `pi_controller_dt`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-runner/src/fem/integrators/adaptive.rs#L74) | embedded-error acceptance and bounded next-step proposal | FEM CPU/GPU | integrator unit tests |
-| Fixed FEM controller | [`crates/fullmag-runner/src/fem/integrators/fixed.rs`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-runner/src/fem/integrators/fixed.rs#L75) | [`validate_fixed_dt`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-runner/src/fem/integrators/fixed.rs#L75) | fixed-step Heun/RK4 validation | FEM CPU/GPU | integrator unit tests |
-| Native FEM adaptive error norm | [`backends/fem/cpu/mfem/integrators/adaptive_dt.cpp`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/backends/fem/cpu/mfem/integrators/adaptive_dt.cpp#L123) | [`compute_adaptive_error_norm`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/backends/fem/cpu/mfem/integrators/adaptive_dt.cpp#L123) | active-node mixed atol/rtol norm and fail-closed guards | FEM CPU | native FEM contract tests |
-| Native FEM adaptive controller | [`backends/fem/cpu/mfem/integrators/adaptive_dt.cpp`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/backends/fem/cpu/mfem/integrators/adaptive_dt.cpp#L379) | [`adaptive_pi_step`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/backends/fem/cpu/mfem/integrators/adaptive_dt.cpp#L379) | shared history-aware PI decision and rejection accounting | FEM CPU | native FEM adaptive tests |
-| Native FEM GPU adaptive error norm | [`backends/fem/gpu/cuda/integrators/rk/adaptive_error_kernels.cu`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/backends/fem/gpu/cuda/integrators/rk/adaptive_error_kernels.cu#L17) | [`adaptive_error_norm_blocks_kernel`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/backends/fem/gpu/cuda/integrators/rk/adaptive_error_kernels.cu#L17) | device reduction of the same active-node error metric | FEM GPU | CUDA contract tests |
-| Native FEM GPU adaptive controller | [`backends/fem/gpu/cuda/integrators/rk/rk_adaptive_runtime.cu`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/backends/fem/gpu/cuda/integrators/rk/rk_adaptive_runtime.cu#L23) | [`gpu_rk_adaptive_pi_step`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/backends/fem/gpu/cuda/integrators/rk/rk_adaptive_runtime.cu#L23) | device-lane decision and previous-error history | FEM GPU | CUDA contract tests |
-| FDM adaptive scalar policy | [`native/include/fullmag_adaptive_step_decision.hpp`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/native/include/fullmag_adaptive_step_decision.hpp#L127) | [`decide` / `decide_adaptive_step`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/native/include/fullmag_adaptive_step_decision.hpp#L127) | shared history-aware accept/retry/dt-min decision | FDM CPU/GPU | FDM policy contract tests |
-| FDM adaptive error norm | [`crates/fullmag-engine/src/fdm/cpu/integrators.rs`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-engine/src/fdm/cpu/integrators.rs#L392) | [`max_error_norm_buf` / `max_error_norm_soa_buf`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-engine/src/fdm/cpu/integrators.rs#L392) | AoS/SoA active-cell error norm, absolute or mixed mode | FDM CPU | engine integrator tests |
-| FDM GPU adaptive error reduction | [`backends/fdm/gpu/cuda/runtime/reductions_fp64.cu`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/backends/fdm/gpu/cuda/runtime/reductions_fp64.cu#L963) | [`reduce_adaptive_error_policy`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/backends/fdm/gpu/cuda/runtime/reductions_fp64.cu#L963) | CUDA reduction and typed dt-min failure | FDM GPU | CUDA policy contract tests |
-| Rust FEM reference adaptive loop | [`crates/fullmag-engine/src/fem.rs`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-engine/src/fem.rs#L1819) | [`rk23_step_ws` / `rk45_step_ws`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-engine/src/fem.rs#L1819) | legacy absolute `max_error` loop with 128-attempt guard | FEM reference | engine tests |
-| Native FDM integrator dispatch | [`crates/fullmag-runner/src/fdm/gpu/cuda/native/construction.rs`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-runner/src/fdm/gpu/cuda/native/construction.rs#L45) | [`NativeFdmBackend::create_multilayer_v2`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-runner/src/fdm/gpu/cuda/native/construction.rs#L45) | maps canonical integrator to CUDA ABI | FDM GPU | device-gated tests |
-| FDM direct minimizer reference | [`crates/fullmag-runner/src/relaxation/direct_minimizer_reference.rs`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-runner/src/relaxation/direct_minimizer_reference.rs#L353) | [`execute_projected_gradient_bb`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-runner/src/relaxation/direct_minimizer_reference.rs#L353) | FDM reference BB relaxation | FDM CPU/reference | Rust unit tests |
-| FDM direct minimizer reference | [`crates/fullmag-runner/src/relaxation/direct_minimizer_reference.rs`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-runner/src/relaxation/direct_minimizer_reference.rs#L835) | [`execute_nonlinear_cg`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-runner/src/relaxation/direct_minimizer_reference.rs#L835) | FDM reference NCG relaxation | FDM CPU/reference | Rust unit tests |
-| Shared pure-damping predicate | [`crates/fullmag-runner/src/relaxation/convergence.rs`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-runner/src/relaxation/convergence.rs#L193) | [`llg_overdamped_uses_pure_damping`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-runner/src/relaxation/convergence.rs#L193) | selects precession-disabled relaxation mode | FEM/FDM orchestration | runner tests |
-| Accepted-state convergence | [`crates/fullmag-runner/src/relaxation/convergence.rs`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-runner/src/relaxation/convergence.rs#L63) | [`relaxation_converged` / `relaxation_stop_criteria_satisfied`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-runner/src/relaxation/convergence.rs#L63) | torque/energy conjunction | shared orchestration | runner tests |
-| Torque confirmation | [`crates/fullmag-runner/src/relaxation/convergence.rs`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-runner/src/relaxation/convergence.rs#L99) | [`RelaxationTorqueConfirmation::observe`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-runner/src/relaxation/convergence.rs#L99) | requires at least three consecutive accepted samples satisfying the combined predicate | shared orchestration | runner tests |
-| FEM LLG execution | [`crates/fullmag-runner/src/fem/relax/llg_overdamped.rs`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-runner/src/fem/relax/llg_overdamped.rs#L174) | [`execute_llg_overdamped`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-runner/src/fem/relax/llg_overdamped.rs#L174) | native FEM loop, integrator and completion metrics | FEM CPU/GPU | native runtime tests |
-| FEM LLG policy | [`crates/fullmag-runner/src/fem/relax/llg_overdamped.rs`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-runner/src/fem/relax/llg_overdamped.rs#L43) | [`convergence_controller_policy` / `fill_provenance`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-runner/src/fem/relax/llg_overdamped.rs#L43) | records resolved controller and integrator | FEM | provenance tests |
-| FDM CPU/reference LLG | [`crates/fullmag-runner/src/fdm/cpu/reference.rs`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-runner/src/fdm/cpu/reference.rs#L1174) | [`execute_reference_fdm_with_coupled_checkpoint`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-runner/src/fdm/cpu/reference.rs#L1174) | Cartesian reference relaxation dispatch | FDM CPU | runner tests |
+| Stop defaults and validation | [`packages/fullmag-py/src/fullmag/model/study.py`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/model/study.py#L831) | [`class RelaxStop`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/model/study.py#L831) | canonical torque/energy/step stop contract | public API | Python contract tests |
+| Algorithm and IR validation | [`packages/fullmag-py/src/fullmag/model/study.py`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/model/study.py#L901) | [`class Relaxation`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/model/study.py#L901) | supported algorithms and serialized relaxation payload | public API | Python contract tests |
+| Stage lowering | [`packages/fullmag-py/src/fullmag/world.py`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/world.py#L3419) | [`relax_stage`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/world.py#L3419) | maps stage arguments into `RelaxStageSpec` | public API | stage export tests |
+| LLG object and adaptive policy | [`packages/fullmag-py/src/fullmag/model/dynamics.py`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/model/dynamics.py#L159) | [`class LLG`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/model/dynamics.py#L159) / [`class AdaptiveTimestep`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/model/dynamics.py#L45) / [`class FieldRefreshPolicy`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/model/dynamics.py#L142) | validates integrator names, aliases (`dp54`/`bs23`/`rk32`), timestep bounds and serialized dynamics | public API | Python dynamics tests |
+| Adaptive FEM helper | [`crates/fullmag-runner/src/fem/integrators/adaptive.rs`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-runner/src/fem/integrators/adaptive.rs#L74) | [`pi_controller_dt`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-runner/src/fem/integrators/adaptive.rs#L74) | stateless single-step reference proposal helper | FEM CPU/GPU | integrator unit tests |
+| Fixed FEM validation | [`crates/fullmag-runner/src/fem/integrators/fixed.rs`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-runner/src/fem/integrators/fixed.rs#L75) | [`validate_fixed_dt`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-runner/src/fem/integrators/fixed.rs#L75) | fixed-step Heun/RK4 validation | FEM CPU/GPU | integrator unit tests |
+| Native FEM adaptive error norm | [`backends/fem/cpu/mfem/integrators/adaptive_dt.cpp`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/backends/fem/cpu/mfem/integrators/adaptive_dt.cpp#L123) | [`compute_adaptive_error_norm`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/backends/fem/cpu/mfem/integrators/adaptive_dt.cpp#L123) | active-node maximum mixed atol/rtol norm and fail-closed guards | FEM CPU | native FEM contract tests |
+| Native FEM adaptive controller | [`backends/fem/cpu/mfem/integrators/adaptive_dt.cpp`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/backends/fem/cpu/mfem/integrators/adaptive_dt.cpp#L379) | [`adaptive_pi_step`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/backends/fem/cpu/mfem/integrators/adaptive_dt.cpp#L379) | history-aware PI decision and rejection accounting | FEM CPU | native FEM adaptive tests |
+| Native FEM GPU adaptive error norm | [`backends/fem/gpu/cuda/integrators/rk/adaptive_error_kernels.cu`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/backends/fem/gpu/cuda/integrators/rk/adaptive_error_kernels.cu#L17) | [`adaptive_error_norm_blocks_kernel`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/backends/fem/gpu/cuda/integrators/rk/adaptive_error_kernels.cu#L17) | device reduction of the active-node error metric | FEM GPU | CUDA contract tests |
+| Native FEM GPU adaptive controller | [`backends/fem/gpu/cuda/integrators/rk/rk_adaptive_runtime.cu`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/backends/fem/gpu/cuda/integrators/rk/rk_adaptive_runtime.cu#L23) | [`gpu_rk_adaptive_pi_step`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/backends/fem/gpu/cuda/integrators/rk/rk_adaptive_runtime.cu#L23) | device-lane PI decision and previous-error history | FEM GPU | CUDA contract tests |
+| Shared adaptive scalar policy | [`native/include/fullmag_adaptive_step_decision.hpp`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/native/include/fullmag_adaptive_step_decision.hpp#L127) | [`decide_adaptive_step`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/native/include/fullmag_adaptive_step_decision.hpp#L127) | shared history-aware accept/retry/dt-min decision | FDM/FEM native | policy contract tests |
+| FDM adaptive error norm | [`crates/fullmag-engine/src/fdm/cpu/integrators.rs`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-engine/src/fdm/cpu/integrators.rs#L4622) | [`max_error_norm_buf`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-engine/src/fdm/cpu/integrators.rs#L4622) / [`decide_adaptive_step`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-engine/src/fdm/cpu/integrators.rs#L22) | active-cell error norm and bounded PI proposal | FDM CPU | engine integrator tests |
+| FDM GPU adaptive error reduction | [`backends/fdm/gpu/cuda/runtime/reductions_fp64.cu`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/backends/fdm/gpu/cuda/runtime/reductions_fp64.cu#L967) | [`reduce_adaptive_error_policy`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/backends/fdm/gpu/cuda/runtime/reductions_fp64.cu#L967) | CUDA reduction and typed dt-min failure | FDM GPU | CUDA policy contract tests |
+| Rust FEM reference adaptive loop | [`crates/fullmag-engine/src/fem.rs`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-engine/src/fem.rs#L2085) | [`rk23_step_ws`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-engine/src/fem.rs#L2085) | legacy reference adaptive loop | FEM reference | engine tests |
+| Native FDM integrator dispatch | [`crates/fullmag-runner/src/fdm/gpu/cuda/native/construction.rs`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-runner/src/fdm/gpu/cuda/native/construction.rs#L45) | [`create_multilayer_v2`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-runner/src/fdm/gpu/cuda/native/construction.rs#L45) | maps canonical integrator to CUDA ABI | FDM GPU | device-gated tests |
+| Shared pure-damping & completion | [`crates/fullmag-runner/src/relaxation/convergence.rs`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-runner/src/relaxation/convergence.rs#L193) | [`llg_overdamped_uses_pure_damping`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-runner/src/relaxation/convergence.rs#L193) / [`relaxation_converged`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-runner/src/relaxation/convergence.rs#L63) / [`observe`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-runner/src/relaxation/convergence.rs#L113) | pure-damping selection, torque/energy conjunction, and 3-sample confirmation | shared orchestration | runner tests |
+| FEM LLG execution | [`crates/fullmag-runner/src/fem/relax/llg_overdamped.rs`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-runner/src/fem/relax/llg_overdamped.rs#L174) | [`execute_llg_overdamped`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-runner/src/fem/relax/llg_overdamped.rs#L174) / [`convergence_controller_policy`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-runner/src/fem/relax/llg_overdamped.rs#L43) | native FEM loop, integrator, and completion provenance | FEM CPU/GPU | native runtime tests |
+| FDM CPU/reference LLG | [`crates/fullmag-runner/src/fdm/cpu/reference.rs`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-runner/src/fdm/cpu/reference.rs#L1608) | [`execute_reference_fdm_with_coupled_checkpoint`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-runner/src/fdm/cpu/reference.rs#L1608) | Cartesian reference relaxation dispatch | FDM CPU | runner tests |

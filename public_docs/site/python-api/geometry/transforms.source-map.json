@@ -1,7 +1,7 @@
 {
   "document": {
     "path": "public_docs/site/python-api/geometry/transforms.md",
-    "reviewed_revision": "ab3c8802a691a535063102c12f9a79bb0043b367"
+    "reviewed_revision": "752450f8d259ab97c76c36fe666d5474b02abe9a"
   },
   "backend_matrix": [
     {
@@ -33,28 +33,40 @@
   "symbols": [],
   "sources": [
     {
-      "id": "source_geometry_transform",
+      "id": "source_geometry_translate",
       "path": "packages/fullmag-py/src/fullmag/model/geometry.py",
       "symbol": "class Translate",
-      "responsibility": "public constructor and IR lowering"
+      "responsibility": "pure translation constructor and IR lowering"
+    },
+    {
+      "id": "source_geometry_transform",
+      "path": "packages/fullmag-py/src/fullmag/model/geometry.py",
+      "symbol": "class Transform",
+      "responsibility": "affine translation, quaternion rotation, scale, and pivot transform"
+    },
+    {
+      "id": "source_rigid_transform",
+      "path": "packages/fullmag-py/src/fullmag/model/geometry.py",
+      "symbol": "class RigidTransform",
+      "responsibility": "rigid rotation-matrix/translation frame for 3D antenna layouts"
     }
   ],
   "public_api": {
-    "owner": "fm.Translate(geometry, offset, name=None)",
+    "owner": "fm.Translate, fm.Transform, fm.RigidTransform, fm.AntennaRigidTransform",
     "parameters": [
       {
-        "python": "geometry",
+        "python": "Translate.geometry",
         "type": "Geometry",
         "default": "required",
         "si_unit": "$1$",
         "validation": "typed geometry",
-        "meaning": "source geometry",
-        "backend_support": "FEM CPU/GPU: IR; FDM CPU/GPU: resolver-specific",
+        "meaning": "source geometry for translation",
+        "backend_support": "FEM/FDM CPU/GPU: IR; resolver-specific",
         "problem_ir": "base"
       },
       {
-        "python": "offset",
-        "type": "tuple[float,float,float]",
+        "python": "Translate.offset",
+        "type": "tuple[float, float, float]",
         "default": "required",
         "si_unit": "$\\mathrm{m}$",
         "validation": "finite three-vector",
@@ -63,14 +75,94 @@
         "problem_ir": "by"
       },
       {
-        "python": "name",
-        "type": "str or None",
+        "python": "Translate.name",
+        "type": "str | None",
         "default": "None",
         "si_unit": "$1$",
         "validation": "non-empty when supplied",
         "meaning": "optional result name",
         "backend_support": "FEM/FDM CPU/GPU: IR; resolver-specific",
         "problem_ir": "name"
+      },
+      {
+        "python": "Transform.child",
+        "type": "Geometry",
+        "default": "required",
+        "si_unit": "$1$",
+        "validation": "typed geometry",
+        "meaning": "child geometry node",
+        "backend_support": "FEM/FDM CPU/GPU: IR; resolver-specific",
+        "problem_ir": "child"
+      },
+      {
+        "python": "Transform.translation",
+        "type": "tuple[float, float, float]",
+        "default": "(0.0, 0.0, 0.0)",
+        "si_unit": "$\\mathrm{m}$",
+        "validation": "finite three-vector",
+        "meaning": "post-rotation translation vector",
+        "backend_support": "FEM/FDM CPU/GPU: IR; resolver-specific",
+        "problem_ir": "translation"
+      },
+      {
+        "python": "Transform.rotation_quat",
+        "type": "tuple[float, float, float, float]",
+        "default": "(0.0, 0.0, 0.0, 1.0)",
+        "si_unit": "$1$",
+        "validation": "finite non-zero quaternion `(qx, qy, qz, qw)`",
+        "meaning": "active 3D rotation quaternion",
+        "backend_support": "FEM/FDM CPU/GPU: IR; resolver-specific",
+        "problem_ir": "rotation_quat"
+      },
+      {
+        "python": "Transform.scale",
+        "type": "tuple[float, float, float]",
+        "default": "(1.0, 1.0, 1.0)",
+        "si_unit": "$1$",
+        "validation": "three positive finite scale factors",
+        "meaning": "per-axis coordinate scaling around `pivot`",
+        "backend_support": "FEM/FDM CPU/GPU: IR; resolver-specific",
+        "problem_ir": "scale"
+      },
+      {
+        "python": "Transform.pivot",
+        "type": "tuple[float, float, float]",
+        "default": "(0.0, 0.0, 0.0)",
+        "si_unit": "$\\mathrm{m}$",
+        "validation": "finite three-vector",
+        "meaning": "rotation and scaling pivot point",
+        "backend_support": "FEM/FDM CPU/GPU: IR; resolver-specific",
+        "problem_ir": "pivot"
+      },
+      {
+        "python": "Transform.name",
+        "type": "str | None",
+        "default": "None",
+        "si_unit": "$1$",
+        "validation": "non-empty when supplied",
+        "meaning": "optional result name",
+        "backend_support": "FEM/FDM CPU/GPU: IR; resolver-specific",
+        "problem_ir": "name"
+      },
+      {
+        "python": "RigidTransform.rotation_matrix",
+        "type": "Sequence[Sequence[float]] | None",
+        "default": "identity",
+        "si_unit": "$1$",
+        "validation": "$3 \\times 3$ proper orthonormal matrix ($\\det = +1$)",
+        "meaning": "rigid-body orientation for 3D antenna layouts",
+        "backend_support": "FEM/FDM CPU/GPU: IR; resolver-specific",
+        "problem_ir": "transform.rotation_matrix"
+      },
+      {
+        "python": "RigidTransform.translation_m",
+        "type": "Sequence[float] | None",
+        "default": "(0.0, 0.0, 0.0)",
+        "si_unit": "$\\mathrm{m}$",
+        "validation": "finite three-vector",
+        "meaning": "rigid-body displacement for 3D antenna layouts",
+        "backend_support": "FEM/FDM CPU/GPU: IR; resolver-specific",
+        "problem_ir": "transform.translation_m"
       }
     ],
     "returns": "typed ProblemIR record at to_ir()"

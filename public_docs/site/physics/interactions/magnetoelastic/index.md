@@ -9,9 +9,9 @@ owner: fullmag-public-docs
 (public-docs-physics-interactions-magnetoelastic)=
 # Magnetoelastic interaction
 
-The executable subset is cubic $B_1/B_2$ coupling to **prescribed strain**. The current
-interaction computes magnetic field and energy from supplied strain; it does not solve
-displacement, elastic equilibrium, or elastodynamics.
+The executable subset is cubic $B_1/B_2$ coupling to **prescribed strain** on FEM CPU and FEM GPU.
+The current interaction computes magnetic field and energy from supplied uniform or per-node
+engineering-Voigt strain; it does not solve displacement, elastic equilibrium, or elastodynamics.
 
 (physics-magnetoelastic-problem-statement)=
 ## Physical problem
@@ -100,19 +100,44 @@ The authored model is valid only within the continuum small-strain, cubic symmet
 prescribed-strain, and backend capability limits stated on this page. `H_mel` divides by the
 local saturation magnetization $M_{s,i}$, nonmagnetic nodes contribute zero field and energy, and
 no displacement PDE or back-action stress solve is performed in the current executable subset.
+`resolve_fem_magnetoelastic_plan` in `crates/fullmag-plan/src/fem.rs` explicitly rejects
+`QuasistaticElasticity`, `Elastodynamics`, isotropic `lambda_s`, `prescribed_stress`, `body_force`,
+and multiple `Magnetoelastic` terms fail-closed.
 
 (physics-magnetoelastic-discrete-realization)=
-## Capability matrix
+## Capability matrix and FEM GPU kernel execution
 
 | Solver | Device | Authoring / IR | Executable realization | Scientific qualification | Exact boundary |
 |---|---|---|---|---|---|
-| FDM | CPU | constructors/IR and native field routines | partial; complete public plan rejected | none for full workflow | uniform/per-cell prescribed strain exists below the planner boundary |
-| FDM | GPU | constructors/IR and kernel branches | partial | no complete lane qualification | FP32/FP64 source is not end-to-end execution evidence |
-| FEM | CPU | prescribed-strain graph | implemented subset | field/energy and mesh tests required | one cubic law and prescribed strain; no mechanics solve |
-| FEM | GPU | same prescribed-strain graph | implemented subset | executed-device parity separate | device strain upload and field/energy kernel |
+| FDM | CPU | constructors/IR and native local routines (`h_mel_field`, `magnetoelastic_field_add_into_soa`) | partial; full public `plan_fdm` rejects magnetoelastic terms | local field/energy unit tests only | uniform/per-cell prescribed strain exists below the planner boundary; not a public FDM workflow |
+| FDM | GPU | constructors/IR and kernel branches | partial; full public `plan_fdm` rejects magnetoelastic terms | no end-to-end FDM GPU qualification | device branches exist below the planner boundary only |
+| FEM | CPU | cubic prescribed-strain graph | implemented subset (`compute_magnetoelastic_field`) | analytic normal/shear, energy-derivative, and mesh tests | single cubic `B1`/`B2` law and uniform or per-node `prescribed_strain`; no elasticity PDE solve |
+| FEM | GPU | same prescribed-strain graph | implemented subset (`fullmag_cuda_magnetoelastic_field_energy_blocks`, `fullmag_cuda_accumulate_heff_fused_xyz`) | 0-ULP CPU/GPU FP64 bitwise parity and `ΔE_mel = 0.0` over 50 RK4 steps | `ComputeEnergy` reduction gating (`energy_out=nullptr` on RK substeps), fused `H_eff` launch, and non-contracted IEEE-754 FP64 (`__dmul_rn`/`__dadd_rn`) matching host rounding |
+
+On FEM GPU, `fullmag_cuda_magnetoelastic_field_energy_blocks` templates energy reduction on
+`ComputeEnergy` so RK substeps omit block reductions when `energy_out == nullptr`, merges into
+$\mathbf H_{\mathrm{eff}}$ via `fullmag_cuda_accumulate_heff_fused_xyz`, and disables implicit FMA
+contraction in FP64 (`__dmul_rn`/`__dadd_rn`) to preserve 0-ULP CPU/GPU parity (see
+{ref}`numerical-methods-performance-fem-gpu-kernels`).
 
 (physics-magnetoelastic-python-api)=
 ## Python API and stage-first example
+
+### Public API parameters
+
+| Python API | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR field |
+|---|---|---|---|---|---|---|---|
+| `fm.Magnetoelastic.magnet` | `str` | required | — | non-empty magnet identifier checked at planner boundary | target magnetic object coupled to elastic body | FEM CPU/GPU (prescribed strain); FDM rejected | `energy_terms[].magnet` |
+| `fm.Magnetoelastic.body` | `str` | required | — | non-empty `ElasticBody` identifier | elastic body carrying the prescribed strain load | FEM CPU/GPU (prescribed strain); FDM rejected | `energy_terms[].body` |
+| `fm.Magnetoelastic.law` | `str` | required | — | non-empty `MagnetostrictionLaw` identifier | named cubic magnetoelastic law | FEM CPU/GPU (prescribed strain); FDM rejected | `energy_terms[].law` |
+| `fm.MagnetostrictionLaw.kind` | `str` | `"cubic"` | — | `"cubic"` executable; isotropic `lambda_s` rejected at FEM planner | crystal symmetry family for magnetoelastic coupling | FEM CPU/GPU (`"cubic"` only) | `mechanics.laws[].kind` |
+| `fm.MagnetostrictionLaw.B1` | `float \| None` | `None` | $\mathrm{J\,m^{-3}}$ | finite float required for executable cubic law at IR/planner boundary | cubic normal-strain magnetoelastic constant $B_1$ | FEM CPU/GPU | `mechanics.laws[].B1` |
+| `fm.MagnetostrictionLaw.B2` | `float \| None` | `None` | $\mathrm{J\,m^{-3}}$ | finite float required for executable cubic law at IR/planner boundary | cubic shear-strain magnetoelastic constant $B_2$ | FEM CPU/GPU | `mechanics.laws[].B2` |
+| `fm.MechanicalLoad.kind` | `str` | required | — | `"prescribed_strain"` executable; `"prescribed_stress"` and `"body_force"` rejected | mechanical load family | FEM CPU/GPU (`"prescribed_strain"` only) | `mechanics.loads[].kind` |
+| `fm.MechanicalLoad.strain` | `tuple[float, ...] \| None` | `None` | $1$ | 6-component engineering-Voigt vector $(\varepsilon_{11},\varepsilon_{22},\varepsilon_{33},\gamma_{23},\gamma_{13},\gamma_{12})$ | uniform prescribed engineering strain tensor | FEM CPU/GPU | `mechanics.loads[].strain` |
+| `fm.ElasticMaterial.C11` | `float` | required | $\mathrm{Pa}$ | positive finite float at construction | cubic stiffness constant $C_{11}$ | schema/IR graph (no PDE solve yet) | `mechanics.materials[].C11` |
+
+### Stage-first authoring boundary example
 
 ```python
 # %% Study, execution lane, and magnetic body
@@ -123,8 +148,8 @@ study = fm.study("magnetoelastic_authoring_boundary")
 study.engine("fem")
 study.device("cpu", precision="double")
 study.mode("strict")
-study.objects.mesh.defaults(cell_size=(2 * nm, 2 * nm, 2 * nm))
 body = study.geometry(fm.Box(40 * nm, 20 * nm, 4 * nm), name="film")
+body.mesh(maximum_element_size=4 * nm, order=1)
 body.Ms = 8.0e5
 body.Aex = 13.0e-12
 body.alpha = 0.02
@@ -155,6 +180,9 @@ than an end-to-end coupled stage run. For exact constructor arguments on `fm.Mag
   during IR/planner validation.
 - `ElasticMaterial` enforces positive $C_{12}$ at construction rather than the full cubic elastic
   stability inequalities $C_{44}>0$, $C_{11}-C_{12}>0$, and $C_{11}+2C_{12}>0$.
+- `resolve_fem_magnetoelastic_plan` enforces single-term cubic `B1`/`B2` `prescribed_strain`
+  legality and rejects isotropic `lambda_s`, `prescribed_stress`, `body_force`, and coupled
+  mechanics models fail-closed.
 
 (physics-magnetoelastic-problem-ir)=
 ## ProblemIR semantics
@@ -180,8 +208,8 @@ Prescribed strain, the elastic material, and the law remain separate typed recor
 - pure engineering-shear factor-of-two test;
 - finite-difference derivative of energy versus field;
 - active-mask/nonmagnetic-node exclusion;
-- uniform versus per-node/per-cell strain equivalence;
-- CPU/GPU comparison at matched integration weights;
+- uniform versus per-node strain equivalence;
+- CPU/GPU 0-ULP comparison at matched integration weights;
 - eventual coupled-mechanics energy exchange and convergence tests.
 
 (physics-magnetoelastic-round-trip-and-failure-semantics)=
@@ -201,18 +229,23 @@ are never silently converted into another law or omitted.
 ## Implementation mapping
 
 Python owns authoring and serialization (`packages/fullmag-py/src/fullmag/model/energy.py`,
-`mechanics.py`), `ProblemIR` owns canonical intent (`crates/fullmag-ir/src/mechanics.rs`,
-`study.rs`), `crates/fullmag-plan/src/fem.rs` (`resolve_fem_magnetoelastic_plan`) owns prescribed-strain
-legality, and native FEM CPU/CUDA kernels own Voigt shear halving, local $M_{s,i}$ scaling, and
-lumped-mass energy integration. Control Room support for magnetoelastic authoring is tracked in
-{doc}`/frontend/capability-register`; parameters without a UI control are configured in Python.
+`packages/fullmag-py/src/fullmag/model/mechanics.py`), `ProblemIR` owns canonical intent
+(`crates/fullmag-ir/src/mechanics.rs`, `crates/fullmag-ir/src/study.rs`),
+`crates/fullmag-plan/src/fem.rs` (`resolve_fem_magnetoelastic_plan`) owns prescribed-strain
+legality, and native FEM CPU/CUDA kernels (`backends/fem/cpu/mfem/interactions/magnetoelastic_prescribed_strain.cpp`,
+`backends/fem/gpu/cuda/interactions/magnetoelastic/magnetoelastic_kernels.cu`,
+`backends/fem/gpu/cuda/fields/vector_field_kernels.cu`) own Voigt shear halving, local $M_{s,i}$
+scaling, non-contracted FP64 parity, and lumped-mass energy integration. Control Room support for
+magnetoelastic authoring is tracked in {doc}`/frontend/capability-register`; parameters without a UI
+control are configured in Python.
 
 (physics-magnetoelastic-limitations)=
 ## Limitations
 
-Quasistatic elasticity, elastodynamics, two-way magnetostriction, mechanical damping, acoustic
-radiation, and temperature-dependent elasticity are represented in schema vocabulary only and are
-not currently executable features.
+Quasistatic elasticity (`QuasistaticElasticity`), elastodynamics (`Elastodynamics`), two-way
+magnetostriction, isotropic `lambda_s`, `prescribed_stress`, `body_force`, mechanical damping,
+acoustic radiation, temperature-dependent elasticity, and full public FDM workflows are represented
+in schema vocabulary or low-level helper routines only and fail closed in strict planning.
 
 (physics-magnetoelastic-scientific-bibliography)=
 ## Scientific bibliography
@@ -244,10 +277,14 @@ not currently executable features.
 
 | Repository path | Stable symbol / area | Responsibility |
 |---|---|---|
-| `packages/fullmag-py/src/fullmag/model/energy.py` | `class Magnetoelastic` | coupling reference term |
-| `packages/fullmag-py/src/fullmag/model/mechanics.py` | `ElasticMaterial, ElasticBody, MagnetostrictionLaw, MechanicalLoad` | mechanics graph authoring |
-| `crates/fullmag-plan/src/fem.rs` | `resolve_fem_magnetoelastic_plan` | FEM prescribed-strain legality |
-| `crates/fullmag-engine/src/magnetoelastic.rs` | `h_mel/e_mel` | FDM local reference routines |
-| `backends/fem/cpu/mfem/interactions/magnetoelastic_prescribed_strain.cpp` | `field/energy` | FEM CPU realization |
-| `backends/fem/gpu/cuda/interactions/magnetoelastic` | `upload and kernels` | FEM GPU realization |
-| `backends/fdm/gpu/cuda/interactions` | `fused magnetoelastic branches` | partial FDM GPU evidence |
+| [`packages/fullmag-py/src/fullmag/model/energy.py`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/model/energy.py#L478) | `class Magnetoelastic` | coupling reference term and IR lowering |
+| [`packages/fullmag-py/src/fullmag/model/mechanics.py`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/model/mechanics.py#L13) | `class ElasticMaterial` | cubic elastic stiffness and density record |
+| [`packages/fullmag-py/src/fullmag/model/mechanics.py`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/model/mechanics.py#L61) | `class ElasticBody` | elastic domain binding geometry and material |
+| [`packages/fullmag-py/src/fullmag/model/mechanics.py`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/model/mechanics.py#L93) | `class MagnetostrictionLaw` | cubic `B1`/`B2` (and schema-only isotropic `lambda_s`) law |
+| [`packages/fullmag-py/src/fullmag/model/mechanics.py`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/model/mechanics.py#L192) | `class MechanicalLoad` | engineering-Voigt `prescribed_strain` (and schema-only stress/body-force) load |
+| [`crates/fullmag-plan/src/fem.rs`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-plan/src/fem.rs#L2900) | `resolve_fem_magnetoelastic_plan` | FEM prescribed-strain legality and fail-closed non-goal gate |
+| [`crates/fullmag-engine/src/magnetoelastic.rs`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-engine/src/magnetoelastic.rs#L95) | `h_mel_field` | low-level local magnetoelastic field reference routine |
+| [`crates/fullmag-engine/src/fdm/cpu/fields/magnetoelastic.rs`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-engine/src/fdm/cpu/fields/magnetoelastic.rs#L87) | `magnetoelastic_field_add_into_soa` | low-level FDM SoA magnetoelastic field accumulation helper |
+| [`backends/fem/cpu/mfem/interactions/magnetoelastic_prescribed_strain.cpp`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/backends/fem/cpu/mfem/interactions/magnetoelastic_prescribed_strain.cpp#L15) | `compute_magnetoelastic_field` | FEM CPU prescribed-strain field and lumped-mass energy realization |
+| [`backends/fem/gpu/cuda/interactions/magnetoelastic/magnetoelastic_kernels.cu`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/backends/fem/gpu/cuda/interactions/magnetoelastic/magnetoelastic_kernels.cu#L105) | `fullmag_cuda_magnetoelastic_field_energy_blocks` | FEM GPU prescribed-strain kernel with `ComputeEnergy` gating and non-contracted FP64 parity |
+| [`backends/fem/gpu/cuda/fields/vector_field_kernels.cu`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/backends/fem/gpu/cuda/fields/vector_field_kernels.cu#L248) | `fullmag_cuda_accumulate_heff_fused_xyz` | FEM GPU single-launch fused `H_eff` combiner including `H_mel` |

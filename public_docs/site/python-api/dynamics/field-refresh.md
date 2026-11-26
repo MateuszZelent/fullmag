@@ -1,6 +1,6 @@
 ---
 title: Field Refresh
-status: partial
+status: implemented
 doc_kind: reference
 audience: user
 owner: fullmag-public-docs
@@ -13,6 +13,8 @@ owner: fullmag-public-docs
 ## 1. Physical problem and overview
 
 `fm.FieldRefreshPolicy` specifies an optional cadence $\Delta t_{\mathrm{demag}}$ (`demag_interval_s`) for refreshing the non-local demagnetization field $\mathbf{H}_{\mathrm{d}}$ during time-domain LLG integration. When `demag_interval_s=None` (the default), the demagnetization operator is evaluated at every Runge–Kutta stage. When a positive `demag_interval_s` is configured on a lane that supports split-cadence refresh, the demagnetization field is recomputed whenever the elapsed physical time since the last refresh satisfies $t - t_{\mathrm{last}} \ge \Delta t_{\mathrm{demag}}$.
+
+In stage-first scripts, attach this cadence via `study.solver(demag_interval_s=...)` or pass `field_refresh=fm.FieldRefreshPolicy(...)` to `study.stages.add_relax(...)`.
 
 (python-api-dynamics-field-refresh-governing-equations)=
 ## 2. Governing equations
@@ -55,7 +57,6 @@ t - t_{\mathrm{last}} < \Delta t_{\mathrm{demag}}.
 
 ```text
 fm.FieldRefreshPolicy(
-    *,
     demag_interval_s: float | None = None,
 )
 ```
@@ -64,44 +65,48 @@ fm.FieldRefreshPolicy(
 
 | Python parameter | Type | Default | SI unit | Validation | Meaning | Backend support | `ProblemIR` |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| `FieldRefreshPolicy.demag_interval_s` | `float \| None` | `None` | $\mathrm{s}$ | Positive | Demag refresh cadence | FEM/FDM CPU/GPU; planner and runtime capability checks remain authoritative | `field_refresh.demag_interval_s` |
-| `LLG.field_refresh` | `FieldRefreshPolicy \| None` | `None` | $1$ | Valid policy | Attach refresh cadence to dynamics | FEM/FDM CPU/GPU; planner and runtime capability checks remain authoritative | `dynamics.field_refresh` |
+| `FieldRefreshPolicy.demag_interval_s` | `float \| None` | `None` | $\mathrm{s}$ | Positive finite when set | Demag refresh cadence | FEM/FDM CPU/GPU; planner and runtime capability checks remain authoritative | `field_refresh.demag_interval_s` |
+| `LLG.field_refresh` | `FieldRefreshPolicy \| None` | `None` | $1$ | Valid `FieldRefreshPolicy` instance | Attach refresh cadence to `fm.LLG` dynamics (see {doc}`llg` for other `LLG` fields) | FEM/FDM CPU/GPU; planner and runtime capability checks remain authoritative | `dynamics.field_refresh` |
 
 ### Executable Python example
 
 ```python
-# %%
+# %% Configure demagnetization refresh cadence in a stage-first FDM study
 import fullmag as fm
 
-refresh = fm.FieldRefreshPolicy(demag_interval_s=5e-13)
+nm = 1.0e-9
 
-world = fm.World(
-    dx=5e-9,
-    dy=5e-9,
-    dz=5e-9,
-    nx=16,
-    ny=4,
-    nz=1,
-    boundaries=fm.BoundaryConfig.open(method="fft"),
-)
-world.add_box(
-    "strip",
-    size=(80e-9, 20e-9, 5e-9),
-    material=fm.Material.permalloy(Ms=8.0e5, Aex=1.3e-11, alpha=0.02),
-    m_init=fm.VectorFieldSpec.uniform((1.0, 0.05, 0.0)),
-    demag=True,
-)
-
-study = fm.study(world, target="fdm", device="cpu", precision="fp64")
-study.solver(
+refresh = fm.FieldRefreshPolicy(demag_interval_s=5.0e-13)
+dynamics = fm.LLG(
     integrator="rk4",
-    fixed_timestep=1e-13,
+    fixed_timestep=1.0e-13,
     field_refresh=refresh,
 )
-study.stages.add_time(name="pulse", duration=0.1e-9, By=5e-3, save_m_every=50e-12)
+assert dynamics.to_ir()["field_refresh"]["demag_interval_s"] == 5.0e-13
 
-ir = study.to_problem_ir()
-assert ir["study"]["dynamics"]["field_refresh"]["demag_interval_s"] == 5e-13
+study = fm.study("field_refresh_example")
+study.engine("fdm")
+study.device("cpu", precision="double")
+study.mode("strict")
+study.objects.mesh.defaults(cell_size=(5 * nm, 5 * nm, 5 * nm))
+
+strip = study.geometry(fm.Box(size=(80 * nm, 20 * nm, 5 * nm)), name="strip")
+strip.Ms = 800.0e3
+strip.Aex = 13.0e-12
+strip.alpha = 0.02
+strip.m = fm.texture.uniform(1.0, 0.05, 0.0)
+
+study.exchange()
+study.demag()
+study.b_ext(0.0, 5.0e-3, 0.0)
+study.solver(
+    integrator="rk4",
+    fix_dt=1.0e-13,
+    demag_interval_s=refresh.demag_interval_s,
+)
+study.stages.add_run(until=0.1e-9, stage_id="pulse").autosave(
+    fm.StageAutosave(fields=[fm.FieldAutosave("m", every=50.0e-12)])
+)
 ```
 
 (python-api-dynamics-field-refresh-problem-ir)=
@@ -109,15 +114,12 @@ assert ir["study"]["dynamics"]["field_refresh"]["demag_interval_s"] == 5e-13
 
 ```json
 {
-  "dynamics": {
-    "equation": "llg",
-    "gyromagnetic_ratio": 221100.0,
-    "integrator": "rk4",
-    "fixed_timestep": 1e-13,
-    "adaptive_timestep": null,
-    "field_refresh": {
-      "demag_interval_s": 5e-13
-    }
+  "kind": "llg",
+  "gyromagnetic_ratio": 221100.0,
+  "integrator": "rk4",
+  "fixed_timestep": 1e-13,
+  "field_refresh": {
+    "demag_interval_s": 5e-13
   }
 }
 ```
@@ -165,5 +167,5 @@ assert ir["study"]["dynamics"]["field_refresh"]["demag_interval_s"] == 5e-13
 
 | Layer | File | Symbol / entrypoint | Responsibility |
 | --- | --- | --- | --- |
-| Python DSL | [`packages/fullmag-py/src/fullmag/model/dynamics.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/dynamics.py#L141) | [`class FieldRefreshPolicy`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/dynamics.py#L141) | Demagnetization refresh policy validation and IR lowering |
-| Python DSL | [`packages/fullmag-py/src/fullmag/model/dynamics.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/dynamics.py#L158) | [`class LLG`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/dynamics.py#L158) | Attaches `FieldRefreshPolicy` to the `LLG` dynamics contract |
+| Python DSL | [`packages/fullmag-py/src/fullmag/model/dynamics.py`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/model/dynamics.py#L142) | [`class FieldRefreshPolicy`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/model/dynamics.py#L142) | Demagnetization refresh policy validation and IR lowering |
+| Python DSL | [`packages/fullmag-py/src/fullmag/model/dynamics.py`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/model/dynamics.py#L159) | [`class LLG`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/model/dynamics.py#L159) | Attaches `FieldRefreshPolicy` to the `LLG` dynamics contract |

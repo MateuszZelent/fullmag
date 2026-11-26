@@ -29,7 +29,7 @@ The left `StartRail` (`apps/control-room/src/modules/start/rail/StartRail.tsx`) 
 |---|---|---|---|
 | `home` | Overview | `Ctrl+1` | Primary launch tiles, interrupted checkpoint recovery, active sessions, recent projects, scripts, and results, and discovered instances |
 | `templates` | Templates | `Ctrl+2` | Curated template catalog (`STUDY_TEMPLATES`) saved as `.py` scripts or launched directly |
-| `import` | Import | `Ctrl+3` | Import workflows for `.mif`, `.mx3`, `.mph`, and `.fms` archives |
+| `import` | Import | `Ctrl+3` | Import workflows for `.mif`, `.mx3`, `.mph`, `.fms` archives, STL surfaces (`geometry.import-stl`), and read-only script previews |
 | `learn` | Learn | `Ctrl+4` | Guided onboarding and example workflows |
 | `docs` | Docs | `F1` | Embedded documentation search view |
 | `settings` | Settings | `Ctrl+,` | Workspace, recent-item filter, and compute-node policy settings |
@@ -40,10 +40,10 @@ On the **Overview** screen, `LaunchTiles` (`apps/control-room/src/modules/start/
 - **FDM simulation** (`start.new-fdm`, `Ctrl+N`): empty structured finite-difference problem.
 - **FEM simulation** (`start.new-fem`, `Ctrl+Shift+N`): empty unstructured tetrahedral mesh problem.
 - **From template** (`start.templates`, `Ctrl+T`): opens the benchmark and study template catalog (`µMAG`, dispersion, FMR, skyrmion templates).
-- **Import** (`start.import`, `Ctrl+I`): imports external `.mif`, `.mx3`, `.mph`, or `.fms` models.
+- **Import** (`start.import`, `Ctrl+I`): imports external `.mif`, `.mx3`, `.mph`, or `.fms` models, imports STL surfaces (`geometry.import-stl`), or opens a concurrent read-only model preview (`api.sessions.previews.fromScript`) without mutating an active execution session.
 - **Open script…** (`start.open-script`): registers a Python `.py` script in the recent-work list with last-use and execution provenance (available when the desktop/script host exposes file picking).
 
-A live `ComputeEnvironmentWidget` in the rail reports resolved host compute capabilities, node inventory, and GPU availability gathered from the compute probe (`useComputeProbe` and `useExecutionAvailability`).
+At the bottom of the Start Screen, a collapsible `ComputeEnvironmentWidget` dock (`fm-start__compute-dock`, collapsed by default while connected to a backend) and `StartStatusBar` report resolved host compute capabilities, node inventory, GPU availability (`useComputeProbe` and `useExecutionAvailability`), and active session status without crowding the left navigation rail.
 
 ## Model Templates and Script Creation
 

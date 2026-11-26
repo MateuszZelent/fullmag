@@ -1,6 +1,6 @@
 ---
 title: Adaptive Timestep
-status: partial
+status: implemented
 doc_kind: reference
 audience: user
 owner: fullmag-public-docs
@@ -12,7 +12,7 @@ owner: fullmag-public-docs
 (python-api-dynamics-adaptive-timestep-problem-statement)=
 ## 1. Physical problem and overview
 
-`fm.AdaptiveTimestep` configures the embedded Runge–Kutta error tolerances, step-size bounds, proportional–integral (PI) controller gains/limits, and optional spin-rotation and norm-drift guards used by `rk23`, `rk45`, and `auto` time integration across FEM and FDM CPU/GPU realizations (`LLG-TD-POLICY-V1` through `LLG-TD-ATOMIC-V1`).
+`fm.AdaptiveTimestep` configures the embedded Runge–Kutta error tolerances, step-size bounds, proportional–integral (PI) controller gains/limits, and optional spin-rotation and norm-drift guards used by `rk23`, `rk45`, `coupled_imex_ark2` (step-doubling ARS(2,3,2) with error scale `1 / 3`), and `auto` time integration across FEM and FDM CPU/GPU realizations (`LLG-TD-POLICY-V1` through `LLG-TD-ATOMIC-V1`).
 
 (python-api-dynamics-adaptive-timestep-governing-equations)=
 ## 2. Governing equations
@@ -80,7 +80,6 @@ s\,\rho_k^{-0.7/(p+1)}\,\rho_{k-1}^{0.4/(p+1)}, & \text{accepted step with prior
 
 ```text
 fm.AdaptiveTimestep(
-    *,
     atol: float = 1e-6,
     rtol: float = 1e-3,
     dt_initial: float | None = None,
@@ -112,8 +111,10 @@ fm.AdaptiveTimestep(
 ### Executable Python example
 
 ```python
-# %%
+# %% Configure adaptive PI error control in a stage-first FDM study
 import fullmag as fm
+
+nm = 1.0e-9
 
 adaptive = fm.AdaptiveTimestep(
     atol=1e-6,
@@ -128,49 +129,50 @@ adaptive = fm.AdaptiveTimestep(
     norm_tolerance=1e-3,
 )
 
-world = fm.World(
-    dx=5e-9,
-    dy=5e-9,
-    dz=5e-9,
-    nx=16,
-    ny=4,
-    nz=1,
-    boundaries=fm.BoundaryConfig.open(method="fft"),
-)
-world.add_box(
-    "strip",
-    size=(80e-9, 20e-9, 5e-9),
-    material=fm.Material.permalloy(Ms=8.0e5, Aex=1.3e-11, alpha=0.02),
-    m_init=fm.VectorFieldSpec.uniform((1.0, 0.05, 0.0)),
-    demag=True,
-)
+study = fm.study("adaptive_timestep_example")
+study.engine("fdm")
+study.device("cpu", precision="double")
+study.mode("strict")
+study.objects.mesh.defaults(cell_size=(5 * nm, 5 * nm, 5 * nm))
 
-study = fm.study(world, target="fdm", device="cpu", precision="fp64")
+strip = study.geometry(fm.Box(size=(80 * nm, 20 * nm, 5 * nm)), name="strip")
+strip.Ms = 800.0e3
+strip.Aex = 13.0e-12
+strip.alpha = 0.02
+strip.m = fm.texture.uniform(1.0, 0.05, 0.0)
+
+study.exchange()
+study.demag()
+study.b_ext(0.0, 5.0e-3, 0.0)
 study.solver(integrator="rk45", adaptive_timestep=adaptive)
-study.stages.add_time(name="pulse", duration=0.2e-9, By=5e-3, save_m_every=50e-12)
+study.stages.add_run(until=0.2e-9, stage_id="pulse").autosave(
+    fm.StageAutosave(fields=[fm.FieldAutosave("m", every=50.0e-12)])
+)
 
-ir = study.to_problem_ir()
-assert ir["study"]["dynamics"]["adaptive_timestep"]["atol"] == 1e-6
-assert ir["study"]["dynamics"]["adaptive_timestep"]["max_spin_rotation"] == 0.35
+ir = adaptive.to_ir()
+assert ir["tolerance_mode"] == "advanced"
+assert ir["atol"] == 1e-6
+assert ir["max_spin_rotation"] == 0.35
 ```
 
 (python-api-dynamics-adaptive-timestep-problem-ir)=
 ## 6. `ProblemIR` and canonical script representation
 
+`AdaptiveTimestep.to_ir()` always emits `tolerance_mode` (`"advanced"` or `"max_error"` when constructed from `max_err`), omitting optional `dt_max`, `max_spin_rotation`, and `norm_tolerance` keys when `None`:
+
 ```json
 {
-  "adaptive_timestep": {
-    "atol": 1e-06,
-    "rtol": 0.0001,
-    "dt_initial": 1e-13,
-    "dt_min": 1e-15,
-    "dt_max": 2e-12,
-    "safety": 0.9,
-    "growth_limit": 2.0,
-    "shrink_limit": 0.2,
-    "max_spin_rotation": 0.35,
-    "norm_tolerance": 0.001
-  }
+  "tolerance_mode": "advanced",
+  "atol": 1e-06,
+  "rtol": 0.0001,
+  "dt_initial": 1e-13,
+  "dt_min": 1e-15,
+  "safety": 0.9,
+  "growth_limit": 2.0,
+  "shrink_limit": 0.2,
+  "dt_max": 2e-12,
+  "max_spin_rotation": 0.35,
+  "norm_tolerance": 0.001
 }
 ```
 
@@ -179,14 +181,14 @@ assert ir["study"]["dynamics"]["adaptive_timestep"]["max_spin_rotation"] == 0.35
 
 - **Requested intent vs. resolved execution**: `AdaptiveTimestep` fields serialize verbatim into `ProblemIR` (`requested intent`) and are recorded alongside the resolved integrator and step statistics in the execution receipt (`resolved execution`).
 - **Validation errors**: Negative tolerances, `atol == 0` and `rtol == 0`, `dt_min <= 0`, `dt_max < dt_min`, `dt_initial` outside `[dt_min, dt_max]`, `safety` outside `(0, 1]`, `growth_limit <= 1`, or `shrink_limit` outside `(0, 1)` raise immediate `ValueError` validation errors.
-- **Unsupported combinations**: Supplying `AdaptiveTimestep` alongside `fixed_timestep` or with a fixed-step integrator (`heun`, `rk4`, `abm3`, `coupled_imex_ark2`) is rejected as an unsupported combination.
+- **Unsupported combinations**: Supplying `AdaptiveTimestep` alongside `fixed_timestep` or with a fixed-step-only integrator (`heun`, `rk4`, `abm3`) is rejected immediately in Python; `coupled_imex_ark2` is accepted in Python and capability-gated by the planner to transient M3 spin drift-diffusion.
 
 (python-api-dynamics-adaptive-timestep-discrete-realization)=
 ## 8. Discrete realization and numerical operators
 
 - **Shared PI decision header**: `decide_adaptive_step` in `native/include/fullmag_adaptive_step_decision.hpp`.
 - **FEM CPU & GPU**: `compute_adaptive_error_norm` / `adaptive_pi_step` (CPU) and `adaptive_error_norm_blocks_kernel` / `gpu_rk_adaptive_pi_step` (GPU).
-- **FDM CPU & GPU**: `max_error_norm_buf` / `decide_adaptive_step` (CPU) and `reduce_adaptive_error_policy` (GPU).
+- **FDM CPU & GPU**: `max_error_norm_buf` / `decide_adaptive_step` (CPU) and `reduce_adaptive_error_policy` (GPU). See {ref}`numerical-methods-performance-fdm-core` for adaptive FSAL and CUDA conditional graph batching.
 
 (python-api-dynamics-adaptive-timestep-implementation-mapping)=
 ## 9. Backend and device implementation mapping
@@ -218,9 +220,9 @@ assert ir["study"]["dynamics"]["adaptive_timestep"]["max_spin_rotation"] == 0.35
 
 | Layer | File | Symbol / entrypoint | Responsibility |
 | --- | --- | --- | --- |
-| Python DSL | [`packages/fullmag-py/src/fullmag/model/dynamics.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/dynamics.py#L30) | [`class AdaptiveTimestep`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/dynamics.py#L30) | Adaptive-step parameters, validation, and IR lowering |
-| Shared Native Header | [`native/include/fullmag_adaptive_step_decision.hpp`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/native/include/fullmag_adaptive_step_decision.hpp#L127) | [`decide_adaptive_step`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/native/include/fullmag_adaptive_step_decision.hpp#L127) | Backend-neutral order-aware history PI step decision |
-| Native FEM CPU | [`backends/fem/cpu/mfem/integrators/adaptive_dt.cpp`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/backends/fem/cpu/mfem/integrators/adaptive_dt.cpp#L123) | [`compute_adaptive_error_norm`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/backends/fem/cpu/mfem/integrators/adaptive_dt.cpp#L123) | Native FEM nodewise mixed error norm and geometric guards |
-| Native FEM GPU | [`backends/fem/gpu/cuda/integrators/rk/adaptive_error_kernels.cu`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/backends/fem/gpu/cuda/integrators/rk/adaptive_error_kernels.cu#L17) | [`adaptive_error_norm_blocks_kernel`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/backends/fem/gpu/cuda/integrators/rk/adaptive_error_kernels.cu#L17) | Native FEM GPU block reduction for the active-node error norm |
-| FDM CPU Engine | [`crates/fullmag-engine/src/fdm/cpu/integrators.rs`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-engine/src/fdm/cpu/integrators.rs#L20) | [`decide_adaptive_step`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-engine/src/fdm/cpu/integrators.rs#L20) | FDM CPU history-aware PI step decision |
-| FDM GPU CUDA | [`backends/fdm/gpu/cuda/runtime/reductions_fp64.cu`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/backends/fdm/gpu/cuda/runtime/reductions_fp64.cu#L963) | [`reduce_adaptive_error_policy`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/backends/fdm/gpu/cuda/runtime/reductions_fp64.cu#L963) | FDM GPU adaptive error reduction and dt-min policy |
+| Python DSL | [`packages/fullmag-py/src/fullmag/model/dynamics.py`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/model/dynamics.py#L45) | [`class AdaptiveTimestep`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/model/dynamics.py#L45) | Adaptive-step parameters, validation, and IR lowering |
+| Shared Native Header | [`native/include/fullmag_adaptive_step_decision.hpp`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/native/include/fullmag_adaptive_step_decision.hpp#L127) | [`decide_adaptive_step`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/native/include/fullmag_adaptive_step_decision.hpp#L127) | Backend-neutral order-aware history PI step decision |
+| Native FEM CPU | [`backends/fem/cpu/mfem/integrators/adaptive_dt.cpp`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/backends/fem/cpu/mfem/integrators/adaptive_dt.cpp#L123) | [`compute_adaptive_error_norm`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/backends/fem/cpu/mfem/integrators/adaptive_dt.cpp#L123) | Native FEM nodewise mixed error norm and geometric guards |
+| Native FEM GPU | [`backends/fem/gpu/cuda/integrators/rk/adaptive_error_kernels.cu`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/backends/fem/gpu/cuda/integrators/rk/adaptive_error_kernels.cu#L17) | [`adaptive_error_norm_blocks_kernel`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/backends/fem/gpu/cuda/integrators/rk/adaptive_error_kernels.cu#L17) | Native FEM GPU block reduction for the active-node error norm |
+| FDM CPU Engine | [`crates/fullmag-engine/src/fdm/cpu/integrators.rs`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-engine/src/fdm/cpu/integrators.rs#L22) | [`decide_adaptive_step`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-engine/src/fdm/cpu/integrators.rs#L22) | FDM CPU history-aware PI step decision |
+| FDM GPU CUDA | [`backends/fdm/gpu/cuda/runtime/reductions_fp64.cu`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/backends/fdm/gpu/cuda/runtime/reductions_fp64.cu#L967) | [`reduce_adaptive_error_policy`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/backends/fdm/gpu/cuda/runtime/reductions_fp64.cu#L967) | FDM GPU adaptive error reduction and dt-min policy |

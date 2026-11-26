@@ -97,7 +97,7 @@ parameters. Unsupported combinations fail capability checks without silent fallb
 ## Implementation mapping
 
 The constructor and typed subpolicies lower in `fullmag.model.discretization`; runtime realization is
-documented in the backend FDM meshing branch.
+documented in the backend FDM meshing branch and {ref}`numerical-methods-performance-fdm-core`.
 
 (python-api-meshing-fdm-validation)=
 ## Validation
@@ -123,23 +123,24 @@ model, and public boundary-correction fields do not establish universal kernel s
 
 ## Control Room
 
-Control Room exposes a read-only structured-grid inspection panel for FDM studies ({doc}`/frontend/meshing/fdm-grid-view`); interactive authoring of `FDM`, `FDMGrid`, and `FDMDemag` remains `Python-only`.
+Control Room provides interactive default FDM structured-grid sizing and grid building in `apps/control-room/src/modules/inspector/inspectors/mesh/MeshRootSpec.tsx` (`MeshRootInspectorSpecPanel`, supporting cell size/count, single 3-D vs multilayer Z-slices, live $l_{\mathrm{ex}}$ checks, 7-smooth FFT snapping, and Save & Build Grid), plus read-only per-grid diagnostics in `apps/control-room/src/modules/inspector/inspectors/mesh/fdm/FdmGridSpec.tsx` (`FdmGridInspectorSpecPanel`). Per-magnet `FDMGrid` mappings, `FDMDemag` policies, `projection_policy`, and boundary-correction parameters remain `Python-only`.
 
 | Python/API surface | Control Room path | Status | Interaction |
 |---|---|---|---|
-| Structured grid dimensions and inspection | `Model Explorer -> Study / Discretization (FDM grid view)` | `inspection-only` | Read-only grid dimensions, cell spacing, and domain extents ({doc}`/frontend/meshing/fdm-grid-view`) |
-| Authoring `FDM`, `FDMGrid`, and `FDMDemag` fields | — | `Python-only` | Configured directly in Python |
+| Default FDM grid sizing and build | `Model Explorer -> Mesh` (`MeshRootSpec.tsx`) | `supported` | Interactive cell size/count, Z-stack mode, $l_{\mathrm{ex}}$ guard, 7-smooth snap, Save & Build Grid ({doc}`/frontend/meshing/fdm-grid-view`) |
+| Structured grid dimensions and inspection | `Model Explorer -> Mesh -> <grid>` (`FdmGridSpec.tsx`) | `inspection-only` | Read-only grid dimensions, cell spacing, origins, and domain extents |
+| Per-magnet `FDMGrid`, `FDMDemag`, `projection_policy`, boundary correction | — | `Python-only` | Configured directly in Python |
 
-See {doc}`/frontend/meshing/fdm-grid-view` and [Control Room capability register](/frontend/capability-register) for browser support details (`apps/control-room/src/modules/inspector/inspectorRouteCatalog.tsx`).
+See {doc}`/frontend/meshing/fdm-grid-view` and [Control Room capability register](/frontend/capability-register) for browser support details (`apps/control-room/src/modules/inspector/inspectors/mesh/MeshRootSpec.tsx`).
 
 (python-api-meshing-fdm-source-code-index)=
 ## Source-code index
 
 | Claim | Path | Stable symbol | Responsibility | Evidence |
 |---|---|---|---|---|
-| constructor and lowering | [`packages/fullmag-py/src/fullmag/model/discretization.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/discretization.py#L19) | [`class FDM`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/discretization.py#L19) | default/per-magnet grid and boundary policy | signature and IR tests |
-| per-magnet grid | [`packages/fullmag-py/src/fullmag/model/discretization.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/discretization.py#L19) | [`class FDMGrid`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/discretization.py#L19) | positive cell triple | validation tests |
-| demag grid policy | [`packages/fullmag-py/src/fullmag/model/discretization.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/discretization.py#L50) | [`class FDMDemag`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/discretization.py#L50) | strategy, mode, and common-grid consistency | validation tests |
+| constructor and lowering | [`packages/fullmag-py/src/fullmag/model/discretization.py`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/model/discretization.py#L220) | [`class FDM`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/model/discretization.py#L220) | default/per-magnet grid, projection, and boundary policy | signature and IR tests |
+| per-magnet grid | [`packages/fullmag-py/src/fullmag/model/discretization.py`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/model/discretization.py#L19) | [`class FDMGrid`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/model/discretization.py#L19) | positive cell triple | validation tests |
+| demag grid policy | [`packages/fullmag-py/src/fullmag/model/discretization.py`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/model/discretization.py#L51) | [`class FDMDemag`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/model/discretization.py#L51) | strategy, mode, common-grid, and `fft_backend` validation | validation tests |
 
 ```{toctree}
 :maxdepth: 2

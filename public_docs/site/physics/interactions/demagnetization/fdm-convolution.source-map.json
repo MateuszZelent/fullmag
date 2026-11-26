@@ -1,33 +1,37 @@
 {
   "document": {
-    "reviewed_revision": "ab3c8802a691a535063102c12f9a79bb0043b367",
+    "reviewed_revision": "752450f8d259ab97c76c36fe666d5474b02abe9a",
+    "reviewed_at": "2026-11-26",
     "path": "public_docs/site/physics/interactions/demagnetization/fdm-convolution.md",
     "title": "FDM Convolution",
     "interaction": "demagnetization"
   },
   "backend_matrix": [
     {"solver": "FDM", "device": "CPU", "status": "reference", "reason": "Newell cell-averaged tensor and FFT reference path."},
-    {"solver": "FDM", "device": "GPU", "status": "partial", "reason": "FP32/FP64 CUDA kernels are source-visible; executed-device qualification is required for production parity claims."},
+    {"solver": "FDM", "device": "GPU", "status": "implemented", "reason": "Single-layer Hermitian D2Z/Z2D (FP64) and R2C/C2R (FP32) cuFFT with exact workspace preflight verified on RTX 4080 SUPER (FP64 rel dE_demag <= 1.76e-16 across 8 geometries, -12.0% to -23.1% peak VRAM); FP32+PBC intentionally rejected fail-closed."},
     {"solver": "FEM", "device": "CPU", "status": "not-applicable", "reason": "FDM convolution is not the FEM scalar-potential realization."},
     {"solver": "FEM", "device": "GPU", "status": "not-applicable", "reason": "FDM convolution is not the FEM scalar-potential realization."}
   ],
   "sources": [
-    {"id": "fdm-policy", "path": "packages/fullmag-py/src/fullmag/model/discretization.py", "symbol": "class FDMDemag", "responsibility": "FDM demagnetization strategy, mode and common-grid policy."},
-    {"id": "fdm-discretization", "path": "packages/fullmag-py/src/fullmag/model/discretization.py", "symbol": "class FDM", "responsibility": "FDM cell, multilayer and partial-cell policy."},
-    {"id": "newell", "path": "crates/fullmag-fdm-demag/src/newell.rs", "symbol": "compute_newell_kernels", "responsibility": "Newell base functions, 27-point tensor and stable summation."},
+    {"id": "fdm-policy", "path": "packages/fullmag-py/src/fullmag/model/discretization.py", "symbol": "class FDMDemag", "responsibility": "FDM demagnetization strategy, mode, FFT backend, and common-grid policy."},
+    {"id": "fdm-discretization", "path": "packages/fullmag-py/src/fullmag/model/discretization.py", "symbol": "class FDM", "responsibility": "FDM cell, multilayer, and partial-cell policy."},
+    {"id": "newell", "path": "crates/fullmag-fdm-demag/src/newell.rs", "symbol": "compute_newell_kernels", "responsibility": "Newell base functions, 27-point tensor, and stable summation."},
     {"id": "multiply", "path": "crates/fullmag-fdm-demag/src/multiply.rs", "symbol": "accumulate_tensor_convolution", "responsibility": "Symmetric six-component tensor-vector convolution."},
     {"id": "cpu-spectrum", "path": "crates/fullmag-engine/src/fdm/cpu/fft.rs", "symbol": "compute_newell_kernel_spectra", "responsibility": "CPU tensor-spectrum construction."},
     {"id": "cpu-field", "path": "crates/fullmag-engine/src/fdm/cpu/fields/demag.rs", "symbol": "demag_field_from_vectors", "responsibility": "CPU demagnetizing-field realization."},
-    {"id": "cuda64", "path": "backends/fdm/gpu/cuda/interactions/demag_fp64.cu", "symbol": "launch_demag_field_fp64", "responsibility": "CUDA FP64 field dispatch."},
-    {"id": "cuda32", "path": "backends/fdm/gpu/cuda/interactions/demag_fp32.cu", "symbol": "launch_demag_field_fp32", "responsibility": "CUDA FP32 field dispatch."},
+    {"id": "cuda-preflight", "path": "backends/fdm/gpu/cuda/runtime/context.cu", "symbol": "context_preflight_single_grid_workspace", "responsibility": "Exact single-grid cuFFT workspace measurement and fail-closed VRAM preflight."},
+    {"id": "cuda64", "path": "backends/fdm/gpu/cuda/interactions/demag_fp64.cu", "symbol": "launch_demag_field_fp64", "responsibility": "CUDA FP64 Hermitian D2Z/Z2D cuFFT field dispatch."},
+    {"id": "cuda32", "path": "backends/fdm/gpu/cuda/interactions/demag_fp32.cu", "symbol": "launch_demag_field_fp32", "responsibility": "CUDA FP32 Hermitian R2C/C2R cuFFT field dispatch."},
     {"id": "energy64", "path": "backends/fdm/gpu/cuda/runtime/reductions_fp64.cu", "symbol": "reduce_demag_energy_fp64", "responsibility": "CUDA FP64 demagnetization-energy reduction."},
-    {"id": "cuda-upload", "path": "backends/fdm/gpu/cuda/runtime/context.cu", "symbol": "context_upload_demag_kernel_spectra", "responsibility": "Device tensor-spectrum upload and validation."},
+    {"id": "cuda-upload", "path": "backends/fdm/gpu/cuda/runtime/context.cu", "symbol": "context_upload_demag_kernel_spectra", "responsibility": "Device Hermitian half-spectrum tensor upload and validation."},
     {"id": "cuda-observable", "path": "backends/fdm/gpu/cuda/runtime/context.cu", "symbol": "context_refresh_demag_observable", "responsibility": "Device demagnetizing-field observable refresh."},
+    {"id": "prepared-fields", "path": "crates/fullmag-api/src/live_prepared_fields.rs", "symbol": "evaluate", "responsibility": "Pre-start prepared field evaluation preserving published FDM/FEM airbox carriers."},
     {"id": "airbox-reconstruction", "path": "crates/fullmag-runner/src/fdm/cpu/reference.rs", "symbol": "reconstruct_inactive_fdm_visual_effective_field", "responsibility": "Reconstructs the defined airbox aggregate from same-state source fields."},
     {"id": "field-materialization", "path": "crates/fullmag-runner/src/interactive/runtime.rs", "symbol": "build_atomic_terminal_update", "responsibility": "Builds one atomic terminal update and materializes the final FDM field set from the terminal backend state."},
-    {"id": "terminal-outcome", "path": "crates/fullmag-runner/src/fdm/cpu/reference.rs", "symbol": "execute_reference_fdm", "responsibility": "Returns the CPU terminal run outcome and scheduled outputs; not proof of an atomic terminal generation/batch."},
-    {"id": "live-field-promotion", "path": "crates/fullmag-cli/src/live_workspace.rs", "symbol": "ingest_preview_fields_from_update", "responsibility": "Promotes incoming fields individually into session state; not proof of an atomic terminal generation/batch."},
-    {"id": "preview-flag", "path": "crates/fullmag-cli/src/live_workspace.rs", "symbol": "feature_flags", "responsibility": "Reads preview-disable benchmark/display configuration."}
+    {"id": "terminal-outcome", "path": "crates/fullmag-runner/src/fdm/cpu/reference.rs", "symbol": "execute_reference_fdm", "responsibility": "Returns the CPU terminal run outcome and scheduled outputs."},
+    {"id": "live-field-promotion", "path": "crates/fullmag-cli/src/live_workspace.rs", "symbol": "ingest_preview_fields_from_update", "responsibility": "Promotes incoming fields into session workspace state."},
+    {"id": "preview-flag", "path": "crates/fullmag-cli/src/live_workspace.rs", "symbol": "feature_flags", "responsibility": "Reads preview-disable benchmark/display configuration."},
+    {"id": "ui-object-physics", "path": "apps/control-room/src/modules/inspector/inspectors/objects/physics/ObjectPhysicsSpec.tsx", "symbol": "ObjectPhysicsInspectorPanel", "responsibility": "Object-level physics inspector panel exposing demagnetization controls."}
   ],
   "symbols": [
     {"id": "M", "latex": "$\\mathbf M$", "meaning": "magnetization field", "si_unit": "$\\mathrm{A\\,m^{-1}}$"},
@@ -65,9 +69,9 @@
     {"id": "eq-fdm-demag-field", "symbols": ["Hpi", "N", "Mqj", "pq", "ij"], "sources": ["multiply", "cpu-field"]},
     {"id": "eq-fdm-demag-energy", "symbols": ["Ed", "mu0", "V", "M", "Hd"], "sources": ["cpu-field", "energy64"]},
     {"id": "eq-fdm-demag-newell-stencil", "symbols": ["Nxx", "h", "f"], "sources": ["newell"]},
-    {"id": "eq-fdm-demag-fft", "symbols": ["Hhat", "Nhat", "Mhat", "F", "k"], "sources": ["multiply", "cpu-spectrum", "cpu-field"]},
+    {"id": "eq-fdm-demag-fft", "symbols": ["Hhat", "Nhat", "Mhat", "F", "k"], "sources": ["multiply", "cpu-spectrum", "cpu-field", "cuda64", "cuda32"]},
     {"id": "eq-fdm-final-active-effective-field", "symbols": ["Heffm", "Hd", "Hext", "Hoe", "Hant", "Omega_m"], "sources": ["airbox-reconstruction", "cpu-field"]},
-    {"id": "eq-fdm-final-airbox-effective-field", "symbols": ["Heffair", "Hd", "Hext", "Hoe", "Hant", "Omega_air"], "sources": ["airbox-reconstruction", "field-materialization"]}
+    {"id": "eq-fdm-final-airbox-effective-field", "symbols": ["Heffair", "Hd", "Hext", "Hoe", "Hant", "Omega_air"], "sources": ["airbox-reconstruction", "field-materialization", "prepared-fields"]}
   ],
   "public_api": {
     "constructors": ["fullmag.FDMDemag", "fullmag.FDMGrid", "fullmag.FDM"],
@@ -77,6 +81,7 @@
       {"python": "study.universe.mesh(cell_size=...)", "type": "Sequence[float]", "default": "inferred for compatible grids", "si_unit": "$\\mathrm{m}$", "validation": "Three finite positive values; common extents must divide exactly.", "meaning": "Requested common convolution-grid resolution for multiple native grids.", "backend_support": "FDM multilayer CPU/GPU subject to lane qualification.", "problem_ir": "`backend_policy.discretization_hints.fdm.demag.common_cell_size`"},
       {"python": "FDMDemag.strategy", "type": "str", "default": "auto", "si_unit": "$1$", "validation": "`auto`, `single_grid`, or `multilayer_convolution`.", "meaning": "Selects one common-grid or explicit multilayer convolution topology.", "backend_support": "FDM CPU/GPU.", "problem_ir": "`backend_policy.discretization_hints.fdm.demag.strategy`"},
       {"python": "FDMDemag.mode", "type": "str", "default": "auto", "si_unit": "$1$", "validation": "`auto`, `two_d_stack`, or `three_d`.", "meaning": "Selects thin-film stack or full 3-D multilayer mode.", "backend_support": "FDM CPU/GPU.", "problem_ir": "`backend_policy.discretization_hints.fdm.demag.mode`"},
+      {"python": "FDMDemag.fft_backend", "type": "str", "default": "auto", "si_unit": "$1$", "validation": "`auto`, `rustfft`, `fftw`, `mkl`, or `cufft`.", "meaning": "Requested FFT realization; unsupported choices fail closed in capability planning.", "backend_support": "FDM CPU/GPU according to compiled FFT library.", "problem_ir": "`backend_policy.discretization_hints.fdm.demag.fft_backend`"},
       {"python": "FDMDemag.common_cells", "type": "tuple[int,int,int] | None", "default": "None", "si_unit": "$1$", "validation": "Exactly three positive integers.", "meaning": "Explicit 3-D common convolution grid size.", "backend_support": "FDM CPU/GPU.", "problem_ir": "`backend_policy.discretization_hints.fdm.demag.common_cells`"},
       {"python": "FDMDemag.common_cells_xy", "type": "tuple[int,int] | None", "default": "None", "si_unit": "$1$", "validation": "Exactly two positive integers.", "meaning": "Explicit in-plane common grid for `two_d_stack`.", "backend_support": "FDM CPU/GPU.", "problem_ir": "`backend_policy.discretization_hints.fdm.demag.common_cells_xy`"},
       {"python": "FDMDemag.allow_single_grid_fallback", "type": "bool | None", "default": "None", "si_unit": "$1$", "validation": "Any non-`None` value raises `ValueError`; it is never silently lowered.", "meaning": "Removed compatibility switch.", "backend_support": "Unsupported; choose strategy explicitly.", "problem_ir": "Not serialized"},

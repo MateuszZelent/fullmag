@@ -21,9 +21,9 @@ blurring authored definitions and realized outputs.
 
 ## Planar Monitor Draft and Committed Editors
 
-- **Draft Creation (`PlanarMonitorDraftInspectorPanel`)**: Triggered from the Ribbon **View -> Monitor** action (`RIBBON_CROSS_SECTION_BEGIN_DRAFT_COMMAND`), allowing users to place a preview cut plane in 3D space (assisted by `PlanarMonitorFacePicker`, `PlanarMonitorNormalHandle`, and `PlanarMonitorRotationRings` gizmos), check `planarMonitorDefinitionAvailabilityErrors` and domain bounds, verify `scene_revision` uniqueness against existing monitors, and commit cleanly to `MODEL_PLANAR_MONITORS_PATH`.
-- **Committed Monitor Inspector (`PlanarMonitorInspectorPanel`, `PlanarMonitorDefinitionEditor`)**: Edits plane center, normal, in-plane axes/extent, grid sampling resolution, and active 2D overlay layers (`PlanarVisualizationSection`, `PlanarFieldLayerList`), synchronizing camera/visualization focus via `VisualizationContextSwitch`.
-- **Legacy Cross-Section Panel (`CrossSectionInspectorPanel`)**: Inspects legacy cross-section cuts and associated quality profiles (`CrossSectionQualityChart`).
+- **Draft Creation (`PlanarMonitorDraftTemplatePanel`)**: Triggered from the Ribbon **View -> Monitor** action (`RIBBON_CROSS_SECTION_BEGIN_DRAFT_COMMAND`), allowing users to place a preview cut plane in 3D space (assisted by `PlanarMonitorFacePicker`, `PlanarMonitorNormalHandle`, and `PlanarMonitorRotationRings` gizmos), check `planarMonitorDefinitionAvailabilityErrors` and domain bounds, verify `scene_revision` uniqueness against existing monitors, and commit cleanly to `MODEL_PLANAR_MONITORS_PATH`.
+- **Committed Monitor Inspector (`PlanarMonitorTemplatePanel`, `CommittedPlanarMonitorTemplateEditor`)**: Edits plane center, normal, in-plane axes/extent, grid sampling resolution, and active 2D overlay layers (`PlanarVisualizationSection`, `PlanarFieldLayerList`), synchronizing camera/visualization focus via `VisualizationContextSwitch`.
+- **2D Cross-Section Inspectors (`inspectors/visualizations/`)**: `Visualizations2DRootInspectorSpecPanel`, `Visualizations2DDraftInspectorSpecPanel`, and `Visualizations2DPlotInspectorSpecPanel` inspect 2D cross-section cuts and associated quality profiles.
 
 ## Frequency-Domain Inspectors (`panels/frequency-domain/`)
 
@@ -57,12 +57,12 @@ controls synchronized with the Ribbon's contextual **Analysis** (`analysis-conte
 
 ## Additional Result & Diagnostic Inspectors
 
-- **Live & Analysis Charts (`LiveChartInspectorPanel`, `ChartInspectorPanel`, `QuickChartInspectorPanel`)**: Configure time/stage traces, horizontal axes, window decimation, and CSV exports.
-- **Materialized Datasets & Playback (`MaterializedDatasetInspectorPanel`, `SavedResultsPlaybackInspector`)**: Browse paged scalar/table datasets and scrub saved frame timelines without reopening a solver backend.
+- **Live & Analysis Charts (`LiveChartTemplatePanel`, `AnalysisChartTemplatePanel`, `QuickChartTemplatePanel`)**: Configure time/stage traces, horizontal axes, window decimation, and CSV exports.
+- **Materialized Datasets & Playback (`MaterializedDatasetTemplateInspectorPanel`, `FieldQuantityTemplateInspectorPanel`, `ObservationFrameTemplateInspectorPanel`)**: Browse paged scalar/table datasets and scrub saved frame timelines (`SavedResultsBrowser`) without reopening a solver backend.
 
 ## Selection routes and Python interoperability
 
-- **Selection routes**: `planar-monitor`, `planar-monitor-draft`, `eigen-dispersion`, `eigen-branch`, `eigen-dispersion-point`, `eigen-mode`, `frequency-response-sweep`, `frequency-response-point`, `fmr-peak`, `mode-visualization`, `chart`, `live-chart`, `materialized-dataset`, and `saved-results-playback`.
+- **Selection routes**: `model.planar.monitors`, `model.planar.monitor.draft`, `model.planar.monitor`, `results.dispersion.*`, `results.resonance.*`, `results.frequency_domain.comparison`, `object.mode_visualization*`, `analysis.chart`, `live.chart`, `results.materialized_dataset`, `results.field_quantity`, and `results.observation_frame`.
 - **State boundary**: Monitor definitions commit authoring revisions (`MODEL_PLANAR_MONITORS_PATH`); all frequency-domain and dataset inspectors are read-only (`inspection-only`) result views coupled to visualization state.
 - **Python alignment**: Planar monitors, eigenmode studies, Bloch $k$-paths, and driven frequency response sweeps are defined in `packages/fullmag-py` stages and problem definitions. Phase rotation and 3D playback rate controls affect UI visualization state only and do not mutate Python study objects.
 
@@ -70,10 +70,11 @@ controls synchronized with the Ribbon's contextual **Analysis** (`analysis-conte
 
 | Responsibility | Repository path | Stable symbol |
 |---|---|---|
-| Planar monitor draft creation | `apps/control-room/src/modules/inspector/panels/PlanarMonitorDraftInspectorPanel.tsx` | `PlanarMonitorDraftInspectorPanel` |
-| Committed monitor editor | `apps/control-room/src/modules/inspector/panels/PlanarMonitorInspectorPanel.tsx` | `PlanarMonitorInspectorPanel` |
+| Planar monitor draft creation | `apps/control-room/src/modules/inspector/inspectors/definitions/PlanarMonitorDraftSpec.tsx` | `PlanarMonitorDraftTemplatePanel` |
+| Committed monitor editor | `apps/control-room/src/modules/inspector/inspectors/definitions/PlanarMonitorSpec.tsx` | `PlanarMonitorTemplatePanel` |
 | Eigenmode dispersion summary inspector | `apps/control-room/src/modules/inspector/panels/frequency-domain/EigenDispersionInspectorPanel.tsx` | `EigenDispersionInspectorPanel` |
 | FMR frequency sweep inspector | `apps/control-room/src/modules/inspector/panels/frequency-domain/FmrResponseSweepInspectorPanel.tsx` | `FmrResponseSweepInspectorPanel` |
 | FMR resonance peak inspector | `apps/control-room/src/modules/inspector/panels/frequency-domain/FmrPeakInspector.tsx` | `FmrPeakInspector` |
 | 3D eigenmode & response phase controls | `apps/control-room/src/modules/inspector/panels/ModeVisualizationInspectorPanel.tsx` | `ModeVisualizationInspectorPanel` |
-| Saved results playback inspector | `apps/control-room/src/modules/inspector/panels/SavedResultsPlaybackInspector.tsx` | `SavedResultsPlaybackInspector` |
+| Materialized datasets & field inspection | `apps/control-room/src/modules/inspector/inspectors/results/playback/MaterializedDatasetAndFieldSpecs.tsx` | `MaterializedDatasetTemplateInspectorPanel`, `FieldQuantityTemplateInspectorPanel` |
+| Saved results browser & playback | `apps/control-room/src/modules/results-navigator/SavedResultsBrowser.tsx` | `SavedResultsBrowser` |

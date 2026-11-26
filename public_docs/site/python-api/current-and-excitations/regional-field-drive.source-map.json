@@ -1,32 +1,32 @@
 {
   "document": {
     "path": "public_docs/site/python-api/current-and-excitations/regional-field-drive.md",
-    "reviewed_revision": "ab3c8802a691a535063102c12f9a79bb0043b367"
+    "reviewed_revision": "752450f8d259ab97c76c36fe666d5474b02abe9a"
   },
   "backend_matrix": [
     {
       "solver": "FEM",
       "device": "CPU",
       "status": "documented",
-      "reason": "authoring and IR documented; runtime qualification separate"
+      "reason": "regional, Gaussian plane-wave, and mask field-drive authoring and evaluation documented"
     },
     {
       "solver": "FEM",
       "device": "GPU",
       "status": "documented",
-      "reason": "authoring and IR documented; runtime qualification separate"
+      "reason": "IR lowering and qualified FEM GPU regional/mask drive evaluation documented"
     },
     {
       "solver": "FDM",
       "device": "CPU",
       "status": "documented",
-      "reason": "authoring and IR documented; runtime qualification separate"
+      "reason": "regional, mask-function, and VectorMask evaluation documented"
     },
     {
       "solver": "FDM",
       "device": "GPU",
       "status": "documented",
-      "reason": "authoring and IR documented; runtime qualification separate"
+      "reason": "IR lowering and CUDA regional/mask drive evaluation documented"
     }
   ],
   "equations": [],
@@ -36,7 +36,61 @@
       "id": "source_regional_field_drive",
       "path": "packages/fullmag-py/src/fullmag/model/antenna.py",
       "symbol": "class RegionalFieldDrive",
-      "responsibility": "public constructor and IR lowering"
+      "responsibility": "typed regional field-drive constructor and IR lowering"
+    },
+    {
+      "id": "source_gaussian_plane_wave_antenna",
+      "path": "packages/fullmag-py/src/fullmag/model/antenna.py",
+      "symbol": "class GaussianPlaneWaveAntenna",
+      "responsibility": "directional quadrature plane-wave launcher expanding to RegionalFieldDrive pairs"
+    },
+    {
+      "id": "source_field_target",
+      "path": "packages/fullmag-py/src/fullmag/model/antenna.py",
+      "symbol": "class FieldTarget",
+      "responsibility": "global, object, and region target selector"
+    },
+    {
+      "id": "source_mask_antenna",
+      "path": "packages/fullmag-py/src/fullmag/model/mask_field_drive.py",
+      "symbol": "class MaskAntenna",
+      "responsibility": "arbitrary multi-term separable mask field drive (mask_field_drive.v1)"
+    },
+    {
+      "id": "source_vector_mask",
+      "path": "packages/fullmag-py/src/fullmag/model/vector_mask.py",
+      "symbol": "class VectorMask",
+      "responsibility": "3D tabulated voxel magnetic-induction mask"
+    },
+    {
+      "id": "source_mask_function",
+      "path": "packages/fullmag-py/src/fullmag/model/mask_function.py",
+      "symbol": "mask",
+      "responsibility": "AST-compiled spatial mask function decorator (MaskFunction / TimeFunction)"
+    },
+    {
+      "id": "source_space_time",
+      "path": "packages/fullmag-py/src/fullmag/model/space_time.py",
+      "symbol": "space_time",
+      "responsibility": "separable space-time expression compiler"
+    },
+    {
+      "id": "source_gaussian_k_source",
+      "path": "packages/fullmag-py/src/fullmag/antennas.py",
+      "symbol": "gaussian_k_source",
+      "responsibility": "ready-made quadrature Gaussian k-source mask/time pairs"
+    },
+    {
+      "id": "source_field_drive_fn",
+      "path": "packages/fullmag-py/src/fullmag/world.py",
+      "symbol": "field_drive",
+      "responsibility": "module-level field-drive registration helper"
+    },
+    {
+      "id": "source_study_field_drive_registry",
+      "path": "packages/fullmag-py/src/fullmag/world.py",
+      "symbol": "class StudyFieldDriveRegistry",
+      "responsibility": "study.field_drives registry handle"
     }
   ],
   "public_api": {
@@ -48,7 +102,7 @@
         "default": "required",
         "si_unit": "$1$",
         "validation": "non-empty",
-        "meaning": "stable drive ID",
+        "meaning": "stable drive identifier",
         "backend_support": "FEM/FDM CPU/GPU: IR; resolver-specific",
         "problem_ir": "id"
       },
@@ -67,8 +121,8 @@
         "type": "FieldTarget",
         "default": "required",
         "si_unit": "$1$",
-        "validation": "typed global/object/region target",
-        "meaning": "spatial target",
+        "validation": "typed global, object, or region `FieldTarget`",
+        "meaning": "spatial domain target",
         "backend_support": "FEM/FDM CPU/GPU: IR; resolved field drive",
         "problem_ir": "target"
       },
@@ -77,58 +131,58 @@
         "type": "float",
         "default": "required",
         "si_unit": "$\\mathrm{T}$",
-        "validation": "finite and non-negative",
-        "meaning": "field amplitude",
+        "validation": "finite and `>= 0`",
+        "meaning": "magnetic induction amplitude",
         "backend_support": "FEM/FDM CPU/GPU: IR; resolved field drive",
-        "problem_ir": "amplitude"
+        "problem_ir": "amplitude_B_T"
       },
       {
         "python": "direction",
-        "type": "tuple[float,float,float]",
+        "type": "Sequence[float]",
         "default": "required",
         "si_unit": "$1$",
-        "validation": "finite non-zero; normalized",
-        "meaning": "field direction",
+        "validation": "finite with norm `> 1e-15`; unit-normalized",
+        "meaning": "polarization direction",
         "backend_support": "FEM/FDM CPU/GPU: IR; resolved field drive",
         "problem_ir": "direction"
       },
       {
         "python": "spatial_profile",
-        "type": "FieldProfile",
+        "type": "FieldSpatialProfile",
         "default": "required",
         "si_unit": "$1$",
-        "validation": "typed profile",
+        "validation": "`UniformFieldProfile`, `SincFieldProfile`, `GaussianPlaneWaveFieldProfile`, or `GeometryMaskFieldProfile`",
         "meaning": "spatial envelope",
         "backend_support": "FEM/FDM CPU/GPU: IR; resolved field drive",
-        "problem_ir": "profile"
+        "problem_ir": "spatial_profile"
       },
       {
         "python": "waveform",
-        "type": "Waveform",
+        "type": "TimeDependence",
         "default": "required",
         "si_unit": "$1$",
-        "validation": "typed waveform with `to_ir`",
-        "meaning": "time envelope",
+        "validation": "typed waveform exposing `to_ir()`",
+        "meaning": "temporal waveform",
         "backend_support": "FEM/FDM CPU/GPU: IR; resolved field drive",
         "problem_ir": "waveform"
       },
       {
         "python": "time_origin",
         "type": "str",
-        "default": "stage_local",
+        "default": "\"stage_local\"",
         "si_unit": "$1$",
-        "validation": "`stage_local` or `absolute`",
-        "meaning": "time origin",
+        "validation": "`\"stage_local\"` or `\"absolute\"`",
+        "meaning": "time reference origin",
         "backend_support": "FEM/FDM CPU/GPU: IR; resolved field drive",
         "problem_ir": "time_origin"
       },
       {
         "python": "activation",
-        "type": "Activation or None",
-        "default": "None",
+        "type": "DriveActivation | None",
+        "default": "DriveActivation.all_time_evolution()",
         "si_unit": "$1$",
-        "validation": "typed activation when supplied",
-        "meaning": "activation window",
+        "validation": "typed `DriveActivation` when supplied",
+        "meaning": "stage activation scope",
         "backend_support": "FEM/FDM CPU/GPU: IR; resolved field drive",
         "problem_ir": "activation"
       },
@@ -138,9 +192,19 @@
         "default": "True",
         "si_unit": "$1$",
         "validation": "boolean",
-        "meaning": "activation flag",
+        "meaning": "drive enable flag",
         "backend_support": "FEM/FDM CPU/GPU: IR; resolved field drive",
         "problem_ir": "enabled"
+      },
+      {
+        "python": "migration",
+        "type": "dict[str, str] | None",
+        "default": "None",
+        "si_unit": "$1$",
+        "validation": "`{\"migrated_from\": \"prescribed_zeeman_mask\"}` when supplied",
+        "meaning": "legacy migration provenance tag",
+        "backend_support": "FEM/FDM CPU/GPU: IR; provenance metadata",
+        "problem_ir": "migration"
       }
     ],
     "returns": "typed ProblemIR record at to_ir()"

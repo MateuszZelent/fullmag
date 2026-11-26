@@ -1,75 +1,99 @@
 {
   "document": {
     "path": "public_docs/site/python-api/interactions/spin-transfer-torque.md",
-    "reviewed_revision": "ab3c8802a691a535063102c12f9a79bb0043b367"
+    "reviewed_revision": "752450f8d259ab97c76c36fe666d5474b02abe9a"
   },
   "backend_matrix": [
     {
       "solver": "FEM",
       "device": "CPU",
       "status": "documented",
-      "reason": "authoring and IR documented; runtime qualification separate"
+      "reason": "IR authored and validated; FEM runtime execution is planner capability-gated"
     },
     {
       "solver": "FEM",
       "device": "GPU",
       "status": "documented",
-      "reason": "authoring and IR documented; runtime qualification separate"
+      "reason": "IR authored and validated; FEM GPU runtime execution is planner capability-gated"
     },
     {
       "solver": "FDM",
       "device": "CPU",
-      "status": "documented",
-      "reason": "authoring and IR documented; runtime qualification separate"
+      "status": "implemented",
+      "reason": "SlonczewskiSTT and ZhangLiSTT executed on FDM CPU; InterfaceCppSTT is a semantic placeholder"
     },
     {
       "solver": "FDM",
       "device": "GPU",
-      "status": "documented",
-      "reason": "authoring and IR documented; runtime qualification separate"
+      "status": "implemented",
+      "reason": "SlonczewskiSTT and ZhangLiSTT executed on FDM GPU with fused FP64 CUDA RK45 kernels (PR #562)"
     }
   ],
   "equations": [],
   "symbols": [],
   "sources": [
     {
-      "id": "source_spin_transfer_torque",
+      "id": "source_slonczewski_stt",
       "path": "packages/fullmag-py/src/fullmag/model/spin_torque.py",
       "symbol": "class SlonczewskiSTT",
-      "responsibility": "public constructor and IR lowering"
+      "responsibility": "Slonczewski CPP spin-transfer torque constructor and IR lowering"
+    },
+    {
+      "id": "source_zhang_li_stt",
+      "path": "packages/fullmag-py/src/fullmag/model/spin_torque.py",
+      "symbol": "class ZhangLiSTT",
+      "responsibility": "Zhang-Li CIP spin-transfer torque constructor and IR lowering"
+    },
+    {
+      "id": "source_interface_cpp_stt",
+      "path": "packages/fullmag-py/src/fullmag/model/spin_torque.py",
+      "symbol": "class InterfaceCppSTT",
+      "responsibility": "interface-local CPP torque semantic placeholder and IR lowering"
+    },
+    {
+      "id": "source_time_expression",
+      "path": "packages/fullmag-py/src/fullmag/model/spin_torque.py",
+      "symbol": "class TimeExpression",
+      "responsibility": "cumulative-time scalar multiplier expression for canonical Slonczewski STT"
+    },
+    {
+      "id": "source_study_builder",
+      "path": "packages/fullmag-py/src/fullmag/world.py",
+      "symbol": "class StudyBuilder",
+      "responsibility": "study.spin_torque(...) registration facade"
     }
   ],
   "public_api": {
-    "owner": "fm.SlonczewskiSTT(...), fm.ZhangLiSTT(...), fm.InterfaceCppSTT(...)",
+    "owner": "fm.SlonczewskiSTT(...), fm.ZhangLiSTT(...), fm.InterfaceCppSTT(...), fm.TimeExpression(...), study.spin_torque(...)",
     "parameters": [
       {
         "python": "current_density",
-        "type": "tuple[float, float, float] or None",
+        "type": "Sequence[float] | None",
         "default": "None",
         "si_unit": "$\\mathrm{A\\,m^{-2}}$",
-        "validation": "finite vector; exclusive with current_source",
-        "meaning": "direct current density vector",
-        "backend_support": "FEM/FDM CPU/GPU: IR; resolver-specific",
+        "validation": "length-3 vector via `as_vector3`; mutually exclusive with `current_source`",
+        "meaning": "direct prescribed current density vector",
+        "backend_support": "FDM CPU/GPU: executable; FEM: IR/planner-gated",
         "problem_ir": "current_density"
       },
       {
         "python": "current_source",
-        "type": "str or None",
+        "type": "str | None",
         "default": "None",
         "si_unit": "$1$",
-        "validation": "exclusive with current_density",
-        "meaning": "named current source",
-        "backend_support": "FEM/FDM CPU/GPU: IR; resolver-specific",
+        "validation": "non-empty; mutually exclusive with `current_density`",
+        "meaning": "named `CurrentTransport` source identifier",
+        "backend_support": "FDM/FEM CPU/GPU: IR; resolver-specific",
         "problem_ir": "current_source"
       },
       {
         "python": "spin_polarization",
-        "type": "tuple[float,float,float]",
-        "default": "(0,0,1)",
+        "type": "Sequence[float]",
+        "default": "(0.0, 0.0, 1.0)",
         "si_unit": "$1$",
-        "validation": "finite non-zero; normalized",
-        "meaning": "polarization direction",
-        "backend_support": "FEM/FDM CPU/GPU: IR; resolver-specific",
+        "validation": "normalized non-zero in canonical `SlonczewskiSTT`; `as_vector3` in legacy/interface mode",
+        "meaning": "fixed-layer polarization direction",
+        "backend_support": "FDM CPU/GPU: executable; FEM: IR",
         "problem_ir": "spin_polarization"
       },
       {
@@ -77,9 +101,9 @@
         "type": "float",
         "default": "0.4",
         "si_unit": "$1$",
-        "validation": "finite",
-        "meaning": "polarization degree",
-        "backend_support": "FEM/FDM CPU/GPU: IR; resolver-specific",
+        "validation": "$0 < P \\le 1$",
+        "meaning": "spin polarization efficiency $P$",
+        "backend_support": "FDM CPU/GPU: executable; FEM: IR",
         "problem_ir": "degree"
       },
       {
@@ -87,9 +111,9 @@
         "type": "float",
         "default": "1.0",
         "si_unit": "$1$",
-        "validation": "finite",
-        "meaning": "Slonczewski asymmetry",
-        "backend_support": "FEM/FDM CPU/GPU: IR; resolver-specific",
+        "validation": "finite $\\Lambda \\ge 1$",
+        "meaning": "Slonczewski asymmetry parameter $\\Lambda$",
+        "backend_support": "FDM CPU/GPU: executable; FEM: IR",
         "problem_ir": "lambda_asymmetry"
       },
       {
@@ -97,42 +121,132 @@
         "type": "float",
         "default": "0.0",
         "si_unit": "$1$",
-        "validation": "finite",
-        "meaning": "field-like efficiency",
-        "backend_support": "FEM/FDM CPU/GPU: IR; resolver-specific",
+        "validation": "finite scalar",
+        "meaning": "field-like spin-transfer efficiency $\\epsilon'$",
+        "backend_support": "FDM CPU/GPU: executable; FEM: IR",
         "problem_ir": "epsilon_prime"
       },
       {
         "python": "free_layer_thickness_m",
-        "type": "float or None",
+        "type": "float | None",
         "default": "None",
         "si_unit": "$\\mathrm{m}$",
-        "validation": "positive in canonical thin-layer mode",
-        "meaning": "free-layer thickness",
-        "backend_support": "FEM/FDM CPU/GPU: IR; resolver-specific",
+        "validation": "strictly positive; required in canonical thin-layer mode, forbidden with `interface_id`",
+        "meaning": "free-layer thickness $d$",
+        "backend_support": "FDM CPU/GPU: executable; FEM: IR",
         "problem_ir": "free_layer_thickness_m"
+      },
+      {
+        "python": "fixed_layer_position",
+        "type": "str | None",
+        "default": "None",
+        "si_unit": "$1$",
+        "validation": "`\"top\"` or `\"bottom\"`; legacy-only (forbidden in canonical v2 mode)",
+        "meaning": "legacy stack ordering controlling torque sign",
+        "backend_support": "FDM CPU/GPU: legacy executable path",
+        "problem_ir": "fixed_layer_position"
+      },
+      {
+        "python": "id",
+        "type": "str | None",
+        "default": "None",
+        "si_unit": "$1$",
+        "validation": "non-empty; required in canonical `SlonczewskiSTT` and `ZhangLiSTT`",
+        "meaning": "stable torque module identifier",
+        "backend_support": "FDM CPU/GPU: executable; FEM: IR",
+        "problem_ir": "id"
+      },
+      {
+        "python": "target",
+        "type": "RegionRef | None",
+        "default": "None",
+        "si_unit": "$1$",
+        "validation": "`RegionRef`; required in canonical `SlonczewskiSTT` and `ZhangLiSTT`",
+        "meaning": "target magnetic object or region",
+        "backend_support": "FDM CPU/GPU: executable; FEM: IR",
+        "problem_ir": "target"
+      },
+      {
+        "python": "stack_normal",
+        "type": "Sequence[float] | None",
+        "default": "None",
+        "si_unit": "$1$",
+        "validation": "finite non-zero normalized unit vector; required in canonical `SlonczewskiSTT`",
+        "meaning": "multilayer stack normal for canonical Slonczewski torque",
+        "backend_support": "FDM CPU/GPU: executable; FEM: IR",
+        "problem_ir": "stack_normal"
+      },
+      {
+        "python": "interface_id",
+        "type": "str | None",
+        "default": "None",
+        "si_unit": "$1$",
+        "validation": "non-empty when supplied; mutually exclusive with `free_layer_thickness_m` and `time_expression`",
+        "meaning": "selects `slonczewski_interface_flux.v1` realization",
+        "backend_support": "FEM/FDM CPU/GPU: IR; planner-gated",
+        "problem_ir": "realization.interface_id"
+      },
+      {
+        "python": "time_expression",
+        "type": "TimeExpression | None",
+        "default": "None",
+        "si_unit": "$1$",
+        "validation": "`TimeExpression`; requires canonical thin-layer `SlonczewskiSTT` with prescribed `current_density`",
+        "meaning": "dimensionless multiplier sampled at RK substeps in cumulative seconds",
+        "backend_support": "FDM GPU CUDA FP64 RK45 (`extended` mode); other lanes fail closed",
+        "problem_ir": "time_expression"
       },
       {
         "python": "beta",
         "type": "float",
         "default": "0.0",
         "si_unit": "$1$",
-        "validation": "finite for ZhangLiSTT",
-        "meaning": "nonadiabaticity parameter",
-        "backend_support": "FEM/FDM CPU/GPU: IR; resolver-specific",
+        "validation": "$\\beta \\ge 0$ (`ZhangLiSTT`)",
+        "meaning": "non-adiabaticity parameter $\\beta$",
+        "backend_support": "FDM CPU/GPU: executable; FEM: IR",
+        "problem_ir": "beta"
+      },
+      {
+        "python": "xi",
+        "type": "float | None",
+        "default": "None",
+        "si_unit": "$1$",
+        "validation": "$\\xi \\ge 0$; MuMax3 alias for `beta`; conflicts if different from non-zero `beta`",
+        "meaning": "alias for Zhang–Li non-adiabaticity parameter",
+        "backend_support": "FDM CPU/GPU: lowers into `beta`",
         "problem_ir": "beta"
       },
       {
         "python": "lande_g",
-        "type": "float or None",
+        "type": "float | None",
         "default": "None",
         "si_unit": "$1$",
-        "validation": "positive in ZhangLi canonical mode",
-        "meaning": "Land\u00e9 factor",
-        "backend_support": "FEM/FDM CPU/GPU: IR; resolver-specific",
+        "validation": "strictly positive; required in canonical `ZhangLiSTT` (`2.0` required for `zl_mumax3_central_v1`)",
+        "meaning": "Landé $g$-factor",
+        "backend_support": "FDM CPU/GPU: executable; FEM: IR",
         "problem_ir": "lande_g"
+      },
+      {
+        "python": "operator_version",
+        "type": "str | None",
+        "default": "None",
+        "si_unit": "$1$",
+        "validation": "`\"zl_central_reference_v1\"` or `\"zl_mumax3_central_v1\"`",
+        "meaning": "canonical Zhang–Li spatial/formula realization",
+        "backend_support": "FDM CPU/GPU: executable; FEM: IR",
+        "problem_ir": "operator_version"
+      },
+      {
+        "python": "interface_normal",
+        "type": "Sequence[float]",
+        "default": "(0.0, 0.0, 1.0)",
+        "si_unit": "$1$",
+        "validation": "length-3 sequence via `as_vector3` (`InterfaceCppSTT`)",
+        "meaning": "CPP interface normal vector",
+        "backend_support": "FEM/FDM CPU/GPU: semantic placeholder IR",
+        "problem_ir": "interface_normal"
       }
     ],
-    "returns": "typed ProblemIR record at to_ir_module()"
+    "returns": "typed ProblemIR module record at to_ir_module()"
   }
 }

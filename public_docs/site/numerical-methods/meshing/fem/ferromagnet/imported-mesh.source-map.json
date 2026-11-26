@@ -1,7 +1,7 @@
 {
   "document": {
     "path": "public_docs/site/numerical-methods/meshing/fem/ferromagnet/imported-mesh.md",
-    "reviewed_revision": "969efa0941905825ac569d525f4bdaefc059e2af"
+    "reviewed_revision": "752450f8d259ab97c76c36fe666d5474b02abe9a"
   },
   "backend_matrix": [
     {
@@ -81,6 +81,27 @@
       "path": "crates/fullmag-runner/src/dispatch.rs",
       "symbol": "apply_native_fem_runtime_contract",
       "responsibility": "Returns () and populates ExecutionProvenance from runtime observations; it is not a gate."
+    },
+    {
+      "id": "stl_shell_classifier",
+      "path": "packages/fullmag-py/src/fullmag/meshing/_stl_shells.py",
+      "symbol": "classify_closed_shells",
+      "responsibility": "Winding-number nesting and cavity classification for closed STL shells",
+      "evidence_status": "verified"
+    },
+    {
+      "id": "stl_shell_recovery",
+      "path": "packages/fullmag-py/src/fullmag/meshing/_gmsh_stl_shells.py",
+      "symbol": "recover_shell_topology",
+      "responsibility": "Preserves STL shell cavities and per-component ownership in Gmsh",
+      "evidence_status": "verified"
+    },
+    {
+      "id": "stl_fallback_guard",
+      "path": "packages/fullmag-py/src/fullmag/meshing/asset_pipeline.py",
+      "symbol": "_reject_anonymous_import_fallback",
+      "responsibility": "Prevents multi-component STL fallback to anonymous concatenated shells",
+      "evidence_status": "verified"
     }
   ],
   "symbols": [

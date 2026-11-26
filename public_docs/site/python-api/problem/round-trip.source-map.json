@@ -1,7 +1,7 @@
 {
   "document": {
     "path": "public_docs/site/python-api/problem/round-trip.md",
-    "reviewed_revision": "ab3c8802a691a535063102c12f9a79bb0043b367"
+    "reviewed_revision": "752450f8d259ab97c76c36fe666d5474b02abe9a"
   },
   "backend_matrix": [
     {
@@ -47,7 +47,7 @@
         "python": "Problem.to_ir.requested_backend",
         "type": "BackendTarget | None",
         "default": "None",
-        "si_unit": "1",
+        "si_unit": "$1$",
         "validation": "Optional override; normalized by `Problem.to_ir`.",
         "meaning": "Requested solver-family intent.",
         "backend_support": "FEM/FDM CPU/GPU authoring; planner resolves capability.",
@@ -57,31 +57,121 @@
         "python": "Problem.to_ir.execution_mode",
         "type": "ExecutionMode | None",
         "default": "None",
-        "si_unit": "1",
+        "si_unit": "$1$",
         "validation": "Optional override; normalized by `Problem.to_ir`.",
         "meaning": "Requested execution-mode intent.",
         "backend_support": "FEM/FDM CPU/GPU authoring; planner resolves capability.",
-        "problem_ir": "`backend_policy.execution_mode`"
+        "problem_ir": "`validation_profile.execution_mode`"
       },
       {
         "python": "Problem.to_ir.execution_precision",
         "type": "ExecutionPrecision | None",
         "default": "None",
-        "si_unit": "1",
+        "si_unit": "$1$",
         "validation": "Optional override; normalized by `Problem.to_ir`.",
         "meaning": "Requested precision intent.",
         "backend_support": "FEM/FDM CPU/GPU authoring; planner resolves capability.",
         "problem_ir": "`backend_policy.execution_precision`"
       },
       {
-        "python": "RuntimeSelection.resolved(...)",
-        "type": "method",
-        "default": "required",
-        "si_unit": "1",
-        "validation": "Backend/mode/precision values are normalized against the selection.",
-        "meaning": "Resolved runtime descriptor.",
+        "python": "Problem.to_ir.script_source",
+        "type": "str | None",
+        "default": "None",
+        "si_unit": "$1$",
+        "validation": "Optional source script text; hashed into `source_hash` when supplied.",
+        "meaning": "Source script recorded for provenance and round-trip sync.",
+        "backend_support": "FEM/FDM CPU/GPU authoring.",
+        "problem_ir": "`problem_meta.script_source`, `problem_meta.source_hash`"
+      },
+      {
+        "python": "Problem.to_ir.source_root",
+        "type": "str | Path | None",
+        "default": "None",
+        "si_unit": "$1$",
+        "validation": "Optional filesystem root used to resolve relative geometry asset paths.",
+        "meaning": "Base directory for imported CAD/mesh asset resolution.",
+        "backend_support": "FEM/FDM CPU/GPU authoring.",
+        "problem_ir": "`geometry_assets`"
+      },
+      {
+        "python": "Problem.to_ir.entrypoint_kind",
+        "type": "str",
+        "default": "\"direct\"",
+        "si_unit": "$1$",
+        "validation": "Non-empty entrypoint label (e.g. `\"direct\"`, `\"script\"`).",
+        "meaning": "Identifies how the problem was loaded into lowering.",
+        "backend_support": "FEM/FDM CPU/GPU authoring.",
+        "problem_ir": "`problem_meta.entrypoint_kind`"
+      },
+      {
+        "python": "Problem.to_ir.asset_cache",
+        "type": "dict[str, dict[str, Any] | None] | None",
+        "default": "None",
+        "si_unit": "$1$",
+        "validation": "Optional mapping reused across repeated lowering calls.",
+        "meaning": "Deterministic cache for materialized geometry assets.",
+        "backend_support": "FEM/FDM CPU/GPU authoring.",
+        "problem_ir": "`geometry_assets`"
+      },
+      {
+        "python": "Problem.to_ir.include_geometry_assets",
+        "type": "bool",
+        "default": "True",
+        "si_unit": "$1$",
+        "validation": "Boolean flag; `False` skips geometry asset generation.",
+        "meaning": "Controls whether mesh/CAD geometry assets are embedded in the lowered payload.",
+        "backend_support": "FEM/FDM CPU/GPU authoring.",
+        "problem_ir": "`geometry_assets`"
+      },
+      {
+        "python": "Problem.to_ir.study_pipeline",
+        "type": "dict[str, object] | None",
+        "default": "None",
+        "si_unit": "$1$",
+        "validation": "Optional multi-stage pipeline payload emitted by the stage-first loader.",
+        "meaning": "Attaches ordered multi-stage workflow metadata to `ProblemIR`.",
+        "backend_support": "FEM/FDM CPU/GPU authoring.",
+        "problem_ir": "`study.pipeline`"
+      },
+      {
+        "python": "Problem.to_ir.runtime_device_override",
+        "type": "str | None",
+        "default": "None",
+        "si_unit": "$1$",
+        "validation": "Optional device override (`\"cpu\"`, `\"gpu\"`, `\"cuda\"`) validated against runtime rules.",
+        "meaning": "Overrides the lowered runtime device descriptor without mutating `Problem.runtime`.",
+        "backend_support": "FEM/FDM CPU/GPU authoring; planner resolves capability.",
+        "problem_ir": "`problem_meta.runtime_metadata.runtime_selection.device`"
+      },
+      {
+        "python": "RuntimeSelection.resolved.backend",
+        "type": "BackendTarget | str | None",
+        "default": "None",
+        "si_unit": "$1$",
+        "validation": "Optional override coerced through `BackendTarget`.",
+        "meaning": "Override solver backend target on a copy of `RuntimeSelection`.",
         "backend_support": "FEM/FDM CPU/GPU; capability checks remain authoritative.",
-        "problem_ir": "`backend_policy`"
+        "problem_ir": "`backend_policy.requested_backend`"
+      },
+      {
+        "python": "RuntimeSelection.resolved.mode",
+        "type": "ExecutionMode | str | None",
+        "default": "None",
+        "si_unit": "$1$",
+        "validation": "Optional override coerced through `ExecutionMode`.",
+        "meaning": "Override execution mode on a copy of `RuntimeSelection`.",
+        "backend_support": "FEM/FDM CPU/GPU; capability checks remain authoritative.",
+        "problem_ir": "`validation_profile.execution_mode`"
+      },
+      {
+        "python": "RuntimeSelection.resolved.precision",
+        "type": "ExecutionPrecision | str | None",
+        "default": "None",
+        "si_unit": "$1$",
+        "validation": "Optional override coerced through `ExecutionPrecision`; checked against `fdm_precision_policy`.",
+        "meaning": "Override floating-point precision on a copy of `RuntimeSelection`.",
+        "backend_support": "FEM/FDM CPU/GPU; capability checks remain authoritative.",
+        "problem_ir": "`backend_policy.execution_precision`"
       }
     ]
   }

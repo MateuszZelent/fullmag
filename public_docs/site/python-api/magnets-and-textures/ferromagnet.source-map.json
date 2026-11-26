@@ -1,6 +1,6 @@
 {
   "document": {
-    "reviewed_revision": "71974540caabd305716d6e86ccc668b97cd8281b",
+    "reviewed_revision": "752450f8d259ab97c76c36fe666d5474b02abe9a",
     "path": "public_docs/site/python-api/magnets-and-textures/ferromagnet.md"
   },
   "backend_matrix": [
@@ -33,6 +33,18 @@
       "path": "packages/fullmag-py/src/fullmag/model/structure.py",
       "symbol": "class Ferromagnet",
       "responsibility": "Owns the documented public API, validation, object constraints, and lowering."
+    },
+    {
+      "id": "absorbing-boundary-layer",
+      "path": "packages/fullmag-py/src/fullmag/model/absorbing_boundary.py",
+      "symbol": "class AbsorbingBoundaryLayer",
+      "responsibility": "Validates and serializes box-face absorbing damping layers."
+    },
+    {
+      "id": "absorbing-geometry",
+      "path": "packages/fullmag-py/src/fullmag/model/absorbing_boundary.py",
+      "symbol": "class AbsorbingGeometry",
+      "responsibility": "Constructs faces, plane, cylinder, sphere, region-boundary, and expression absorbing geometries."
     },
     {
       "id": "absorbing-layers",

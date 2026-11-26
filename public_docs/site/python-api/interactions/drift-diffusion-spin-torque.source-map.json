@@ -1,32 +1,32 @@
 {
   "document": {
     "path": "public_docs/site/python-api/interactions/drift-diffusion-spin-torque.md",
-    "reviewed_revision": "ab3c8802a691a535063102c12f9a79bb0043b367"
+    "reviewed_revision": "752450f8d259ab97c76c36fe666d5474b02abe9a"
   },
   "backend_matrix": [
     {
       "solver": "FEM",
       "device": "CPU",
       "status": "documented",
-      "reason": "authoring and IR documented; runtime qualification separate"
+      "reason": "authoring, IR, and stiff FEM M1/M2 transport documented; runtime qualification separate"
     },
     {
       "solver": "FEM",
       "device": "GPU",
       "status": "documented",
-      "reason": "authoring and IR documented; runtime qualification separate"
+      "reason": "authoring and IR documented; GPU coupled FEM transport fails closed where unimplemented"
     },
     {
       "solver": "FDM",
       "device": "CPU",
       "status": "documented",
-      "reason": "authoring and IR documented; runtime qualification separate"
+      "reason": "authoring, IR, and FV M1/M2 reference solver documented"
     },
     {
       "solver": "FDM",
       "device": "GPU",
       "status": "documented",
-      "reason": "authoring and IR documented; runtime qualification separate"
+      "reason": "authoring, IR, and CUDA M1 spin transport documented"
     }
   ],
   "equations": [],
@@ -36,7 +36,37 @@
       "id": "source_spin_drift_diffusion",
       "path": "packages/fullmag-py/src/fullmag/model/spin_transport.py",
       "symbol": "class SpinDriftDiffusion",
-      "responsibility": "public constructor and IR lowering"
+      "responsibility": "public spin drift-diffusion module constructor and spin_transport.v1 IR lowering"
+    },
+    {
+      "id": "source_drift_diffusion_spin_torque",
+      "path": "packages/fullmag-py/src/fullmag/model/spin_transport.py",
+      "symbol": "class DriftDiffusionSpinTorque",
+      "responsibility": "LLG spin-torque binder emitting drift_diffusion_spin_torque.v1"
+    },
+    {
+      "id": "source_spin_transport_material",
+      "path": "packages/fullmag-py/src/fullmag/model/spin_transport.py",
+      "symbol": "class SpinTransportMaterial",
+      "responsibility": "constitutive spin conductivity, polarization, lengths, and capacitance validation"
+    },
+    {
+      "id": "source_mixing_conductance_spin_interface",
+      "path": "packages/fullmag-py/src/fullmag/model/spin_transport.py",
+      "symbol": "class MixingConductanceSpinInterface",
+      "responsibility": "magnetoelectronic mixing-conductance and spin-memory-loss interface contract"
+    },
+    {
+      "id": "source_spin_solver_policy",
+      "path": "packages/fullmag-py/src/fullmag/model/spin_transport.py",
+      "symbol": "class SpinSolverPolicy",
+      "responsibility": "linear solver tolerances, operator version, and reciprocal nonlinear policy"
+    },
+    {
+      "id": "source_study_builder",
+      "path": "packages/fullmag-py/src/fullmag/world.py",
+      "symbol": "class StudyBuilder",
+      "responsibility": "study registration methods spin_transport(...) and spin_torque(...)"
     }
   ],
   "public_api": {
@@ -48,7 +78,7 @@
         "default": "required",
         "si_unit": "$1$",
         "validation": "non-empty",
-        "meaning": "module identifier",
+        "meaning": "spin drift-diffusion solve identifier",
         "backend_support": "FEM/FDM CPU/GPU: IR; resolved spin runtime required",
         "problem_ir": "id"
       },
@@ -58,66 +88,76 @@
         "default": "required",
         "si_unit": "$1$",
         "validation": "non-empty",
-        "meaning": "charge-current source link",
+        "meaning": "charge-current source link (`CurrentTransport.name`)",
         "backend_support": "FEM/FDM CPU/GPU: IR; resolved spin runtime required",
         "problem_ir": "current_source_id"
       },
       {
         "python": "domain",
-        "type": "typed collection",
+        "type": "Sequence[RegionRef]",
         "default": "required",
         "si_unit": "$1$",
         "validation": "non-empty",
-        "meaning": "spin transport domain",
+        "meaning": "spin transport domain regions",
         "backend_support": "FEM/FDM CPU/GPU: IR; resolved spin runtime required",
         "problem_ir": "domain"
       },
       {
         "python": "materials",
-        "type": "typed collection",
+        "type": "Sequence[SpinTransportMaterialAssignment]",
         "default": "required",
         "si_unit": "$1$",
-        "validation": "non-empty",
-        "meaning": "spin transport materials",
+        "validation": "non-empty typed assignments",
+        "meaning": "per-region spin transport materials",
         "backend_support": "FEM/FDM CPU/GPU: IR; resolved spin runtime required",
         "problem_ir": "materials"
       },
       {
-        "python": "interfaces/boundaries",
-        "type": "typed collections",
-        "default": "empty",
+        "python": "interfaces",
+        "type": "Sequence[TransparentSpinInterface | MixingConductanceSpinInterface]",
+        "default": "()",
         "si_unit": "$1$",
-        "validation": "typed entries",
-        "meaning": "interface and boundary contracts",
+        "validation": "typed interface contracts",
+        "meaning": "internal spin interface conditions",
         "backend_support": "FEM/FDM CPU/GPU: IR; resolved spin runtime required",
-        "problem_ir": "interfaces/boundaries"
+        "problem_ir": "interfaces"
+      },
+      {
+        "python": "boundaries",
+        "type": "Sequence[_SurfaceBoundary | PeriodicSpin]",
+        "default": "()",
+        "si_unit": "$1$",
+        "validation": "typed boundary contracts",
+        "meaning": "external and periodic spin boundary conditions",
+        "backend_support": "FEM/FDM CPU/GPU: IR; resolved spin runtime required",
+        "problem_ir": "boundaries"
       },
       {
         "python": "solver",
-        "type": "object or None",
-        "default": "None",
+        "type": "SpinSolverPolicy | None",
+        "default": "SpinSolverPolicy()",
         "si_unit": "$1$",
-        "validation": "typed solver when supplied",
-        "meaning": "solver request",
+        "validation": "typed `SpinSolverPolicy` when supplied",
+        "meaning": "linear and reciprocal nonlinear solver policy",
         "backend_support": "FEM/FDM CPU/GPU: IR; resolver-specific",
         "problem_ir": "solver"
       },
       {
         "python": "requested_execution",
-        "type": "object or None",
-        "default": "None",
+        "type": "TransportExecution | None",
+        "default": "TransportExecution()",
         "si_unit": "$1$",
-        "validation": "typed execution request",
-        "meaning": "requested device/precision",
+        "validation": "typed `TransportExecution` when supplied",
+        "meaning": "requested discretization, device, precision, and mode",
         "backend_support": "FEM/FDM CPU/GPU: IR; resolver-specific",
         "problem_ir": "requested_execution"
       },
       {
         "python": "mode",
         "type": "str",
-        "default": "steady",
+        "default": "\"steady\"",
         "si_unit": "$1$",
-        "validation": "steady or transient; transient requires physical capacitance",
+        "validation": "`\"steady\"` or `\"transient\"`; `\"transient\"` requires physical capacitance on every material",
         "meaning": "time regime",
         "backend_support": "FEM/FDM CPU/GPU: IR; resolved spin runtime required",
         "problem_ir": "mode"

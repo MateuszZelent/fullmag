@@ -1,32 +1,32 @@
 {
   "document": {
     "path": "public_docs/site/python-api/interactions/demagnetization.md",
-    "reviewed_revision": "ab3c8802a691a535063102c12f9a79bb0043b367"
+    "reviewed_revision": "752450f8d259ab97c76c36fe666d5474b02abe9a"
   },
   "backend_matrix": [
     {
       "solver": "FEM",
       "device": "CPU",
-      "status": "documented",
-      "reason": "authoring and IR documented; runtime qualification separate"
+      "status": "implemented",
+      "reason": "Airbox Poisson (Robin/Dirichlet) and Fredkin-Koehler FEM/BEM implemented on FEM CPU"
     },
     {
       "solver": "FEM",
       "device": "GPU",
-      "status": "documented",
-      "reason": "authoring and IR documented; runtime qualification separate"
+      "status": "implemented",
+      "reason": "Airbox Poisson, periodic Poisson, and atomic FEM/BEM implemented on FEM GPU via cg_amg and auto-cuDSS"
     },
     {
       "solver": "FDM",
       "device": "CPU",
-      "status": "documented",
-      "reason": "authoring and IR documented; runtime qualification separate"
+      "status": "implemented",
+      "reason": "3D Newell-tensor R2C/C2R FFT convolution implemented on FDM CPU"
     },
     {
       "solver": "FDM",
       "device": "GPU",
-      "status": "documented",
-      "reason": "authoring and IR documented; runtime qualification separate"
+      "status": "implemented",
+      "reason": "Batched single-layer D2Z/Z2D and R2C/C2R cuFFT convolution with workspace preflight implemented on FDM GPU"
     }
   ],
   "equations": [],
@@ -36,43 +36,69 @@
       "id": "source_demag",
       "path": "packages/fullmag-py/src/fullmag/model/energy.py",
       "symbol": "class Demag",
-      "responsibility": "public constructor and IR lowering"
+      "responsibility": "public constructor, alias normalization, and flat IR lowering"
+    },
+    {
+      "id": "source_demag_quality",
+      "path": "packages/fullmag-py/src/fullmag/world.py",
+      "symbol": "demag_quality",
+      "responsibility": "named refresh-cadence profiles (exact, balanced, fast)"
     }
   ],
   "public_api": {
-    "owner": "fm.Demag(model=None, variant=None, realization=None)",
+    "owner": "fm.Demag(model=None, variant=None, realization=None), study.demag(...), study.disable_demag(), fm.demag_quality(profile)",
     "parameters": [
       {
         "python": "fm.Demag.model",
-        "type": "str or None",
+        "type": "str | None",
         "default": "None",
         "si_unit": "$1$",
-        "validation": "airbox, bem, fredkin_koehler, or fmm when supplied",
-        "meaning": "demagnetization model",
-        "backend_support": "FEM/FDM CPU/GPU: IR; resolved support required",
+        "validation": "`\"airbox\"`, `\"bem\"`, `\"fredkin_koehler\"`, or `\"fmm\"` when supplied; mutually exclusive with `realization`",
+        "meaning": "canonical demagnetization model",
+        "backend_support": "FEM/FDM CPU/GPU: IR; planner resolves backend support",
         "problem_ir": "realization"
       },
       {
         "python": "fm.Demag.variant",
-        "type": "str or None",
+        "type": "str | None",
         "default": "None",
         "si_unit": "$1$",
-        "validation": "airbox variant auto, dirichlet, or robin; only with model=airbox",
-        "meaning": "airbox boundary variant",
-        "backend_support": "FEM/FDM CPU/GPU: IR; resolved support required",
-        "problem_ir": "realization.variant"
+        "validation": "`\"auto\"`, `\"dirichlet\"`, or `\"robin\"`; valid only with `model=\"airbox\"`",
+        "meaning": "airbox boundary variant flattened into `realization`",
+        "backend_support": "FEM CPU/GPU: airbox Robin/Dirichlet; FDM fails closed on FEM airbox options",
+        "problem_ir": "realization"
       },
       {
         "python": "fm.Demag.realization",
-        "type": "str or None",
+        "type": "str | None",
         "default": "None",
         "si_unit": "$1$",
-        "validation": "mutually exclusive with model",
-        "meaning": "pre-resolved realization label",
-        "backend_support": "FEM/FDM CPU/GPU: IR; resolved support required",
+        "validation": "canonical tags or aliases (`poisson_airbox`, `airbox_robin`, `airbox_dirichlet`); mutually exclusive with `model`",
+        "meaning": "legacy pre-resolved realization label",
+        "backend_support": "FEM/FDM CPU/GPU: IR; normalized to flat realization string",
         "problem_ir": "realization"
+      },
+      {
+        "python": "study.demag.enabled",
+        "type": "bool",
+        "default": "True",
+        "si_unit": "$1$",
+        "validation": "boolean; `enabled=False` or `study.disable_demag()` omits demag",
+        "meaning": "enables or disables demagnetization on the study",
+        "backend_support": "FEM/FDM CPU/GPU: controls inclusion in `energy_terms`",
+        "problem_ir": "energy_terms"
+      },
+      {
+        "python": "fm.demag_quality.profile",
+        "type": "str",
+        "default": "required",
+        "si_unit": "$1$",
+        "validation": "`\"exact\"`, `\"balanced\"`, or `\"fast\"`",
+        "meaning": "sets demag refresh cadence (`None`, `5e-13` s, `2e-12` s)",
+        "backend_support": "FEM/FDM CPU/GPU: lowers to `field_refresh.demag_interval_s`",
+        "problem_ir": "field_refresh.demag_interval_s"
       }
     ],
-    "returns": "typed ProblemIR record at to_ir()"
+    "returns": "flat ProblemIR record {\"kind\": \"demag\", \"realization\": ...} at to_ir()"
   }
 }

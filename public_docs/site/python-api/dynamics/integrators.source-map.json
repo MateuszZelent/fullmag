@@ -1,7 +1,7 @@
 {
   "document": {
     "path": "public_docs/site/python-api/dynamics/integrators.md",
-    "reviewed_revision": "5e99782acbb7fb3f65d0cad872e102bf67733103"
+    "reviewed_revision": "752450f8d259ab97c76c36fe666d5474b02abe9a"
   },
   "backend_matrix": [
     {"solver": "FEM", "device": "CPU", "status": "documented"},
@@ -65,7 +65,7 @@
         "type": "`str`",
         "default": "`\"auto\"`",
         "si_unit": "1",
-        "validation": "One of `heun`, `rk4`, `rk23`, `rk45`, `abm3`, `coupled_imex_ark2`, `auto`",
+        "validation": "One of `heun`, `rk4`, `rk23`, `rk45`, `abm3`, `coupled_imex_ark2`, `auto` (aliases: `dp54`, `bs23`, `rk32`)",
         "meaning": "Time integration scheme",
         "backend_support": "FEM/FDM CPU/GPU; planner and runtime capability checks remain authoritative",
         "problem_ir": "`dynamics.integrator`"
@@ -73,9 +73,9 @@
       {
         "python": "LLG.gamma",
         "type": "`float`",
-        "default": "`2.211e5`",
+        "default": "`221100.0`",
         "si_unit": "\\mathrm{m\\,A^{-1}\\,s^{-1}}",
-        "validation": "Positive",
+        "validation": "Positive finite",
         "meaning": "Gyromagnetic ratio",
         "backend_support": "FEM/FDM CPU/GPU; planner and runtime capability checks remain authoritative",
         "problem_ir": "`dynamics.gyromagnetic_ratio`"
@@ -85,7 +85,7 @@
         "type": "`float | None`",
         "default": "`None`",
         "si_unit": "\\mathrm{s}",
-        "validation": "Positive; exclusive with adaptive step",
+        "validation": "Positive finite; mutually exclusive with `adaptive_timestep`",
         "meaning": "Fixed step size",
         "backend_support": "FEM/FDM CPU/GPU; planner and runtime capability checks remain authoritative",
         "problem_ir": "`dynamics.fixed_timestep`"
@@ -95,10 +95,20 @@
         "type": "`AdaptiveTimestep | None`",
         "default": "`None`",
         "si_unit": "1",
-        "validation": "Adaptive integrator required",
-        "meaning": "Embedded error control",
+        "validation": "Adaptive integrator (`rk23`, `rk45`, `coupled_imex_ark2`, or `auto`) required",
+        "meaning": "Embedded RK or step-doubling error control",
         "backend_support": "FEM/FDM CPU/GPU; planner and runtime capability checks remain authoritative",
         "problem_ir": "`dynamics.adaptive_timestep`"
+      },
+      {
+        "python": "LLG.field_refresh",
+        "type": "`FieldRefreshPolicy | None`",
+        "default": "`None`",
+        "si_unit": "1",
+        "validation": "Optional `FieldRefreshPolicy` instance",
+        "meaning": "Demagnetization refresh cadence",
+        "backend_support": "FEM/FDM CPU/GPU; planner and runtime capability checks remain authoritative",
+        "problem_ir": "`dynamics.field_refresh`"
       }
     ]
   }

@@ -1,0 +1,131 @@
+{
+  "document": {
+    "path": "public_docs/site/numerical-methods/performance/fem-gpu-demag-and-time-stepping.md",
+    "reviewed_revision": "752450f8d259ab97c76c36fe666d5474b02abe9a",
+    "source_of_truth": "Current repository FEM GPU demag, RK FSAL/predictor, and pure_prism_p2 declarations and RTX 4080 SUPER A/B evidence."
+  },
+  "backend_matrix": [
+    {
+      "solver": "FEM",
+      "device": "GPU",
+      "status": "implemented"
+    },
+    {
+      "solver": "FEM",
+      "device": "CPU",
+      "status": "implemented"
+    },
+    {
+      "solver": "FDM",
+      "device": "CPU",
+      "status": "not-applicable",
+      "reason": "Cartesian FDM uses Newell FFT convolution rather than FEM scalar-potential stiffness matrices."
+    },
+    {
+      "solver": "FDM",
+      "device": "GPU",
+      "status": "not-applicable",
+      "reason": "Cartesian FDM CUDA uses batched real-to-complex cuFFT documented on the FDM core page."
+    }
+  ],
+  "equations": [
+    {
+      "id": "eq-perf-fem-cudss-cholesky",
+      "symbols": ["K", "L", "P", "phi", "bm", "Hd"],
+      "sources": ["cudss-init", "cudss-solve", "api-create-v6"]
+    },
+    {
+      "id": "eq-perf-fem-cudss-vram-budget",
+      "symbols": ["Bcap", "Mfree", "Mpeak"],
+      "sources": ["cudss-strategy", "cudss-fits", "api-prov"]
+    },
+    {
+      "id": "eq-perf-fem-bem-atomic-budget",
+      "symbols": ["Bcap", "Mpeak"],
+      "sources": ["cudss-fembem-pair", "fembem-init"]
+    },
+    {
+      "id": "eq-perf-fem-potential-predictor",
+      "symbols": ["phi0", "phi", "apred", "teval"],
+      "sources": ["fsal-k0", "fsal-shortcut", "pred-kernel", "pred-apply"]
+    }
+  ],
+  "symbols": [
+    {"id": "K", "latex": "$K$", "meaning": "assembled sparse SPD magnetostatic stiffness matrix", "si_unit": "$\\mathrm{m}$"},
+    {"id": "L", "latex": "$L$", "meaning": "lower-triangular Cholesky factor of permuted stiffness matrix", "si_unit": "$\\mathrm{m^{1/2}}$"},
+    {"id": "P", "latex": "$P$", "meaning": "fill-reducing symmetric permutation matrix", "si_unit": "$1$"},
+    {"id": "phi", "latex": "$\\phi$", "meaning": "magnetic scalar potential vector", "si_unit": "$\\mathrm{A}$"},
+    {"id": "bm", "latex": "$\\mathbf b(\\mathbf m)$", "meaning": "magnetic divergence right-hand side vector", "si_unit": "$\\mathrm{A\\,m}$"},
+    {"id": "Hd", "latex": "$\\mathbf H_{\\mathrm{d}}$", "meaning": "recovered demagnetizing magnetic field", "si_unit": "$\\mathrm{A\\,m^{-1}}$"},
+    {"id": "Bcap", "latex": "$B, B_{\\mathrm{cap}}$", "meaning": "effective and configured VRAM admission budget", "si_unit": "$\\mathrm{B}$"},
+    {"id": "Mfree", "latex": "$M_{\\mathrm{free}}, M_{\\mathrm{total}}$", "meaning": "free and total CUDA device VRAM at admission", "si_unit": "$\\mathrm{B}$"},
+    {"id": "Mpeak", "latex": "$\\widehat M_{\\mathrm{peak}}, \\widehat M_{\\mathrm{stable}}$", "meaning": "cuDSS post-analysis peak and steady factor memory estimates", "si_unit": "$\\mathrm{B}$"},
+    {"id": "phi0", "latex": "$\\phi^{(0)}$", "meaning": "two-step linearly extrapolated Krylov initial potential", "si_unit": "$\\mathrm{A}$"},
+    {"id": "apred", "latex": "$\\alpha_{\\mathrm{pred}}, r_{\\max}$", "meaning": "clamped linear extrapolation ratio and upper bound", "si_unit": "$1$"},
+    {"id": "teval", "latex": "$t_{\\mathrm{eval}}, t_n$", "meaning": "stage evaluation time and accepted step time", "si_unit": "$\\mathrm{s}$"}
+  ],
+  "sources": [
+    {"id": "py-fem-policy", "path": "packages/fullmag-py/src/fullmag/model/discretization.py", "symbol": "class FemLinearSolverPolicy", "responsibility": "Public FEM linear solver policy including gpu_strategy."},
+    {"id": "cudss-strategy", "path": "backends/fem/gpu/cuda/demag_poisson/cudss_direct_solver.cpp", "symbol": "resolve_demag_gpu_solver_strategy", "responsibility": "Resolve plan policy and env overrides for GPU demag."},
+    {"id": "cudss-fits", "path": "backends/fem/gpu/cuda/demag_poisson/cudss_direct_solver.cpp", "symbol": "check_demag_cudss_factor_fits", "responsibility": "Enforce VRAM budget guard on post-analysis cuDSS estimate."},
+    {"id": "cudss-init", "path": "backends/fem/gpu/cuda/demag_poisson/cudss_direct_solver.cpp", "symbol": "try_initialize_demag_cudss_direct", "responsibility": "Initialize factor-once cuDSS for open and PBC Poisson."},
+    {"id": "cudss-fembem-pair", "path": "backends/fem/gpu/cuda/demag_poisson/cudss_direct_solver.cpp", "symbol": "try_initialize_fem_bem_cudss_pair", "responsibility": "Atomic dual-factor VRAM admission for GPU FEM/BEM."},
+    {"id": "cudss-solve", "path": "backends/fem/gpu/cuda/demag_poisson/cudss_direct_solver.cpp", "symbol": "solve_demag_cudss_direct", "responsibility": "Per-step cuDSS triangular solve inside HypreStreamInterop."},
+    {"id": "fembem-init", "path": "backends/fem/gpu/cuda/demag_fem_bem/fem_bem.cpp", "symbol": "gpu_demag_fem_bem_initialize", "responsibility": "GPU Fredkin-Koehler initialization with cuDSS or relax-18 HYPRE."},
+    {"id": "cub-cert", "path": "backends/fem/gpu/cuda/demag_poisson/hypre_device_solver.cpp", "symbol": "certify_gpu_hypre_demag_residual", "responsibility": "Multi-block CUB pair-norm residual certification."},
+    {"id": "hypre-init", "path": "backends/fem/gpu/cuda/demag_poisson/hypre_device_solver.cpp", "symbol": "initialize_demag_poisson_hypre_device_solver", "responsibility": "Device HYPRE BoomerAMG coarse relax-18 configuration."},
+    {"id": "api-create-v6", "path": "backends/fem/src/api.cpp", "symbol": "fullmag_fem_backend_create_v6", "responsibility": "Versioned C ABI backend creation carrying gpu_strategy."},
+    {"id": "api-prov", "path": "backends/fem/src/api.cpp", "symbol": "fullmag_fem_backend_get_gpu_demag_linear_solver_provenance_v1", "responsibility": "Query resolved demag solver provenance and fallback reason."},
+    {"id": "fsal-k0", "path": "backends/fem/gpu/cuda/integrators/rk/rk_fsal_policy.cpp", "symbol": "gpu_rk_rhs_allows_fsal_k0_reuse", "responsibility": "10-condition operator signature gate for Heun/RK4 FSAL k0 reuse."},
+    {"id": "fsal-shortcut", "path": "backends/fem/gpu/cuda/integrators/rk/rk_fsal_policy.cpp", "symbol": "gpu_rk_allows_endpoint_rhs_shortcut", "responsibility": "Separate endpoint shortcut eligibility from k0 reuse."},
+    {"id": "pred-kernel", "path": "backends/fem/gpu/cuda/demag_poisson/demag_predictor.cu", "symbol": "demag_linear_predict_potential_kernel", "responsibility": "Device kernel for clamped two-step linear potential prediction."},
+    {"id": "pred-apply", "path": "backends/fem/gpu/cuda/demag_poisson/demag_predictor.cu", "symbol": "gpu_demag_predictor_apply_warm_start", "responsibility": "Apply Krylov warm start and remain zero-byte no-op under cuDSS."},
+    {"id": "pure-prism-mesh", "path": "packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py", "symbol": "generate_pure_prism_box_airbox_mesh", "responsibility": "Generate 100% prism6 shared-domain film-plus-airbox meshes."},
+    {"id": "tet-untangle", "path": "packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py", "symbol": "_untangle_same_side_mixed_tetrahedra", "responsibility": "Chebyshev-center LP untangler for layers>=2 mixed meshes."},
+    {"id": "pure-prism-cert", "path": "crates/fullmag-ir/src/mixed_certificate.rs", "symbol": "validate_pure_prism_topology_certificate_against_mesh", "responsibility": "Fail-closed validator for pure_prism_topology_certificate.v1."}
+  ],
+  "public_api": {
+    "parameters": [
+      {
+        "python": "FemLinearSolverPolicy.gpu_strategy",
+        "type": "Literal[\"auto\",\"cg_amg\",\"cudss\"]",
+        "default": "\"auto\"",
+        "si_unit": "$1$",
+        "validation": "`\"auto\"`, `\"cg_amg\"`, or `\"cudss\"`; unknown values raise `ValueError`",
+        "meaning": "GPU demag direct vs Krylov selection policy",
+        "backend_support": "FEM GPU (ignored on CPU)",
+        "problem_ir": "`demag_solver_policy.gpu_strategy`"
+      },
+      {
+        "python": "SweptMeshControls.transition_policy",
+        "type": "Literal[\"pyramid_to_tetrahedra\",\"pure_prism\",\"reject\"]",
+        "default": "\"reject\"",
+        "si_unit": "$1$",
+        "validation": "`\"pure_prism\"` requires uniform layered box in bbox airbox",
+        "meaning": "shared-domain swept prism-to-airbox transition",
+        "backend_support": "FEM CPU/GPU meshing",
+        "problem_ir": "`mesh_controls.swept.transition_policy`"
+      },
+      {
+        "python": "FULLMAG_FEM_DEMAG_GPU_DIRECT_SOLVER",
+        "type": "env str",
+        "default": "unset",
+        "si_unit": "$1$",
+        "validation": "`\"auto\"`, `\"cg_amg\"`, `\"hypre\"`, `\"off\"`, or `\"cudss\"` runtime override",
+        "meaning": "process-level override for FEM GPU demag strategy",
+        "backend_support": "FEM GPU runtime env",
+        "problem_ir": "`provenance.resolved_linear_solver`"
+      },
+      {
+        "python": "FULLMAG_FEM_DEMAG_CUDSS_MAX_VRAM_MIB",
+        "type": "env int",
+        "default": "device auto",
+        "si_unit": "$\\mathrm{MiB}$",
+        "validation": "positive MiB ceiling for cuDSS peak factor budget",
+        "meaning": "explicit VRAM cap triggering `auto` fallback or `cudss` refusal",
+        "backend_support": "FEM GPU runtime env",
+        "problem_ir": "`provenance.linear_solver_fallback_reason`"
+      }
+    ]
+  }
+}

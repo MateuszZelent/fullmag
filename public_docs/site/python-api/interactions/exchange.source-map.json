@@ -1,32 +1,32 @@
 {
   "document": {
     "path": "public_docs/site/python-api/interactions/exchange.md",
-    "reviewed_revision": "ab3c8802a691a535063102c12f9a79bb0043b367"
+    "reviewed_revision": "752450f8d259ab97c76c36fe666d5474b02abe9a"
   },
   "backend_matrix": [
     {
       "solver": "FEM",
       "device": "CPU",
-      "status": "documented",
-      "reason": "authoring and IR documented; runtime qualification separate"
+      "status": "implemented",
+      "reason": "Assembled FEM stiffness CSR exchange implemented on FEM CPU"
     },
     {
       "solver": "FEM",
       "device": "GPU",
-      "status": "documented",
-      "reason": "authoring and IR documented; runtime qualification separate"
+      "status": "implemented",
+      "reason": "Dual-path FMA / double-double CSR GPU exchange implemented on FEM GPU"
     },
     {
       "solver": "FDM",
       "device": "CPU",
-      "status": "documented",
-      "reason": "authoring and IR documented; runtime qualification separate"
+      "status": "implemented",
+      "reason": "Rayon-parallel persistent SoA row-wise 6-neighbor exchange implemented on FDM CPU"
     },
     {
       "solver": "FDM",
       "device": "GPU",
-      "status": "documented",
-      "reason": "authoring and IR documented; runtime qualification separate"
+      "status": "implemented",
+      "reason": "Precomputed face-weight and uniform fast-path CUDA exchange implemented on FDM GPU"
     }
   ],
   "equations": [],
@@ -37,10 +37,16 @@
       "path": "packages/fullmag-py/src/fullmag/model/energy.py",
       "symbol": "class Exchange",
       "responsibility": "public constructor and IR lowering"
+    },
+    {
+      "id": "source_study_builder",
+      "path": "packages/fullmag-py/src/fullmag/world.py",
+      "symbol": "class StudyBuilder",
+      "responsibility": "study.exchange(...) and study.disable_exchange() study controls"
     }
   ],
   "public_api": {
-    "owner": "fm.Exchange()",
+    "owner": "fm.Exchange(), study.exchange(*, enabled=True), study.disable_exchange()",
     "parameters": [
       {
         "python": "fm.Exchange",
@@ -49,8 +55,18 @@
         "si_unit": "$1$",
         "validation": "no parameters",
         "meaning": "nearest-neighbour exchange term",
-        "backend_support": "FEM/FDM CPU/GPU: IR; runtime resolver-specific",
+        "backend_support": "FEM/FDM CPU/GPU: IR and exchange field/energy kernels",
         "problem_ir": "kind"
+      },
+      {
+        "python": "study.exchange.enabled",
+        "type": "bool",
+        "default": "True",
+        "si_unit": "$1$",
+        "validation": "boolean; `enabled=False` or `study.disable_exchange()` omits exchange",
+        "meaning": "enables or disables isotropic exchange on the study",
+        "backend_support": "FEM/FDM CPU/GPU: controls inclusion in `energy_terms`",
+        "problem_ir": "energy_terms"
       }
     ],
     "returns": "typed ProblemIR record at to_ir()"

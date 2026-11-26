@@ -1,10 +1,10 @@
 {
   "document": {
-    "reviewed_revision": "ab3c8802a691a535063102c12f9a79bb0043b367",
+    "reviewed_revision": "752450f8d259ab97c76c36fe666d5474b02abe9a",
     "path": "public_docs/site/python-api/magnets-and-textures/mumax3-compatibility.md",
     "title": "Mumax3 Texture Compatibility",
     "status": "implemented_with_explicit_reproducibility_adaptations",
-    "updated": "2026-08-24"
+    "updated": "2026-11-26"
   },
   "backend_matrix": [
     {

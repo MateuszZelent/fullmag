@@ -1,6 +1,7 @@
 {
   "document": {
-    "reviewed_revision": "ab3c8802a691a535063102c12f9a79bb0043b367",
+    "reviewed_revision": "752450f8d259ab97c76c36fe666d5474b02abe9a",
+    "reviewed_at": "2026-11-26",
     "path": "public_docs/site/physics/interactions/magnetoelastic/index.md",
     "title": "Magnetoelastic interaction",
     "interaction": "magnetoelastic"
@@ -10,38 +11,217 @@
       "solver": "FDM",
       "device": "CPU",
       "status": "partial",
-      "reason": "Authoring, planning, runtime, and scientific qualification are reported separately on the page."
+      "reason": "Low-level local field routines exist below the planner boundary, but full public FDM planning rejects magnetoelastic terms fail-closed."
     },
     {
       "solver": "FDM",
       "device": "GPU",
       "status": "partial",
-      "reason": "Device source presence does not replace executed-device evidence and precision-specific qualification."
+      "reason": "Low-level CUDA branches exist below the planner boundary, but full public FDM planning rejects magnetoelastic terms fail-closed."
     },
     {
       "solver": "FEM",
       "device": "CPU",
       "status": "partial",
-      "reason": "The exact weak/discrete realization and bounded capability envelope remain lane-specific."
+      "reason": "Single cubic B1/B2 prescribed-strain (uniform or per-node) executes cleanly; quasistatic elasticity, elastodynamics, isotropic lambda_s, prescribed_stress, and body_force fail closed."
     },
     {
       "solver": "FEM",
       "device": "GPU",
       "status": "partial",
-      "reason": "Strict device residency and executed-device qualification remain separate evidence gates."
+      "reason": "Single cubic B1/B2 prescribed-strain executes device-resident with ComputeEnergy gating, fused H_eff, and 0-ULP non-contracted FP64 parity; coupled mechanics models fail closed."
     }
   ],
   "sources": [
     {
-      "id": "python-owner",
+      "id": "python-magnetoelastic",
       "path": "packages/fullmag-py/src/fullmag/model/energy.py",
       "symbol": "class Magnetoelastic",
-      "responsibility": "Own the public interaction constructor, validation, or canonical IR lowering boundary."
+      "responsibility": "Coupling reference term and canonical IR lowering."
+    },
+    {
+      "id": "python-elastic-material",
+      "path": "packages/fullmag-py/src/fullmag/model/mechanics.py",
+      "symbol": "class ElasticMaterial",
+      "responsibility": "Cubic elastic stiffness and density authoring record."
+    },
+    {
+      "id": "python-elastic-body",
+      "path": "packages/fullmag-py/src/fullmag/model/mechanics.py",
+      "symbol": "class ElasticBody",
+      "responsibility": "Elastic domain binding geometry and elastic material."
+    },
+    {
+      "id": "python-magnetostriction-law",
+      "path": "packages/fullmag-py/src/fullmag/model/mechanics.py",
+      "symbol": "class MagnetostrictionLaw",
+      "responsibility": "Cubic B1/B2 and schema-only isotropic lambda_s law authoring."
+    },
+    {
+      "id": "python-mechanical-load",
+      "path": "packages/fullmag-py/src/fullmag/model/mechanics.py",
+      "symbol": "class MechanicalLoad",
+      "responsibility": "Engineering-Voigt prescribed_strain and schema-only stress/body-force load."
+    },
+    {
+      "id": "plan-fem-magnetoelastic",
+      "path": "crates/fullmag-plan/src/fem.rs",
+      "symbol": "resolve_fem_magnetoelastic_plan",
+      "responsibility": "FEM prescribed-strain legality and fail-closed non-goal gate."
+    },
+    {
+      "id": "engine-local-hmel",
+      "path": "crates/fullmag-engine/src/magnetoelastic.rs",
+      "symbol": "h_mel_field",
+      "responsibility": "Low-level local magnetoelastic field reference routine."
+    },
+    {
+      "id": "engine-fdm-soa-hmel",
+      "path": "crates/fullmag-engine/src/fdm/cpu/fields/magnetoelastic.rs",
+      "symbol": "magnetoelastic_field_add_into_soa",
+      "responsibility": "Low-level FDM SoA magnetoelastic field accumulation helper."
+    },
+    {
+      "id": "fem-cpu-magnetoelastic",
+      "path": "backends/fem/cpu/mfem/interactions/magnetoelastic_prescribed_strain.cpp",
+      "symbol": "compute_magnetoelastic_field",
+      "responsibility": "FEM CPU prescribed-strain field and lumped-mass energy realization."
+    },
+    {
+      "id": "fem-gpu-magnetoelastic",
+      "path": "backends/fem/gpu/cuda/interactions/magnetoelastic/magnetoelastic_kernels.cu",
+      "symbol": "fullmag_cuda_magnetoelastic_field_energy_blocks",
+      "responsibility": "FEM GPU prescribed-strain kernel with ComputeEnergy gating and non-contracted FP64 parity."
+    },
+    {
+      "id": "fem-gpu-fused-heff",
+      "path": "backends/fem/gpu/cuda/fields/vector_field_kernels.cu",
+      "symbol": "fullmag_cuda_accumulate_heff_fused_xyz",
+      "responsibility": "FEM GPU single-launch fused H_eff combiner including H_mel."
     }
   ],
-  "symbols": [],
-  "equations": [],
+  "symbols": [
+    {"id": "B1_B2", "latex": "$B_1,B_2$", "meaning": "cubic magnetoelastic constants", "si_unit": "$\\mathrm{Pa}=\\mathrm{J\\,m^{-3}}$"},
+    {"id": "eps_ij", "latex": "$\\varepsilon_{ij}$", "meaning": "tensor strain", "si_unit": "$1$"},
+    {"id": "gamma_ij", "latex": "$\\gamma_{ij}$", "meaning": "engineering shear strain", "si_unit": "$1$"},
+    {"id": "w_mel", "latex": "$w_{\\mathrm{mel}}$", "meaning": "coupling energy density", "si_unit": "$\\mathrm{J\\,m^{-3}}$"},
+    {"id": "H_mel", "latex": "$\\mathbf H_{\\mathrm{mel}}$", "meaning": "effective field", "si_unit": "$\\mathrm{A\\,m^{-1}}$"}
+  ],
+  "equations": [
+    {
+      "id": "eq-public-magnetoelastic-mel-voigt",
+      "symbols": ["eps_ij", "gamma_ij"],
+      "sources": ["python-mechanical-load", "plan-fem-magnetoelastic", "fem-cpu-magnetoelastic", "fem-gpu-magnetoelastic"]
+    },
+    {
+      "id": "eq-public-magnetoelastic-mel-density",
+      "symbols": ["w_mel", "B1_B2", "eps_ij"],
+      "sources": ["python-magnetostriction-law", "fem-cpu-magnetoelastic", "fem-gpu-magnetoelastic"]
+    },
+    {
+      "id": "eq-public-magnetoelastic-mel-field",
+      "symbols": ["H_mel", "w_mel"],
+      "sources": ["engine-local-hmel", "fem-cpu-magnetoelastic", "fem-gpu-magnetoelastic"]
+    },
+    {
+      "id": "eq-public-magnetoelastic-mel-field-x",
+      "symbols": ["H_mel", "B1_B2", "eps_ij"],
+      "sources": ["engine-local-hmel", "engine-fdm-soa-hmel", "fem-cpu-magnetoelastic", "fem-gpu-magnetoelastic", "fem-gpu-fused-heff"]
+    }
+  ],
   "public_api": {
-    "parameters": []
+    "constructors": ["fullmag.Magnetoelastic", "fullmag.ElasticMaterial", "fullmag.ElasticBody", "fullmag.MagnetostrictionLaw", "fullmag.MechanicalLoad"],
+    "parameters": [
+      {
+        "python": "fm.Magnetoelastic.magnet",
+        "type": "str",
+        "default": "required",
+        "si_unit": "—",
+        "validation": "non-empty magnet identifier checked at planner boundary",
+        "meaning": "target magnetic object coupled to elastic body",
+        "backend_support": "FEM CPU/GPU (prescribed strain); FDM rejected",
+        "problem_ir": "energy_terms[].magnet"
+      },
+      {
+        "python": "fm.Magnetoelastic.body",
+        "type": "str",
+        "default": "required",
+        "si_unit": "—",
+        "validation": "non-empty `ElasticBody` identifier",
+        "meaning": "elastic body carrying the prescribed strain load",
+        "backend_support": "FEM CPU/GPU (prescribed strain); FDM rejected",
+        "problem_ir": "energy_terms[].body"
+      },
+      {
+        "python": "fm.Magnetoelastic.law",
+        "type": "str",
+        "default": "required",
+        "si_unit": "—",
+        "validation": "non-empty `MagnetostrictionLaw` identifier",
+        "meaning": "named cubic magnetoelastic law",
+        "backend_support": "FEM CPU/GPU (prescribed strain); FDM rejected",
+        "problem_ir": "energy_terms[].law"
+      },
+      {
+        "python": "fm.MagnetostrictionLaw.kind",
+        "type": "str",
+        "default": "\"cubic\"",
+        "si_unit": "—",
+        "validation": "`\"cubic\"` executable; isotropic `lambda_s` rejected at FEM planner",
+        "meaning": "crystal symmetry family for magnetoelastic coupling",
+        "backend_support": "FEM CPU/GPU (`\"cubic\"` only)",
+        "problem_ir": "mechanics.laws[].kind"
+      },
+      {
+        "python": "fm.MagnetostrictionLaw.B1",
+        "type": "float | None",
+        "default": "None",
+        "si_unit": "$\\mathrm{J\\,m^{-3}}$",
+        "validation": "finite float required for executable cubic law at IR/planner boundary",
+        "meaning": "cubic normal-strain magnetoelastic constant $B_1$",
+        "backend_support": "FEM CPU/GPU",
+        "problem_ir": "mechanics.laws[].B1"
+      },
+      {
+        "python": "fm.MagnetostrictionLaw.B2",
+        "type": "float | None",
+        "default": "None",
+        "si_unit": "$\\mathrm{J\\,m^{-3}}$",
+        "validation": "finite float required for executable cubic law at IR/planner boundary",
+        "meaning": "cubic shear-strain magnetoelastic constant $B_2$",
+        "backend_support": "FEM CPU/GPU",
+        "problem_ir": "mechanics.laws[].B2"
+      },
+      {
+        "python": "fm.MechanicalLoad.kind",
+        "type": "str",
+        "default": "required",
+        "si_unit": "—",
+        "validation": "`\"prescribed_strain\"` executable; `\"prescribed_stress\"` and `\"body_force\"` rejected",
+        "meaning": "mechanical load family",
+        "backend_support": "FEM CPU/GPU (`\"prescribed_strain\"` only)",
+        "problem_ir": "mechanics.loads[].kind"
+      },
+      {
+        "python": "fm.MechanicalLoad.strain",
+        "type": "tuple[float, ...] | None",
+        "default": "None",
+        "si_unit": "$1$",
+        "validation": "6-component engineering-Voigt vector $(\\varepsilon_{11},\\varepsilon_{22},\\varepsilon_{33},\\gamma_{23},\\gamma_{13},\\gamma_{12})$",
+        "meaning": "uniform prescribed engineering strain tensor",
+        "backend_support": "FEM CPU/GPU",
+        "problem_ir": "mechanics.loads[].strain"
+      },
+      {
+        "python": "fm.ElasticMaterial.C11",
+        "type": "float",
+        "default": "required",
+        "si_unit": "$\\mathrm{Pa}$",
+        "validation": "positive finite float at construction",
+        "meaning": "cubic stiffness constant $C_{11}$",
+        "backend_support": "schema/IR graph (no PDE solve yet)",
+        "problem_ir": "mechanics.materials[].C11"
+      }
+    ]
   }
 }

@@ -18,22 +18,34 @@ The public compatibility object `fullmag.CubicAnisotropy` is migrated into canon
 fields before ProblemIR lowering. It is not a second native energy owner. The API and migration
 contract are documented in {doc}`../../../python-api/interactions/cubic-anisotropy`.
 
-:::{admonition} Crystal-frame validity
+:::{admonition} Crystal-frame orthogonality validation
 :class: note
 
-FEM planning requires finite unit orthogonal `axis1` and `axis2`. FDM native field code
-normalizes each axis and derives a cross product; it must not be reported as accepting an
-arbitrary non-orthogonal physical crystal frame without a lane-specific validation result.
+Active cubic crystal axes must be finite, non-zero, and mutually orthogonal:
+
+- At the **FEM planner boundary** (`validate_cubic_anisotropy_axes` in
+  `crates/fullmag-plan/src/fem.rs`), `axis1` and `axis2` are normalized and checked against
+  $\lvert \mathbf c_1 \cdot \mathbf c_2 \rvert \le 10^{-3}$ and
+  $\lVert \mathbf c_1 \times \mathbf c_2 \rVert \ge 10^{-6}$ before native execution.
+- Inside the **native FEM C++ realization** (`require_orthonormal_crystal_axes` in
+  `backends/fem/cpu/mfem/interactions/anisotropy_cubic.cpp`), the resolved frame is verified to
+  strict orthonormal tolerance $\lvert\lVert\mathbf c_a\rVert - 1\rvert \le 128\varepsilon_{\mathrm{mach}}$
+  and $\lvert \mathbf c_1 \cdot \mathbf c_2 \rvert \le 128\varepsilon_{\mathrm{mach}}$
+  ($\approx 2.84 \times 10^{-14}$). Authors should supply crystal axes orthogonal to at least
+  $\lvert \mathbf c_1 \cdot \mathbf c_2 \rvert \le 10^{-6}$ (ideally machine precision).
+- **FDM native field code** normalizes each axis and forms $\mathbf c_3 = \mathbf c_1 \times \mathbf c_2$
+  without enforcing the FEM orthogonality tolerance, so FDM must not be reported as validating an
+  arbitrary non-orthogonal crystal frame.
 :::
 
 ## Solver and backend realizations
 
 | Solver | Device | Status | Realization |
 |---|---|---|---|
-| FDM | CPU | reference | Cell-local crystal-frame polynomial in double precision with cell-volume energy integration. |
+| FDM | CPU | reference | Cell-local crystal-frame polynomial in double precision (`fields/anisotropy.rs`, `fields/energy.rs`) with cell-volume energy integration. |
 | FDM | GPU | implemented | FP64/FP32 local field kernels and anisotropy energy reductions; precision paths remain separate. |
-| FEM | CPU | implemented | Nodal/lumped and element-quadrature material paths with strict crystal-axis validation. |
-| FEM | GPU | implemented | Device field/energy block kernels and reductions; current executed-device qualification is separate. |
+| FEM | CPU | implemented | Nodal/lumped and element-quadrature material paths with strict crystal-axis orthogonality validation. |
+| FEM | GPU | implemented | Device `template <bool ComputeEnergy>` field/energy block kernels (`anisotropy_kernels.cu`) with explicit non-contracted FP64 arithmetic (`__dmul_rn`/`__dadd_rn`/`__dsub_rn`) for 0-ULP parity and single-launch fused `H_eff` (`fullmag_cuda_accumulate_heff_fused_xyz`); qualified on RTX 4080 SUPER. |
 
 (cubic-problem-statement)=
 ## Physical problem
@@ -141,8 +153,11 @@ Panel (b) displays 3D isometric energy surfaces and $(1\bar{1}0)$-plane profiles
 ## Assumptions and validity
 
 - `Kc1`, `Kc2`, and `Kc3` are SI energy-density constants in $\mathrm{J\,m^{-3}}$.
-- The physical crystal frame is orthonormal. FEM planner validation is strict; FDM normalization
-  behavior must be recorded as resolved execution and not generalized to all lanes.
+- The physical crystal frame is orthonormal ($\lvert \mathbf c_1 \cdot \mathbf c_2 \rvert \le 10^{-6}$
+  recommended; FEM planner rejects $\lvert \mathbf c_1 \cdot \mathbf c_2 \rvert > 10^{-3}$ or
+  $\lVert \mathbf c_1 \times \mathbf c_2 \rVert < 10^{-6}$, and native FEM C++ requires
+  orthonormality within $128\varepsilon_{\mathrm{mach}}$). FDM normalization behavior must be
+  recorded as resolved execution and not generalized to all lanes.
 - $M_s>0$ and the reduced magnetization normalization are supplied by surrounding contracts.
 - Spatial `Kc1_field`, `Kc2_field`, and `Kc3_field` require backend-supported cardinality and
   interpolation; they do not change the crystal axes.
@@ -169,12 +184,12 @@ Panel (b) displays 3D isometric energy surfaces and $(1\bar{1}0)$-plane profiles
 | `Material.Kc2_field` | `list[float] \| None` | `None` | $\mathrm{J\,m^{-3}}$ | finite; cardinality downstream | spatial Kc2 override | FEM and supported allocating FDM reference paths | `materials[].kc2_field` |
 | `Material.Kc3_field` | `list[float] \| None` | `None` | $\mathrm{J\,m^{-3}}$ | finite; cardinality downstream | spatial Kc3 override | FEM and supported allocating FDM reference paths | `materials[].kc3_field` |
 
-
 ### Executable user workflow: study and stages
 
-The normal user-facing script assigns the cubic constants and crystal axes to the geometry
-material, then registers an explicit stage pipeline. This example exercises the FDM CPU reference
-lane; device and precision are resolved from the declared study intent.
+The normal user-facing script assigns the cubic constants and crystal axes directly on the
+geometry handle (`MagnetHandle`), then registers an explicit stage pipeline. This example
+exercises the FDM CPU reference lane; device and precision are resolved from the declared study
+intent.
 
 ```python
 # %% Copyable Python/Jupyter example: cubic anisotropy study pipeline
@@ -193,7 +208,11 @@ body.Ms = 800.0e3
 body.Aex = 13.0e-12
 body.alpha = 0.01
 body.Kc1 = 0.2e6
-body.m = fm.init.UniformMagnetization((1.0, 0.0, 0.0))
+body.Kc2 = 0.0
+body.Kc3 = 0.0
+body.anisC1 = (1.0, 0.0, 0.0)
+body.anisC2 = (0.0, 1.0, 0.0)
+body.m = fm.texture.uniform(1.0, 0.0, 0.0)
 
 study.stages.add_relax(
     stage_id="relax",
@@ -201,27 +220,13 @@ study.stages.add_relax(
     max_steps=50_000,
     tolT=1.0e-6,
 )
-
-# %% Material inspection when specifying Kc2, Kc3, and explicit crystal axes
-cubic_material = fm.Material(
-    name="cubic_film",
-    Ms=800.0e3,
-    A=13.0e-12,
-    alpha=0.01,
-    Kc1=0.2e6,
-    Kc2=0.0,
-    Kc3=0.0,
-    anisC1=(1.0, 0.0, 0.0),
-    anisC2=(0.0, 1.0, 0.0),
-)
-assert cubic_material.to_ir()["cubic_anisotropy_kc1"] == 0.2e6
 ```
 
-On the stage-first handle (`MagnetHandle`), `body.Kc1` is assigned directly; higher-order
-constants (`Kc2`, `Kc3`), crystal axes (`anisC1`, `anisC2`), and spatial `Kc*_field` arrays
-are authored on `fm.Material(...)` or via `fm.CubicAnisotropy(...)`. A GPU request or spatial
-cubic fields requires the corresponding planner capability and is not implied by this CPU
-reference example.
+On the stage-first handle (`MagnetHandle` in `packages/fullmag-py/src/fullmag/world.py`),
+`body.Kc1`, `body.Kc2`, `body.Kc3`, `body.anisC1`, and `body.anisC2` are all exposed directly.
+Spatial `Kc1_field`, `Kc2_field`, and `Kc3_field` arrays are authored on `fm.Material(...)`.
+A GPU request or spatial cubic fields requires the corresponding planner capability and is not
+implied by this CPU reference example.
 
 (cubic-problem-ir)=
 ## ProblemIR and planner contract
@@ -238,9 +243,10 @@ The canonical material fragment is:
 }
 ```
 
-The compatibility term is migrated to one material. FEM planning rejects non-finite, non-unit,
-or non-orthogonal active axes. The planner must preserve requested intent and resolved execution;
-it must not silently repair an invalid crystal frame while reporting a successful physical run.
+The compatibility term is migrated to one material. FEM planning rejects non-finite, zero-norm,
+or non-orthogonal active axes (`validate_cubic_anisotropy_axes`). The planner must preserve
+requested intent and resolved execution; it must not silently repair an invalid crystal frame
+while reporting a successful physical run.
 
 (cubic-round-trip-and-failure-semantics)=
 ## Round-trip and failure semantics
@@ -255,7 +261,9 @@ legacy/material conflicts, multi-material migration, and invalid FEM crystal fra
 
 ### FDM CPU
 
-Each active cell computes $\alpha_a$ in the derived frame and integrates
+Each active cell (`crates/fullmag-engine/src/fdm/cpu/fields/anisotropy.rs`,
+`crates/fullmag-engine/src/fdm/cpu/fields/energy.rs`) computes $\alpha_a$ in the derived frame
+and integrates
 
 ```{math}
 :label: eq-cubic-fdm-energy
@@ -273,14 +281,20 @@ arithmetic. A device source path is not an executed-device parity result.
 
 ### FEM CPU
 
-FEM uses strict orthonormal axes. Scalar fields use nodal/lumped integration; spatial material
-fields use element quadrature with explicit field cardinality and material-location checks.
+FEM uses strict orthonormal axes (`require_orthonormal_crystal_axes`). Scalar fields use
+nodal/lumped integration; spatial material fields use element quadrature with explicit field
+cardinality and material-location checks.
 
 ### FEM GPU
 
-The CUDA kernel computes the crystal-frame components, reconstructs the laboratory field, emits
-block energy sums, and the RK reduction consumes those sums. Device `Ms`, `Kc` arrays, axes, masks,
-and lumped masses are required; missing arrays fail closed.
+`cubic_anisotropy_field_energy_blocks_kernel<ComputeEnergy>` computes the crystal-frame
+components, reconstructs the laboratory field using explicit non-contracted IEEE-754 FP64
+intrinsics (`__dmul_rn`, `__dadd_rn`, `__dsub_rn`) so `ComputeEnergy=true` and
+`ComputeEnergy=false` emit 0-ULP bitwise-identical `H_cubic` under NVCC `-fmad=true`, gates
+per-block `cub::BlockReduce` energy reductions on `block_sums != nullptr` (skipping unused
+intermediate RK reductions), and feeds `fullmag_cuda_accumulate_heff_fused_xyz` (`17.5×` faster
+single-launch fused `H_eff`). Device `Ms`, `Kc` arrays, axes, masks, and lumped masses are
+required; missing arrays fail closed. See {ref}`numerical-methods-performance-fem-gpu-kernels`.
 
 ### Observables
 
@@ -302,14 +316,18 @@ FDM CUDA, FEM CPU, and FEM CUDA have separate field and energy symbols listed in
 Use the six high-symmetry directions of the cubic frame and compare the polynomial energy. Perturb
 each direction and compare finite differences with the analytic crystal-frame field. Test invalid
 axis norms/dot products in FEM planning, scalar and spatial Kc fields, inactive masks, and all
-precision lanes. Compare field, scalar energy, and spatial energy, not only trajectories.
+precision lanes. Compare field, scalar energy, and spatial energy, not only trajectories. On FEM
+GPU (RTX 4080 SUPER, SM `89-real`), `fem_cuda_shortrange_kernels_contract` verifies 0-ULP bitwise
+field equality (`memcmp == 0`) between `ComputeEnergy=true` and `ComputeEnergy=false` with 0
+`compute-sanitizer` errors and `ΔE_ani = 0.0` across 50 RK4 steps.
 
 (cubic-limitations)=
 ## Limitations and deferred work
 
 The public frame is specified by two axes. No arbitrary third axis parameter or public per-node
 crystal-frame field exists. FEM strict orthonormal validation and FDM normalization behavior must
-remain explicitly distinguished. GPU production qualification remains an executed-device question.
+remain explicitly distinguished. FDM GPU production qualification remains an executed-device
+question.
 
 (cubic-scientific-bibliography)=
 ## Scientific bibliography
@@ -323,18 +341,21 @@ remain explicitly distinguished. GPU production qualification remains an execute
 
 | Repository path | Stable symbol | Responsibility |
 |---|---|---|
-| [`packages/fullmag-py/src/fullmag/model/energy.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/energy.py#L530) | [`class CubicAnisotropy`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/energy.py#L530) | Compatibility constructor and serialization. |
-| [`packages/fullmag-py/src/fullmag/model/structure.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/structure.py#L16) | [`class Material`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/structure.py#L16) | Canonical cubic constants, axes, and fields. |
-| [`packages/fullmag-py/src/fullmag/model/problem.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/problem.py#L2045) | [`_migrate_legacy_anisotropy_energy_terms`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/problem.py#L2045) | Conflict-checked migration. |
-| [`crates/fullmag-plan/src/fdm.rs`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-plan/src/fdm.rs#L2385) | [`plan_fdm`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-plan/src/fdm.rs#L2385) | FDM native cubic material resolution. |
-| [`crates/fullmag-plan/src/fem.rs`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-plan/src/fem.rs#L3583) | [`plan_fem`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-plan/src/fem.rs#L3583) | FEM native resolution and strict axis validation. |
-| `crates/fullmag-engine/src/fdm/cpu/fields.rs` | `anisotropy_field` | FDM CPU cubic field composition. |
-| `crates/fullmag-engine/src/fdm/cpu/fields.rs` | `anisotropy_energy_density_from_vectors` | FDM CPU cubic energy density. |
-| [`backends/fdm/gpu/cuda/interactions/demag_fp64.cu`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/backends/fdm/gpu/cuda/interactions/demag_fp64.cu#L550) | [`anisotropy_field_fp64_kernel`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/backends/fdm/gpu/cuda/interactions/demag_fp64.cu#L550) | FDM CUDA FP64 local anisotropy field. |
-| [`backends/fdm/gpu/cuda/interactions/demag_fp32.cu`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/backends/fdm/gpu/cuda/interactions/demag_fp32.cu#L533) | [`anisotropy_field_fp32_kernel`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/backends/fdm/gpu/cuda/interactions/demag_fp32.cu#L533) | FDM CUDA FP32 local anisotropy field. |
-| [`backends/fdm/gpu/cuda/runtime/reductions_fp64.cu`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/backends/fdm/gpu/cuda/runtime/reductions_fp64.cu#L1699) | [`reduce_cubic_anisotropy_energy_fp64`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/backends/fdm/gpu/cuda/runtime/reductions_fp64.cu#L1699) | FDM CUDA cubic energy reduction. |
-| [`backends/fem/cpu/mfem/interactions/anisotropy_cubic.cpp`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/backends/fem/cpu/mfem/interactions/anisotropy_cubic.cpp#L127) | [`compute_cubic_anisotropy_field`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/backends/fem/cpu/mfem/interactions/anisotropy_cubic.cpp#L127) | FEM CPU field and lumped energy. |
-| [`backends/fem/cpu/mfem/interactions/anisotropy_cubic.cpp`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/backends/fem/cpu/mfem/interactions/anisotropy_cubic.cpp#L216) | [`cubic_anisotropy_energy_from_element_quadrature_material`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/backends/fem/cpu/mfem/interactions/anisotropy_cubic.cpp#L216) | FEM CPU spatial-material energy. |
-| [`backends/fem/gpu/cuda/interactions/anisotropy/anisotropy_kernels.cu`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/backends/fem/gpu/cuda/interactions/anisotropy/anisotropy_kernels.cu#L82) | [`cubic_anisotropy_field_energy_blocks_kernel`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/backends/fem/gpu/cuda/interactions/anisotropy/anisotropy_kernels.cu#L82) | FEM CUDA cubic field/energy blocks. |
-| [`backends/fem/gpu/cuda/integrators/rk/rk_anisotropy_field.cu`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/backends/fem/gpu/cuda/integrators/rk/rk_anisotropy_field.cu#L38) | [`gpu_rk_compute_anisotropy_field_contributions`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/backends/fem/gpu/cuda/integrators/rk/rk_anisotropy_field.cu#L38) | FEM CUDA field dispatch and buffer validation. |
-| [`backends/fem/gpu/cuda/integrators/rk/rk_anisotropy_energy_reductions.cu`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/backends/fem/gpu/cuda/integrators/rk/rk_anisotropy_energy_reductions.cu#L41) | [`gpu_rk_reduce_final_anisotropy_energy_terms`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/backends/fem/gpu/cuda/integrators/rk/rk_anisotropy_energy_reductions.cu#L41) | FEM CUDA final energy reduction. |
+| [`packages/fullmag-py/src/fullmag/model/energy.py`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/model/energy.py#L556) | [`class CubicAnisotropy`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/model/energy.py#L556) | Compatibility constructor and serialization. |
+| [`packages/fullmag-py/src/fullmag/model/structure.py`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/model/structure.py#L16) | [`class Material`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/model/structure.py#L16) | Canonical cubic constants, axes, and fields. |
+| [`packages/fullmag-py/src/fullmag/world.py`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/world.py#L568) | [`class MagnetHandle`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/world.py#L568) | Stage-first direct `Kc1`, `Kc2`, `Kc3`, `anisC1`, and `anisC2` authoring. |
+| [`packages/fullmag-py/src/fullmag/model/problem.py`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/model/problem.py#L2197) | [`_migrate_legacy_anisotropy_energy_terms`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/model/problem.py#L2197) | Conflict-checked migration. |
+| [`crates/fullmag-plan/src/fdm.rs`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-plan/src/fdm.rs#L2512) | [`plan_fdm`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-plan/src/fdm.rs#L2512) | FDM native cubic material resolution. |
+| [`crates/fullmag-plan/src/fem.rs`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-plan/src/fem.rs#L4287) | [`plan_fem`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-plan/src/fem.rs#L4287) | FEM native resolution. |
+| [`crates/fullmag-plan/src/fem.rs`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-plan/src/fem.rs#L3655) | [`validate_cubic_anisotropy_axes`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-plan/src/fem.rs#L3655) | FEM planner cubic axis orthogonality check. |
+| [`crates/fullmag-engine/src/fdm/cpu/fields/anisotropy.rs`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-engine/src/fdm/cpu/fields/anisotropy.rs#L65) | [`anisotropy_field`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-engine/src/fdm/cpu/fields/anisotropy.rs#L65) | FDM CPU cubic field composition. |
+| [`crates/fullmag-engine/src/fdm/cpu/fields/energy.rs`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-engine/src/fdm/cpu/fields/energy.rs#L502) | [`anisotropy_energy_density_from_vectors`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-engine/src/fdm/cpu/fields/energy.rs#L502) | FDM CPU cubic energy density. |
+| [`backends/fdm/gpu/cuda/interactions/demag_fp64.cu`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/backends/fdm/gpu/cuda/interactions/demag_fp64.cu#L574) | [`anisotropy_field_fp64_kernel`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/backends/fdm/gpu/cuda/interactions/demag_fp64.cu#L574) | FDM CUDA FP64 local anisotropy field. |
+| [`backends/fdm/gpu/cuda/interactions/demag_fp32.cu`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/backends/fdm/gpu/cuda/interactions/demag_fp32.cu#L546) | [`anisotropy_field_fp32_kernel`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/backends/fdm/gpu/cuda/interactions/demag_fp32.cu#L546) | FDM CUDA FP32 local anisotropy field. |
+| [`backends/fdm/gpu/cuda/runtime/reductions_fp64.cu`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/backends/fdm/gpu/cuda/runtime/reductions_fp64.cu#L1763) | [`reduce_cubic_anisotropy_energy_fp64`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/backends/fdm/gpu/cuda/runtime/reductions_fp64.cu#L1763) | FDM CUDA cubic energy reduction. |
+| [`backends/fem/cpu/mfem/interactions/anisotropy_cubic.cpp`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/backends/fem/cpu/mfem/interactions/anisotropy_cubic.cpp#L127) | [`compute_cubic_anisotropy_field`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/backends/fem/cpu/mfem/interactions/anisotropy_cubic.cpp#L127) | FEM CPU field and lumped energy. |
+| [`backends/fem/cpu/mfem/interactions/anisotropy_cubic.cpp`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/backends/fem/cpu/mfem/interactions/anisotropy_cubic.cpp#L216) | [`cubic_anisotropy_energy_from_element_quadrature_material`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/backends/fem/cpu/mfem/interactions/anisotropy_cubic.cpp#L216) | FEM CPU spatial-material energy. |
+| [`backends/fem/gpu/cuda/interactions/anisotropy/anisotropy_kernels.cu`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/backends/fem/gpu/cuda/interactions/anisotropy/anisotropy_kernels.cu#L91) | [`cubic_anisotropy_field_energy_blocks_kernel`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/backends/fem/gpu/cuda/interactions/anisotropy/anisotropy_kernels.cu#L91) | FEM CUDA cubic field/energy blocks with non-contracted FP64 parity. |
+| [`backends/fem/gpu/cuda/integrators/rk/rk_anisotropy_field.cu`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/backends/fem/gpu/cuda/integrators/rk/rk_anisotropy_field.cu#L38) | [`gpu_rk_compute_anisotropy_field_contributions`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/backends/fem/gpu/cuda/integrators/rk/rk_anisotropy_field.cu#L38) | FEM CUDA field dispatch and buffer validation. |
+| [`backends/fem/gpu/cuda/integrators/rk/rk_anisotropy_energy_reductions.cu`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/backends/fem/gpu/cuda/integrators/rk/rk_anisotropy_energy_reductions.cu#L41) | [`gpu_rk_reduce_final_anisotropy_energy_terms`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/backends/fem/gpu/cuda/integrators/rk/rk_anisotropy_energy_reductions.cu#L41) | FEM CUDA final energy reduction. |
+| [`backends/fem/gpu/cuda/fields/vector_field_kernels.hpp`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/backends/fem/gpu/cuda/fields/vector_field_kernels.hpp#L91) | [`fullmag_cuda_accumulate_heff_fused_xyz`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/backends/fem/gpu/cuda/fields/vector_field_kernels.hpp#L91) | FEM CUDA single-launch fused `H_eff` composition. |

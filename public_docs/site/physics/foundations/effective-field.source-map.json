@@ -2,21 +2,23 @@
   "document": {
     "path": "public_docs/site/physics/foundations/effective-field.md",
     "title": "Effective field",
-    "scope": "field-form composition and direct-torque separation",
-    "reviewed_revision": "ab3c8802a691a535063102c12f9a79bb0043b367"
+    "scope": "field-form composition, PhysicsGraph scope/activation, and direct-torque separation",
+    "reviewed_revision": "752450f8d259ab97c76c36fe666d5474b02abe9a",
+    "reviewed_at": "2026-11-26"
   },
   "backend_matrix": [
     {"solver": "FDM", "device": "CPU", "status": "partial", "reason": "CPU field composition is term- and qualification-dependent."},
-    {"solver": "FDM", "device": "GPU", "status": "partial", "reason": "CUDA field composition requires executed-device and precision evidence."},
+    {"solver": "FDM", "device": "GPU", "status": "partial", "reason": "CUDA field composition includes fused FP64 RK45 prescribed spin torques; executed-device and precision evidence remain required."},
     {"solver": "FEM", "device": "CPU", "status": "partial", "reason": "The FEM CPU composition function is implemented, but numerical qualification is separate."},
-    {"solver": "FEM", "device": "GPU", "status": "partial", "reason": "The FEM GPU composition function is implemented, but runtime parity is not inferred."}
+    {"solver": "FEM", "device": "GPU", "status": "partial", "reason": "The FEM GPU composition path fuses active field terms into a single kernel launch; runtime parity is reported per interaction."}
   ],
   "sources": [
     {"id": "effective-exchange", "path": "packages/fullmag-py/src/fullmag/model/energy.py", "symbol": "class Exchange", "responsibility": "Owns exchange term authoring and IR serialization."},
     {"id": "effective-zeeman", "path": "packages/fullmag-py/src/fullmag/model/energy.py", "symbol": "class Zeeman", "responsibility": "Owns external-field term authoring and vector validation."},
+    {"id": "effective-graph", "path": "packages/fullmag-py/src/fullmag/model/physics_scope.py", "symbol": "class PhysicsGraph", "responsibility": "Owns module scope, stage activation, and coupling edges."},
     {"id": "effective-ir", "path": "crates/fullmag-ir/src/lib.rs", "symbol": "ProblemIR", "responsibility": "Stores canonical energy terms and execution policy."},
     {"id": "effective-fem-cpu", "path": "backends/fem/cpu/mfem/interactions/effective_field.cpp", "symbol": "compute_effective_fields_for_magnetization", "responsibility": "Composes FEM CPU field contributions."},
-    {"id": "effective-fem-gpu", "path": "backends/fem/gpu/cuda/integrators/rk/rk_effective_field.cu", "symbol": "gpu_rk_accumulate_effective_field", "responsibility": "Accumulates FEM GPU RK effective-field contributions."},
+    {"id": "effective-fem-gpu", "path": "backends/fem/gpu/cuda/integrators/rk/rk_effective_field.cu", "symbol": "gpu_rk_accumulate_effective_field", "responsibility": "Fuses FEM GPU RK effective-field contributions into a single launch."},
     {"id": "effective-fem-cpu-rhs", "path": "backends/fem/cpu/mfem/integrators/llg_rhs.cpp", "symbol": "llg_rhs_aos", "responsibility": "Consumes the composed field in the FEM CPU field-driven RHS."},
     {"id": "effective-fem-gpu-rhs", "path": "backends/fem/gpu/cuda/integrators/llg/llg_rhs_kernels.cu", "symbol": "fullmag_cuda_llg_rhs_fused", "responsibility": "Consumes the composed field in the FEM GPU fused RHS."}
   ],
@@ -32,7 +34,7 @@
     {"id": "Omega", "latex": "$\\Omega_m$", "meaning": "magnetic domain", "si_unit": "$\\mathrm{m^3}$"}
   ],
   "equations": [
-    {"id": "eq-foundation-effective-field-sum", "symbols": ["Heff", "Hk", "Kfield"], "sources": ["effective-fem-cpu", "effective-fem-gpu"]},
+    {"id": "eq-foundation-effective-field-sum", "symbols": ["Heff", "Hk", "Kfield"], "sources": ["effective-fem-cpu", "effective-fem-gpu", "effective-graph"]},
     {"id": "eq-foundation-effective-field-variation", "symbols": ["Hk", "mu0", "Ms", "eta", "Omega"], "sources": ["effective-ir"]},
     {"id": "eq-foundation-effective-field-direct-torque", "symbols": ["m", "Heff", "tau"], "sources": ["effective-fem-cpu-rhs", "effective-fem-gpu-rhs"]}
   ],

@@ -1,7 +1,7 @@
 {
   "document": {
     "path": "public_docs/site/python-api/materials/elastic-materials.md",
-    "reviewed_revision": "ab3c8802a691a535063102c12f9a79bb0043b367"
+    "reviewed_revision": "752450f8d259ab97c76c36fe666d5474b02abe9a"
   },
   "backend_matrix": [
     {
@@ -36,51 +36,107 @@
       "id": "source_elastic_material",
       "path": "packages/fullmag-py/src/fullmag/model/mechanics.py",
       "symbol": "class ElasticMaterial",
-      "responsibility": "public constructor and IR lowering"
+      "responsibility": "cubic elastic material constructor and IR lowering"
+    },
+    {
+      "id": "source_elastic_body",
+      "path": "packages/fullmag-py/src/fullmag/model/mechanics.py",
+      "symbol": "class ElasticBody",
+      "responsibility": "elastic body binding geometry and ElasticMaterial"
     }
   ],
   "public_api": {
-    "owner": "fm.ElasticMaterial(name, C11, C12, C44, rho, eta_mech=None)",
+    "owner": "fm.ElasticMaterial(name, C11, C12, C44, rho, eta_mech=None) and fm.ElasticBody(name, geometry, elastic_material)",
     "parameters": [
       {
-        "python": "name",
+        "python": "ElasticMaterial.name",
         "type": "str",
         "default": "required",
         "si_unit": "$1$",
         "validation": "non-empty",
-        "meaning": "material identifier",
+        "meaning": "elastic material identifier",
         "backend_support": "FEM CPU/GPU: IR; FDM not currently resolved",
-        "problem_ir": "name"
+        "problem_ir": "elastic_materials[].name"
       },
       {
-        "python": "C11/C12/C44",
+        "python": "ElasticMaterial.C11",
         "type": "float",
         "default": "required",
         "si_unit": "$\\mathrm{Pa}$",
-        "validation": "positive",
-        "meaning": "cubic elastic constants",
+        "validation": "finite and positive",
+        "meaning": "cubic Voigt stiffness $C_{11}$",
         "backend_support": "FEM CPU/GPU: IR; FDM not currently resolved",
-        "problem_ir": "c11/c12/c44"
+        "problem_ir": "elastic_materials[].c11"
       },
       {
-        "python": "rho",
+        "python": "ElasticMaterial.C12",
+        "type": "float",
+        "default": "required",
+        "si_unit": "$\\mathrm{Pa}$",
+        "validation": "finite and positive",
+        "meaning": "cubic Voigt stiffness $C_{12}$",
+        "backend_support": "FEM CPU/GPU: IR; FDM not currently resolved",
+        "problem_ir": "elastic_materials[].c12"
+      },
+      {
+        "python": "ElasticMaterial.C44",
+        "type": "float",
+        "default": "required",
+        "si_unit": "$\\mathrm{Pa}$",
+        "validation": "finite and positive",
+        "meaning": "cubic Voigt shear stiffness $C_{44}$",
+        "backend_support": "FEM CPU/GPU: IR; FDM not currently resolved",
+        "problem_ir": "elastic_materials[].c44"
+      },
+      {
+        "python": "ElasticMaterial.rho",
         "type": "float",
         "default": "required",
         "si_unit": "$\\mathrm{kg\\,m^{-3}}$",
-        "validation": "positive",
+        "validation": "finite and positive",
         "meaning": "mass density",
         "backend_support": "FEM CPU/GPU: IR; FDM not currently resolved",
-        "problem_ir": "density"
+        "problem_ir": "elastic_materials[].density"
       },
       {
-        "python": "eta_mech",
-        "type": "float or None",
+        "python": "ElasticMaterial.eta_mech",
+        "type": "float | None",
         "default": "None",
         "si_unit": "$\\mathrm{Pa\\,s}$",
-        "validation": "non-negative when supplied",
-        "meaning": "mechanical damping",
+        "validation": "finite and non-negative when supplied",
+        "meaning": "mechanical damping coefficient",
         "backend_support": "FEM CPU/GPU: IR; FDM not currently resolved",
-        "problem_ir": "mechanical_damping"
+        "problem_ir": "elastic_materials[].mechanical_damping"
+      },
+      {
+        "python": "ElasticBody.name",
+        "type": "str",
+        "default": "required",
+        "si_unit": "$1$",
+        "validation": "non-empty",
+        "meaning": "elastic body identifier",
+        "backend_support": "FEM CPU/GPU: IR; FDM not currently resolved",
+        "problem_ir": "elastic_bodies[].name"
+      },
+      {
+        "python": "ElasticBody.geometry",
+        "type": "Geometry",
+        "default": "required",
+        "si_unit": "$1$",
+        "validation": "typed geometry object",
+        "meaning": "geometric solid of the elastic body",
+        "backend_support": "FEM CPU/GPU: IR; FDM not currently resolved",
+        "problem_ir": "elastic_bodies[].geometry"
+      },
+      {
+        "python": "ElasticBody.elastic_material",
+        "type": "ElasticMaterial",
+        "default": "required",
+        "si_unit": "$1$",
+        "validation": "`ElasticMaterial` instance",
+        "meaning": "elastic material assigned to the body",
+        "backend_support": "FEM CPU/GPU: IR; FDM not currently resolved",
+        "problem_ir": "elastic_bodies[].elastic_material"
       }
     ],
     "returns": "typed ProblemIR record at to_ir()"

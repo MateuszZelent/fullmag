@@ -1,15 +1,15 @@
 {
-  "document": {"path": "public_docs/site/numerical-methods/relaxation/stopping-criteria.md", "reviewed_revision": "a1de38b4d7dad275dccbdbfd937b757d6ca7ee99"},
+  "document": {"path": "public_docs/site/numerical-methods/relaxation/stopping-criteria.md", "reviewed_revision": "752450f8d259ab97c76c36fe666d5474b02abe9a"},
   "backend_matrix": [
-    {"solver": "FEM", "device": "CPU", "status": "source-backed"},
-    {"solver": "FEM", "device": "GPU", "status": "source-backed", "reason": "Native reductions exist; executed-device qualification is separate."},
-    {"solver": "FDM", "device": "CPU", "status": "source-backed"},
-    {"solver": "FDM", "device": "GPU", "status": "source-backed", "reason": "Native completion path exists; device evidence is separate."}
+    {"solver": "FEM", "device": "CPU", "status": "implemented"},
+    {"solver": "FEM", "device": "GPU", "status": "implemented"},
+    {"solver": "FDM", "device": "CPU", "status": "implemented"},
+    {"solver": "FDM", "device": "GPU", "status": "implemented"}
   ],
   "equations": [
     {"id": "eq-relax-stop-torque", "symbols": ["tau_max", "m", "H_eff"], "sources": ["runner-completion"]},
-    {"id": "eq-relax-stop-energy", "symbols": ["DeltaE", "E", "WE", "epsilonE"], "sources": ["runner-completion"]},
-    {"id": "eq-relax-stop-completion", "symbols": ["converged", "tau_max", "epsilon_tau", "epsilonE", "DeltaE"], "sources": ["runner-completion", "python-stop"]}
+    {"id": "eq-relax-stop-energy", "symbols": ["DeltaE", "E", "WE", "epsilonE"], "sources": ["runner-energy-window", "runner-completion"]},
+    {"id": "eq-relax-stop-completion", "symbols": ["converged", "tau_max", "epsilon_tau", "epsilonE", "DeltaE"], "sources": ["runner-completion", "runner-reason", "python-stop"]}
   ],
   "symbols": [
     {"id": "m", "latex": "\\mathbf m_i^{(k)}", "meaning": "accepted reduced magnetization", "si_unit": "1"},
@@ -26,14 +26,17 @@
   ],
   "sources": [
     {"id": "runner-completion", "path": "crates/fullmag-runner/src/relaxation/convergence.rs", "symbol": "relaxation_converged", "responsibility": "Accepted-state torque/energy completion and budget semantics."},
+    {"id": "runner-energy-window", "path": "crates/fullmag-runner/src/relaxation/convergence.rs", "symbol": "RelaxationEnergyPlateauWindow", "responsibility": "Fixed 50-sample accepted-energy plateau window."},
+    {"id": "runner-torque-confirm", "path": "crates/fullmag-runner/src/relaxation/convergence.rs", "symbol": "RelaxationTorqueConfirmation", "responsibility": "Three-consecutive-sample torque confirmation guard."},
+    {"id": "runner-reason", "path": "crates/fullmag-runner/src/relaxation/convergence.rs", "symbol": "resolve_stage_completion", "responsibility": "Authoritative stage completion reason mapping."},
     {"id": "python-stop", "path": "packages/fullmag-py/src/fullmag/model/study.py", "symbol": "class RelaxStop", "responsibility": "Public stop contract and ProblemIR normalization."},
     {"id": "python-flat-stop", "path": "packages/fullmag-py/src/fullmag/world.py", "symbol": "_resolve_flat_relax_stop", "responsibility": "tolT/tolA conversion and alias validation."}
   ],
   "public_api": {
     "parameters": [
       {"python": "fm.RelaxStop.torque_tolerance_apm", "type": "float | None", "default": "$0.7957747154594767$", "si_unit": "$\\mathrm{A\\,m^{-1}}$", "validation": "positive when set", "meaning": "primary torque threshold", "backend_support": "FDM/FEM lanes", "problem_ir": "study.stop.torque_tolerance_apm"},
-      {"python": "fm.RelaxStop.energy_tolerance_j", "type": "float | None", "default": "None", "si_unit": "$\\mathrm{J}$", "validation": "positive when set", "meaning": "optional accepted-energy range threshold", "backend_support": "FDM/FEM lanes", "problem_ir": "study.stop.energy_tolerance_j"},
-      {"python": "fm.RelaxStop.max_steps", "type": "int | None", "default": "$50,000$", "si_unit": "$1$", "validation": "positive integer when set", "meaning": "work budget", "backend_support": "FDM/FEM lanes", "problem_ir": "study.stop.max_steps"}
+      {"python": "fm.RelaxStop.energy_tolerance_j", "type": "float | None", "default": "None", "si_unit": "$\\mathrm{J}$", "validation": "positive when set", "meaning": "optional 50-sample accepted-energy range threshold", "backend_support": "FDM/FEM lanes", "problem_ir": "study.stop.energy_tolerance_j"},
+      {"python": "fm.RelaxStop.max_steps", "type": "int | None", "default": "$50{,}000$", "si_unit": "$1$", "validation": "positive integer when set", "meaning": "work budget", "backend_support": "FDM/FEM lanes", "problem_ir": "study.stop.max_steps"}
     ]
   }
 }

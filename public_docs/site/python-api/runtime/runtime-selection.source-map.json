@@ -1,7 +1,7 @@
 {
   "document": {
     "path": "public_docs/site/python-api/runtime/runtime-selection.md",
-    "reviewed_revision": "ab3c8802a691a535063102c12f9a79bb0043b367"
+    "reviewed_revision": "752450f8d259ab97c76c36fe666d5474b02abe9a"
   },
   "backend_matrix": [
     {
@@ -33,79 +33,121 @@
       "path": "packages/fullmag-py/src/fullmag/model/problem.py",
       "symbol": "class RuntimeSelection",
       "responsibility": "Runtime selection state, validation, and resolution."
+    },
+    {
+      "id": "source-2",
+      "path": "packages/fullmag-py/src/fullmag/world.py",
+      "symbol": "class ExecutionContext",
+      "responsibility": "Isolated authoring context for thread/task-safe DSL capture."
+    },
+    {
+      "id": "source-3",
+      "path": "packages/fullmag-py/src/fullmag/world.py",
+      "symbol": "change_device",
+      "responsibility": "Per-stage device transition helper on StudyStagesBuilder."
     }
   ],
   "public_api": {
     "parameters": [
       {
-        "python": "study.engine(backend)",
-        "type": "`str`",
-        "default": "`\"auto\"`",
-        "si_unit": "1",
-        "validation": "One of `auto`, `fdm`, `fem`, `hybrid`",
-        "meaning": "Requested backend target",
-        "backend_support": "planner-resolved",
-        "problem_ir": "`runtime.backend_target`"
+        "python": "RuntimeSelection.backend_target",
+        "type": "`BackendTarget`",
+        "default": "`BackendTarget.AUTO`",
+        "si_unit": "$1$",
+        "validation": "`auto`, `fdm`, `fem`, or `hybrid`",
+        "meaning": "Requested solver backend family",
+        "backend_support": "Planner-resolved across FEM/FDM CPU/GPU",
+        "problem_ir": "`backend_policy.requested_backend`"
       },
       {
-        "python": "study.device(spec",
-        "type": "`str`",
-        "default": "`\"auto\"`",
-        "si_unit": "1",
-        "validation": "`cpu`, `cuda[:i]`, `gpu`, or a known device id",
-        "meaning": "Requested device target and optional precision",
-        "backend_support": "planner-resolved",
-        "problem_ir": "`runtime.device_target`, `runtime.execution_precision`"
-      },
-      {
-        "python": "precision=...)",
-        "type": "`str`",
-        "default": "`\"auto\"`",
-        "si_unit": "1",
-        "validation": "`cpu`, `cuda[:i]`, `gpu`, or a known device id",
-        "meaning": "Requested device target and optional precision",
-        "backend_support": "planner-resolved",
-        "problem_ir": "`runtime.device_target`, `runtime.execution_precision`"
-      },
-      {
-        "python": "study.mode(execution_mode)",
-        "type": "`str`",
-        "default": "`\"strict\"`",
-        "si_unit": "1",
-        "validation": "`strict`, `extended`, or `hybrid`",
-        "meaning": "Execution policy",
-        "backend_support": "planner-resolved",
-        "problem_ir": "`runtime.execution_mode`"
-      },
-      {
-        "python": "study.threads(cpu_threads)",
-        "type": "`int`",
-        "default": "not set",
-        "si_unit": "1",
-        "validation": "`>= 1`",
-        "meaning": "Requested CPU thread count",
-        "backend_support": "CPU lanes",
-        "problem_ir": "`runtime.cpu_threads`"
+        "python": "RuntimeSelection.device_target",
+        "type": "`DeviceTarget`",
+        "default": "`DeviceTarget.AUTO`",
+        "si_unit": "$1$",
+        "validation": "`auto`, `cpu`, `cuda`, or `gpu`",
+        "meaning": "Requested execution device target",
+        "backend_support": "Planner-resolved across CPU/GPU",
+        "problem_ir": "`problem_meta.runtime_metadata.runtime_selection.device`"
       },
       {
         "python": "RuntimeSelection.gpu_count",
         "type": "`int`",
         "default": "`0`",
-        "si_unit": "1",
-        "validation": "`0` or `1`; `> 1` rejected as unimplemented",
-        "meaning": "Requested GPU count",
-        "backend_support": "CUDA lanes",
-        "problem_ir": "`runtime.gpu_count`"
+        "si_unit": "$1$",
+        "validation": "`0` or `1`; `> 1` rejected as unimplemented; non-zero requires `cuda`/`gpu`",
+        "meaning": "Requested GPU device count",
+        "backend_support": "CUDA/GPU lanes",
+        "problem_ir": "`problem_meta.runtime_metadata.runtime_selection.gpu_count`"
       },
       {
         "python": "RuntimeSelection.device_index",
         "type": "`int | None`",
         "default": "`None`",
-        "si_unit": "1",
-        "validation": "Requires `cuda`/`gpu`",
-        "meaning": "Device ordinal",
-        "backend_support": "CUDA lanes",
-        "problem_ir": "`runtime.device_index`"
+        "si_unit": "$1$",
+        "validation": "Non-negative integer; requires `cuda`/`gpu`",
+        "meaning": "Explicit CUDA device ordinal",
+        "backend_support": "CUDA/GPU lanes",
+        "problem_ir": "`problem_meta.runtime_metadata.runtime_selection.device_index`"
+      },
+      {
+        "python": "RuntimeSelection.cpu_threads",
+        "type": "`int | None`",
+        "default": "`None`",
+        "si_unit": "$1$",
+        "validation": "Integer `>= 1` when set",
+        "meaning": "Requested CPU thread count for the Rayon pool",
+        "backend_support": "CPU lanes",
+        "problem_ir": "`problem_meta.runtime_metadata.runtime_selection.cpu_threads`"
+      },
+      {
+        "python": "RuntimeSelection.execution_mode",
+        "type": "`ExecutionMode`",
+        "default": "`ExecutionMode.STRICT`",
+        "si_unit": "$1$",
+        "validation": "`strict`, `extended`, or `hybrid`",
+        "meaning": "Execution capability policy",
+        "backend_support": "Planner-resolved across FEM/FDM CPU/GPU",
+        "problem_ir": "`validation_profile.execution_mode`"
+      },
+      {
+        "python": "RuntimeSelection.execution_precision",
+        "type": "`ExecutionPrecision`",
+        "default": "`ExecutionPrecision.DOUBLE`",
+        "si_unit": "$1$",
+        "validation": "`single` or `double`",
+        "meaning": "Requested floating-point precision",
+        "backend_support": "Planner-resolved across FEM/FDM CPU/GPU",
+        "problem_ir": "`backend_policy.execution_precision`"
+      },
+      {
+        "python": "RuntimeSelection.fdm_precision_policy",
+        "type": "`FdmPrecisionPolicy | None`",
+        "default": "`None`",
+        "si_unit": "$1$",
+        "validation": "`full_double` or `single_storage_fp64_reduction`; must match `execution_precision`",
+        "meaning": "Explicit FDM storage/reduction precision policy",
+        "backend_support": "FDM CPU/GPU; planner validates compatibility",
+        "problem_ir": "`problem_meta.runtime_metadata.runtime_selection.fdm_precision_policy`"
+      },
+      {
+        "python": "RuntimeSelection.parallel_execution",
+        "type": "`ParallelExecutionPolicy`",
+        "default": "`ParallelExecutionPolicy()` (`mode=\"serial\"`)",
+        "si_unit": "$1$",
+        "validation": "`serial` or `adaptive`; `adaptive` fails closed unless `fem` + `cpu`",
+        "meaning": "Independent-work admission policy",
+        "backend_support": "Serial: all lanes; adaptive: FEM CPU only",
+        "problem_ir": "`problem_meta.runtime_metadata.runtime_selection.parallel_execution`"
+      },
+      {
+        "python": "StudyStages.change_device.device",
+        "type": "`str`",
+        "default": "`required`",
+        "si_unit": "$1$",
+        "validation": "Device spec (`\"cpu\"`, `\"gpu\"`, `\"cuda\"`, `\"cuda:0\"`)",
+        "meaning": "Switch execution device for subsequent stages in a multi-stage study",
+        "backend_support": "Multi-stage CPU/GPU workflows",
+        "problem_ir": "`study.pipeline.stages[].device`"
       }
     ]
   }

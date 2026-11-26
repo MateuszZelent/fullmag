@@ -1,16 +1,16 @@
 {
-  "document": {"path": "public_docs/site/numerical-methods/relaxation/projected-gradient.md", "reviewed_revision": "a1de38b4d7dad275dccbdbfd937b757d6ca7ee99"},
+  "document": {"path": "public_docs/site/numerical-methods/relaxation/projected-gradient.md", "reviewed_revision": "752450f8d259ab97c76c36fe666d5474b02abe9a"},
   "backend_matrix": [
-    {"solver": "FEM", "device": "CPU", "status": "source-backed"},
-    {"solver": "FEM", "device": "GPU", "status": "source-backed", "reason": "Native CUDA step source exists; runtime qualification is separate."},
-    {"solver": "FDM", "device": "CPU", "status": "source-backed"},
-    {"solver": "FDM", "device": "GPU", "status": "source-backed", "reason": "CUDA/reference direct-minimizer path exists; executed-device evidence is separate."}
+    {"solver": "FEM", "device": "CPU", "status": "implemented"},
+    {"solver": "FEM", "device": "GPU", "status": "implemented"},
+    {"solver": "FDM", "device": "CPU", "status": "implemented"},
+    {"solver": "FDM", "device": "GPU", "status": "implemented"}
   ],
   "equations": [
     {"id": "eq-pgbb-tangent-gradient", "symbols": ["g", "H_eff", "m", "tau"], "sources": ["physics-pgbb", "fdm-pgbb"]},
-    {"id": "eq-pgbb-retraction", "symbols": ["R", "m", "lambda", "p"], "sources": ["physics-pgbb", "fdm-pgbb"]},
-    {"id": "eq-pgbb-step-selection", "symbols": ["lambda", "s", "y"], "sources": ["physics-pgbb", "fdm-policy"]},
-    {"id": "eq-pgbb-armijo", "symbols": ["E", "lambda", "c1", "D"], "sources": ["physics-pgbb", "fem-cpu-pgbb"]},
+    {"id": "eq-pgbb-retraction", "symbols": ["R", "m", "lambda", "p"], "sources": ["physics-pgbb", "fdm-pgbb", "fdm-gpu-pgbb"]},
+    {"id": "eq-pgbb-step-selection", "symbols": ["lambda", "s", "y"], "sources": ["physics-pgbb", "fdm-policy", "fem-gpu-bb-precond"]},
+    {"id": "eq-pgbb-armijo", "symbols": ["E", "lambda", "c1", "D"], "sources": ["physics-pgbb", "fem-cpu-pgbb", "fem-gpu-pgbb"]},
     {"id": "eq-pgbb-energy-metric", "symbols": ["mu0", "Ms", "V", "a", "b"], "sources": ["fdm-policy", "fem-cpu-pgbb", "fem-gpu-pgbb"]}
   ],
   "symbols": [
@@ -21,8 +21,8 @@
     {"id": "R", "latex": "\\mathcal R_{\\mathbf m_i}", "meaning": "sphere retraction", "si_unit": "1"},
     {"id": "lambda", "latex": "\\lambda_k", "meaning": "minimizer step size", "si_unit": "\\mathrm{m\\,A^{-1}}"},
     {"id": "p", "latex": "\\mathbf p_i", "meaning": "tangent search direction", "si_unit": "\\mathrm{A\\,m^{-1}}"},
-    {"id": "s", "latex": "\\mathbf s_k", "meaning": "magnetization difference", "si_unit": "1"},
-    {"id": "y", "latex": "\\mathbf y_k", "meaning": "gradient difference", "si_unit": "\\mathrm{A\\,m^{-1}}"},
+    {"id": "s", "latex": "\\mathbf s_k", "meaning": "tangent-transported magnetization difference", "si_unit": "1"},
+    {"id": "y", "latex": "\\mathbf y_k", "meaning": "tangent-transported gradient difference", "si_unit": "\\mathrm{A\\,m^{-1}}"},
     {"id": "E", "latex": "E", "meaning": "total micromagnetic energy", "si_unit": "\\mathrm{J}"},
     {"id": "c1", "latex": "c_1", "meaning": "Armijo sufficient-decrease constant", "si_unit": "1"},
     {"id": "D", "latex": "D_k", "meaning": "energy directional derivative with respect to $\\lambda$", "si_unit": "\\mathrm{J\\,A\\,m^{-1}}"},
@@ -35,17 +35,24 @@
   "sources": [
     {"id": "physics-pgbb", "path": "crates/fullmag-runner/src/relaxation/direct_minimizer.rs", "symbol": "projected_gradient_armijo_accepts", "responsibility": "Shared projected-gradient Armijo acceptance contract."},
     {"id": "fdm-pgbb", "path": "crates/fullmag-runner/src/relaxation/direct_minimizer_reference.rs", "symbol": "execute_projected_gradient_bb", "responsibility": "FDM reference direct-minimizer loop."},
+    {"id": "fdm-gpu-pgbb", "path": "backends/fdm/gpu/cuda/runtime/single_layer_bb.cu", "symbol": "context_single_layer_bb", "responsibility": "Single-layer device-resident CUDA PG-BB execution (native_cuda_pgbb)."},
+    {"id": "fdm-cuda-dispatch", "path": "crates/fullmag-runner/src/fdm/gpu/cuda/direct_minimizer.rs", "symbol": "execute_direct_minimizer", "responsibility": "Native CUDA direct-minimizer dispatch and residency receipt."},
     {"id": "fdm-policy", "path": "crates/fullmag-runner/src/relaxation/direct_minimizer.rs", "symbol": "projected_gradient_step_size_update", "responsibility": "Shared FDM/CUDA BB step and line-search policy."},
+    {"id": "fdm-line-search", "path": "crates/fullmag-runner/src/relaxation/direct_minimizer.rs", "symbol": "projected_gradient_line_search", "responsibility": "Normalized trial, Armijo check, and 20-backtrack limit."},
     {"id": "fem-cpu-pgbb", "path": "backends/fem/cpu/mfem/relaxation/projected_gradient_bb.cpp", "symbol": "run_projected_gradient_bb_step", "responsibility": "Native FEM CPU projected-gradient step."},
-    {"id": "fem-gpu-pgbb", "path": "backends/fem/gpu/cuda/relaxation/pgbb.cpp", "symbol": "gpu_relax_projected_gradient_bb_step", "responsibility": "Native FEM GPU projected-gradient step."},
+    {"id": "fem-gpu-pgbb", "path": "backends/fem/gpu/cuda/relaxation/pgbb.cpp", "symbol": "gpu_relax_projected_gradient_bb_step", "responsibility": "Native FEM GPU projected-gradient step with endpoint potential reuse."},
+    {"id": "fem-gpu-bb-precond", "path": "backends/fem/gpu/cuda/relaxation/bb_exchange_mass.cpp", "symbol": "gpu_bb_exchange_mass_solve_and_project", "responsibility": "FEM GPU exchange-mass tangent preconditioner solve."},
+    {"id": "relax-provenance", "path": "crates/fullmag-runner/src/relaxation/provenance.rs", "symbol": "resolve_fem_direct_minimizer_policy", "responsibility": "Records native_cuda_pgbb and FEM BB preconditioner provenance."},
     {"id": "python-relaxation", "path": "packages/fullmag-py/src/fullmag/model/study.py", "symbol": "class Relaxation", "responsibility": "Public algorithm validation and IR destination."},
-    {"id": "python-stage", "path": "packages/fullmag-py/src/fullmag/world.py", "symbol": "relax_stage", "responsibility": "Stage-first lowering."}
+    {"id": "python-stage", "path": "packages/fullmag-py/src/fullmag/world.py", "symbol": "relax_stage", "responsibility": "Stage-first lowering."},
+    {"id": "python-bb-precond", "path": "packages/fullmag-py/src/fullmag/model/bb_pipeline.py", "symbol": "is_gpu_bb_only_pipeline", "responsibility": "Validates explicit FEM GPU projected_gradient_bb pipeline for fem_bb_preconditioner."}
   ],
   "public_api": {
     "parameters": [
-      {"python": "StudyStagesBuilder.add_relax(algorithm=\"projected_gradient_bb\")", "type": "str", "default": "required for this page", "si_unit": "$1$", "validation": "supported algorithm identifier", "meaning": "selects BB projected minimizer", "backend_support": "FDM reference; FEM CPU/GPU native lanes", "problem_ir": "study.algorithm"},
+      {"python": "StudyStagesBuilder.add_relax(algorithm=\"projected_gradient_bb\")", "type": "str", "default": "required for this page", "si_unit": "$1$", "validation": "supported algorithm identifier", "meaning": "selects BB projected minimizer", "backend_support": "FDM CPU/GPU; FEM CPU/GPU", "problem_ir": "study.algorithm"},
       {"python": "StudyStagesBuilder.add_relax(tolT=...)", "type": "float", "default": "$10^{-6}$", "si_unit": "$\\mathrm{T}$", "validation": "finite and positive; exclusive with `tolA`", "meaning": "requested torque threshold", "backend_support": "FDM/FEM lanes", "problem_ir": "study.stop.torque_tolerance_apm"},
-      {"python": "StudyStagesBuilder.add_relax(max_steps=...)", "type": "int", "default": "$50,000$", "si_unit": "$1$", "validation": "positive integer", "meaning": "iteration budget", "backend_support": "FDM/FEM lanes", "problem_ir": "study.stop.max_steps"}
+      {"python": "StudyStagesBuilder.add_relax(max_steps=...)", "type": "int", "default": "$50{,}000$", "si_unit": "$1$", "validation": "positive integer", "meaning": "iteration budget", "backend_support": "FDM/FEM lanes", "problem_ir": "study.stop.max_steps"},
+      {"python": "StudyBuilder.fem_bb_preconditioner(policy)", "type": "str", "default": "\"auto\"", "si_unit": "$1$", "validation": "requires explicit FEM GPU", "meaning": "GPU BB direction preconditioner", "backend_support": "FEM GPU only", "problem_ir": "discretization.fem.gpu_bb_preconditioner"}
     ]
   }
 }

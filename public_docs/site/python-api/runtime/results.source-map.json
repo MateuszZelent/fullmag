@@ -1,7 +1,7 @@
 {
   "document": {
     "path": "public_docs/site/python-api/runtime/results.md",
-    "reviewed_revision": "ab3c8802a691a535063102c12f9a79bb0043b367"
+    "reviewed_revision": "752450f8d259ab97c76c36fe666d5474b02abe9a"
   },
   "backend_matrix": [
     {
@@ -32,7 +32,7 @@
       "id": "source-1",
       "path": "packages/fullmag-py/src/fullmag/runtime/simulation.py",
       "symbol": "class Result",
-      "responsibility": "Resolved result record and scalar accessors."
+      "responsibility": "Resolved result record, diagnostic notes, scalar descriptors, and state export."
     }
   ],
   "public_api": {
@@ -41,9 +41,9 @@
         "python": "Result.status",
         "type": "`str`",
         "default": "`required`",
-        "si_unit": "1",
+        "si_unit": "$1$",
         "validation": "`completed`, `planned`, or `not-executable`",
-        "meaning": "`completed`, `planned`, or `not-executable`",
+        "meaning": "Resolved run execution status",
         "backend_support": "FEM/FDM CPU/GPU; planner and runtime capability checks remain authoritative",
         "problem_ir": "run status"
       },
@@ -51,61 +51,71 @@
         "python": "Result.backend",
         "type": "`BackendTarget`",
         "default": "`required`",
-        "si_unit": "1",
-        "validation": "Resolved backend",
-        "meaning": "Resolved backend",
+        "si_unit": "$1$",
+        "validation": "Resolved `BackendTarget` enum",
+        "meaning": "Backend selected for the run",
         "backend_support": "FEM/FDM CPU/GPU; planner and runtime capability checks remain authoritative",
-        "problem_ir": "`requested_backend`"
+        "problem_ir": "`backend_policy.requested_backend`"
       },
       {
         "python": "Result.mode",
         "type": "`ExecutionMode`",
         "default": "`required`",
-        "si_unit": "1",
-        "validation": "Resolved execution mode",
-        "meaning": "Resolved execution mode",
+        "si_unit": "$1$",
+        "validation": "Resolved `ExecutionMode` enum",
+        "meaning": "Execution policy applied to the run",
         "backend_support": "FEM/FDM CPU/GPU; planner and runtime capability checks remain authoritative",
-        "problem_ir": "`execution_mode`"
+        "problem_ir": "`validation_profile.execution_mode`"
       },
       {
         "python": "Result.precision",
         "type": "`ExecutionPrecision`",
         "default": "`required`",
-        "si_unit": "1",
-        "validation": "Resolved precision",
-        "meaning": "Resolved precision",
+        "si_unit": "$1$",
+        "validation": "Resolved `ExecutionPrecision` enum",
+        "meaning": "Floating-point precision applied to the run",
         "backend_support": "FEM/FDM CPU/GPU; planner and runtime capability checks remain authoritative",
-        "problem_ir": "`execution_precision`"
+        "problem_ir": "`backend_policy.execution_precision`"
+      },
+      {
+        "python": "Result.notes",
+        "type": "`Sequence[str]`",
+        "default": "`()`",
+        "si_unit": "$1$",
+        "validation": "Ordered diagnostic strings",
+        "meaning": "Planning, capability, or non-executable diagnostic notes",
+        "backend_support": "FEM/FDM CPU/GPU runtime record",
+        "problem_ir": "runtime notes"
       },
       {
         "python": "Result.steps",
         "type": "`Sequence[StepStats]`",
-        "default": "empty",
-        "si_unit": "1",
-        "validation": "Per-step statistics",
-        "meaning": "Per-step statistics",
-        "backend_support": "FEM/FDM CPU/GPU; planner and runtime capability checks remain authoritative",
+        "default": "`()`",
+        "si_unit": "$1$",
+        "validation": "Per-step scalar statistics",
+        "meaning": "Recorded time-step observables and energies",
+        "backend_support": "FEM/FDM CPU/GPU runtime output",
         "problem_ir": "steps array"
       },
       {
         "python": "Result.final_magnetization",
         "type": "`list[list[float]] | None`",
         "default": "`None`",
-        "si_unit": "1",
-        "validation": "Final vector samples",
-        "meaning": "Final vector samples",
-        "backend_support": "FEM/FDM CPU/GPU; planner and runtime capability checks remain authoritative",
+        "si_unit": "$1$",
+        "validation": "Final reduced magnetization vectors `(N, 3)`",
+        "meaning": "Final unit magnetization samples",
+        "backend_support": "FEM/FDM CPU/GPU runtime output",
         "problem_ir": "final magnetization"
       },
       {
         "python": "Result.output_dir",
         "type": "`str | None`",
         "default": "`None`",
-        "si_unit": "1",
-        "validation": "Artifact directory",
-        "meaning": "Artifact directory",
-        "backend_support": "FEM/FDM CPU/GPU; planner and runtime capability checks remain authoritative",
-        "problem_ir": "output dir"
+        "si_unit": "$1$",
+        "validation": "Resolved artifact directory path",
+        "meaning": "Directory holding persisted run artifacts",
+        "backend_support": "FEM/FDM CPU/GPU runtime output",
+        "problem_ir": "`resolved_output_storage.output_dir`"
       }
     ]
   }

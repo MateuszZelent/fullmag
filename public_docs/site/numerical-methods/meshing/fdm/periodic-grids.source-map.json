@@ -1,7 +1,7 @@
 {
   "document": {
     "path": "public_docs/site/numerical-methods/meshing/fdm/periodic-grids.md",
-    "reviewed_revision": "969efa0941905825ac569d525f4bdaefc059e2af"
+    "reviewed_revision": "752450f8d259ab97c76c36fe666d5474b02abe9a"
   },
   "backend_matrix": [
     {
@@ -63,6 +63,13 @@
       "path": "crates/fullmag-engine/src/fdm/cpu/fft.rs",
       "symbol": "compute_periodic_newell_kernel_spectra",
       "responsibility": "CPU periodic spectra."
+    },
+    {
+      "id": "cufft_preflight",
+      "path": "backends/fdm/gpu/cuda/runtime/context.cu",
+      "symbol": "alloc_fft_workspace",
+      "responsibility": "Exact cuFFT half-spectrum workspace preflight and shared forward/inverse work area",
+      "evidence_status": "verified"
     }
   ],
   "symbols": [

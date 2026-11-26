@@ -11,7 +11,8 @@ owner: fullmag-public-docs
 
 The airbox panel edits the universe-owned exterior geometry and air-mesh policy. Its typed draft is
 defined in `airboxMeshPolicyDraft.ts`; the UI is implemented by
-`AirboxMeshParametersPanel.tsx`.
+`AirboxMeshParametersInspectorSpecPanel` (`AirboxMeshSizingSpecs.tsx`) and
+`AirboxMeshInspectorSpecPanel` (`AirboxMeshOverviewSpec.tsx`).
 
 ## Canonical controls
 
@@ -56,5 +57,6 @@ the current text fields.
 
 | Repository path | Stable symbol | Responsibility |
 |---|---|---|
-| `apps/control-room/src/modules/inspector/panels/airbox/AirboxMeshParametersPanel.tsx` | `AirboxMeshParametersPanel` | Controls and explicit Apply/build transaction |
+| `apps/control-room/src/modules/inspector/inspectors/universe/AirboxMeshSizingSpecs.tsx` | `AirboxMeshParametersInspectorSpecPanel` | Controls and explicit Apply/build transaction |
+| `apps/control-room/src/modules/inspector/inspectors/universe/AirboxMeshOverviewSpec.tsx` | `AirboxMeshInspectorSpecPanel` | Airbox overview, revision match, and effective config readout |
 | `apps/control-room/src/modules/inspector/panels/airbox/airboxMeshPolicyDraft.ts` | `buildAirboxMeshPolicyReplaceRequest` | Typed/JSON policy merge and FDM filtering |

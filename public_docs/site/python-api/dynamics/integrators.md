@@ -1,6 +1,6 @@
 ---
 title: Integrators
-status: partial
+status: implemented
 doc_kind: reference
 audience: user
 owner: fullmag-public-docs
@@ -12,7 +12,7 @@ owner: fullmag-public-docs
 (python-api-dynamics-integrators-problem-statement)=
 ## 1. Physical problem and overview
 
-`LLG.integrator` (and `study.solver(integrator=...)`) selects the numerical time-integration scheme used to advance the semi-discrete Landau–Lifshitz–Gilbert (LLG) equation across time-evolution and overdamped relaxation stages. Fullmag distinguishes fixed-step schemes (`heun`, `rk4`, `abm3`, `coupled_imex_ark2`), embedded adaptive Runge–Kutta pairs (`rk23`, `rk45`), and the planner-resolved `"auto"` mode.
+`LLG.integrator` (and `study.solver(integrator=...)`) selects the numerical time-integration scheme used to advance the semi-discrete Landau–Lifshitz–Gilbert (LLG) equation across time-evolution and overdamped relaxation stages. Fullmag distinguishes fixed-step-only schemes (`heun`, `rk4`, `abm3`), adaptive-capable schemes (`rk23`, `rk45`, and `coupled_imex_ark2` for coupled transient M3 spin drift-diffusion), and the planner-resolved `"auto"` mode.
 
 (python-api-dynamics-integrators-governing-equations)=
 ## 2. Governing equations
@@ -55,9 +55,9 @@ y_{n+1} = \mathcal{N}\!\left(y_n + \frac{\Delta t}{12}\left(5 F(t_{n+1}, y_{n+1}
 (python-api-dynamics-integrators-assumptions-and-validity)=
 ## 4. Assumptions and limits of validity
 
-- **Alias normalization**: `"euler"` normalizes to `"heun"` (two-stage second-order predictor–corrector) and `"dopri5"` normalizes to `"rk45"` (Dormand–Prince 5(4)).
-- **Fixed vs. adaptive exclusivity**: Fixed-step integrators (`heun`, `rk4`, `abm3`, `coupled_imex_ark2`) require `fixed_timestep` and reject `adaptive_timestep`; adaptive pairs (`rk23`, `rk45`) reject `fixed_timestep`.
-- **Provenance preservation**: `"auto"` is preserved verbatim in `ProblemIR` (`requested intent`) and resolved by the planner to `"rk45"` (or the appropriate lane default) in the execution plan and receipt (`resolved execution`).
+- **Alias normalization**: `"dp54"` normalizes to `"rk45"` (Dormand–Prince 5(4)), and `"bs23"` or `"rk32"` normalizes to `"rk23"` (Bogacki–Shampine 3(2)). Unrecognized names such as `"euler"` or `"dopri5"` raise `ValueError`.
+- **Fixed vs. adaptive stepping**: `fixed_timestep` and `adaptive_timestep` are mutually exclusive. Fixed-step-only integrators (`heun`, `rk4`, `abm3`) reject `adaptive_timestep`, whereas `ADAPTIVE_INTEGRATORS = {"rk23", "rk45", "coupled_imex_ark2"}` accept `adaptive_timestep` (embedded RK error control for `rk23`/`rk45`; step-doubling ARS(2,3,2) error control for `coupled_imex_ark2`).
+- **Provenance preservation**: `"auto"` is preserved verbatim in `ProblemIR` (`requested intent`) and resolved by the planner to a concrete backend stepper in the execution plan and receipt (`resolved execution`).
 
 (python-api-dynamics-integrators-python-api)=
 ## 5. Python API and parameter contract
@@ -66,8 +66,7 @@ y_{n+1} = \mathcal{N}\!\left(y_n + \frac{\Delta t}{12}\left(5 F(t_{n+1}, y_{n+1}
 
 ```text
 fm.LLG(
-    *,
-    gamma: float = 2.211e5,
+    gamma: float = 221100.0,
     integrator: str = "auto",
     fixed_timestep: float | None = None,
     adaptive_timestep: AdaptiveTimestep | None = None,
@@ -79,48 +78,51 @@ fm.LLG(
 
 | Python parameter | Type | Default | SI unit | Validation | Meaning | Backend support | `ProblemIR` |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| `LLG.integrator` | `str` | `"auto"` | $1$ | One of `heun`, `rk4`, `rk23`, `rk45`, `abm3`, `coupled_imex_ark2`, `auto` | Time integration scheme | FEM/FDM CPU/GPU; planner and runtime capability checks remain authoritative | `dynamics.integrator` |
-| `LLG.gamma` | `float` | `2.211e5` | $\mathrm{m\,A^{-1}\,s^{-1}}$ | Positive | Gyromagnetic ratio | FEM/FDM CPU/GPU; planner and runtime capability checks remain authoritative | `dynamics.gyromagnetic_ratio` |
-| `LLG.fixed_timestep` | `float \| None` | `None` | $\mathrm{s}$ | Positive; exclusive with adaptive step | Fixed step size | FEM/FDM CPU/GPU; planner and runtime capability checks remain authoritative | `dynamics.fixed_timestep` |
-| `LLG.adaptive_timestep` | `AdaptiveTimestep \| None` | `None` | $1$ | Adaptive integrator required | Embedded error control | FEM/FDM CPU/GPU; planner and runtime capability checks remain authoritative | `dynamics.adaptive_timestep` |
+| `LLG.integrator` | `str` | `"auto"` | $1$ | One of `heun`, `rk4`, `rk23`, `rk45`, `abm3`, `coupled_imex_ark2`, `auto` (aliases: `dp54`, `bs23`, `rk32`) | Time integration scheme | FEM/FDM CPU/GPU; planner and runtime capability checks remain authoritative | `dynamics.integrator` |
+| `LLG.gamma` | `float` | `221100.0` | $\mathrm{m\,A^{-1}\,s^{-1}}$ | Positive finite | Gyromagnetic ratio | FEM/FDM CPU/GPU; planner and runtime capability checks remain authoritative | `dynamics.gyromagnetic_ratio` |
+| `LLG.fixed_timestep` | `float \| None` | `None` | $\mathrm{s}$ | Positive finite; mutually exclusive with `adaptive_timestep` | Fixed step size | FEM/FDM CPU/GPU; planner and runtime capability checks remain authoritative | `dynamics.fixed_timestep` |
+| `LLG.adaptive_timestep` | `AdaptiveTimestep \| None` | `None` | $1$ | Adaptive integrator (`rk23`, `rk45`, `coupled_imex_ark2`, or `auto`) required | Embedded RK or step-doubling error control | FEM/FDM CPU/GPU; planner and runtime capability checks remain authoritative | `dynamics.adaptive_timestep` |
+| `LLG.field_refresh` | `FieldRefreshPolicy \| None` | `None` | $1$ | Optional `FieldRefreshPolicy` instance | Demagnetization refresh cadence | FEM/FDM CPU/GPU; planner and runtime capability checks remain authoritative | `dynamics.field_refresh` |
 
 ### Executable Python example
 
 ```python
-# %%
+# %% Compare Dormand-Prince RK45 and fixed-step ABM3 dynamics contracts
 import fullmag as fm
 
-world = fm.World(
-    dx=5e-9,
-    dy=5e-9,
-    dz=5e-9,
-    nx=16,
-    ny=4,
-    nz=1,
-    boundaries=fm.BoundaryConfig.open(method="fft"),
-)
-world.add_box(
-    "strip",
-    size=(80e-9, 20e-9, 5e-9),
-    material=fm.Material.permalloy(Ms=8.0e5, Aex=1.3e-11, alpha=0.02),
-    m_init=fm.VectorFieldSpec.uniform((1.0, 0.05, 0.0)),
-    demag=True,
-)
+nm = 1.0e-9
 
-# Compare Dormand-Prince RK45 and fixed-step ABM3 configurations
-study = fm.study(world, target="fdm", device="cpu", precision="fp64")
-study.solver(
-    integrator="rk45",
+rk45_dynamics = fm.LLG(
+    integrator="dp54",  # normalizes to "rk45"
     adaptive_timestep=fm.AdaptiveTimestep(atol=1e-6, rtol=1e-4, dt_min=1e-15, dt_max=2e-12),
 )
-study.stages.add_time(name="rk45_run", duration=0.1e-9, By=5e-3, save_m_every=50e-12)
+abm3_dynamics = fm.LLG(integrator="abm3", fixed_timestep=5.0e-14)
+assert rk45_dynamics.integrator == "rk45"
+assert abm3_dynamics.to_ir()["kind"] == "llg"
+assert abm3_dynamics.to_ir()["integrator"] == "abm3"
 
-study_abm3 = fm.study(world, target="fdm", device="cpu", precision="fp64")
-study_abm3.solver(integrator="abm3", fixed_timestep=5e-14)
-study_abm3.stages.add_time(name="abm3_run", duration=0.1e-9, By=5e-3, save_m_every=50e-12)
+study = fm.study("integrator_selection_example")
+study.engine("fdm")
+study.device("cpu", precision="double")
+study.mode("strict")
+study.objects.mesh.defaults(cell_size=(5 * nm, 5 * nm, 5 * nm))
 
-assert study.to_problem_ir()["study"]["dynamics"]["integrator"] == "rk45"
-assert study_abm3.to_problem_ir()["study"]["dynamics"]["integrator"] == "abm3"
+strip = study.geometry(fm.Box(size=(80 * nm, 20 * nm, 5 * nm)), name="strip")
+strip.Ms = 800.0e3
+strip.Aex = 13.0e-12
+strip.alpha = 0.02
+strip.m = fm.texture.uniform(1.0, 0.05, 0.0)
+
+study.exchange()
+study.demag()
+study.b_ext(0.0, 5.0e-3, 0.0)
+study.solver(
+    integrator=rk45_dynamics.integrator,
+    adaptive_timestep=rk45_dynamics.adaptive_timestep,
+)
+study.stages.add_run(until=0.1e-9, stage_id="rk45_run").autosave(
+    fm.StageAutosave(fields=[fm.FieldAutosave("m", every=50.0e-12)])
+)
 ```
 
 (python-api-dynamics-integrators-problem-ir)=
@@ -128,14 +130,10 @@ assert study_abm3.to_problem_ir()["study"]["dynamics"]["integrator"] == "abm3"
 
 ```json
 {
-  "dynamics": {
-    "equation": "llg",
-    "gyromagnetic_ratio": 221100.0,
-    "integrator": "abm3",
-    "fixed_timestep": 5e-14,
-    "adaptive_timestep": null,
-    "field_refresh": null
-  }
+  "kind": "llg",
+  "gyromagnetic_ratio": 221100.0,
+  "integrator": "abm3",
+  "fixed_timestep": 5e-14
 }
 ```
 
@@ -143,16 +141,16 @@ assert study_abm3.to_problem_ir()["study"]["dynamics"]["integrator"] == "abm3"
 ## 7. Round-trip, provenance, and failure semantics
 
 - **Requested intent vs. resolved execution**: `ProblemIR` stores the canonicalized `integrator` string (`requested intent`), while the execution plan and receipt record the concrete backend stepper (`resolved execution`).
-- **Validation errors**: Unknown integrator strings or mismatched `fixed_timestep` / `adaptive_timestep` pairings raise `ValueError` validation errors in Python.
-- **Unsupported combinations**: Requesting `abm3` or `coupled_imex_ark2` on `target="fem"` is rejected as an unsupported combination by the planner.
+- **Validation errors**: Unknown integrator strings, supplying both `fixed_timestep` and `adaptive_timestep`, or attaching `adaptive_timestep` to `heun`/`rk4`/`abm3` raise `ValueError` validation errors in Python.
+- **Unsupported combinations**: Requesting `abm3` or `coupled_imex_ark2` on `target="fem"`, or requesting `coupled_imex_ark2` outside a qualified transient M3 spin drift-diffusion study, is rejected as an unsupported combination by the planner.
 
 (python-api-dynamics-integrators-discrete-realization)=
 ## 8. Discrete realization and numerical operators
 
 - **FEM CPU**: `context_step_explicit_rk_mfem` (`heun`, `rk4`, `rk23`, `rk45`).
-- **FEM GPU**: `gpu_rk_device_resident_step` (`heun`, `rk4`, `rk23`, `rk45`).
+- **FEM GPU**: `gpu_rk_device_resident_step` (`heun`, `rk4`, `rk23`, `rk45`), including FSAL `k0` reuse for Heun/RK4 and a two-step linear potential predictor on Krylov lanes; see {ref}`numerical-methods-performance-fem-gpu-demag`.
 - **FDM CPU**: `heun`, `rk4`, `rk23`, `rk45`, `abm3` (`abm3_step_soa_state_buf`), and `coupled_imex_ark2`.
-- **FDM GPU**: CUDA `heun`, `rk4`, `rk23`, `rk45`, and `coupled_imex_ark2`.
+- **FDM GPU**: CUDA `heun`, `rk4`, `rk23`, `rk45` (with FSAL and fused FP64 spin torques), and `coupled_imex_ark2`; see {ref}`numerical-methods-performance-fdm-core`.
 
 (python-api-dynamics-integrators-implementation-mapping)=
 ## 9. Backend and device implementation mapping
@@ -173,6 +171,7 @@ assert study_abm3.to_problem_ir()["study"]["dynamics"]["integrator"] == "abm3"
 ## 11. Known limitations and operational constraints
 
 - `abm3` requires uniform $\Delta t$ across steps; changing external stage fields discontinuously across stage boundaries resets the multistep history unless resumed from a matching `FdmCpuSolverCheckpointV1`.
+- `coupled_imex_ark2` is an ARS(2,3,2) IMEX scheme designed specifically for coupled transient M3 spin drift-diffusion problems and is not a general-purpose FEM integrator.
 
 (python-api-dynamics-integrators-scientific-bibliography)=
 ## 12. Scientific bibliography
@@ -185,7 +184,7 @@ assert study_abm3.to_problem_ir()["study"]["dynamics"]["integrator"] == "abm3"
 
 | Layer | File | Symbol / entrypoint | Responsibility |
 | --- | --- | --- | --- |
-| Python DSL | [`packages/fullmag-py/src/fullmag/model/dynamics.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/dynamics.py#L158) | [`class LLG`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/dynamics.py#L158) | Integrator selection, validation, and dynamics IR lowering |
-| Native FEM CPU | [`backends/fem/cpu/mfem/integrators/rk_explicit_step.cpp`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/backends/fem/cpu/mfem/integrators/rk_explicit_step.cpp#L126) | [`context_step_explicit_rk_mfem`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/backends/fem/cpu/mfem/integrators/rk_explicit_step.cpp#L126) | Native FEM CPU explicit RK step driver |
-| Native FEM GPU | [`backends/fem/gpu/cuda/integrators/rk/rk_step.cu`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/backends/fem/gpu/cuda/integrators/rk/rk_step.cu#L24) | [`gpu_rk_device_resident_step`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/backends/fem/gpu/cuda/integrators/rk/rk_step.cu#L24) | Native FEM GPU device-resident RK step driver |
-| FDM CPU Engine | [`crates/fullmag-engine/src/fdm/cpu/state.rs`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-engine/src/fdm/cpu/state.rs#L29) | [`FdmCpuSolverCheckpointV1`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-engine/src/fdm/cpu/state.rs#L29) | FDM CPU `abm3` multistep checkpoint contract |
+| Python DSL | [`packages/fullmag-py/src/fullmag/model/dynamics.py`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/model/dynamics.py#L159) | [`class LLG`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/model/dynamics.py#L159) | Integrator selection, validation, and dynamics IR lowering |
+| Native FEM CPU | [`backends/fem/cpu/mfem/integrators/rk_explicit_step.cpp`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/backends/fem/cpu/mfem/integrators/rk_explicit_step.cpp#L126) | [`context_step_explicit_rk_mfem`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/backends/fem/cpu/mfem/integrators/rk_explicit_step.cpp#L126) | Native FEM CPU explicit RK step driver |
+| Native FEM GPU | [`backends/fem/gpu/cuda/integrators/rk/rk_step.cu`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/backends/fem/gpu/cuda/integrators/rk/rk_step.cu#L24) | [`gpu_rk_device_resident_step`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/backends/fem/gpu/cuda/integrators/rk/rk_step.cu#L24) | Native FEM GPU device-resident RK step driver |
+| FDM CPU Engine | [`crates/fullmag-engine/src/fdm/cpu/state.rs`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-engine/src/fdm/cpu/state.rs#L29) | [`FdmCpuSolverCheckpointV1`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-engine/src/fdm/cpu/state.rs#L29) | FDM CPU `abm3` multistep checkpoint contract |

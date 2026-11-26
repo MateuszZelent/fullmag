@@ -92,7 +92,7 @@ Control Room workspace overview in the default **Catppuccin Mocha** (dark) theme
 |---|---|---|
 | **Top Bar** | App Menu, Session Indicator & Theme Switcher | Navigate Home, switch multi-instance tabs, open Command Search (`Ctrl+Shift+P`), monitor session connectivity, control global Run/Pause/Stop transport, and toggle themes. |
 | **Top Ribbon** | Ribbon Toolbar Strip | Contextual tabs (`Workspace`, `View`, `Geometry`, `Materials`, `Physics`, `Mesh`, `Study`, `Results`, plus contextual `Analysis` when inspecting Results; placeholder preview tabs such as `Definitions` and `Automation` stay hidden when they have no active non-preview actions). |
-| **Left Dock** | Semantic Explorer Panel | Navigate five dedicated explorer tabs (`Model`, `Resources`, `Results`, `Jobs`, `Diagnostics`). |
+| **Left Dock** | Semantic Explorer Panel | Navigate seven dedicated explorer tabs (`Model`, `Resources`, `Results`, `Jobs`, `Diagnostics`, `Helper`, `Errors`). |
 | **Center Stage** | 3D Viewport / 2D Planar Field Map / Split Plots | WebGL 3D vector & mesh canvas, 2D planar slice inspector, and optional companion analysis viewports. |
 | **Right Dock** | Contextual Inspector Panel | Property editor for the selected Explorer node with explicit draft-and-apply isolation. |
 | **Bottom Dock** | Footer Analysis & Telemetry | Tabbed workspace footer hosting `Telemetry`, `Diagnostics`, `Operations`, `Engine`, `Logs`, `Problems`, and `Quick Chart`. |
@@ -127,29 +127,25 @@ FEM-only mesh actions stay hidden or gated when working in an FDM study.
 :class: fm-ui-figure
 :width: 100%
 
-The **Geometry** tab groups primitive creation (`Box`, `Cylinder`, `Sphere`, `Microstrip`, `CPW`, `Thin Film`), transforms (`Move`, `Rotate`, `Scale`), lifecycle validation (`Build Geometry`, `Apply Draft`, `Validate`), and camera focus commands (`Focus Selected`, `Frame All`).
+The **Geometry** tab groups primitive creation (`Box`, `Thin Film`, `Cylinder`, `Sphere`, `Ellipsoid`, `Cone`, `Torus`, `Polygon Prism`, `Import STL…`), `AC/DC · Antennas` (`Microstrip`, `CPW`), `Boolean` (`Union`, `Subtract`, `Intersect`, `Imprint Regions`), `Modify` (`Duplicate`, `Array 3D`, `Split by Plane`, `Extract Operand`), `Transform` (`Move`), `Lifecycle` (`Realize Geometry`, `Mesh Selected`, `Validate`), and camera focus commands (`Focus Selected`, `Frame All`).
 ```
 
-- **Primitives & Antennas**: Create standard ferromagnetic bodies (`Box`, `Cylinder`, `Sphere`,
-  `Thin Film`) or inductive antennas (`Microstrip`, `CPW`). For boolean compositions and file-based
-  geometry workflows, use the Python DSL ({doc}`/python-api/geometry/boolean-operations` and
-  {doc}`/python-api/geometry/imported-geometry`).
-- **Transforms, Lifecycle & Focus**: Apply `Move`, `Rotate`, or `Scale` edits (or canvas snap/camera
-  shortcuts `Q` / `G`), run `Build Geometry`, `Apply Draft`, or `Validate`, and frame objects in the
-  3D viewport (`Focus Selected`, `Frame All`).
+- **Primitives, Antennas, Booleans & Modifiers**: Create parametric ferromagnetic bodies (`Box`, `Thin Film`, `Cylinder`, `Sphere`, `Ellipsoid`, `Cone`, `Torus`, `Polygon Prism`), import STL surfaces (`Import STL…`), place microwave antennas (`Microstrip`, `CPW`), compose CSG operations (`Union`, `Subtract`, `Intersect`, `Imprint Regions`), or apply modifiers (`Duplicate`, `Array 3D`, `Split by Plane`, `Extract Operand`). Full programmatic CSG and CAD import workflows remain available in Python ({doc}`/python-api/geometry/boolean-operations` and {doc}`/python-api/geometry/imported-geometry`).
+- **Transforms, Lifecycle & Focus**: Translate objects interactively with Ribbon `Move` (`W`), author center translation, Euler XYZ rotation, pivot, and scale/bake in the Geometry Inspector **Placement** tab, run `Realize Geometry`, `Mesh Selected` (FEM), or `Validate`, and frame objects in the 3D viewport (`Focus Selected`, `Frame All`).
 
 ```{figure} /_static/images/ui/ribbon-tabs-physics.png
 :alt: Control Room Physics Ribbon Tab
 :class: fm-ui-figure
 :width: 100%
 
-The **Physics** tab configures global drives, spin transport / interface resources, and micromagnetic energy terms.
+The **Physics** tab configures core/global interactions (`Add Physics`, `Global Physics` including `Field Drive` and `Mask Antenna`), spin transport / interface resources, and optional terms (`Add ABL`, `Frozen Spins`).
 ```
 
 - **Micromagnetic Interactions**: Add and inspect Heisenberg exchange $A_{\text{ex}}$,
   demagnetization (FDM FFT convolution or FEM Poisson airbox/BEM), external Zeeman drives
-  $\mathbf{H}_{\text{ext}}(t)$, uniaxial/cubic anisotropy, bulk/interfacial DMI, and spin-transport
-  resources (STT/SOT/SHE and spin interfaces), bounded by the resolved lane capabilities.
+  $\mathbf{H}_{\text{ext}}(t)$ and mask antennas, uniaxial/cubic anisotropy, bulk/interfacial DMI,
+  spatial absorbing boundaries (`Add ABL`), frozen spins, and spin-transport resources
+  (STT/SOT/SHE and spin interfaces), bounded by the resolved lane capabilities.
 
 ```{figure} /_static/images/ui/ribbon-tabs-automation-python.png
 :alt: Control Room File menu showing Save canonical copy as for canonical Python script export
@@ -177,9 +173,9 @@ Global Command Search overlay triggered from the top bar or via `Ctrl+Shift+P`.
 
 ## Semantic Explorer Panel
 
-The **Explorer Panel** on the left provides five tabs—**Model**, **Resources**, **Results**,
-**Jobs**, and **Diagnostics**—keeping structural authoring, compute artifacts, and job history
-strictly separated:
+The **Explorer Panel** on the left provides seven tabs—**Model**, **Resources**, **Results**,
+**Jobs**, **Diagnostics**, **Helper**, and **Errors**—keeping structural authoring, compute
+artifacts, job history, guided assistance, and structured errors strictly separated:
 
 ```{figure} /_static/images/ui/explorer-tree-structure.png
 :alt: Control Room Semantic Explorer Tree Panel
@@ -189,15 +185,18 @@ strictly separated:
 Hierarchical **Model** tree displaying geometry objects, material zones, physical interactions, meshing policies, ordered study stages, and monitors.
 ```
 
-1. **Model**: Hierarchical model tree covering **Objects** and sub-regions, **Materials**,
-   **Physics** terms and couplings, **Discretization & Mesh**, **Study & Ordered Stages**, and
-   configured **Outputs / Planar Monitors**.
+1. **Model**: Hierarchical model tree covering **Objects** (with CSG operand trees and sub-regions),
+   **Materials**, **Physics** terms and couplings, **Discretization & Mesh**, **Study & Ordered
+   Stages**, and configured **Outputs / Planar Monitors**.
 2. **Resources**: Shared domain manifests, material libraries, field/quantity catalogs, and session
    assets.
 3. **Results**: Current run outputs alongside browsable **Saved Results** history with comparison
    and playback controls.
 4. **Jobs**: Active and completed mesh builds, stage commands, and compute queue history.
 5. **Diagnostics**: Live telemetry, solver profiling summaries, and readiness diagnostics.
+6. **Helper**: Guided workflow checks and next-step readiness recommendations.
+7. **Errors**: Aggregated session errors with direct navigation to the affected object, stage, or
+   diagnostic entry.
 
 Selecting any node in the Explorer updates the **Inspector Panel** on the right without losing
 uncommitted edits elsewhere in the model.
@@ -359,11 +358,13 @@ Footer status bar reporting session state, runtime version, mesh status, WebSock
   Screen workspace hub, template browser, and `fm.connect()` active simulation list.
 - `apps/control-room/src/modules/ribbon/ribbonContributions.tsx` — ribbon tab definitions and
   capability-gated actions.
-- `apps/control-room/src/modules/explorer/ExplorerTabBar.tsx` — five Explorer tabs (`Model`,
-  `Resources`, `Results`, `Jobs`, `Diagnostics`).
-- `apps/control-room/src/modules/inspector/panels/GeometryObjectPanel.tsx`,
-  `StudyStageDraftEditor.tsx`, and `stages/StageInspectorFrame.tsx` — explicit draft-and-apply
-  editors and interactive stage re-execution with `StageInitialStateSelector`.
+- `apps/control-room/src/modules/explorer/ExplorerTabBar.tsx` and `explorerTabs.ts` — seven
+  Explorer tabs (`Model`, `Resources`, `Results`, `Jobs`, `Diagnostics`, `Helper`, `Errors`).
+- `apps/control-room/src/modules/inspector/inspectors/objects/geometry/ObjectGeometrySpec.tsx`,
+  `apps/control-room/src/modules/inspector/inspectors/study/StudyRootSpec.tsx`,
+  `apps/control-room/src/modules/inspector/panels/StudyStageDraftEditor.tsx`, and
+  `apps/control-room/src/modules/inspector/panels/stages/StageInitialStateSelector.model.ts` —
+  explicit draft-and-apply declarative spec editors and interactive stage re-execution.
 - `apps/control-room/src/modules/status-bar/StatusBarModule.tsx` — live status strip and footer
   diagnostics launchers.
 - {doc}`/frontend/capability-register` — authoritative boundary between implemented UI editors and

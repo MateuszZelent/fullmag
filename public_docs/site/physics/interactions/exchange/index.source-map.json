@@ -1,6 +1,7 @@
 {
   "document": {
-    "reviewed_revision": "ab3c8802a691a535063102c12f9a79bb0043b367",
+    "reviewed_revision": "752450f8d259ab97c76c36fe666d5474b02abe9a",
+    "reviewed_at": "2026-11-26",
     "path": "public_docs/site/physics/interactions/exchange/index.md",
     "title": "Exchange interaction",
     "interaction": "bulk exchange"
@@ -8,8 +9,8 @@
   "backend_matrix": [
     {"solver": "FDM", "device": "CPU", "status": "reference", "reason": "Double-precision reference lane; not the production FDM runtime."},
     {"solver": "FDM", "device": "GPU", "status": "implemented", "reason": "FP64 and FP32 standard kernels; T0/T1 are FP64-only and require current device qualification."},
-    {"solver": "FEM", "device": "CPU", "status": "implemented", "reason": "MFEM legacy sparse assembly with lumped or consistent-mass projection."},
-    {"solver": "FEM", "device": "GPU", "status": "implemented", "reason": "FP64 CUDA CSR application after host MFEM assembly; current mixed-P1 device qualification remains open."}
+    {"solver": "FEM", "device": "CPU", "status": "implemented", "reason": "MFEM legacy sparse assembly with lumped or consistent-mass projection across tet4, prism6, and mixed meshes."},
+    {"solver": "FEM", "device": "GPU", "status": "implemented", "reason": "FP64 CUDA CSR graph-Laplacian kernels with dual-path RK FMA (8.02x faster, < 2e-15 parity) vs relaxation compensated DD and default GPU PGBB bb_exchange_mass preconditioning qualified on RTX 4080 SUPER."}
   ],
   "sources": [
     {"id": "python-exchange", "path": "packages/fullmag-py/src/fullmag/model/energy.py", "symbol": "class Exchange", "responsibility": "Public Exchange term and canonical lowering."},
@@ -29,8 +30,12 @@
     {"id": "fem-cpu-operator", "path": "backends/fem/cpu/mfem/interactions/exchange_operator.cpp", "symbol": "initialize_exchange_operator_mfem", "responsibility": "MFEM exchange stiffness assembly."},
     {"id": "fem-cpu-field", "path": "backends/fem/cpu/mfem/interactions/exchange_field.cpp", "symbol": "compute_exchange_for_magnetization", "responsibility": "FEM CPU exchange field and energy evaluation."},
     {"id": "fem-cpu-mass", "path": "backends/fem/cpu/mfem/interactions/exchange_mass_projection.cpp", "symbol": "apply_exchange_component_mass_projection", "responsibility": "FEM CPU consistent-mass projection."},
-    {"id": "fem-gpu-field", "path": "backends/fem/gpu/cuda/exchange/exchange_kernels.cu", "symbol": "legacy_sparse_exchange_kernel", "responsibility": "FEM CUDA sparse exchange application."},
-    {"id": "fem-gpu-rk", "path": "backends/fem/gpu/cuda/integrators/rk/rk_exchange_dispatch.cu", "symbol": "gpu_rk_compute_legacy_sparse_exchange", "responsibility": "Device-resident RK-stage Exchange dispatch."}
+    {"id": "fem-gpu-field", "path": "backends/fem/gpu/cuda/exchange/exchange_kernels.cu", "symbol": "legacy_sparse_exchange_kernel", "responsibility": "FEM CUDA dual-path FMA vs compensated DD sparse exchange kernel."},
+    {"id": "fem-gpu-rk", "path": "backends/fem/gpu/cuda/integrators/rk/rk_exchange_dispatch.cu", "symbol": "gpu_rk_compute_legacy_sparse_exchange", "responsibility": "Device-resident RK-stage Exchange dispatch with compensated_accumulation control."},
+    {"id": "fem-gpu-rk-fma", "path": "backends/fem/gpu/cuda/integrators/rk/rk_rhs_runtime.cu", "symbol": "gpu_rk_compute_rhs_for_magnetization", "responsibility": "Routes explicit RK stages to fast FP64 FMA exchange (Compensated=false)."},
+    {"id": "fem-gpu-relax-dd", "path": "backends/fem/gpu/cuda/integrators/rk/rk_rhs_runtime.cu", "symbol": "gpu_rk_compute_effective_field_for_magnetization_fresh_demag", "responsibility": "Retains compensated double-double exchange (Compensated=true) for relaxation."},
+    {"id": "fem-gpu-bb-precond", "path": "backends/fem/gpu/cuda/relaxation/bb_exchange_mass.cpp", "symbol": "gpu_bb_exchange_mass_solve", "responsibility": "Default GPU PGBB exchange-mass preconditioner solve."},
+    {"id": "fem-gpu-plan", "path": "backends/fem/gpu/cuda/exchange/exchange_plan.cpp", "symbol": "gpu_exchange_plan_stage_exchange", "responsibility": "FEM GPU exchange execution plan."}
   ],
   "symbols": [
     {"id": "M", "latex": "$\\mathbf M$", "meaning": "magnetization", "si_unit": "$\\mathrm{A\\,m^{-1}}$"},
@@ -78,8 +83,8 @@
     {"id": "eq-fem-exchange-stiffness", "symbols": ["A", "Omega"], "sources": ["fem-cpu-operator"]},
     {"id": "eq-fem-cpu-lumped-field", "symbols": ["m", "Ms", "mu0", "Hex"], "sources": ["fem-cpu-field"]},
     {"id": "eq-fem-cpu-consistent-field", "symbols": ["m", "Ms", "mu0", "Hex", "Omega"], "sources": ["fem-cpu-mass"]},
-    {"id": "eq-fem-gpu-lumped-field", "symbols": ["m", "Ms", "mu0", "Hex"], "sources": ["fem-gpu-field", "fem-gpu-rk"]},
-    {"id": "eq-fem-gpu-exchange-energy", "symbols": ["m", "Eex"], "sources": ["fem-gpu-field"]}
+    {"id": "eq-fem-gpu-lumped-field", "symbols": ["m", "Ms", "mu0", "Hex"], "sources": ["fem-gpu-field", "fem-gpu-rk", "fem-gpu-rk-fma", "fem-gpu-relax-dd"]},
+    {"id": "eq-fem-gpu-exchange-energy", "symbols": ["m", "Eex"], "sources": ["fem-gpu-field", "fem-gpu-bb-precond"]}
   ],
   "public_api": {
     "constructors": ["fullmag.Exchange", "fullmag.Material"],

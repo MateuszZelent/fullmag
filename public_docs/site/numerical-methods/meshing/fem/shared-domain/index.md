@@ -6,20 +6,20 @@ status: implemented
 doc_kind: reference
 audience: user
 owner: fullmag-public-docs
-last_updated: 2026-08-24
-reviewed_revision: 5db00ccf0113b9756fec2d46feb36ade762b12c2
-source_of_truth: "Shared-domain asset pipeline, build report, semantic marker recovery and API mesh resources"
+last_updated: 2026-11-26
+reviewed_revision: 752450f8d259ab97c76c36fe666d5474b02abe9a
+source_of_truth: "Shared-domain asset pipeline, pure_prism and mixed build modes, Chebyshev untangler, CompactMarkerMap, build report, semantic marker recovery and API mesh resources"
 ---
 
 (public-docs-numerical-methods-meshing-fem-shared-domain-index)=
 # FEM shared-domain assembly
 
-Shared-domain assembly turns object and universe authoring into one revisioned solver mesh. Its manifest must prove conformity, semantic ownership, actual build mode, topology and fallback status.
+Shared-domain assembly turns object and universe authoring into one revisioned solver mesh. Its manifest must prove conformity, semantic ownership, compact marker mapping, actual build mode, topology and fallback status.
 
 ::::{admonition} Implementation status
 :class: important
 
-Ordinary conforming tetrahedral assembly is implemented. Specialized mixed/swept modes and periodic pairing are separately qualified and must be checked in the manifest.
+Conforming OCC tetrahedral assembly (`conformal_occ`), pure-prism P2 assembly (`pure_prism_extruded_shared_domain`), and mixed `prism6 + pyramid5 + tet4` assembly (`single_geometry_geo_mixed` with `layers=2` Chebyshev-center untangling) are implemented and certified via mutually exclusive topology certificates. Periodic pairing remains separately qualified and must be verified in the manifest.
 ::::
 
 ## Scope and purpose
@@ -144,10 +144,10 @@ for body, direction in ((left, (1.0, 0.0, 0.0)), (right, (0.0, 1.0, 0.0))):
 
 study.exchange()
 study.demag(realization="poisson_robin")
-study.build_domain_mesh()
 study.stages.add_relax(
     stage_id="equilibrium",
     algorithm="llg_overdamped",
+    dt=5.0e-13,
     tolA=1.0e-4,
     max_steps=20_000,
 )
@@ -236,13 +236,14 @@ A manifest that omits actual method, realized cell families, marker map or fallb
 
 | Responsibility | Repository source | Stable owner / symbol |
 | --- | --- | --- |
-| Shared asset pipeline | [`packages/fullmag-py/src/fullmag/meshing/asset_pipeline.py`](https://github.com/MateuszZelent/fullmag/blob/5db00ccf0113b9756fec2d46feb36ade762b12c2/packages/fullmag-py/src/fullmag/meshing/asset_pipeline.py) | `shared-domain materialization` |
-| Build report | [`packages/fullmag-py/src/fullmag/meshing/mesh_build_report.py`](https://github.com/MateuszZelent/fullmag/blob/5db00ccf0113b9756fec2d46feb36ade762b12c2/packages/fullmag-py/src/fullmag/meshing/mesh_build_report.py) | `shared-domain report` |
-| API schema | [`crates/fullmag-api/src/schemas/mesh.rs`](https://github.com/MateuszZelent/fullmag/blob/5db00ccf0113b9756fec2d46feb36ade762b12c2/crates/fullmag-api/src/schemas/mesh.rs) | `shared-domain resource schema` |
-| Control Room lifecycle resources | [`apps/control-room/src/kernel/resources/geometryLifecycleResources.ts`](https://github.com/MateuszZelent/fullmag/blob/5db00ccf0113b9756fec2d46feb36ade762b12c2/apps/control-room/src/kernel/resources/geometryLifecycleResources.ts) | `mesh build/summary/manifest hooks` |
-| Mesh details UI | [`apps/control-room/src/modules/inspector/panels/MeshDetailsPanel.tsx`](https://github.com/MateuszZelent/fullmag/blob/5db00ccf0113b9756fec2d46feb36ade762b12c2/apps/control-room/src/modules/inspector/panels/MeshDetailsPanel.tsx) | `MeshDetailsPanel` |
+| Shared asset pipeline | [`packages/fullmag-py/src/fullmag/meshing/asset_pipeline.py`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/meshing/asset_pipeline.py) | `shared-domain materialization` |
+| Build report | [`packages/fullmag-py/src/fullmag/meshing/mesh_build_report.py`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/meshing/mesh_build_report.py) | `shared-domain report` |
+| API schema | [`crates/fullmag-api/src/schemas/mesh.rs`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-api/src/schemas/mesh.rs) | `shared-domain resource schema` |
+| Control Room lifecycle resources | [`apps/control-room/src/kernel/resources/geometryLifecycleResources.ts`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/apps/control-room/src/kernel/resources/geometryLifecycleResources.ts) | `mesh build/summary/manifest hooks` |
+| Mesh root inspector UI | [`apps/control-room/src/modules/inspector/inspectors/mesh/MeshRootSpec.tsx`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/apps/control-room/src/modules/inspector/inspectors/mesh/MeshRootSpec.tsx#L51) | `MeshRootInspectorSpecPanel` |
+| Shared-domain inspector UI | [`apps/control-room/src/modules/inspector/inspectors/mesh/SharedDomainMeshSpec.tsx`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/apps/control-room/src/modules/inspector/inspectors/mesh/SharedDomainMeshSpec.tsx#L63) | `MeshSharedDomainInspectorSpecPanel` |
 
-Implementation map reviewed against commit `5db00ccf0113b9756fec2d46feb36ade762b12c2` on 2026-08-24.
+Implementation map reviewed against commit `752450f8d259ab97c76c36fe666d5474b02abe9a` on 2026-11-26.
 
 ## References
 

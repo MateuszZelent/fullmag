@@ -1,32 +1,32 @@
 {
   "document": {
     "path": "public_docs/site/python-api/interactions/thermal-noise.md",
-    "reviewed_revision": "ab3c8802a691a535063102c12f9a79bb0043b367"
+    "reviewed_revision": "752450f8d259ab97c76c36fe666d5474b02abe9a"
   },
   "backend_matrix": [
     {
       "solver": "FEM",
       "device": "CPU",
       "status": "documented",
-      "reason": "authoring and IR documented; runtime qualification separate"
+      "reason": "IR authored and validated; stochastic FEM runtime capability is planner-gated"
     },
     {
       "solver": "FEM",
       "device": "GPU",
       "status": "documented",
-      "reason": "authoring and IR documented; runtime qualification separate"
+      "reason": "IR authored and validated; stochastic FEM GPU runtime capability is planner-gated"
     },
     {
       "solver": "FDM",
       "device": "CPU",
-      "status": "documented",
-      "reason": "authoring and IR documented; runtime qualification separate"
+      "status": "implemented",
+      "reason": "Fixed-step stochastic Heun thermal noise implemented on FDM CPU"
     },
     {
       "solver": "FDM",
       "device": "GPU",
-      "status": "documented",
-      "reason": "authoring and IR documented; runtime qualification separate"
+      "status": "partial",
+      "reason": "Stochastic CUDA thermal field implemented on qualified fixed-step FDM GPU paths"
     }
   ],
   "equations": [],
@@ -37,29 +37,35 @@
       "path": "packages/fullmag-py/src/fullmag/model/energy.py",
       "symbol": "class ThermalNoise",
       "responsibility": "public constructor and IR lowering"
+    },
+    {
+      "id": "source_study_builder",
+      "path": "packages/fullmag-py/src/fullmag/world.py",
+      "symbol": "class StudyBuilder",
+      "responsibility": "study.thermal_noise(...) stage-first study facade"
     }
   ],
   "public_api": {
-    "owner": "fm.ThermalNoise(temperature, seed=None)",
+    "owner": "fm.ThermalNoise(temperature, seed=None), study.thermal_noise(temperature, *, seed=None)",
     "parameters": [
       {
         "python": "fm.ThermalNoise.temperature",
         "type": "float",
         "default": "required",
         "si_unit": "$\\mathrm{K}$",
-        "validation": "strictly positive",
+        "validation": "finite and strictly positive via `require_positive`",
         "meaning": "bath temperature",
-        "backend_support": "FEM/FDM CPU/GPU: IR; stochastic runtime qualification required",
+        "backend_support": "FEM/FDM CPU/GPU: IR; fixed-step stochastic integrator required",
         "problem_ir": "temperature"
       },
       {
         "python": "fm.ThermalNoise.seed",
-        "type": "int or None",
+        "type": "int | None",
         "default": "None",
         "si_unit": "$1$",
-        "validation": "positive integer when supplied",
-        "meaning": "reproducibility seed",
-        "backend_support": "FEM/FDM CPU/GPU: IR; stochastic runtime qualification required",
+        "validation": "strictly positive integer when supplied (`None` uses system entropy)",
+        "meaning": "reproducibility PRNG seed",
+        "backend_support": "FEM/FDM CPU/GPU: IR; fixed-step stochastic integrator required",
         "problem_ir": "seed"
       }
     ],

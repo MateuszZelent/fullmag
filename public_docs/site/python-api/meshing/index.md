@@ -16,8 +16,11 @@ Python meshing is divided first by discretization:
 - **FEM** — study defaults, ferromagnet topology, airbox, regions, build, and quality.
 
 This branch owns public commands and lowering. Backend algorithms are under
-{doc}`../../numerical-methods/meshing/index`; matching Control Room panels under
-{doc}`../../frontend/meshing/index` (`ObjectMeshPolicyPanel`, `ObjectRegionMeshPanel`, Airbox Mesh Parameters, and the read-only FDM structured-grid view).
+{doc}`../../numerical-methods/meshing/index`, and GPU/CPU performance realizations are under
+{ref}`numerical-methods-performance-fdm-core` and {ref}`numerical-methods-performance-fem-gpu-demag`;
+matching Control Room panels live under {doc}`../../frontend/meshing/index`
+(`MeshRootInspectorSpecPanel`, `ObjectMeshInspectorSpecPanel`, `ObjectRegionMeshInspectorPanel`,
+Airbox Mesh Parameters, and interactive FDM structured-grid sizing and inspection).
 
 ```{image} /_static/images/ui/inspector-fem-mesh-and-airbox.png
 :alt: Semantic Inspector panel for FEM object mesh sizing and airbox configuration

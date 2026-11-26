@@ -1,6 +1,7 @@
 {
   "document": {
-    "reviewed_revision": "ab3c8802a691a535063102c12f9a79bb0043b367",
+    "reviewed_revision": "752450f8d259ab97c76c36fe666d5474b02abe9a",
+    "reviewed_at": "2026-11-26",
     "path": "public_docs/site/physics/interactions/demagnetization/index.md",
     "title": "Demagnetization",
     "interaction": "demagnetization"
@@ -9,39 +10,258 @@
     {
       "solver": "FDM",
       "device": "CPU",
-      "status": "partial",
-      "reason": "Authoring, planning, runtime, and scientific qualification are reported separately on the page."
+      "status": "reference",
+      "reason": "Reference 27-point Newell FFT convolution for open, single-layer mixed periodic (r >= 40 h_max dipole limit), and CPU FP64 multilayer convolution."
     },
     {
       "solver": "FDM",
       "device": "GPU",
-      "status": "partial",
-      "reason": "Device source presence does not replace executed-device evidence and precision-specific qualification."
+      "status": "implemented",
+      "reason": "Single-layer FP64 D2Z/Z2D and FP32 R2C/C2R Hermitian cuFFT with exact workspace preflight verified on RTX 4080 SUPER (FP64 rel dE_demag <= 1.76e-16); FP32+PBC rejected fail-closed and multilayer CUDA remains partial."
     },
     {
       "solver": "FEM",
       "device": "CPU",
-      "status": "partial",
-      "reason": "The exact weak/discrete realization and bounded capability envelope remain lane-specific."
+      "status": "implemented",
+      "reason": "MFEM/Hypre open Poisson Robin/Dirichlet (tet4 P2, mixed_p1, pure_prism_p2), periodic reduced P1 Poisson, and hierarchical H2/dense body-only tet4 P1 Fredkin-Koehler."
     },
     {
       "solver": "FEM",
       "device": "GPU",
-      "status": "partial",
-      "reason": "Strict device residency and executed-device qualification remain separate evidence gates."
+      "status": "implemented",
+      "reason": "Strict device-resident open Poisson (tet4 P2, mixed_p1, pure_prism_p2 P2), PBC-reduced 1D Robin and 2D film, and strict GPU Fredkin-Koehler (u1, u2) with VRAM-guarded cuDSS and hypre_krylov fallback verified on RTX 4080 SUPER."
     }
   ],
   "sources": [
     {
-      "id": "python-owner",
+      "id": "python-demag",
       "path": "packages/fullmag-py/src/fullmag/model/energy.py",
       "symbol": "class Demag",
-      "responsibility": "Own the public interaction constructor, validation, or canonical IR lowering boundary."
+      "responsibility": "Public demagnetization realization vocabulary, validation, and ProblemIR lowering."
+    },
+    {
+      "id": "python-fdm-demag",
+      "path": "packages/fullmag-py/src/fullmag/model/discretization.py",
+      "symbol": "class FDMDemag",
+      "responsibility": "FDM demag strategy, mode, common-grid, and FFT backend policy."
+    },
+    {
+      "id": "python-fem-policy",
+      "path": "packages/fullmag-py/src/fullmag/model/discretization.py",
+      "symbol": "class FemLinearSolverPolicy",
+      "responsibility": "FEM Krylov solver, preconditioner, tolerance, and gpu_strategy policy."
+    },
+    {
+      "id": "python-pbc",
+      "path": "packages/fullmag-py/src/fullmag/model/problem.py",
+      "symbol": "class FdmPbc",
+      "responsibility": "Periodic axis flags, demag boundary policy, and finite image counts."
+    },
+    {
+      "id": "ir-fem-policy",
+      "path": "crates/fullmag-ir/src/study.rs",
+      "symbol": "FemLinearSolverPolicy",
+      "responsibility": "Canonical ProblemIR FEM demag solver policy including backward-compatible gpu_strategy."
+    },
+    {
+      "id": "ir-fem-demag",
+      "path": "crates/fullmag-ir/src/plan.rs",
+      "symbol": "ResolvedFemDemagIR",
+      "responsibility": "Resolved FEM demag realization enum in execution plans."
+    },
+    {
+      "id": "plan-fdm",
+      "path": "crates/fullmag-plan/src/fdm.rs",
+      "symbol": "plan_fdm",
+      "responsibility": "FDM single-grid and multilayer topology, PBC, and capability resolution."
+    },
+    {
+      "id": "plan-fem",
+      "path": "crates/fullmag-plan/src/fem.rs",
+      "symbol": "plan_fem",
+      "responsibility": "FEM demag realization, mesh-topology, solver-policy, and capability resolution."
+    },
+    {
+      "id": "fdm-newell",
+      "path": "crates/fullmag-fdm-demag/src/newell.rs",
+      "symbol": "compute_newell_kernels",
+      "responsibility": "Cell-averaged 27-point Newell demagnetization tensor construction."
+    },
+    {
+      "id": "fdm-gpu-fp64",
+      "path": "backends/fdm/gpu/cuda/interactions/demag_fp64.cu",
+      "symbol": "launch_demag_field_fp64",
+      "responsibility": "Single-layer CUDA FP64 Hermitian D2Z/Z2D cuFFT demagnetizing field evaluation."
+    },
+    {
+      "id": "fem-cpu-poisson",
+      "path": "backends/fem/cpu/mfem/interactions/demag_poisson_solve.cpp",
+      "symbol": "context_compute_demag_poisson",
+      "responsibility": "FEM CPU Poisson airbox RHS, linear solve, field recovery, and energy orchestration."
+    },
+    {
+      "id": "fem-gpu-cudss",
+      "path": "backends/fem/gpu/cuda/demag_poisson/cudss_direct_solver.cpp",
+      "symbol": "try_initialize_demag_cudss_direct",
+      "responsibility": "Three-state VRAM-guarded cuDSS direct Cholesky admission for GPU Poisson demag."
+    },
+    {
+      "id": "fem-gpu-fembem",
+      "path": "backends/fem/gpu/cuda/demag_fem_bem/fem_bem.cpp",
+      "symbol": "compute_device_demag_fem_bem_for_device_stage",
+      "responsibility": "Strict device-resident GPU Fredkin-Koehler (u1, u2) demag stage execution."
+    },
+    {
+      "id": "ui-object-physics",
+      "path": "apps/control-room/src/modules/inspector/inspectors/objects/physics/ObjectPhysicsSpec.tsx",
+      "symbol": "ObjectPhysicsInspectorPanel",
+      "responsibility": "Object-level physics inspector panel exposing demagnetization controls."
+    },
+    {
+      "id": "ui-physics-overview",
+      "path": "apps/control-room/src/modules/inspector/panels/PhysicsInspectorOverview.tsx",
+      "symbol": "PhysicsInspectorOverview",
+      "responsibility": "Physics inspector overview summarizing scope, lane, and diagnostics."
     }
   ],
-  "symbols": [],
-  "equations": [],
+  "symbols": [
+    {"id": "M", "latex": "$\\mathbf M$", "meaning": "magnetization field", "si_unit": "$\\mathrm{A\\,m^{-1}}$"},
+    {"id": "Ms", "latex": "$M_s$", "meaning": "saturation magnetization", "si_unit": "$\\mathrm{A\\,m^{-1}}$"},
+    {"id": "m", "latex": "$\\mathbf m$", "meaning": "reduced magnetization", "si_unit": "$1$"},
+    {"id": "Hd", "latex": "$\\mathbf H_{\\mathrm d}$", "meaning": "demagnetizing field", "si_unit": "$\\mathrm{A\\,m^{-1}}$"},
+    {"id": "u", "latex": "$u$", "meaning": "magnetic scalar potential", "si_unit": "$\\mathrm{A}$"},
+    {"id": "Ed", "latex": "$E_{\\mathrm d}$", "meaning": "demagnetization energy", "si_unit": "$\\mathrm{J}$"},
+    {"id": "mu0", "latex": "$\\mu_0$", "meaning": "vacuum permeability", "si_unit": "$\\mathrm{N\\,A^{-2}}$"},
+    {"id": "Omega_m", "latex": "$\\Omega_m$", "meaning": "magnetic domain", "si_unit": "$\\mathrm{m^3}$"},
+    {"id": "R3", "latex": "$\\mathbb R^3$", "meaning": "unbounded three-dimensional space", "si_unit": "$\\mathrm{m^3}$"},
+    {"id": "x", "latex": "$\\mathbf x$", "meaning": "spatial position vector", "si_unit": "$\\mathrm{m}$"},
+    {"id": "dV", "latex": "$\\mathrm dV$", "meaning": "volume measure", "si_unit": "$\\mathrm{m^3}$"}
+  ],
+  "equations": [
+    {
+      "id": "eq-public-demagnetization-demag-maxwell",
+      "symbols": ["Hd", "M"],
+      "sources": ["fdm-newell", "fem-cpu-poisson"]
+    },
+    {
+      "id": "eq-public-demagnetization-demag-potential",
+      "symbols": ["Hd", "u", "M"],
+      "sources": ["fem-cpu-poisson", "fem-gpu-cudss", "fem-gpu-fembem"]
+    },
+    {
+      "id": "eq-public-demagnetization-demag-energy",
+      "symbols": ["Ed", "mu0", "Omega_m", "M", "Hd", "dV", "R3"],
+      "sources": ["fdm-gpu-fp64", "fem-cpu-poisson", "fem-gpu-fembem"]
+    }
+  ],
   "public_api": {
-    "parameters": []
+    "constructors": [
+      "fullmag.Demag",
+      "fullmag.FDMDemag",
+      "fullmag.FemLinearSolverPolicy",
+      "fullmag.FdmPbc"
+    ],
+    "parameters": [
+      {
+        "python": "Demag.model",
+        "type": "str | None",
+        "default": "None",
+        "si_unit": "$1$",
+        "validation": "One of `airbox`, `bem`, `fredkin_koehler`, `fmm`; mutually exclusive with `realization`.",
+        "meaning": "Selects the backend-neutral demagnetization realization family.",
+        "backend_support": "FEM planner (`airbox`, `fredkin_koehler` executable; `bem`, `fmm` fail closed).",
+        "problem_ir": "`energy[].realization`"
+      },
+      {
+        "python": "Demag.variant",
+        "type": "str | None",
+        "default": "None",
+        "si_unit": "$1$",
+        "validation": "Only valid with `model=\"airbox\"`; allowed values are `auto`, `robin`, `dirichlet`.",
+        "meaning": "Selects finite-airbox outer boundary closure (`auto` normalizes to `poisson_robin`).",
+        "backend_support": "FEM Poisson CPU/GPU.",
+        "problem_ir": "`energy[].realization`"
+      },
+      {
+        "python": "Demag.realization",
+        "type": "str | None",
+        "default": "None",
+        "si_unit": "$1$",
+        "validation": "Canonical or legacy realization alias; mutually exclusive with `model`.",
+        "meaning": "Legacy compatibility realization selector normalized before planning.",
+        "backend_support": "FDM/FEM according to normalized realization.",
+        "problem_ir": "`energy[].realization`"
+      },
+      {
+        "python": "FDMDemag.strategy",
+        "type": "str",
+        "default": "auto",
+        "si_unit": "$1$",
+        "validation": "One of `auto`, `single_grid`, `multilayer_convolution`.",
+        "meaning": "Selects single shared FDM grid or per-layer multilayer convolution.",
+        "backend_support": "FDM CPU/GPU (`multilayer_convolution` CUDA partial).",
+        "problem_ir": "`backend_policy.discretization_hints.fdm.demag.strategy`"
+      },
+      {
+        "python": "FDMDemag.mode",
+        "type": "str",
+        "default": "auto",
+        "si_unit": "$1$",
+        "validation": "One of `auto`, `two_d_stack`, `three_d`.",
+        "meaning": "Selects thin-film stack or full 3-D multilayer transform mode.",
+        "backend_support": "FDM CPU/GPU.",
+        "problem_ir": "`backend_policy.discretization_hints.fdm.demag.mode`"
+      },
+      {
+        "python": "FemLinearSolverPolicy.solver",
+        "type": "Literal[\"CG\", \"GMRES\"]",
+        "default": "\"CG\"",
+        "si_unit": "$1$",
+        "validation": "Must be `CG` or `GMRES`.",
+        "meaning": "Iterative Krylov solver for FEM CPU and GPU HYPRE fallback solves.",
+        "backend_support": "FEM CPU/GPU.",
+        "problem_ir": "`backend_policy.discretization_hints.fem.demag_solver_policy.solver`"
+      },
+      {
+        "python": "FemLinearSolverPolicy.preconditioner",
+        "type": "Literal[\"AMG\", \"JACOBI\", \"NONE\"]",
+        "default": "\"AMG\"",
+        "si_unit": "$1$",
+        "validation": "Must be `AMG`, `JACOBI`, or `NONE`.",
+        "meaning": "Preconditioner for FEM CPU and GPU HYPRE fallback solves.",
+        "backend_support": "FEM CPU/GPU.",
+        "problem_ir": "`backend_policy.discretization_hints.fem.demag_solver_policy.preconditioner`"
+      },
+      {
+        "python": "FemLinearSolverPolicy.rtol",
+        "type": "float",
+        "default": "1e-8",
+        "si_unit": "$1$",
+        "validation": "Finite and strictly positive.",
+        "meaning": "Relative Euclidean residual tolerance certifying every FEM demag solve.",
+        "backend_support": "FEM CPU/GPU.",
+        "problem_ir": "`backend_policy.discretization_hints.fem.demag_solver_policy.rtol`"
+      },
+      {
+        "python": "FemLinearSolverPolicy.gpu_strategy",
+        "type": "Literal[\"auto\", \"cg_amg\", \"cudss\"]",
+        "default": "\"auto\"",
+        "si_unit": "$1$",
+        "validation": "Must be `auto`, `cg_amg`, or `cudss`.",
+        "meaning": "Selects VRAM-guarded `cuDSS` direct Cholesky vs `hypre_krylov` on FEM GPU.",
+        "backend_support": "FEM GPU (ignored on FEM CPU).",
+        "problem_ir": "`backend_policy.discretization_hints.fem.demag_solver_policy.gpu_strategy`"
+      },
+      {
+        "python": "FdmPbc.demag",
+        "type": "str",
+        "default": "open",
+        "si_unit": "$1$",
+        "validation": "One of `open`, `truncated_images`, `periodic_airbox_k0`.",
+        "meaning": "Selects open, finite-image periodic FDM, or periodic FEM airbox demag policy.",
+        "backend_support": "Solver-specific (FDM rejects `periodic_airbox_k0`).",
+        "problem_ir": "`pbc.demag`"
+      }
+    ]
   }
 }

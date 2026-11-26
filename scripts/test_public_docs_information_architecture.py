@@ -121,6 +121,42 @@ class PublicDocumentationInformationArchitectureTests(unittest.TestCase):
     def test_manifest_has_unique_paths_labels_and_valid_statuses(self) -> None:
         self.assertEqual(validate_tree(PAGE_SPECS), [])
 
+    def test_numerical_methods_performance_subtree_is_registered(self) -> None:
+        pages = {spec.path: spec for spec in PAGE_SPECS}
+        nm_root = pages["numerical-methods/index.md"]
+        self.assertIn("numerical-methods/performance/index.md", nm_root.children)
+        perf_root = pages["numerical-methods/performance/index.md"]
+        self.assertEqual(perf_root.label, "numerical-methods-performance")
+        self.assertEqual(perf_root.status, "implemented")
+        expected_leaves = (
+            (
+                "numerical-methods/performance/fdm-gpu-and-cpu-acceleration.md",
+                "numerical-methods-performance-fdm-core",
+            ),
+            (
+                "numerical-methods/performance/fdm-transport-acceleration.md",
+                "numerical-methods-performance-fdm-transport",
+            ),
+            (
+                "numerical-methods/performance/fem-gpu-demag-and-time-stepping.md",
+                "numerical-methods-performance-fem-gpu-demag",
+            ),
+            (
+                "numerical-methods/performance/fem-gpu-relaxation-and-kernels.md",
+                "numerical-methods-performance-fem-gpu-kernels",
+            ),
+            (
+                "numerical-methods/performance/fem-spectral-multiphysics-and-platform.md",
+                "numerical-methods-performance-fem-spectral-multiphysics",
+            ),
+        )
+        self.assertEqual(perf_root.children, tuple(path for path, _ in expected_leaves))
+        for path, label in expected_leaves:
+            self.assertIn(path, pages)
+            self.assertEqual(pages[path].label, label)
+            self.assertEqual(pages[path].status, "implemented")
+            self.assertEqual(pages[path].doc_kind, "reference")
+
     def test_index_navigation_links_to_every_direct_child(self) -> None:
         for index_path in (
             "index.md",
@@ -128,7 +164,9 @@ class PublicDocumentationInformationArchitectureTests(unittest.TestCase):
             "backend/index.md",
             "python-api/index.md",
             "python-api/meshing/index.md",
+            "numerical-methods/index.md",
             "numerical-methods/meshing/index.md",
+            "numerical-methods/performance/index.md",
         ):
             index = next(spec for spec in PAGE_SPECS if spec.path == index_path)
             text = (PUBLIC_DOCS_ROOT / index.path).read_text(encoding="utf-8")

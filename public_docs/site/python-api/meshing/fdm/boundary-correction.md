@@ -76,16 +76,17 @@ ordinary uniform sizing should use `study.objects.mesh.defaults(...)`.
 
 | Python | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| `boundary_correction` | `str \| None` | `None` | $1$ | `none`, `volume`, or `full` | embedded-boundary policy | FDM CPU/GPU; FEM not applicable to Cartesian grid authoring | `mesh_workflow` |
-| `boundary_phi_floor` | `float \| None` | `None` | $1$ | `0 < value < 1` | minimum occupied-volume fraction | FDM CPU/GPU; FEM not applicable to Cartesian grid authoring | `mesh_workflow` |
-| `boundary_delta_min` | `float \| None` | `None` | $\mathrm{m}$ | non-negative | minimum T1 stencil distance | FDM CPU/GPU; FEM not applicable to Cartesian grid authoring | `mesh_workflow` |
+| `FDM.boundary_correction` | `str \| None` | `None` | $1$ | `none`, `volume`, or `full` | embedded-boundary policy | FDM CPU/GPU; FEM not applicable to Cartesian grid authoring | `backend_policy.discretization_hints.fdm.boundary_correction` |
+| `FDM.boundary_phi_floor` | `float \| None` | `None` | $1$ | `0 < value < 1` | minimum occupied-volume fraction | FDM CPU/GPU; FEM not applicable to Cartesian grid authoring | `backend_policy.discretization_hints.fdm.boundary_phi_floor` |
+| `FDM.boundary_delta_min` | `float \| None` | `None` | $\mathrm{m}$ | non-negative | minimum T1 stencil distance | FDM CPU/GPU; FEM not applicable to Cartesian grid authoring | `backend_policy.discretization_hints.fdm.boundary_delta_min` |
 
 `FDM.__init__(*, cell=None, default_cell=None, per_magnet=None, demag=None, projection_policy=None, boundary_correction=None, boundary_phi_floor=None, boundary_delta_min=None)`
 rejects conflicting cell aliases, invalid modes, non-positive cells, out-of-range phi floors, and negative delta minima.
+For FDM CPU and CUDA solver realization details see {ref}`numerical-methods-performance-fdm-core`.
 
 (python-api-meshing-fdm-boundary-correction-problem-ir)=
 ## ProblemIR
-The request lowers to the mesh-workflow or discretization subtree; requested intent remains distinct from the resolved mesh asset and provenance report.
+The request lowers to `backend_policy.discretization_hints.fdm.boundary_correction`, `backend_policy.discretization_hints.fdm.boundary_phi_floor`, and `backend_policy.discretization_hints.fdm.boundary_delta_min`; requested intent remains distinct from the resolved mesh asset and provenance report.
 
 (python-api-meshing-fdm-boundary-correction-round-trip-and-failure-semantics)=
 ## Round-trip and failure semantics
@@ -93,11 +94,11 @@ Requested intent is the Python policy; resolved execution is the realized mesh r
 
 (python-api-meshing-fdm-boundary-correction-discrete-realization)=
 ## Discrete realization
-The backend consumes the realized Cartesian or finite-element asset, including topology, markers, quality, and provenance where available.
+The backend consumes the realized Cartesian grid asset, including sub-cell volume fractions, boundary stencils, and provenance where available.
 
 ## 5. How to set it in Control Room
 
-Authoring `boundary_correction`, `boundary_phi_floor`, and `boundary_delta_min` remains Python-only; realized structured-grid inspection uses the read-only FDM grid and region views described in {doc}`/frontend/meshing/fdm-grid-view`. See [Control Room capability register](/frontend/capability-register).
+Default FDM grid sizing is interactive in `apps/control-room/src/modules/inspector/inspectors/mesh/MeshRootSpec.tsx` (`MeshRootInspectorSpecPanel`), whereas authoring `boundary_correction`, `boundary_phi_floor`, and `boundary_delta_min` remains Python-only; realized structured-grid inspection uses the FDM grid and region views described in {doc}`/frontend/meshing/fdm-grid-view`. See [Control Room capability register](/frontend/capability-register).
 
 (python-api-meshing-fdm-boundary-correction-implementation-mapping)=
 ## 6. Backend and frontend support
@@ -132,7 +133,7 @@ Focused constructor, lowering, and mesh-report tests are the evidence boundary f
 
 | Claim | Repository path | Stable symbol | Evidence |
 |---|---|---|---|
-| FDM boundary-correction authoring and lowering | [`packages/fullmag-py/src/fullmag/model/discretization.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/discretization.py#L19) | [`class FDM`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/discretization.py#L19) | constructor and IR tests |
+| FDM boundary-correction authoring and lowering | [`packages/fullmag-py/src/fullmag/model/discretization.py`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/model/discretization.py#L220) | [`class FDM`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/model/discretization.py#L220) | constructor and IR tests |
 | FDM fields and validation | `packages/fullmag-py/src/fullmag/model/discretization.py` | `FDM.__init__` | constructor and IR implementation |
 | stage-first attachment | `packages/fullmag-py/src/fullmag/world.py` | `StudyBuilder.fdm` | builder delegation |
-| accepted correction modes | `packages/fullmag-py/src/fullmag/world.py` | `boundary_correction` | mode validation and state update |
+| accepted correction modes | [`packages/fullmag-py/src/fullmag/world.py`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/world.py#L7857) | `boundary_correction` | mode validation and state update |

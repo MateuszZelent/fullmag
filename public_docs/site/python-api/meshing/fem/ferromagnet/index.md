@@ -22,10 +22,10 @@ Mode selection:
 |---|---|
 | ordinary unstructured mesh | {doc}`free-tetrahedral` |
 | thin film, through-thickness target | {doc}`thin-film-tetrahedral` |
-| exact prism layers (P1) | {doc}`swept-prism` |
+| exact prism layers (mixed P1 or `pure_prism_p2`) | {doc}`swept-prism` |
 | swept hexes (non-production) | {doc}`swept-hex` |
 | surface refinement | {doc}`boundary-layers` |
-| external prebuilt mesh | {doc}`imported-mesh` |
+| external prebuilt shared-domain mesh | {doc}`imported-mesh` |
 
 Impact on the simulation: the object recipe controls local gradient resolution
 (exchange, domain walls, interfaces) independently per object; the final mesh
@@ -85,7 +85,7 @@ film.mesh(minimum_element_size=2.5 * nm, maximum_element_size=5 * nm, order=1)
 study.exchange()
 study.demag(model="airbox", variant="robin")
 study.build_domain_mesh()
-study.stages.add_relax(stage_id="equilibrium", tolT=1.0e-6)
+study.stages.add_relax(stage_id="equilibrium", algorithm="projected_gradient_bb", tolT=1.0e-6)
 ```
 
 ## 4. Exact API
@@ -115,7 +115,7 @@ Model Explorer
         └── Mesh            → selection kind: object.mesh
 ```
 
-The **Object Mesh Policy** inspector (`ObjectMeshPolicyPanel.tsx` / `ObjectMeshPolicyPanelModel.ts`) groups size presets, element size parameters, thin-film strategy (`swept_prism` layer counts from `mesh.exact_layer_count` with `swept_hex` disabled), interface/edge refinement, core relaxation, backend parameters, advanced JSON, and the Quality/History tabs (`MeshQualityStatisticsView`). Full description: {doc}`../../../../frontend/meshing/object-mesh`.
+The **Object Mesh Policy** inspector (`apps/control-room/src/modules/inspector/panels/mesh-details/ObjectMeshSpecPanel.tsx` / `apps/control-room/src/modules/inspector/panels/ObjectMeshPolicyPanelModel.ts`, plus `apps/control-room/src/modules/inspector/inspectors/mesh/MeshRootSpec.tsx`) groups size presets, element size parameters, thin-film strategy (`swept_prism` layer counts from `mesh.exact_layer_count` with `swept_hex` disabled), interface/edge refinement, core relaxation, backend parameters, advanced JSON, and the Quality/History tabs (`MeshQualityStatisticsView`). Full description: {doc}`../../../../frontend/meshing/object-mesh`. For GPU demagnetization and thin-film discretization acceleration, see {ref}`numerical-methods-performance-fem-gpu-demag`.
 
 ```{image} /_static/images/ui/inspector-fem-mesh-and-airbox.png
 :alt: Semantic Inspector Object Mesh Policy and Airbox Mesh controls for magnetic bodies
@@ -149,10 +149,10 @@ The **Object Mesh Policy** inspector (`ObjectMeshPolicyPanel.tsx` / `ObjectMeshP
 
 | Claim | Path | Symbol | Evidence |
 |---|---|---|---|
-| ordinary facade and helper | `packages/fullmag-py/src/fullmag/world.py` | `GeometryMeshHandle.__call__`, `GeometryMeshHandle.thin_film` | method signatures |
-| object recipe | `packages/fullmag-py/src/fullmag/model/discretization.py` | `PerObjectMeshRecipe` | validation tests |
-| ordered operations | `packages/fullmag-py/src/fullmag/world.py` | `_MeshOperationSpec` | class definition |
-| typed swept controls | `packages/fullmag-py/src/fullmag/model/discretization.py` | `SweptMeshControls` | validation tests |
+| ordinary facade and helper | [`packages/fullmag-py/src/fullmag/world.py`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/world.py#L1681) | `GeometryMeshHandle.__call__`, `GeometryMeshHandle.thin_film`, `GeometryMeshHandle.swept` | method signatures |
+| object recipe | [`packages/fullmag-py/src/fullmag/model/discretization.py`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/model/discretization.py#L694) | `PerObjectMeshRecipe` | validation tests |
+| ordered operations | [`packages/fullmag-py/src/fullmag/world.py`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/world.py#L1272) | `_MeshOperationSpec` | class definition |
+| typed swept controls | [`packages/fullmag-py/src/fullmag/model/discretization.py`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/model/discretization.py#L413) | `SweptMeshControls` | validation tests |
 
 ```{toctree}
 :maxdepth: 2

@@ -1,6 +1,6 @@
 ---
 title: Frontend State and Commands
-status: partial
+status: implemented
 doc_kind: reference
 audience: user
 owner: fullmag-public-docs
@@ -21,7 +21,7 @@ Key invariants:
 - dependent mesh, preparation, and field caches are invalidated explicitly across resources;
 - command acceptance, command completion, and scientific qualification remain separate states;
 - `current` and `latest-successful` mesh/runtime artifacts remain distinct;
-- backend validation and transport errors appear verbatim or in bounded summaries.
+- backend validation and transport errors persist in session error history (`sessionErrorStore`) across browser reloads and appear verbatim or in bounded summaries, while busy performance-endpoint reads are treated as deferred rather than spurious failures.
 
 ## Command Registry & Palette (`Ctrl+Shift+P`)
 
@@ -82,15 +82,18 @@ decodes zero-copy `ArrayBuffer` responses identified by 4-byte magic headers:
 | `FMMT` | `topologyCodec.ts` | FEM topology (positions, cell/facet connectivity, global ordinals, cell/facet/boundary markers) |
 | `FMRM` | `fdmRegionMembershipCodec.ts` | FDM grid cell-to-region membership (`Uint32Array`, `FMRM_INACTIVE_REGION_ID` sentinel in v2) |
 | `FMBM` | `fdmMultilayerActiveMaskCodec.ts` | Per-layer active cell masks for multilayer FDM models |
+| `FMFG` | `fdmPlanarGridOverlayCodec.ts` | Structured FDM planar grid overlay lines and cell boundaries for 2D slice views |
 | `FMCS` | `crossSectionCodec.ts` | 2D planar slice field and geometry cut payloads |
 | `FMQS` | `crossSectionQualityCodec.ts` | 2D cross-section mesh quality profiles |
 | `FMMQ` | `meshQualityDataCodec.ts` | FEM element size, edge-length, and quality histograms |
 | `FMPP` | `periodicPairsCodec.ts` | Bloch-periodic master/slave boundary facet pairing data |
 | `FMTB` | `tableRowsCodec.ts` | Decimated scalar/time-series table rows for charts and exports |
+| `FMDS` | `materializedDatasetSliceCodec.ts` | Paged materialized dataset slices for saved-result inspection |
+| `FMSP` | `savedSupportCodec.ts` | Saved spatial support geometry/mask payloads for offline playback |
 
 ## Capability scope and Python interoperability
 
-- **Browser authoring scope**: Command infrastructure, optimistic `scene_revision` drafts, WebSocket invalidation, and all nine binary decoders above are implemented; live two-way Python script buffer diff/sync in the hidden Ribbon `Automation` tab remains `Python-only`.
+- **Browser authoring scope**: Command infrastructure, optimistic `scene_revision` drafts, WebSocket invalidation, and all twelve binary decoders above are implemented; live two-way Python script buffer diff/sync in the hidden Ribbon `Automation` tab remains `Python-only`.
 - **Primary surfaces**: Command Palette (`Ctrl+Shift+P`), Inspector **Apply** (`Ctrl+Shift+Enter`) / **Reset**, Footer **Logs** (HTTP/WS/Command audit), and Start Screen **Active simulations**.
 - **Shared OpenAPI v2 & binary codecs**: `fullmag.live` (`fm.connect()`, `LiveSession`) drives HTTP resource endpoints compatible with the same OpenAPI v2 schema consumed by `ControlRoomApi`, and client binary decoders match the backend serializers used by `fullmag.client` (`fmvp`, `fmtb`).
 

@@ -1,6 +1,6 @@
 {
   "document": {
-    "reviewed_revision": "5e99782acbb7fb3f65d0cad872e102bf67733103",
+    "reviewed_revision": "752450f8d259ab97c76c36fe666d5474b02abe9a",
     "path": "public_docs/site/python-api/dynamics/llg.md"
   },
   "backend_matrix": [
@@ -68,7 +68,7 @@
         "type": "`str`",
         "default": "`\"auto\"`",
         "si_unit": "1",
-        "validation": "Canonical supported integrator identifier or `auto`; planner and runtime legality are validated explicitly.",
+        "validation": "Canonical supported integrator identifier (`heun`, `rk4`, `rk23`, `rk45`, `abm3`, `coupled_imex_ark2`, `auto`) or alias (`dp54`, `bs23`, `rk32`).",
         "meaning": "Canonical supported integrator identifier or `auto`; planner and runtime legality are validated explicitly.",
         "backend_support": "FEM/FDM CPU/GPU; planner checks combinations",
         "problem_ir": "`study.dynamics.integrator`"
@@ -78,7 +78,7 @@
         "type": "`float | None`",
         "default": "`None`",
         "si_unit": "\\mathrm{s}",
-        "validation": "Positive fixed step when supplied; mutually constrained with adaptive stepping.",
+        "validation": "Positive finite fixed step when supplied; mutually exclusive with `adaptive_timestep`.",
         "meaning": "Positive fixed step when supplied; mutually constrained with adaptive stepping.",
         "backend_support": "FEM/FDM CPU/GPU; planner checks combinations",
         "problem_ir": "`study.dynamics.fixed_timestep`"
@@ -88,7 +88,7 @@
         "type": "`AdaptiveTimestep | None`",
         "default": "`None`",
         "si_unit": "1",
-        "validation": "Optional adaptive-step contract.",
+        "validation": "Optional adaptive-step contract; requires `rk23`, `rk45`, `coupled_imex_ark2`, or `auto`.",
         "meaning": "Optional adaptive-step contract.",
         "backend_support": "FEM/FDM CPU/GPU; planner checks combinations",
         "problem_ir": "`study.dynamics.adaptive_timestep`"

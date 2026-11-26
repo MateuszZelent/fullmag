@@ -6,8 +6,8 @@ status: implemented
 doc_kind: reference
 audience: user
 owner: fullmag-public-docs
-last_updated: 2026-08-24
-reviewed_revision: 5db00ccf0113b9756fec2d46feb36ade762b12c2
+last_updated: 2026-11-26
+reviewed_revision: 752450f8d259ab97c76c36fe666d5474b02abe9a
 source_of_truth: "FDM/FEM discretization schemas, meshing builders, Control Room mesh resources, realization reports and solver capability matrices"
 ---
 
@@ -19,7 +19,7 @@ This chapter defines the complete Fullmag meshing contract: physical resolution,
 ::::{admonition} Implementation status
 :class: important
 
-FDM Cartesian grids and FEM tetrahedral/shared-domain workflows are implemented. Swept and mixed-element support is scenario-qualified and capability-gated. The realized mesh report—not the selected UI label—is the final statement of what the solver received.
+FDM Cartesian grids (with interactive sizing in Control Room, half-spectrum D2Z/R2C cuFFT, and exact workspace preflight) and FEM tetrahedral/shared-domain workflows are implemented. For thin-film FEM, both pyramid-free 100% `prism6` pure-prism P2 (`transition="pure_prism"`, automatic P2 `H1_WedgeElement(2)` demagnetization potential + P1 magnetization) and mixed `prism6 + pyramid5 + tet4` (`layers=1,2,3` with deterministic Chebyshev-center untangling) are implemented and verified on CPU and GPU. The realized mesh report—not the selected UI label—remains the final statement of what the solver received.
 ::::
 
 ## Scope and purpose
@@ -111,7 +111,7 @@ faster demagnetization operator. The choice must be tied to the observable and b
 | --- | --- | --- |
 | Rectangular film, regular geometry, large dynamics run | `FDM` | Cartesian cells, efficient local stencils and FFT demagnetization |
 | Curved surface, imported CAD/STL, irregular boundary | `FEM free tetrahedral` | Geometry-conforming boundary and local refinement |
-| Thin extrudable film with certified layer planes | `FEM swept prism` | Explicit through-thickness layers and prism topology when capability-gated |
+| Thin extrudable film with certified layer planes and P2 demag | `FEM swept prism` (`transition="pure_prism"` / `pure_prism_p2`) | 100% `prism6` shared domain with automatic P2 `H1_WedgeElement(2)` demag + P1 $\mathbf{m}_h$ (`0.50–0.51 s` mesh, `-0.60%` Aharoni at `L=2`); `pyramid_to_tetrahedra` (`mixed_p1`) with `layers=2` Chebyshev untangler also available |
 | Thin film where prism route is unavailable | `FEM thin-film tetrahedral` | Tetrahedra with thickness-aware sizing; verify actual layer sampling |
 | Open-boundary FEM demagnetization | `FEM shared domain + airbox` | Conforming magnetic/air domain with an explicit outer-boundary closure |
 | Several FDM magnets on different grids | `FDM multilayer_convolution` | Current multi-body production route; shared single-grid authoring is rejected |
@@ -147,7 +147,7 @@ def build_fdm_study():
         center=(0.0, 0.0, 0.0),
         padding=(0.0, 0.0, 0.0),
     )
-    study.cell(5 * nm, 5 * nm, 5 * nm)
+    study.objects.mesh.defaults(cell_size=(5 * nm, 5 * nm, 5 * nm))
     film = study.geometry(
         fm.Box(size=(100 * nm, 300 * nm, 10 * nm), name="fdm_film"),
         name="fdm_film",
@@ -201,9 +201,7 @@ def build_fem_study():
 ## Control Room workflow
 
 1. Select **Study** and set the requested backend, device, precision and execution mode.
-2. For FDM, author the structured grid in the Study Inspector. For FEM, select each object's
-   **Mesh** node and author an object-owned policy; select **Universe / Airbox Mesh** for the
-   exterior-domain policy.
+2. For FDM, configure interactive cell size, cell count, 7-smooth FFT snapping, and $\ell_{\mathrm{ex}}$ guards in **Mesh Root** (`MeshRootSpec.tsx`, `FdmMeshWorkflowCard.tsx`) or the Study Inspector. For FEM, select each object's **Mesh** node (`ObjectMeshSpecPanel.tsx`) for object-owned policy and **Universe / Airbox Mesh** (`AirboxMeshSizingSpecs.tsx`) for exterior-domain policy.
 3. Apply policies before building. A policy edit makes older mesh resources stale by design.
 4. Build the selected object mesh or the full shared-domain mesh through the canonical command.
 5. Inspect **requested vs. effective vs. realized** values, quality scopes, markers and fallback
@@ -265,14 +263,16 @@ Treat the following as blocking unless a study-specific acceptance rule says oth
 
 | Responsibility | Repository source | Stable owner / symbol |
 | --- | --- | --- |
-| Python discretization schemas | [`packages/fullmag-py/src/fullmag/model/discretization.py`](https://github.com/MateuszZelent/fullmag/blob/5db00ccf0113b9756fec2d46feb36ade762b12c2/packages/fullmag-py/src/fullmag/model/discretization.py) | `FDM, FEM, PerObjectMeshRecipe, SweptMeshControls` |
-| Gmsh generation and extraction | [`packages/fullmag-py/src/fullmag/meshing/_gmsh_generators.py`](https://github.com/MateuszZelent/fullmag/blob/5db00ccf0113b9756fec2d46feb36ade762b12c2/packages/fullmag-py/src/fullmag/meshing/_gmsh_generators.py) | `generate_mesh` |
-| Mesh data and quality contracts | [`packages/fullmag-py/src/fullmag/meshing/_gmsh_types.py`](https://github.com/MateuszZelent/fullmag/blob/5db00ccf0113b9756fec2d46feb36ade762b12c2/packages/fullmag-py/src/fullmag/meshing/_gmsh_types.py) | `MeshData, MeshQualityReport, MeshOptions` |
-| Control Room object mesh authoring | [`apps/control-room/src/modules/inspector/panels/ObjectMeshPolicyPanel.tsx`](https://github.com/MateuszZelent/fullmag/blob/5db00ccf0113b9756fec2d46feb36ade762b12c2/apps/control-room/src/modules/inspector/panels/ObjectMeshPolicyPanel.tsx) | `ObjectMeshPolicyPanel` |
-| Control Room study/FDM authoring | [`apps/control-room/src/modules/inspector/panels/StudyInspectorPanel.tsx`](https://github.com/MateuszZelent/fullmag/blob/5db00ccf0113b9756fec2d46feb36ade762b12c2/apps/control-room/src/modules/inspector/panels/StudyInspectorPanel.tsx) | `StudyInspectorPanel` |
-| Rust mesh API schemas | [`crates/fullmag-api/src/schemas/mesh.rs`](https://github.com/MateuszZelent/fullmag/blob/5db00ccf0113b9756fec2d46feb36ade762b12c2/crates/fullmag-api/src/schemas/mesh.rs) | `mesh resource and request schemas` |
+| Python discretization schemas | [`packages/fullmag-py/src/fullmag/model/discretization.py`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/model/discretization.py) | `FDM, FEM, PerObjectMeshRecipe, SweptMeshControls` |
+| Gmsh generation and extraction | [`packages/fullmag-py/src/fullmag/meshing/_gmsh_generators.py`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/meshing/_gmsh_generators.py#L322) | `generate_mesh` |
+| Pure-prism and mixed swept generators | [`packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py) | `generate_pure_prism_box_airbox_mesh, _untangle_same_side_mixed_tetrahedra` |
+| Mesh data and quality contracts | [`packages/fullmag-py/src/fullmag/meshing/_gmsh_types.py`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/meshing/_gmsh_types.py) | `MeshData, MeshQualityReport, MeshOptions` |
+| Control Room object mesh authoring | [`apps/control-room/src/modules/inspector/panels/mesh-details/ObjectMeshSpecPanel.tsx`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/apps/control-room/src/modules/inspector/panels/mesh-details/ObjectMeshSpecPanel.tsx#L180) | `ObjectMeshInspectorSpecPanel` |
+| Control Room mesh root and interactive FDM sizing | [`apps/control-room/src/modules/inspector/inspectors/mesh/MeshRootSpec.tsx`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/apps/control-room/src/modules/inspector/inspectors/mesh/MeshRootSpec.tsx#L51) | `MeshRootInspectorSpecPanel` |
+| Control Room study authoring | [`apps/control-room/src/modules/inspector/panels/StudyInspectorPanel.tsx`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/apps/control-room/src/modules/inspector/panels/StudyInspectorPanel.tsx#L1152) | `StudyInspectorPanel` |
+| Rust mesh API schemas | [`crates/fullmag-api/src/schemas/mesh.rs`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-api/src/schemas/mesh.rs) | `mesh resource and request schemas` |
 
-Implementation map reviewed against commit `5db00ccf0113b9756fec2d46feb36ade762b12c2` on 2026-08-24.
+Implementation map reviewed against commit `752450f8d259ab97c76c36fe666d5474b02abe9a` on 2026-11-26.
 
 ## Related documentation
 
@@ -280,6 +280,8 @@ Implementation map reviewed against commit `5db00ccf0113b9756fec2d46feb36ade762b
 - [FEM shared domain](fem-shared-domain.md)
 - [Refinement and convergence](refinement.md)
 - [Swept meshes](swept-meshes.md)
+- {ref}`numerical-methods-performance-fem-gpu-demag`
+- {ref}`numerical-methods-performance-fdm-core`
 
 ## References
 

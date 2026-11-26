@@ -1,13 +1,13 @@
 {
   "document": {
     "path": "public_docs/site/python-api/outputs/dispersion-and-response.md",
-    "reviewed_revision": "5e99782acbb7fb3f65d0cad872e102bf67733103"
+    "reviewed_revision": "752450f8d259ab97c76c36fe666d5474b02abe9a"
   },
   "backend_matrix": [
-    {"solver": "FEM", "device": "CPU", "status": "documented"},
-    {"solver": "FEM", "device": "GPU", "status": "documented"},
-    {"solver": "FDM", "device": "CPU", "status": "documented"},
-    {"solver": "FDM", "device": "GPU", "status": "documented"}
+    {"solver": "FEM", "device": "CPU", "status": "implemented"},
+    {"solver": "FEM", "device": "GPU", "status": "implemented"},
+    {"solver": "FDM", "device": "CPU", "status": "partial", "reason": "Time-domain fft_response supported; linear modal/frequency-response studies are FEM-only"},
+    {"solver": "FDM", "device": "GPU", "status": "partial", "reason": "Time-domain fft_response supported; linear modal/frequency-response studies are FEM-only"}
   ],
   "equations": [],
   "symbols": [],
@@ -18,9 +18,9 @@
   ],
   "public_api": {
     "parameters": [
-      {"python": "SaveDispersion.name", "type": "`str`", "default": "`\"dispersion\"`", "si_unit": "$1$", "validation": "Non-empty", "meaning": "Curve name", "backend_support": "FEM/FDM CPU/GPU; planner and runtime capability checks remain authoritative", "problem_ir": "`dispersion_curve.name`"},
-      {"python": "SaveDispersion.include_branch_table", "type": "`bool`", "default": "`True`", "si_unit": "$1$", "validation": "Boolean", "meaning": "Include branch table", "backend_support": "FEM/FDM CPU/GPU; planner and runtime capability checks remain authoritative", "problem_ir": "`dispersion_curve.include_branch_table`"},
-      {"python": "SaveResponse.observable", "type": "`str`", "default": "`required`", "si_unit": "$1$", "validation": "One of the supported response observables", "meaning": "Response output", "backend_support": "FEM/FDM CPU/GPU; planner and runtime capability checks remain authoritative", "problem_ir": "`frequency_response_output.observable`"}
+      {"python": "SaveDispersion.name", "type": "`str`", "default": "`\"dispersion\"`", "si_unit": "$1$", "validation": "Non-empty", "meaning": "Curve name", "backend_support": "FEM CPU/GPU; planner checks materialization", "problem_ir": "`dispersion_curve.name`"},
+      {"python": "SaveDispersion.include_branch_table", "type": "`bool`", "default": "`True`", "si_unit": "$1$", "validation": "Boolean", "meaning": "Include branch table", "backend_support": "FEM CPU/GPU; planner checks materialization", "problem_ir": "`dispersion_curve.include_branch_table`"},
+      {"python": "SaveResponse.observable", "type": "`str`", "default": "`required`", "si_unit": "$1$", "validation": "One of the 9 supported response observables", "meaning": "Response output", "backend_support": "FEM CPU/GPU; planner checks materialization", "problem_ir": "`frequency_response_output.observable`"}
     ]
   }
 }

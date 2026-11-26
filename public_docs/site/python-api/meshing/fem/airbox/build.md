@@ -84,7 +84,7 @@ study.build_domain_mesh()
 # Optional persistence of the realized mesh:
 # study.mesh.save("run_output/domain_mesh.fmsh")
 
-study.stages.add_relax(stage_id="equilibrium", tolT=1.0e-6)
+study.stages.add_relax(stage_id="equilibrium", algorithm="projected_gradient_bb", tolT=1.0e-6)
 ```
 
 (python-api-meshing-fem-airbox-build-python-api)=
@@ -92,19 +92,26 @@ study.stages.add_relax(stage_id="equilibrium", tolT=1.0e-6)
 
 | Python | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| `study.build_domain_mesh()` | `str \| None` | `None` | $1$ | `StudyBuilder.build_domain_mesh()` | materializes the shared domain mesh | FEM CPU/GPU; FDM not applicable to this mesh policy | `mesh_workflow.build` |
-| `study.build_mesh()` | `str \| None` | `None` | $1$ | `StudyBuilder.build_mesh()` | legacy mesh build entry point | FEM CPU/GPU; FDM not applicable to this mesh policy | `mesh_workflow.build` |
-| `study.mesh.save(path)` | `str \| None` | `None` | $1$ | `StudyMeshHandle.save` | save the mesh artifact | FEM CPU/GPU; FDM not applicable to this mesh policy | `mesh_workflow.build` |
-| `study.mesh.load(path)` | `str \| None` | `None` | $1$ | `StudyMeshHandle.load` | load the artifact; authoring-consistency validation | FEM CPU/GPU; FDM not applicable to this mesh policy | `mesh_workflow.build` |
-| `study.mesh.save_or_load(path)` | `str \| None` | `None` | $1$ | `StudyMeshHandle.save_or_load` | cache: load when consistent, otherwise save | FEM CPU/GPU; FDM not applicable to this mesh policy | `mesh_workflow.build` |
+| `StudyBuilder.build_domain_mesh` | `() -> StudyBuilder` | n/a | $1$ | validates authored policies before Gmsh generation | materializes the shared domain mesh (`study.build_domain_mesh()`) | FEM CPU/GPU; FDM not applicable to this mesh policy | `mesh_workflow.build` |
+| `StudyBuilder.build_mesh` | `() -> StudyBuilder` | n/a | $1$ | delegates to `build_domain_mesh()` | legacy mesh build entry point (`study.build_mesh()`) | FEM CPU/GPU; FDM not applicable to this mesh policy | `mesh_workflow.build` |
+| `fullmag.world.StudyMeshHandle.save` | `(path: str \| Path) -> Path` | required | $1$ | requires realized shared-domain FEM mesh | save the mesh artifact (`study.mesh.save(path)`) | FEM CPU/GPU; FDM not applicable to this mesh policy | `mesh_workflow.build` |
+| `fullmag.world.StudyMeshHandle.load` | `(path: str \| Path, *, expected_sha256: str \| None = None, build_requested: bool \| None = None) -> MeshPersistenceResult` | `None` | $1$ | validates authoring fingerprint and optional SHA-256 digest | load a persisted mesh artifact (`study.mesh.load(path)`) | FEM CPU/GPU; FDM not applicable to this mesh policy | `mesh_workflow.build` |
+| `fullmag.world.StudyMeshHandle.save_or_load` | `(path: str \| Path) -> MeshPersistenceResult` | required | $1$ | reloads when authoring matches, otherwise rebuilds and saves | cache-or-build shared-domain mesh (`study.mesh.save_or_load(path)`) | FEM CPU/GPU; FDM not applicable to this mesh policy | `mesh_workflow.build` |
+| `fullmag.world.StudyMeshHandle.export` | `(path: str \| Path, *, format: str = "auto") -> Path` | `format="auto"` | $1$ | `format` must be `"auto"`, `"comsol"`, or `"gmsh"` | exports realized mesh to Gmsh `.msh` or COMSOL `.mphtxt` (`study.mesh.export(path)`) | FEM CPU/GPU; FDM not applicable to this mesh policy | `mesh_workflow.build` |
+| `fullmag.world.StudyMeshHandle.import_` | `(path: str \| Path, *, region_map=None, boundary_map=None, region_entity_map=None, boundary_entity_map=None, coordinate_unit=None) -> MeshPersistenceResult` | optional maps | $1$ | validates Gmsh/COMSOL format, coordinate unit, and marker maps | imports and binds an external shared-domain mesh (`study.mesh.import_(path, ...)`) | FEM CPU/GPU; FDM not applicable to this mesh policy | `backend_policy.discretization_hints.fem.mesh` |
+| `fullmag.world.StudyAirboxHandle.load` | `(path: str \| Path, *, quantity: object, format: str = "auto", dataset: str \| None = None, sample: int = -1, mode: str = "attach") -> FieldState` | `mode="attach"` | $1$ | `mode` must be `"attach"` or `"auto"`; quantity must match file payload | loads and attaches an airbox field state (`study.airbox.load(...)`) | FEM CPU/GPU airbox field I/O | `runtime_metadata.loaded_field_states` |
+| `fullmag.world.StudyAirboxHandle.save` | `(path: str \| Path, *, quantity: object, format: str = "auto", dataset: str \| None = None, units: str \| None = None) -> Path` | `format="auto"` | $1$ | requires a previously loaded explicit `FieldState` for `quantity` | saves an attached airbox field state to disk (`study.airbox.save(...)`) | FEM CPU/GPU airbox field I/O | `runtime_metadata.loaded_field_states` |
 
 Failure behavior / invalidation:
 
 - geometry, object/region policy, or universe changes invalidate the realization,
-- `study.mesh(...)` without a realized mesh → API migration error (pointing to the
-  correct facade),
+- `study.mesh(...)` raises a migration error pointing to `study.objects.mesh.defaults(...)` or `body.mesh(...)`,
+- `study.airbox(...)` raises `ValueError` pointing to `study.universe(...)` or `study.universe.mesh(...)` (only `study.airbox.visualization`, `study.airbox.load`, and `study.airbox.save` are live on `StudyAirboxHandle`),
 - topology/authoring fingerprint mismatch on `load` →
   `MeshConfigurationMismatch` with a difference list.
+
+For FEM GPU demagnetization solver performance on built airbox meshes, see
+{ref}`numerical-methods-performance-fem-gpu-demag`.
 
 ProblemIR mapping: realization and the build report land in provenance; requested
 intent stays separate from resolved execution.
@@ -129,7 +136,7 @@ Model Explorer
     └── Mesh Build          → selection kind: airbox.mesh.build
 ```
 
-The **Airbox Mesh Build** inspector (`AirboxMeshBuildLanePanel`) and **Airbox Mesh Parameters** (`AirboxMeshParametersPanel`, via **Apply & Build Shared-Domain Mesh** / `mesh.build-shared-domain`) run the shared-domain build; the Quality/History tabs (`MeshQualityStatisticsView`) show the realized report. In the object panel (`ObjectMeshPolicyPanel`), **Build Mesh** executes `mesh.build-selected`. Full build lifecycle description: {doc}`../../../../frontend/meshing/index`; reports and quality: {doc}`../../../../frontend/meshing/quality-and-reports`.
+The **Airbox Mesh Build** inspector (`apps/control-room/src/modules/inspector/inspectors/universe/AirboxMeshBuildSpec.tsx`, `AirboxMeshBuildInspectorSpecPanel`) and **Airbox Mesh Parameters** (`apps/control-room/src/modules/inspector/inspectors/universe/AirboxMeshSizingSpecs.tsx`, `AirboxMeshParametersInspectorSpecPanel`, via **Apply & Build Shared-Domain Mesh** / `mesh.build-shared-domain`) run the shared-domain build; the Quality/History tabs (`MeshQualityStatisticsView`) show the realized report. In the object panel (`apps/control-room/src/modules/inspector/panels/mesh-details/ObjectMeshSpecPanel.tsx`), **Build Mesh** executes `mesh.build-selected`. Full build lifecycle description: {doc}`../../../../frontend/meshing/index`; reports and quality: {doc}`../../../../frontend/meshing/quality-and-reports`.
 
 ```{image} /_static/images/ui/viewport-3d-fem-mesh-airbox.png
 :alt: 3D Viewport showing realized shared-domain FEM tetrahedral mesh and exterior airbox
@@ -172,7 +179,8 @@ No page-specific physical claims; airbox physics: {doc}`index`.
 
 | Claim | Path | Symbol | Evidence |
 |---|---|---|---|
-| airbox geometry construction and mesh extraction boundary | [`packages/fullmag-py/src/fullmag/meshing/_gmsh_airbox.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/meshing/_gmsh_airbox.py#L1457) | [`add_air_box`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/meshing/_gmsh_airbox.py#L1457) | meshing and API tests |
-| explicit domain build | `packages/fullmag-py/src/fullmag/world.py` | `StudyBuilder.build_domain_mesh`, `build_domain_mesh` | module function implementation |
-| artifact persistence | `packages/fullmag-py/src/fullmag/world.py` | `StudyMeshHandle.save/load/save_or_load`, `MeshPersistenceResult` | facade implementation |
-| quality result | `packages/fullmag-py/src/fullmag/world.py` | `GeometryMeshHandle.quality` | method signature |
+| airbox geometry construction and mesh extraction boundary | [`packages/fullmag-py/src/fullmag/meshing/_gmsh_airbox.py`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/meshing/_gmsh_airbox.py#L1545) | [`add_air_box`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/meshing/_gmsh_airbox.py#L1545) | meshing and API tests |
+| explicit domain build | [`packages/fullmag-py/src/fullmag/world.py`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/world.py#L6439) | [`class StudyBuilder`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/world.py#L6439) (`build_domain_mesh`, `build_mesh`) | module function implementation |
+| artifact persistence and interchange | [`packages/fullmag-py/src/fullmag/world.py`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/world.py#L5850) | [`class StudyMeshHandle`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/world.py#L5850) (`save`, `load`, `save_or_load`, `export`, `import_`) | facade implementation |
+| airbox field-state persistence | [`packages/fullmag-py/src/fullmag/world.py`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/world.py#L5623) | [`class StudyAirboxHandle`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/world.py#L5623) (`load`, `save`) | facade implementation |
+| quality result | [`packages/fullmag-py/src/fullmag/world.py`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/world.py#L2575) | `GeometryMeshHandle.quality` | method signature |

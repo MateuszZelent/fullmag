@@ -1,18 +1,20 @@
 {
   "document": {
-    "reviewed_revision": "ab3c8802a691a535063102c12f9a79bb0043b367",
+    "reviewed_revision": "752450f8d259ab97c76c36fe666d5474b02abe9a",
     "path": "public_docs/site/python-api/discretization/fdm.md"
   },
   "backend_matrix": [
     {
       "solver": "FEM",
       "device": "CPU",
-      "status": "documented"
+      "status": "not-applicable",
+      "reason": "FDM discretization hints do not apply to FEM unstructured meshes."
     },
     {
       "solver": "FEM",
       "device": "GPU",
-      "status": "documented"
+      "status": "not-applicable",
+      "reason": "FDM discretization hints do not apply to FEM unstructured meshes."
     },
     {
       "solver": "FDM",
@@ -32,7 +34,19 @@
       "id": "owner",
       "path": "packages/fullmag-py/src/fullmag/model/discretization.py",
       "symbol": "class FDM",
-      "responsibility": "Owns the documented public API, validation, and lowering."
+      "responsibility": "Owns the documented FDM public API, validation, and lowering."
+    },
+    {
+      "id": "fdm_demag",
+      "path": "packages/fullmag-py/src/fullmag/model/discretization.py",
+      "symbol": "class FDMDemag",
+      "responsibility": "Owns FDM demag strategy, mode, common_cell_size, and fft_backend validation and lowering."
+    },
+    {
+      "id": "mesh_root_ui",
+      "path": "apps/control-room/src/modules/inspector/inspectors/mesh/MeshRootSpec.tsx",
+      "symbol": "MeshRootInspectorSpecPanel",
+      "responsibility": "Control Room interactive FDM grid sizing and build panel."
     }
   ],
   "public_api": {
@@ -41,71 +55,101 @@
         "python": "FDM.cell",
         "type": "`tuple[float, float, float] | None`",
         "default": "`None`",
-        "si_unit": "\\mathrm{m}",
-        "validation": "Canonical uniform cell size; it also becomes `default_cell` when supplied.",
-        "meaning": "Canonical uniform cell size; it also becomes `default_cell` when supplied.",
-        "backend_support": "FEM/FDM CPU/GPU; planner checks combinations",
+        "si_unit": "$\\mathrm{m}$",
+        "validation": "Three finite positive values; cannot coexist with `default_cell`.",
+        "meaning": "Canonical uniform cell size; also populates `default_cell` when supplied.",
+        "backend_support": "FDM CPU/GPU; planner checks combinations",
         "problem_ir": "`backend_policy.discretization_hints.fdm.cell`"
       },
       {
         "python": "FDM.default_cell",
         "type": "`tuple[float, float, float] | None`",
         "default": "`None`",
-        "si_unit": "\\mathrm{m}",
-        "validation": "Default cell size when per-magnet grids are present.",
+        "si_unit": "$\\mathrm{m}$",
+        "validation": "Three finite positive values; required unless `per_magnet` is nonempty.",
         "meaning": "Default cell size when per-magnet grids are present.",
-        "backend_support": "FEM/FDM CPU/GPU; planner checks combinations",
+        "backend_support": "FDM CPU/GPU; planner checks combinations",
         "problem_ir": "`backend_policy.discretization_hints.fdm.default_cell`"
       },
       {
         "python": "FDM.per_magnet",
-        "type": "`Mapping[str, Any] | None`",
+        "type": "`dict[str, FDMGrid] | None`",
         "default": "`None`",
-        "si_unit": "1",
-        "validation": "Optional explicit per-magnet FDM grids.",
+        "si_unit": "$1$",
+        "validation": "Nonempty string keys and `FDMGrid` values.",
         "meaning": "Optional explicit per-magnet FDM grids.",
-        "backend_support": "FEM/FDM CPU/GPU; planner checks combinations",
+        "backend_support": "FDM CPU/GPU; planner checks combinations",
         "problem_ir": "`backend_policy.discretization_hints.fdm.per_magnet`"
       },
       {
         "python": "FDM.demag",
         "type": "`FDMDemag | None`",
         "default": "`None`",
-        "si_unit": "1",
-        "validation": "Demagnetization hint.",
-        "meaning": "Demagnetization hint.",
-        "backend_support": "FEM/FDM CPU/GPU; planner checks combinations",
+        "si_unit": "$1$",
+        "validation": "Typed `FDMDemag` policy.",
+        "meaning": "Demagnetization strategy, common-grid, and FFT backend hint.",
+        "backend_support": "FDM CPU/GPU; planner checks combinations",
         "problem_ir": "`backend_policy.discretization_hints.fdm.demag`"
+      },
+      {
+        "python": "FDM.projection_policy",
+        "type": "`str | None`",
+        "default": "`None`",
+        "si_unit": "$1$",
+        "validation": "`None` or `\"unit_sphere\"`.",
+        "meaning": "Projected-RK state constraint policy; `None` selects the qualified default.",
+        "backend_support": "FDM CPU/GPU; planner checks combinations",
+        "problem_ir": "`backend_policy.discretization_hints.fdm.projection_policy`"
       },
       {
         "python": "FDM.boundary_correction",
         "type": "`str | None`",
         "default": "`None`",
-        "si_unit": "1",
-        "validation": "Optional `T0`/`T1`-family sub-cell policy. Support differs by precision and device.",
-        "meaning": "Optional `T0`/`T1`-family sub-cell policy. Support differs by precision and device.",
-        "backend_support": "FEM/FDM CPU/GPU; planner checks combinations",
+        "si_unit": "$1$",
+        "validation": "`\"none\"`, `\"volume\"`, or `\"full\"`.",
+        "meaning": "Optional `T0`/`T1`-family sub-cell policy; support differs by precision and device.",
+        "backend_support": "FDM CPU/GPU; planner checks combinations",
         "problem_ir": "`backend_policy.discretization_hints.fdm.boundary_correction`"
       },
       {
         "python": "FDM.boundary_phi_floor",
         "type": "`float | None`",
         "default": "`None`",
-        "si_unit": "1",
-        "validation": "Optional lower bound $\\varphi_{\\mathrm{floor}}$ with strict domain $0<\\varphi_{\\mathrm{floor}}<1$.",
-        "meaning": "Optional lower bound $\\varphi_{\\mathrm{floor}}$ with strict domain $0<\\varphi_{\\mathrm{floor}}<1$.",
-        "backend_support": "FEM/FDM CPU/GPU; planner checks combinations",
+        "si_unit": "$1$",
+        "validation": "Strict domain $0<\\varphi_{\\mathrm{floor}}<1$.",
+        "meaning": "Optional lower volume-fraction bound $\\varphi_{\\mathrm{floor}}$.",
+        "backend_support": "FDM CPU/GPU; planner checks combinations",
         "problem_ir": "`backend_policy.discretization_hints.fdm.boundary_phi_floor`"
       },
       {
         "python": "FDM.boundary_delta_min",
         "type": "`float | None`",
         "default": "`None`",
-        "si_unit": "\\mathrm{m}",
-        "validation": "Optional T1 distance floor $\\delta_{\\min}\\geq0$; zero is accepted.",
-        "meaning": "Optional T1 distance floor $\\delta_{\\min}\\geq0$; zero is accepted.",
-        "backend_support": "FEM/FDM CPU/GPU; planner checks combinations",
+        "si_unit": "$\\mathrm{m}$",
+        "validation": "Nonnegative $\\delta_{\\min}\\geq0$; zero is accepted.",
+        "meaning": "Optional T1 distance floor $\\delta_{\\min}$.",
+        "backend_support": "FDM CPU/GPU; planner checks combinations",
         "problem_ir": "`backend_policy.discretization_hints.fdm.boundary_delta_min`"
+      },
+      {
+        "python": "FDMDemag.common_cell_size",
+        "type": "`tuple[float, float, float] | None`",
+        "default": "`None`",
+        "si_unit": "$\\mathrm{m}$",
+        "validation": "Three finite positive values; mutually exclusive with `common_cells` and `common_cells_xy`.",
+        "meaning": "Explicit 3-D common convolution-grid cell size.",
+        "backend_support": "FDM CPU/GPU multilayer lanes",
+        "problem_ir": "`backend_policy.discretization_hints.fdm.demag.common_cell_size`"
+      },
+      {
+        "python": "FDMDemag.fft_backend",
+        "type": "`Literal[\"auto\", \"rustfft\", \"fftw\", \"mkl\", \"cufft\"]`",
+        "default": "`\"auto\"`",
+        "si_unit": "$1$",
+        "validation": "One of `\"auto\"`, `\"rustfft\"`, `\"fftw\"`, `\"mkl\"`, or `\"cufft\"`.",
+        "meaning": "Requested FFT realization; unsupported realizations are preserved in IR and rejected fail-closed by capability planning.",
+        "backend_support": "FDM CPU/GPU; capability-gated per device",
+        "problem_ir": "`backend_policy.discretization_hints.fdm.demag.fft_backend`"
       }
     ]
   }

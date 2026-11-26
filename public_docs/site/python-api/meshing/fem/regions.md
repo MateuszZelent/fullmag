@@ -62,6 +62,7 @@ study.build_domain_mesh()
 study.stages.add_relax(
     stage_id="equilibrium",
     algorithm="llg_overdamped",
+    dt=5.0e-13,
     tolA=1.0e-4,
     max_steps=1_000,
 )
@@ -96,12 +97,13 @@ The backend consumes the realized Cartesian or finite-element asset, including t
 
 ## 5. How to set it in Control Room
 
-Route: `Model Explorer -> Objects -> <object> -> Regions -> <region> -> Mesh` (`ObjectRegionMeshPanel`).
+Route: `Model Explorer -> Objects -> <object> -> Regions -> <region> -> Mesh` (`apps/control-room/src/modules/inspector/inspectors/objects/regions/RegionMeshSpec.tsx`, `ObjectRegionMeshInspectorPanel`).
 When the region is committed on a FEM study, enable the region mesh override, set maximum/minimum element size,
 transition distance, and finite-element order, then press **Apply**; **Apply & Build Shared-Domain Mesh** materializes
 the conforming domain mesh and refreshes membership and quality resources (under FDM, the same panel becomes a read-only
-structured-cell membership inspector). See {doc}`/frontend/meshing/region-mesh` and
-[Control Room capability register](/frontend/capability-register).
+structured-cell membership inspector). See {doc}`/frontend/meshing/region-mesh`,
+[Control Room capability register](/frontend/capability-register), and
+{ref}`numerical-methods-performance-fem-gpu-demag` for FEM GPU solver realization details.
 
 ```{image} /_static/images/ui/inspector-material-and-regions.png
 :alt: Semantic Inspector region panel showing object-owned region configuration and overrides
@@ -146,7 +148,7 @@ Focused constructor, lowering, and mesh-report tests are the evidence boundary f
 
 | Claim | Repository path | Stable symbol | Evidence |
 |---|---|---|---|
-| region markers and typed mesh realization | [`packages/fullmag-py/src/fullmag/meshing/_gmsh_types.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/meshing/_gmsh_types.py#L1357) | [`class MeshData`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/meshing/_gmsh_types.py#L1357) | mesh realization and API tests |
-| region mesh signature and validation | `packages/fullmag-py/src/fullmag/model/structure.py` | `ObjectRegion.mesh` | source implementation |
+| region markers and typed mesh realization | [`packages/fullmag-py/src/fullmag/meshing/_gmsh_types.py`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/meshing/_gmsh_types.py#L2358) | [`class MeshData`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/meshing/_gmsh_types.py#L2358) | mesh realization and API tests |
+| region mesh signature and validation | [`packages/fullmag-py/src/fullmag/model/structure.py`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/model/structure.py#L374) | `ObjectRegion.mesh` | source implementation |
 | region policy resolution | `packages/fullmag-py/src/fullmag/meshing/_size_field_plan.py` | region mesh policy builder | shared-domain lowering |
-| region UI | `apps/control-room/src/modules/inspector/panels/region/ObjectRegionMeshPanel.tsx` | `ObjectRegionMeshPanel` | frontend component |
+| region UI | [`apps/control-room/src/modules/inspector/inspectors/objects/regions/RegionMeshSpec.tsx`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/apps/control-room/src/modules/inspector/inspectors/objects/regions/RegionMeshSpec.tsx#L71) | [`ObjectRegionMeshInspectorPanel`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/apps/control-room/src/modules/inspector/inspectors/objects/regions/RegionMeshSpec.tsx#L71) | frontend component |

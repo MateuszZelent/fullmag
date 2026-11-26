@@ -1,7 +1,7 @@
 {
   "document": {
     "path": "public_docs/site/numerical-methods/meshing/fem/ferromagnet/thin-film-tetrahedral.md",
-    "reviewed_revision": "969efa0941905825ac569d525f4bdaefc059e2af"
+    "reviewed_revision": "752450f8d259ab97c76c36fe666d5474b02abe9a"
   },
   "backend_matrix": [
     {
@@ -246,10 +246,10 @@
       },
       {
         "python": "transition",
-        "type": "Literal[\"pyramid_to_tetrahedra\", \"reject\"] | None",
+        "type": "Literal[\"pyramid_to_tetrahedra\", \"pure_prism\", \"reject\"] | None",
         "default": "None",
         "si_unit": "$1$",
-        "validation": "prismatic requires pyramid_to_tetrahedra",
+        "validation": "prismatic requires `pyramid_to_tetrahedra` or `pure_prism`",
         "meaning": "shared-domain transition request",
         "backend_support": "FEM CPU source-backed; FEM GPU capability-gated",
         "problem_ir": "mesh_workflow.per_geometry[].transition_policy"

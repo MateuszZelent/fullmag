@@ -1,7 +1,7 @@
 {
   "document": {
     "path": "public_docs/site/numerical-methods/meshing/fem-shared-domain.md",
-    "reviewed_revision": "969efa0941905825ac569d525f4bdaefc059e2af"
+    "reviewed_revision": "752450f8d259ab97c76c36fe666d5474b02abe9a"
   },
   "backend_matrix": [
     {
@@ -81,6 +81,34 @@
       "path": "crates/fullmag-runner/src/lib.rs",
       "symbol": "run_planned_problem",
       "responsibility": "Planned runtime dispatch; source evidence only here."
+    },
+    {
+      "id": "shared_policy_guard",
+      "path": "packages/fullmag-py/src/fullmag/meshing/asset_pipeline.py",
+      "symbol": "_validate_shared_mesh_assembly_policy",
+      "responsibility": "Fail-closed rejection of non-default SharedMeshAssemblyPolicy values",
+      "evidence_status": "source-inspected"
+    },
+    {
+      "id": "pure_prism_mesher",
+      "path": "packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py",
+      "symbol": "generate_pure_prism_box_airbox_mesh",
+      "responsibility": "100% prism6 pure-prism shared-domain generator and certificate emitter",
+      "evidence_status": "verified"
+    },
+    {
+      "id": "mixed_untangler",
+      "path": "packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py",
+      "symbol": "_untangle_same_side_mixed_tetrahedra",
+      "responsibility": "Deterministic Chebyshev-center mixed-tet conformity repair (layers=2)",
+      "evidence_status": "verified"
+    },
+    {
+      "id": "ui_shared_domain",
+      "path": "apps/control-room/src/modules/inspector/inspectors/mesh/SharedDomainMeshSpec.tsx",
+      "symbol": "function MeshSharedDomainInspectorSpecPanel",
+      "responsibility": "Control Room shared-domain inspector",
+      "evidence_status": "source-inspected"
     }
   ],
   "symbols": [
@@ -134,7 +162,7 @@
         "type": "str | None",
         "default": "None",
         "si_unit": "$1$",
-        "validation": "forwarded to StudyUniverseConfig",
+        "validation": "forwarded to `StudyUniverseConfig`; `auto` or `manual`",
         "meaning": "domain mode",
         "backend_support": "FEM CPU/GPU capability-gated",
         "problem_ir": "runtime_metadata.study_universe.mode"
@@ -148,7 +176,7 @@
         "type": "Sequence[float] | None",
         "default": "None",
         "si_unit": "$\\mathrm{m}$",
-        "validation": "as_vector3; explicit dimensions must be positive when realized",
+        "validation": "`as_vector3`; explicit dimensions must be positive when realized",
         "meaning": "outer dimensions",
         "backend_support": "FEM CPU/GPU capability-gated",
         "problem_ir": "runtime_metadata.study_universe.size"
@@ -176,7 +204,7 @@
         "type": "Sequence[float] | None",
         "default": "None",
         "si_unit": "$\\mathrm{m}$",
-        "validation": "as_vector3; domain validation governs signs",
+        "validation": "`as_vector3`; non-negative per axis",
         "meaning": "directional padding",
         "backend_support": "FEM CPU/GPU capability-gated",
         "problem_ir": "runtime_metadata.study_universe.padding"
@@ -218,7 +246,7 @@
         "type": "float | None",
         "default": "None",
         "si_unit": "$1$",
-        "validation": "finite positive at most 2.5",
+        "validation": "finite, strictly greater than `1.0`, and at most `2.5`",
         "meaning": "airbox growth target",
         "backend_support": "FEM CPU/GPU capability-gated",
         "problem_ir": "runtime_metadata.study_universe.airbox_growth_rate"
@@ -232,7 +260,7 @@
         "type": "str | None",
         "default": "None",
         "si_unit": "$1$",
-        "validation": "forwarded without vocabulary validation by this handle",
+        "validation": "normalized to `auto`, `geometric`, or `linear` in `StudyUniverseConfig`",
         "meaning": "airbox grading request",
         "backend_support": "FEM CPU/GPU capability-gated",
         "problem_ir": "runtime_metadata.study_universe.airbox_grading"

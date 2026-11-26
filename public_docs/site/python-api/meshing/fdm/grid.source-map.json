@@ -1,7 +1,7 @@
 {
   "document": {
     "path": "public_docs/site/python-api/meshing/fdm/grid.md",
-    "reviewed_revision": "ab3c8802a691a535063102c12f9a79bb0043b367"
+    "reviewed_revision": "752450f8d259ab97c76c36fe666d5474b02abe9a"
   },
   "backend_matrix": [
     {
@@ -33,27 +33,45 @@
     {
       "id": "source-1",
       "path": "packages/fullmag-py/src/fullmag/model/discretization.py",
+      "symbol": "class FDM",
+      "responsibility": "FDM default grid policy and lowering."
+    },
+    {
+      "id": "source-2",
+      "path": "packages/fullmag-py/src/fullmag/model/discretization.py",
       "symbol": "class FDMGrid",
       "responsibility": "Per-magnet Cartesian grid contract."
+    },
+    {
+      "id": "source-3",
+      "path": "packages/fullmag-py/src/fullmag/world.py",
+      "symbol": "class StudyObjectsMeshDefaultsHandle",
+      "responsibility": "Stage-first default cell facade."
+    },
+    {
+      "id": "source-4",
+      "path": "apps/control-room/src/modules/inspector/inspectors/mesh/MeshRootSpec.tsx",
+      "symbol": "MeshRootInspectorSpecPanel",
+      "responsibility": "Control Room interactive FDM default grid sizing and build panel."
     }
   ],
   "public_api": {
     "parameters": [
       {
-        "python": "study.objects.mesh.defaults(cell_size=...)",
-        "type": "`Sequence[float] | None`",
+        "python": "fullmag.world.StudyObjectsMeshDefaultsHandle.__call__",
+        "type": "`Sequence[float] | None` (`cell_size`)",
         "default": "`None`",
-        "si_unit": "\\mathrm{m}",
+        "si_unit": "$\\mathrm{m}$",
         "validation": "exactly three positive values",
-        "meaning": "stage-first default cell",
+        "meaning": "stage-first default cell (`study.objects.mesh.defaults(cell_size=...)`)",
         "backend_support": "FDM CPU/GPU; FEM not applicable to Cartesian grid authoring",
-        "problem_ir": "`mesh_workflow.build`"
+        "problem_ir": "`backend_policy.discretization_hints.fdm.default_cell`"
       },
       {
         "python": "FDM.default_cell",
         "type": "`Sequence[float] | None`",
         "default": "`None`",
-        "si_unit": "\\mathrm{m}",
+        "si_unit": "$\\mathrm{m}$",
         "validation": "exactly three positive values",
         "meaning": "low-level default cell",
         "backend_support": "FDM CPU/GPU; FEM not applicable to Cartesian grid authoring",
@@ -63,7 +81,7 @@
         "python": "FDM.cell",
         "type": "`Sequence[float] | None`",
         "default": "`None`",
-        "si_unit": "\\mathrm{m}",
+        "si_unit": "$\\mathrm{m}$",
         "validation": "legacy alias; cannot coexist with `default_cell`",
         "meaning": "compatibility spelling",
         "backend_support": "FDM CPU/GPU; FEM not applicable to Cartesian grid authoring",

@@ -1,20 +1,20 @@
 {
   "document": {
     "path": "public_docs/site/python-api/meshing/fem/index.md",
-    "reviewed_revision": "7f2d02a3d4b0af26d8dcb66c736c98039b953911"
+    "reviewed_revision": "752450f8d259ab97c76c36fe666d5474b02abe9a"
   },
   "backend_matrix": [
     {
       "solver": "FEM",
       "device": "CPU",
       "status": "source-backed",
-      "reason": "Study defaults, per-object mesh recipes, and host shared-domain meshing are source-backed."
+      "reason": "Study defaults, per-object mesh recipes, and host shared-domain meshing (including pure_prism_p2) are source-backed."
     },
     {
       "solver": "FEM",
       "device": "GPU",
       "status": "partial",
-      "reason": "The same mesh asset can feed GPU operators, but element-family, order, and interaction coverage is capability-gated."
+      "reason": "The same mesh asset feeds GPU operators (including qualified exchange_mass BB preconditioning, cg_amg/cudss Poisson, and pure_prism_p2), while element-family, order, and auxiliary-operator coverage remains capability-gated."
     },
     {
       "solver": "FDM",
@@ -37,6 +37,12 @@
       "path": "packages/fullmag-py/src/fullmag/model/discretization.py",
       "symbol": "class FEM",
       "responsibility": "Owns study-level order, hmax alias, imported mesh, demag policy, optional GPU BB policy, and FEM hint IR lowering."
+    },
+    {
+      "id": "fem_linear_solver_policy",
+      "path": "packages/fullmag-py/src/fullmag/model/discretization.py",
+      "symbol": "class FemLinearSolverPolicy",
+      "responsibility": "Owns native FEM Poisson solver tolerances, print_level, and gpu_strategy (auto, cg_amg, cudss)."
     },
     {
       "id": "bb_policy_validation",
@@ -71,8 +77,8 @@
         "default": "required",
         "si_unit": "$1$",
         "validation": "Integer greater than or equal to one.",
-        "meaning": "Study-level finite-element field order.",
-        "backend_support": "FEM CPU; GPU element/order capability-gated",
+        "meaning": "Study-level finite-element field order (`order=1` for magnetization; certified `pure_prism` thin films automatically elevate scalar potential $\\phi$ to P2 `H1_WedgeElement(2)`).",
+        "backend_support": "FEM CPU/GPU (`tet4`/mixed P1 and `pure_prism_p2`)",
         "problem_ir": "`backend_policy.discretization_hints.fem.order`"
       },
       {
@@ -110,7 +116,7 @@
         "type": "`FemLinearSolverPolicy | None`",
         "default": "`None`",
         "si_unit": "$1$",
-        "validation": "Typed solver policy.",
+        "validation": "Typed solver policy (`solver`, `preconditioner`, `rtol`, `atol`, `max_iterations`, `print_level`, `gpu_strategy`).",
         "meaning": "Algebraic Poisson/demag solver request; not mesh geometry.",
         "backend_support": "FEM demagnetization lanes",
         "problem_ir": "`backend_policy.discretization_hints.fem.demag_solver_policy`"
@@ -119,10 +125,10 @@
         "python": "FEM.gpu_bb_preconditioner",
         "type": "`str | None`",
         "default": "`None`",
-        "si_unit": "1",
+        "si_unit": "$1$",
         "validation": "`auto`, `none`, or `exchange_mass`. Explicit values require FEM GPU `projected_gradient_bb` relaxation.",
-        "meaning": "GPU BB search direction. Omission, `auto`, and `none` use the raw tangent gradient. `exchange_mass` selects the exchange-mass preconditioner.",
-        "backend_support": "FEM GPU `projected_gradient_bb` only. Runtime qualification is pending.",
+        "meaning": "GPU BB search direction. Omission and `auto` resolve to the qualified `exchange_mass` default when eligible; `none` forces the raw tangent gradient; explicit `exchange_mass` fails closed if unavailable.",
+        "backend_support": "FEM GPU `projected_gradient_bb` qualified (default `auto` -> `exchange_mass`).",
         "problem_ir": "`backend_policy.discretization_hints.fem.gpu_bb_preconditioner`"
       }
     ]

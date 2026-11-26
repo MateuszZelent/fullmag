@@ -29,7 +29,7 @@ live simulations, frequency-domain mode overlays, and offline saved playback.
 
 ## Discretization Adapters, Meshes, and Airbox Overlays
 
-- **FDM Adapter (`FdmCuboidLayer`)**: Consumes active cell masks and region assignments (`FMRM`, `FMBM`) to draw structured cells cleanly without generating spurious exterior triangles.
+- **FDM Adapter (`FdmCuboidLayer`)**: Consumes active cell masks and region assignments (`FMRM`, `FMBM`) to draw continuous structured cells within configurable render limits without generating spurious exterior triangles. Live FDM target colors build off the main thread (`useViewport3DFdmSampledScalarColors`) with topology reuse, coalesced obsolete color jobs, visible-owner scoped field fetches, and pointer-settled hover picks on large grids.
 - **FEM Adapter (`TopologyMeshLayer`, `MeshPartLayer`, `RegionMeshOverlayLayer`)**: Decodes streamed binary topology (`FMMT`) and quality bins (`FMMQ`), distinguishing magnetic object bodies, sub-object regions, exterior **Airbox** wireframes/points/surfaces, and **Periodic Pairs** (`PeriodicPairsOverlayLayer`).
 - **Scene Overlays & Selection**: Dedicated layers visualize **Move Object Gizmo** (`MoveObjectGizmo`), **Frozen Spins** preview masks (`FrozenSpinsOverlay`), **Planar Monitor** handle/rotation rings, **Dimension Frame** floor/cage reference ticks (`DimensionFrameLayer`), and **Hysteresis Replay** directional glyphs (`HysteresisReplayGlyphLayer`).
 
@@ -45,7 +45,7 @@ Through `ObjectVisualizationPanel`, the **View** / **Results** ribbon tabs, and 
 **Analysis** tab (`analysis-context`), operators configure per-target (`all`, `airbox`,
 `object:<id>`) and global visualization settings:
 
-- **Surface & Texture Coloring**: Render modes (`Shaded`, `Shaded + wireframe`, `Wireframe`, `Points`) paired with `Solid`, **HSL orientation**, scalar components (`X`, `Y`, `Z`, Magnitude $|m|$), and scientific perceptually uniform colormaps (`VisibleColorScales` HUD).
+- **Surface & Texture Coloring**: Render modes (`Shaded`, `Shaded + wireframe`, `Wireframe`, `Points`) paired with `Solid`, **HSL orientation**, scalar components (`X`, `Y`, `Z`, Magnitude $|m|$), manual field color ranges, and scientific perceptually uniform colormaps (`VisibleColorScales` HUD).
 - **Spatial Quantities & Phase Projection**: Inspect canonical $M$, $H_{\text{eff}}$, $H_{\text{demag}}$, $H_{\text{ex}}$, $H_{\text{anis}}$, Torque, Energy, pre-solved antenna fields (`AntennaFieldLayer`), or eigenmode / FMR complex overlays (`real`, `imag`, `magnitude`, `phase_rotated_real`, animated in phase over $0..2\pi$).
 - **Vectors & 3D Clipping (`ClipPlaneLayer`)**: Adjustable instanced `THREE.InstancedMesh` glyph density (`8..4096`), domain scope (`auto`, `magnetic_only`, `full_domain`, `airbox_only`), anchor/offset, vector colors, and orthogonal volume clipping/trimming along **XY**, **XZ**, or **YZ** cut planes.
 
@@ -82,7 +82,7 @@ publication-quality rendering alongside strict quantitative safeguards:
 - **Primary module**: `Viewport3DModule` and `Viewport3DCanvas` (`apps/control-room/src/modules/viewport-3d/`).
 - **Controls**: Ribbon **View** / **Results** / **Analysis** tabs, `Viewport3DAppearanceHud` (**View settings**), `Viewport3DSettingsDialog`, `Viewport3DCameraDialog`, and `ObjectVisualizationPanel`.
 - **Rendering boundary**: A rendered surface never guarantees element quality or mesh validity; inspect `MeshQualityStatisticsView` and backend validation diagnostics before claiming solver readiness.
-- **Session synchronization**: The 3D viewport consumes published scene, mesh, and field resources and synchronizes visualization state cleanly across live browser sessions and Python `fm.connect()` scripts. Studio lighting, quality profiles, clipping, and PNG capture settings affect browser rendering only and never alter solver physics.
+- **Session synchronization**: The 3D viewport consumes published scene, mesh, and field resources—including prepared FDM/FEM magnetization and material-field previews evaluated before starting a study—and synchronizes visualization state cleanly across live browser sessions and Python `fm.connect()` scripts. Off-main-thread viewport workers stay owned through canvas teardown so rapid tab switches and WebGL lifecycle transitions do not leak worker state. Studio lighting, quality profiles, clipping, and PNG capture settings affect browser rendering only and never alter solver physics.
 
 ## Source-code index
 

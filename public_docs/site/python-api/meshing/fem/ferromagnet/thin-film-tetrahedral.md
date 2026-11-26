@@ -110,7 +110,7 @@ film.mesh.thin_film(
 study.exchange()
 study.demag(model="airbox", variant="robin")
 study.build_domain_mesh()
-study.stages.add_relax(stage_id="equilibrium", tolT=1.0e-6)
+study.stages.add_relax(stage_id="equilibrium", algorithm="projected_gradient_bb", tolT=1.0e-6)
 ```
 
 (python-api-meshing-fem-ferromagnet-thin-film-tetrahedral-python-api)=
@@ -130,7 +130,7 @@ defined in `packages/fullmag-py/src/fullmag/world.py`
 | `layers` | `int` | `1` | $1$ | positive | requested layer count through the thickness | FEM CPU/GPU; FDM not applicable to this mesh policy | `mesh_workflow` |
 | `topology` | `"tetrahedral" \| "prismatic" \| None` | `None` (= legacy tetrahedral) | $1$ | only these names | through-thickness topology | FEM CPU/GPU; FDM not applicable to this mesh policy | `mesh_workflow` |
 | `exact_layers` | `bool \| None` | `None` | $1$ | only with `topology="prismatic"` | require the exact layer count | FEM CPU/GPU; FDM not applicable to this mesh policy | `mesh_workflow` |
-| `transition` | `"pyramid_to_tetrahedra" \| "reject" \| None` | `None` | $1$ | only with `topology="prismatic"` | transition to surrounding tetrahedra | FEM CPU/GPU; FDM not applicable to this mesh policy | `mesh_workflow` |
+| `transition` | `"pyramid_to_tetrahedra" \| "pure_prism" \| "reject" \| None` | `None` | $1$ | `"pyramid_to_tetrahedra"` or `"pure_prism"` with `topology="prismatic"` | transition to surrounding domain (`"pyramid_to_tetrahedra"` uses Chebyshev mixed-tet untangler for `layers >= 2`; `"pure_prism"` enables `pure_prism_p2` P2 `H1_WedgeElement(2)` scalar potential) | FEM CPU/GPU; FDM not applicable to this mesh policy | `mesh_workflow` |
 | `interface_maximum_element_size`, `surface_maximum_element_size` | `float \| None` | `None` | $\mathrm{m}$ | positive | refinement at interfaces/surfaces | FEM CPU/GPU; FDM not applicable to this mesh policy | `mesh_workflow` |
 | `interface_thickness`, `surface_thickness` | `float \| None` | `None` | $\mathrm{m}$ | positive | interface/surface zone thickness | FEM CPU/GPU; FDM not applicable to this mesh policy | `mesh_workflow` |
 | `transition_distance`, `surface_transition_distance` | `float \| str \| None` | `None` | $\mathrm{m}$ | non-negative | size-transition distance | FEM CPU/GPU; FDM not applicable to this mesh policy | `mesh_workflow` |
@@ -150,7 +150,9 @@ ProblemIR mapping: fields land in the canonical object recipe
 request into `mesh_strategy="swept_prism"` with
 `through_thickness_elements=layers`,
 `through_thickness_distribution="fixed"`, `sweep_face_meshing="triangular"`,
-the `prism` family, and `transition_policy="pyramid_to_tetrahedra"`.
+the `prism` family, and `transition_policy` set to `"pyramid_to_tetrahedra"` (default)
+or `"pure_prism"` (activating `pure_prism_p2` automatic P2 `H1_WedgeElement(2)` scalar
+potential; see {ref}`numerical-methods-performance-fem-gpu-demag`).
 
 (python-api-meshing-fem-ferromagnet-thin-film-tetrahedral-problem-ir)=
 ## ProblemIR
@@ -176,9 +178,9 @@ Model Explorer
 ```
 
 Selecting the `Mesh` node opens the **Object Mesh Policy** inspector
-(`apps/control-room/src/modules/inspector/panels/ObjectMeshPolicyPanel.tsx`;
-registered as `object-mesh-policy` in
-`apps/control-room/src/modules/inspector/inspectorRouteCatalog.tsx`).
+(`apps/control-room/src/modules/inspector/panels/mesh-details/ObjectMeshSpecPanel.tsx`,
+`ObjectMeshInspectorSpecPanel`; alongside the mesh root overview in
+`apps/control-room/src/modules/inspector/inspectors/mesh/MeshRootSpec.tsx`).
 
 Panel groups relevant to this mode:
 
@@ -231,8 +233,8 @@ Focused constructor, lowering, and mesh-report tests are the evidence boundary f
 
 | Claim | Path | Symbol | Evidence |
 |---|---|---|---|
-| thin-film tetrahedral object policy and lowering | [`packages/fullmag-py/src/fullmag/model/discretization.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/discretization.py#L679) | [`class PerObjectMeshRecipe`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/discretization.py#L679) | recipe validation tests |
-| helper signature and validation | `packages/fullmag-py/src/fullmag/world.py` | `GeometryMeshHandle.thin_film` | validation in method body; meshing tests |
+| thin-film tetrahedral object policy and lowering | [`packages/fullmag-py/src/fullmag/model/discretization.py`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/model/discretization.py#L694) | [`class PerObjectMeshRecipe`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/model/discretization.py#L694) | recipe validation tests |
+| helper signature and validation | [`packages/fullmag-py/src/fullmag/world.py`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/world.py#L2335) | `GeometryMeshHandle.thin_film` | validation in method body; meshing tests |
 | prismatic → `swept_prism` canonicalization | `packages/fullmag-py/src/fullmag/world.py` | `GeometryMeshHandle.thin_film` (prismatic branch) | recipe round-trip tests |
 | object recipe and strategies | `packages/fullmag-py/src/fullmag/model/discretization.py` | `PerObjectMeshRecipe.mesh_strategy` | strategy validation tests |
 | $h_\perp = t/N$ target | `packages/fullmag-py/src/fullmag/world.py` | `GeometryMeshHandle.thin_film` (tetrahedral branch) | `body_hmin` derived from `classify_sweepability().thickness` |

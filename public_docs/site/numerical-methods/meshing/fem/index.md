@@ -6,9 +6,9 @@ status: implemented
 doc_kind: reference
 audience: user
 owner: fullmag-public-docs
-last_updated: 2026-08-24
-reviewed_revision: 5db00ccf0113b9756fec2d46feb36ade762b12c2
-source_of_truth: "FEM/mesh policy schemas, Gmsh generation, shared-domain resources and active-lane capability matrix"
+last_updated: 2026-11-26
+reviewed_revision: 752450f8d259ab97c76c36fe666d5474b02abe9a
+source_of_truth: "FEM/mesh policy schemas, Gmsh generation, pure-prism P2 and mixed swept assembly, shared-domain resources and active-lane capability matrix"
 ---
 
 (public-docs-numerical-methods-meshing-fem-index)=
@@ -19,7 +19,7 @@ Fullmag FEM meshing combines object-owned policies, a universe-owned airbox poli
 ::::{admonition} Implementation status
 :class: important
 
-Free tetrahedral and ordinary shared-domain FEM are implemented. Thin-film, swept and mixed-element paths have explicit support boundaries. Every solver/device must advertise support for the realized cell families.
+Free tetrahedral, thickness-aware tetrahedral, pure-prism P2 (`transition="pure_prism"`, 100% `prism6` with automatic P2 `H1_WedgeElement(2)` demagnetization potential and P1 magnetization), and mixed `prism6 + pyramid5 + tet4` (`layers=1,2,3` with deterministic Chebyshev-center untangling) shared-domain workflows are implemented. Every solver/device must advertise support for the realized cell families.
 ::::
 
 ## Scope and purpose
@@ -170,10 +170,10 @@ magnet.m = fm.texture.uniform(1.0, 0.0, 0.0)
 
 study.exchange()
 study.demag(realization="poisson_robin")
-study.build_domain_mesh()
 study.stages.add_relax(
     stage_id="equilibrium",
     algorithm="llg_overdamped",
+    dt=5.0e-13,
     tolA=1.0e-4,
     max_steps=20_000,
 )
@@ -262,14 +262,15 @@ Do not run FEM from an object preview when the selected interaction requires the
 
 | Responsibility | Repository source | Stable owner / symbol |
 | --- | --- | --- |
-| FEM Python contract | [`packages/fullmag-py/src/fullmag/model/discretization.py`](https://github.com/MateuszZelent/fullmag/blob/5db00ccf0113b9756fec2d46feb36ade762b12c2/packages/fullmag-py/src/fullmag/model/discretization.py) | `FEM, PerObjectMeshRecipe` |
-| Gmsh bridge | [`packages/fullmag-py/src/fullmag/meshing/gmsh_bridge.py`](https://github.com/MateuszZelent/fullmag/blob/5db00ccf0113b9756fec2d46feb36ade762b12c2/packages/fullmag-py/src/fullmag/meshing/gmsh_bridge.py) | `public meshing bridge` |
-| FEM asset pipeline | [`packages/fullmag-py/src/fullmag/meshing/asset_pipeline.py`](https://github.com/MateuszZelent/fullmag/blob/5db00ccf0113b9756fec2d46feb36ade762b12c2/packages/fullmag-py/src/fullmag/meshing/asset_pipeline.py) | `mesh asset materialization` |
-| Control Room object policy | [`apps/control-room/src/modules/inspector/panels/ObjectMeshPolicyPanel.tsx`](https://github.com/MateuszZelent/fullmag/blob/5db00ccf0113b9756fec2d46feb36ade762b12c2/apps/control-room/src/modules/inspector/panels/ObjectMeshPolicyPanel.tsx) | `ObjectMeshPolicyPanel` |
-| Control Room mesh details | [`apps/control-room/src/modules/inspector/panels/MeshDetailsPanel.tsx`](https://github.com/MateuszZelent/fullmag/blob/5db00ccf0113b9756fec2d46feb36ade762b12c2/apps/control-room/src/modules/inspector/panels/MeshDetailsPanel.tsx) | `MeshDetailsPanel` |
-| API mesh handlers | [`crates/fullmag-api/src/router_v2/handlers/meshing/mesh.rs`](https://github.com/MateuszZelent/fullmag/blob/5db00ccf0113b9756fec2d46feb36ade762b12c2/crates/fullmag-api/src/router_v2/handlers/meshing/mesh.rs) | `mesh lifecycle endpoints` |
+| FEM Python contract | [`packages/fullmag-py/src/fullmag/model/discretization.py`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/model/discretization.py) | `FEM, PerObjectMeshRecipe` |
+| Gmsh bridge | [`packages/fullmag-py/src/fullmag/meshing/gmsh_bridge.py`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/meshing/gmsh_bridge.py) | `public meshing bridge` |
+| FEM asset pipeline | [`packages/fullmag-py/src/fullmag/meshing/asset_pipeline.py`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/meshing/asset_pipeline.py) | `mesh asset materialization` |
+| Control Room object policy | [`apps/control-room/src/modules/inspector/panels/mesh-details/ObjectMeshSpecPanel.tsx`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/apps/control-room/src/modules/inspector/panels/mesh-details/ObjectMeshSpecPanel.tsx#L180) | `ObjectMeshInspectorSpecPanel` |
+| Control Room mesh root and shared domain | [`apps/control-room/src/modules/inspector/inspectors/mesh/MeshRootSpec.tsx`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/apps/control-room/src/modules/inspector/inspectors/mesh/MeshRootSpec.tsx#L51) | `MeshRootInspectorSpecPanel` |
+| Control Room shared-domain inspector | [`apps/control-room/src/modules/inspector/inspectors/mesh/SharedDomainMeshSpec.tsx`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/apps/control-room/src/modules/inspector/inspectors/mesh/SharedDomainMeshSpec.tsx#L63) | `MeshSharedDomainInspectorSpecPanel` |
+| API mesh handlers | [`crates/fullmag-api/src/router_v2/handlers/meshing/mesh.rs`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/crates/fullmag-api/src/router_v2/handlers/meshing/mesh.rs) | `mesh lifecycle endpoints` |
 
-Implementation map reviewed against commit `5db00ccf0113b9756fec2d46feb36ade762b12c2` on 2026-08-24.
+Implementation map reviewed against commit `752450f8d259ab97c76c36fe666d5474b02abe9a` on 2026-11-26.
 
 ## References
 

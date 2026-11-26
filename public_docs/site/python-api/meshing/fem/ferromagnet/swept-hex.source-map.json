@@ -1,18 +1,20 @@
 {
   "document": {
     "path": "public_docs/site/python-api/meshing/fem/ferromagnet/swept-hex.md",
-    "reviewed_revision": "ab3c8802a691a535063102c12f9a79bb0043b367"
+    "reviewed_revision": "752450f8d259ab97c76c36fe666d5474b02abe9a"
   },
   "backend_matrix": [
     {
       "solver": "FEM",
       "device": "CPU",
-      "status": "documented"
+      "status": "unsupported",
+      "reason": "Swept-hex is representable in Python schemas, but no production-qualified shared-domain backend realization exists."
     },
     {
       "solver": "FEM",
       "device": "GPU",
-      "status": "documented"
+      "status": "unsupported",
+      "reason": "Swept-hex has no production-qualified shared-domain FEM GPU realization."
     },
     {
       "solver": "FDM",
@@ -41,42 +43,42 @@
     "parameters": [
       {
         "python": "mesh_strategy",
-        "type": "`str`",
+        "type": "`str | None`",
         "default": "`None`",
-        "si_unit": "1",
-        "validation": "`\"auto\" | \"free_tetrahedral\" | \"swept_prism\" | \"swept_hex\"`",
+        "si_unit": "$1$",
+        "validation": "`\"auto\" | \"free_tetrahedral\" | \"thin_film_tetrahedral\" | \"swept_prism\" | \"swept_hex\"`",
         "meaning": "local recipe topology",
-        "backend_support": "FEM CPU/GPU; FDM not applicable to this mesh policy",
+        "backend_support": "FEM CPU/GPU (authoring only for `swept_hex`); FDM not applicable",
         "problem_ir": "`mesh_workflow`"
       },
       {
         "python": "sweep_face_meshing",
-        "type": "`Literal[\"triangular\",\"quadrilateral\"]`",
+        "type": "`Literal[\"triangular\", \"quadrilateral\"] | None`",
         "default": "`None`",
-        "si_unit": "1",
-        "validation": "consistent with strategy",
+        "si_unit": "$1$",
+        "validation": "consistent with strategy (`\"quadrilateral\"` required for `hex`)",
         "meaning": "source faces (`quadrilateral` for hex)",
-        "backend_support": "FEM CPU/GPU; FDM not applicable to this mesh policy",
+        "backend_support": "FEM CPU/GPU (authoring only for `swept_hex`); FDM not applicable",
         "problem_ir": "`mesh_workflow`"
       },
       {
         "python": "element_family",
-        "type": "`Literal[\"prism\",\"hex\"]`",
+        "type": "`Literal[\"prism\", \"hex\"] | None`",
         "default": "`None`",
-        "si_unit": "1",
-        "validation": "consistent with strategy",
+        "si_unit": "$1$",
+        "validation": "consistent with strategy (`\"hex\"` requires `swept_hex` and `\"quadrilateral\"`)",
         "meaning": "element family (`hex`)",
-        "backend_support": "FEM CPU/GPU; FDM not applicable to this mesh policy",
+        "backend_support": "FEM CPU/GPU (authoring only for `swept_hex`); FDM not applicable",
         "problem_ir": "`mesh_workflow`"
       },
       {
         "python": "transition_policy",
-        "type": "`Literal[\"pyramid_to_tetrahedra\",\"reject\"]`",
+        "type": "`Literal[\"pyramid_to_tetrahedra\", \"pure_prism\", \"reject\"] | None`",
         "default": "`None`",
-        "si_unit": "1",
-        "validation": "prism\u2192pyramid contradicts hex \u2192 rejected",
+        "si_unit": "$1$",
+        "validation": "`hex` rejects both `\"pyramid_to_tetrahedra\"` and `\"pure_prism\"` (only `\"reject\"` is valid)",
         "meaning": "transition policy",
-        "backend_support": "FEM CPU/GPU; FDM not applicable to this mesh policy",
+        "backend_support": "FEM CPU/GPU (authoring only for `swept_hex`); FDM not applicable",
         "problem_ir": "`mesh_workflow`"
       }
     ]

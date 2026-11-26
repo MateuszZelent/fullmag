@@ -1,7 +1,7 @@
 {
   "document": {
     "path": "public_docs/site/python-api/boundary-conditions/periodic-boundary-conditions.md",
-    "reviewed_revision": "5e99782acbb7fb3f65d0cad872e102bf67733103"
+    "reviewed_revision": "752450f8d259ab97c76c36fe666d5474b02abe9a"
   },
   "backend_matrix": [
     {
@@ -86,14 +86,14 @@
     },
     {
       "id": "r_minus",
-      "latex": "\\mathbf{r}_-, \\mathbf{r}_+",
-      "meaning": "paired master and slave boundary coordinates",
+      "latex": "\\mathbf{r}_-",
+      "meaning": "master boundary coordinate",
       "si_unit": "\\mathrm{m}"
     },
     {
       "id": "r_plus",
-      "latex": "\\Delta\\mathbf{r}",
-      "meaning": "periodic lattice translation vector $\\mathbf{r}_+ - \\mathbf{r}_-$",
+      "latex": "\\mathbf{r}_+",
+      "meaning": "slave boundary coordinate",
       "si_unit": "\\mathrm{m}"
     },
     {
@@ -109,6 +109,18 @@
       "path": "packages/fullmag-py/src/fullmag/model/study.py",
       "symbol": "class PeriodicBC",
       "responsibility": "public constructor and IR lowering for zero-phase periodic boundary pairs"
+    },
+    {
+      "id": "source_fdm_pbc",
+      "path": "packages/fullmag-py/src/fullmag/model/problem.py",
+      "symbol": "class FdmPbc",
+      "responsibility": "structured periodic axes and demag image policy contract"
+    },
+    {
+      "id": "source_study_builder",
+      "path": "packages/fullmag-py/src/fullmag/world.py",
+      "symbol": "class StudyBuilder",
+      "responsibility": "study.pbc(...) study-level periodic boundary helper"
     },
     {
       "id": "source_spin_wave_bc_ir",

@@ -1,6 +1,7 @@
 {
   "document": {
-    "reviewed_revision": "ab3c8802a691a535063102c12f9a79bb0043b367",
+    "reviewed_revision": "752450f8d259ab97c76c36fe666d5474b02abe9a",
+    "reviewed_at": "2026-11-26",
     "path": "public_docs/site/physics/interactions/thermal-noise/index.md",
     "title": "Thermal Brown noise",
     "interaction": "thermal noise"
@@ -10,38 +11,142 @@
       "solver": "FDM",
       "device": "CPU",
       "status": "partial",
-      "reason": "Authoring, planning, runtime, and scientific qualification are reported separately on the page."
+      "reason": "Counter-based splitmix64 Box-Muller sampling executes with fixed-step Heun recommended; ABM3, adaptive_timestep, multilayer FDM, and H_therm output fail closed."
     },
     {
       "solver": "FDM",
       "device": "GPU",
       "status": "partial",
-      "reason": "Device source presence does not replace executed-device evidence and precision-specific qualification."
+      "reason": "cuRAND Philox4x32-10 sampling executes in FP64/FP32 with checkpoint v3 RNG provenance; ABM3, adaptive_timestep, multilayer FDM, and H_therm output fail closed."
     },
     {
       "solver": "FEM",
       "device": "CPU",
       "status": "partial",
-      "reason": "The exact weak/discrete realization and bounded capability envelope remain lane-specific."
+      "reason": "mt19937_64 per-interval sampler executes with raw-draw reuse across rejected retries, FSAL invalidation, and canonical H_therm output."
     },
     {
       "solver": "FEM",
       "device": "GPU",
-      "status": "partial",
-      "reason": "Strict device residency and executed-device qualification remain separate evidence gates."
+      "status": "unsupported",
+      "reason": "Strict public FEM GPU planning fails closed pending CAP-THERM-GPU-001 even though fullmag_cuda_thermal_field_blocks exists and is contract-tested."
     }
   ],
   "sources": [
     {
-      "id": "python-owner",
+      "id": "python-thermal-noise",
       "path": "packages/fullmag-py/src/fullmag/model/energy.py",
       "symbol": "class ThermalNoise",
-      "responsibility": "Own the public interaction constructor, validation, or canonical IR lowering boundary."
+      "responsibility": "Public temperature and seed contract with canonical IR lowering."
+    },
+    {
+      "id": "fdm-cpu-thermal-soa",
+      "path": "crates/fullmag-engine/src/fdm/cpu/fields.rs",
+      "symbol": "thermal_field_add_into_soa",
+      "responsibility": "FDM CPU SoA counter-based splitmix64 Box-Muller thermal field."
+    },
+    {
+      "id": "fdm-cpu-thermal-step",
+      "path": "crates/fullmag-engine/src/fdm/cpu/fields.rs",
+      "symbol": "thermal_field_add_into_step",
+      "responsibility": "FDM CPU AoS step-indexed splitmix64 Box-Muller thermal field."
+    },
+    {
+      "id": "fdm-gpu-thermal-fp64",
+      "path": "backends/fdm/gpu/cuda/interactions/demag_fp64.cu",
+      "symbol": "combine_effective_field_fp64_kernel",
+      "responsibility": "FDM GPU FP64 cuRAND Philox4x32-10 thermal field combination."
+    },
+    {
+      "id": "fdm-gpu-thermal-fp32",
+      "path": "backends/fdm/gpu/cuda/interactions/demag_fp32.cu",
+      "symbol": "combine_effective_field_fp32_kernel",
+      "responsibility": "FDM GPU FP32 cuRAND Philox4x32-10 thermal field combination."
+    },
+    {
+      "id": "fem-cpu-thermal-sigma",
+      "path": "backends/fem/cpu/mfem/interactions/thermal_brown_sigma.cpp",
+      "symbol": "thermal_brown_sigma",
+      "responsibility": "Fluctuation-dissipation standard deviation using bare gyromagnetic ratio."
+    },
+    {
+      "id": "fem-cpu-thermal-sampler",
+      "path": "backends/fem/cpu/mfem/interactions/thermal_brown_sampler.cpp",
+      "symbol": "refresh_thermal_brown_field",
+      "responsibility": "FEM CPU mt19937_64 nodal sampler with retry raw-draw reuse and H_therm output."
+    },
+    {
+      "id": "fem-gpu-thermal-kernel",
+      "path": "backends/fem/gpu/cuda/interactions/thermal/thermal_kernels.cu",
+      "symbol": "fullmag_cuda_thermal_field_blocks",
+      "responsibility": "FEM GPU splitmix64 kernel with ComputeMaxSigma gating (non-promoting pending CAP-THERM-GPU-001)."
+    },
+    {
+      "id": "fem-gpu-fused-heff",
+      "path": "backends/fem/gpu/cuda/fields/vector_field_kernels.cu",
+      "symbol": "fullmag_cuda_accumulate_heff_fused_xyz",
+      "responsibility": "FEM GPU single-launch fused H_eff combiner."
     }
   ],
-  "symbols": [],
-  "equations": [],
+  "symbols": [
+    {"id": "T", "latex": "$T$", "meaning": "temperature", "si_unit": "$\\mathrm{K}$"},
+    {"id": "alpha", "latex": "$\\alpha$", "meaning": "Gilbert damping", "si_unit": "$1$"},
+    {"id": "kB", "latex": "$k_{\\mathrm B}$", "meaning": "Boltzmann constant", "si_unit": "$\\mathrm{J\\,K^{-1}}$"},
+    {"id": "gamma_mu0", "latex": "$\\gamma_{\\mu0}$", "meaning": "bare gyromagnetic input used by Fullmag", "si_unit": "$\\mathrm{m\\,A^{-1}\\,s^{-1}}$"},
+    {"id": "Vi", "latex": "$V_i$", "meaning": "cell or nodal volume", "si_unit": "$\\mathrm{m^3}$"},
+    {"id": "dt_n", "latex": "$\\Delta t_n$", "meaning": "stochastic interval", "si_unit": "$\\mathrm{s}$"},
+    {"id": "H_th", "latex": "$\\mathbf H_{\\mathrm{th}}$", "meaning": "sampled thermal field", "si_unit": "$\\mathrm{A\\,m^{-1}}$"}
+  ],
+  "equations": [
+    {
+      "id": "eq-public-thermal-noise-thermal-field",
+      "symbols": ["H_th"],
+      "sources": ["fdm-cpu-thermal-soa", "fdm-cpu-thermal-step", "fdm-gpu-thermal-fp64", "fdm-gpu-thermal-fp32", "fem-cpu-thermal-sampler", "fem-gpu-thermal-kernel"]
+    },
+    {
+      "id": "eq-public-thermal-noise-thermal-amplitude",
+      "symbols": ["alpha", "kB", "T", "gamma_mu0", "Vi", "dt_n"],
+      "sources": ["fem-cpu-thermal-sigma", "fdm-cpu-thermal-soa", "fdm-gpu-thermal-fp64", "fem-gpu-thermal-kernel"]
+    },
+    {
+      "id": "eq-public-thermal-noise-thermal-covariance",
+      "symbols": ["H_th", "dt_n"],
+      "sources": ["fdm-cpu-thermal-step", "fem-cpu-thermal-sampler", "fem-gpu-thermal-kernel"]
+    }
+  ],
   "public_api": {
-    "parameters": []
+    "constructors": ["fullmag.ThermalNoise"],
+    "parameters": [
+      {
+        "python": "fm.ThermalNoise.temperature",
+        "type": "float",
+        "default": "required",
+        "si_unit": "$\\mathrm{K}$",
+        "validation": "finite strictly positive float ($T > 0$)",
+        "meaning": "thermal bath temperature $T$",
+        "backend_support": "FDM CPU/GPU, FEM CPU; FEM GPU rejected (`CAP-THERM-GPU-001`)",
+        "problem_ir": "energy_terms[].temperature"
+      },
+      {
+        "python": "fm.ThermalNoise.seed",
+        "type": "int | None",
+        "default": "None",
+        "si_unit": "$1$",
+        "validation": "`None` (system entropy) or positive integer (`seed <= 0` rejected)",
+        "meaning": "replay seed for per-lane RNG stream",
+        "backend_support": "FDM CPU/GPU, FEM CPU; FEM GPU rejected (`CAP-THERM-GPU-001`)",
+        "problem_ir": "energy_terms[].seed"
+      },
+      {
+        "python": "study.thermal_noise",
+        "type": "(float, *, seed)",
+        "default": "required `temperature`, `seed=None`",
+        "si_unit": "$\\mathrm{K}$",
+        "validation": "delegates to `fm.ThermalNoise(temperature, seed=seed)`",
+        "meaning": "stage-first thermal-noise authoring helper",
+        "backend_support": "FDM CPU/GPU, FEM CPU; FEM GPU rejected (`CAP-THERM-GPU-001`)",
+        "problem_ir": "energy_terms[]"
+      }
+    ]
   }
 }

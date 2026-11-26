@@ -15,10 +15,10 @@ Python spelling a user types.
 
 The branch is divided into:
 
-- architecture and runtime boundaries;
-- physics and interaction definitions;
-- meshing and spatial discretization;
-- numerical solvers and stage algorithms.
+- architecture, capability planning, runtime transport, and provenance boundaries;
+- physics foundations and canonical interaction definitions;
+- meshing and spatial discretization (FDM grids and conforming FEM shared-domain / `pure_prism_p2` meshes);
+- numerical solvers, stage algorithms, and {ref}`computational optimizations and hardware acceleration <numerical-methods-performance>`.
 
 Python authoring is documented separately under {doc}`../python-api/index`; Control Room behavior
 under {doc}`../frontend/index`.

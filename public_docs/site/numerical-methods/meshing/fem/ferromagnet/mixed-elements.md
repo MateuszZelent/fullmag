@@ -6,8 +6,8 @@ status: partial
 doc_kind: reference
 audience: user
 owner: fullmag-public-docs
-last_updated: 2026-08-31
-reviewed_revision: 969efa0941905825ac569d525f4bdaefc059e2af
+last_updated: 2026-11-26
+reviewed_revision: 752450f8d259ab97c76c36fe666d5474b02abe9a
 ---
 
 (public-docs-numerical-methods-meshing-fem-ferromagnet-mixed-elements)=
@@ -42,7 +42,10 @@ o_{c+1}-o_c=a(t_c),\qquad K_c=\mathrm{cell\_nodes}[o_c:o_{c+1}].
 (mixed-elements-assumptions-and-validity)=
 ## Assumptions and validity
 
-The carrier is linear typed topology: 4, 6, 5, and 8 nodes for `tet4`, `prism6`, `pyramid5`, and `hex8`. `pyramid5` is a prism--tet transition family, not a prism replacement. Mixed compatibility views fail rather than converting to tetrahedra.
+The carrier is linear typed topology: 4, 6, 5, and 8 nodes for `tet4`, `prism6`, `pyramid5`, and `hex8`. `pyramid5` is a prism–tet transition family, not a prism replacement. Mixed compatibility views fail rather than converting to tetrahedra.
+
+- **Conforming `layers=2` repair (`_untangle_same_side_mixed_tetrahedra`):** For `layers >= 2` on `transition="pyramid_to_tetrahedra"`, Gmsh Delaunay triangulation in thin lateral transition air slabs can emit inverted `tet4` pairs causing `same_side_two_owner_face` overlaps ($d_0 d_1 > 0$). Fullmag's deterministic Chebyshev-center star LP untangler (`_chebyshev_center_3d`, SciPy HiGHS with pure-NumPy fallback) relocates movable interior non-apex vertices and reorients affected tetrahedra to eliminate `same_side_two_owner_face` overlaps across `layers = 1, 2, 3`.
+- **Accuracy contrast vs `pure_prism_p2`:** Because MFEM `pyramid5` elements restrict the scalar demagnetization potential to **P1**, `mixed prism P1` (`transition="pyramid_to_tetrahedra"`) incurs a **`-25.97%` to `-32.73%`** uniform Aharoni demagnetization energy deficit (`-19.36%` to `-19.93%` relaxed total energy vs FDM) on a $300\times 300\times 5\;\mathrm{nm}$ Permalloy film. For thin films requiring sub-percent magnetostatic accuracy, use `transition="pure_prism"` (`pure_prism_p2`, 100% `prism6`, automatic P2 `H1_WedgeElement(2)` potential, **`-0.60%`** Aharoni at `L=2`; see [Swept-prism ferromagnet mesh](swept-prism.md) and {ref}`numerical-methods-performance-fem-gpu-demag`).
 
 (mixed-elements-python-api)=
 ## Python API
@@ -64,7 +67,7 @@ film = study.geometry(fm.Box(size=(24 * nm, 12 * nm, 1 * nm), name="film"), name
 film.mesh.thin_film(
     maximum_element_size=3 * nm,
     minimum_element_size=1 * nm,
-    layers=1,
+    layers=2,
     topology="prismatic",
     exact_layers=True,
     transition="pyramid_to_tetrahedra",
@@ -75,7 +78,6 @@ film.Aex = 13e-12
 film.m = fm.texture.uniform(1.0, 1e-4, 0.0)
 study.exchange()
 study.demag(realization="poisson_robin")
-study.build_domain_mesh()
 study.stages.add_relax(stage_id="equilibrium", algorithm="llg_overdamped", tolA=1e-4, max_steps=20_000, dt=1e-13)
 ```
 
@@ -93,7 +95,7 @@ study.stages.add_relax(stage_id="equilibrium", algorithm="llg_overdamped", tolA=
 | `layers` | `int` | `1` | $1$ | bool rejected; integer at least 1 | Requested element-layer count | FEM capability-gated; FDM N/A | `through_thickness_elements` |
 | `topology` | `Literal["tetrahedral", "prismatic"] \| None` | `None` | $1$ | one of `None`, `tetrahedral`, `prismatic` | Thin-film topology | FEM capability-gated; FDM N/A | `topology` |
 | `exact_layers` | `bool \| None` | `None` | $1$ | Boolean; only valid with prismatic topology; strict prismatic rejects `False` outside extended mode | Strict layer-count intent | FEM capability-gated; FDM N/A | `exact_layer_count` |
-| `transition` | `Literal["pyramid_to_tetrahedra", "reject"] \| None` | `None` | $1$ | only valid with prismatic topology; prismatic resolves or requires `pyramid_to_tetrahedra` | Shared-domain transition | FEM capability-gated; FDM N/A | `transition_policy` |
+| `transition` | `Literal["pyramid_to_tetrahedra", "pure_prism", "reject"] \| None` | `None` | $1$ | only valid with prismatic topology; resolves to `pyramid_to_tetrahedra` when omitted or accepts `pure_prism` | Shared-domain transition | FEM capability-gated; FDM N/A | `transition_policy` |
 | `interface_maximum_element_size` | `float \| None` | `None` | $\mathrm{m}$ | positive; used unless `surface_maximum_element_size` is set | Interface size ceiling | FEM capability-gated; FDM N/A | `interface_hmax` |
 | `surface_maximum_element_size` | `float \| None` | `None` | $\mathrm{m}$ | positive; takes precedence over `interface_maximum_element_size` | Surface alias for interface size | FEM capability-gated; FDM N/A | `interface_hmax` |
 | `interface_thickness` | `float \| None` | `None` | $\mathrm{m}$ | positive; used unless `surface_thickness` is set | Interface refinement-shell thickness | FEM capability-gated; FDM N/A | `interface_thickness` |
@@ -117,34 +119,37 @@ All four transition-distance arguments accept the sentinels `airbox_boundary`, `
 (mixed-elements-round-trip-and-failure-semantics)=
 ## Round-trip and failure semantics
 
-**Requested intent** is the `thin_film()` call and lowered object policy. **Resolved execution** is the typed `MeshData` and realization report. **Validation errors** reject invalid CSR arity, invalid recipe distribution/direction, and any prismatic request whose transition is not `pyramid_to_tetrahedra`. That transition is mandatory because `topology="prismatic"`; it is not an unconditional rule for every policy whose family happens to be `prism`. **Unsupported combinations** include a solver/device lacking a realized family. No `prism6`, `pyramid5`, or `hex8` is silently replaced by `tet4`.
+**Requested intent** is the `thin_film()` call and lowered object policy. **Resolved execution** is the typed `MeshData`, Chebyshev untangling diagnostics (when triggered), and realization report. **Validation errors** reject invalid CSR arity, invalid recipe distribution/direction, unresolved `same_side_two_owner_face` overlaps, and any prismatic request whose transition is neither `pyramid_to_tetrahedra` nor `pure_prism`. **Unsupported combinations** include a solver/device lacking a realized family or Zhang–Li STT on mixed meshes. No `prism6`, `pyramid5`, or `hex8` is silently replaced by `tet4`.
 
 (mixed-elements-discrete-realization)=
 ## Discrete realization
 
-`_MESHIO_VOLUME_TYPES` maps `tetra`, `wedge`/`prism`, `pyramid`, and `hexahedron` to canonical types; `_CELL_LOCAL_FACETS` supplies the local `tri3`/`quad4` faces.
+`_MESHIO_VOLUME_TYPES` maps `tetra`, `wedge`/`prism`, `pyramid`, and `hexahedron` to canonical types; `_CELL_LOCAL_FACETS` supplies the local `tri3`/`quad4` faces. On mixed `prism6 + pyramid5 + tet4` meshes, GPU DMI executes through the unified preassembled skew-symmetric CSR operator (`build_gpu_dmi_csr_from_mfem` / `fullmag_cuda_dmi_csr_field_energy`), eliminating legacy `tet4`-only GPU DMI rejections. See {ref}`numerical-methods-performance-fem-gpu-demag`.
 
 | Solver | Device | Status | Reason |
 | --- | --- | --- | --- |
-| FEM | CPU | source-backed, capability-gated | Active execution must accept every realized family. |
-| FEM | GPU | source-backed, capability-gated | No GPU runtime or parity evidence is claimed. |
+| FEM | CPU | implemented (`mixed_p1`, `layers=1,2,3`) | Certified `prism6 + pyramid5 + tet4` with Chebyshev untangling; imported `hex8` ingress only |
+| FEM | GPU | implemented (RTX 4080 SUPER verified for `mixed_p1`) | Verified on GPU `cuDSS` (`180 MB`, `7.52 ms/step` at `L=2, h=2.5 nm`, `hot_loop_gather_scatter_bytes = 0`) and unified CSR GPU DMI (`mixed_30x30x2`, `180.3×–205.9×` vs CPU MFEM); Zhang–Li STT and `hex8` fail closed |
 | FDM | CPU | not applicable | FEM mesh topology. |
 | FDM | GPU | not applicable | FEM mesh topology. |
 
 (mixed-elements-implementation-mapping)=
 ## Implementation mapping
 
-`GeometryMeshHandle.thin_film` is the public authoring callable. `PerObjectMeshRecipe` owns the lowered policy. `MeshData` owns canonical typed variable-arity CSR, while the extraction maps preserve typed volume and facet families. `test_mesh_data_accepts_canonical_mixed_typed_csr` asserts typed mixed CSR and rejects tetra-only compatibility access.
+`GeometryMeshHandle.thin_film` is the public authoring callable. `PerObjectMeshRecipe` owns the lowered policy. `MeshData` owns canonical typed variable-arity CSR, while `_MESHIO_VOLUME_TYPES` and `_CELL_LOCAL_FACETS` preserve typed volume and facet families. `_untangle_same_side_mixed_tetrahedra` and `_chebyshev_center_3d` repair `same_side_two_owner_face` overlaps for `layers >= 2`. `build_gpu_dmi_csr_from_mfem` and `fullmag_cuda_dmi_csr_field_energy` realize GPU DMI on mixed meshes. `test_mesh_data_accepts_canonical_mixed_typed_csr` asserts typed mixed CSR and rejects tetra-only compatibility access.
 
 (mixed-elements-validation)=
 ## Validation
 
-Focused tests cover typed CSR, arity, offsets, node indices, facets, and Gmsh prism ordering. This is source/test evidence, not an executed CPU/GPU solver qualification.
+- **Mixed `layers=2` untangler (RTX 4080 SUPER, $300\times 300\times 5\;\mathrm{nm}$, $h=2.5\;\mathrm{nm}$):** `_untangle_same_side_mixed_tetrahedra` reduces `same_side_two_owner_face` **`6 -> 0`** (relocating node `53465`, `reoriented_tets = 2`, margin `4.452e-4`), producing a certified conforming mesh (`54,016` nodes, `159,714` cells, `p05={'prism6': 0.8616, 'pyramid5': 0.4622, 'tet4': 0.1842}`) executing on GPU `cuDSS` (`180 MB`, `7.52 ms/step`). Parametric tests pass 3/3 for `layers = 1, 2, 3`.
+- **Unified CSR GPU DMI on mixed meshes (`mixed_30x30x2`, `3,843` nodes, `5,460` elements):** field parity $h_{\mathrm{rel}} \le 6.57 \times 10^{-16}$ and energy parity $E_{\mathrm{rel}} \le 6.97 \times 10^{-15}$ vs CPU MFEM across interfacial, rotated Göbel, and bulk DMI, with **`180.3×–205.9×`** field speedup (`0.053–0.060 ms` GPU vs `10.46–11.55 ms` CPU).
+- **Accuracy benchmark vs `pure_prism_p2`:** On $300\times 300\times 5\;\mathrm{nm}$ Permalloy, `mixed prism P1` reports `-32.73%` (`L=1, h=5.0 nm`), `-30.11%` (`L=1, h=2.5 nm`), and `-25.97%` (`L=2, h=2.5 nm`) uniform Aharoni error compared to **`-0.60%`** for `pure_prism_p2` (`L=2, h=5.0 nm`; see [Swept-prism ferromagnet mesh](swept-prism.md) and {ref}`numerical-methods-performance-fem-gpu-demag`).
 
 (mixed-elements-limitations)=
 ## Limitations
 
-Imported `hex8` preservation does not establish hex assembly, a qualified transition, CPU/GPU execution, or observable convergence.
+- MFEM `pyramid5` cells force scalar demagnetization potential down to P1, causing the `-26%` to `-33%` thin-film Aharoni deficit above; switch to `transition="pure_prism"` (`pure_prism_p2`) whenever sub-percent demagnetization accuracy is required.
+- Imported `hex8` preservation does not establish hex assembly, a qualified transition, or swept-hex execution; Zhang–Li STT remains fail-closed on mixed meshes.
 
 (mixed-elements-scientific-bibliography)=
 ## Scientific bibliography
@@ -157,9 +162,13 @@ Imported `hex8` preservation does not establish hex assembly, a qualified transi
 
 | Path | Stable symbol | Responsibility |
 | --- | --- | --- |
-| [`packages/fullmag-py/src/fullmag/world.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/world.py#L2149) | [`thin_film`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/world.py#L2149) | Public prismatic authoring and lowering |
-| [`packages/fullmag-py/src/fullmag/model/discretization.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/discretization.py#L679) | [`class PerObjectMeshRecipe`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/discretization.py#L679) | Lowered recipe validation and IR |
-| [`packages/fullmag-py/src/fullmag/meshing/_gmsh_types.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/meshing/_gmsh_types.py#L1357) | [`class MeshData`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/meshing/_gmsh_types.py#L1357) | Canonical typed variable-arity CSR |
-| [`packages/fullmag-py/src/fullmag/meshing/_gmsh_extraction.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/meshing/_gmsh_extraction.py#L466) | [`_MESHIO_VOLUME_TYPES`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/meshing/_gmsh_extraction.py#L466) | Canonical volume families |
-| [`packages/fullmag-py/src/fullmag/meshing/_gmsh_extraction.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/meshing/_gmsh_extraction.py#L474) | [`_CELL_LOCAL_FACETS`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/meshing/_gmsh_extraction.py#L474) | Typed local facets |
-| [`packages/fullmag-py/tests/test_mixed_element_meshing.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/tests/test_mixed_element_meshing.py#L3515) | [`test_mesh_data_accepts_canonical_mixed_typed_csr`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/tests/test_mixed_element_meshing.py#L3515) | No coercion regression |
+| [`packages/fullmag-py/src/fullmag/world.py`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/world.py#L2334) | [`thin_film`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/world.py#L2334) | Public prismatic authoring and lowering |
+| [`packages/fullmag-py/src/fullmag/model/discretization.py`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/model/discretization.py#L694) | [`class PerObjectMeshRecipe`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/model/discretization.py#L694) | Lowered recipe validation and IR |
+| [`packages/fullmag-py/src/fullmag/meshing/_gmsh_types.py`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/meshing/_gmsh_types.py#L2358) | [`class MeshData`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/meshing/_gmsh_types.py#L2358) | Canonical typed variable-arity CSR |
+| [`packages/fullmag-py/src/fullmag/meshing/_gmsh_extraction.py`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/meshing/_gmsh_extraction.py#L468) | [`_MESHIO_VOLUME_TYPES`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/meshing/_gmsh_extraction.py#L468) | Canonical volume families |
+| [`packages/fullmag-py/src/fullmag/meshing/_gmsh_extraction.py`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/meshing/_gmsh_extraction.py#L476) | [`_CELL_LOCAL_FACETS`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/meshing/_gmsh_extraction.py#L476) | Typed local facets |
+| [`packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py#L2501) | [`_untangle_same_side_mixed_tetrahedra`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py#L2501) | Deterministic Chebyshev-center mixed-tet conformity repair (`layers=2`, `same_side 6->0`) |
+| [`packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py#L2248) | [`_chebyshev_center_3d`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py#L2248) | 4-variable Chebyshev-center star LP solver (SciPy HiGHS + pure-NumPy fallback) |
+| [`backends/fem/gpu/cuda/interactions/dmi/dmi_csr_operator.cpp`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/backends/fem/gpu/cuda/interactions/dmi/dmi_csr_operator.cpp#L138) | [`build_gpu_dmi_csr_from_mfem`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/backends/fem/gpu/cuda/interactions/dmi/dmi_csr_operator.cpp#L138) | Unified CSR GPU DMI assembly on mixed `prism6 + pyramid5 + tet4` meshes |
+| [`backends/fem/gpu/cuda/interactions/dmi/dmi_csr_kernels.cu`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/backends/fem/gpu/cuda/interactions/dmi/dmi_csr_kernels.cu#L331) | [`fullmag_cuda_dmi_csr_field_energy`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/backends/fem/gpu/cuda/interactions/dmi/dmi_csr_kernels.cu#L331) | Zero-atomic CSR GPU DMI field and energy evaluation |
+| [`packages/fullmag-py/tests/test_mixed_element_meshing.py`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/tests/test_mixed_element_meshing.py#L3515) | [`test_mesh_data_accepts_canonical_mixed_typed_csr`](https://github.com/MateuszZelent/fullmag/blob/752450f8d259ab97c76c36fe666d5474b02abe9a/packages/fullmag-py/tests/test_mixed_element_meshing.py#L3515) | No coercion regression |

@@ -1,7 +1,7 @@
 {
   "document": {
     "path": "public_docs/site/python-api/meshing/fem/airbox/build.md",
-    "reviewed_revision": "ab3c8802a691a535063102c12f9a79bb0043b367"
+    "reviewed_revision": "752450f8d259ab97c76c36fe666d5474b02abe9a"
   },
   "backend_matrix": [
     {
@@ -35,9 +35,118 @@
       "path": "packages/fullmag-py/src/fullmag/meshing/_gmsh_airbox.py",
       "symbol": "add_air_box",
       "responsibility": "Airbox geometry construction and mesh extraction boundary."
+    },
+    {
+      "id": "source-2",
+      "path": "packages/fullmag-py/src/fullmag/world.py",
+      "symbol": "class StudyBuilder",
+      "responsibility": "Explicit domain build entry points."
+    },
+    {
+      "id": "source-3",
+      "path": "packages/fullmag-py/src/fullmag/world.py",
+      "symbol": "class StudyMeshHandle",
+      "responsibility": "Shared-domain mesh save, load, save_or_load, export, and import_ persistence facade."
+    },
+    {
+      "id": "source-4",
+      "path": "packages/fullmag-py/src/fullmag/world.py",
+      "symbol": "class StudyAirboxHandle",
+      "responsibility": "Airbox field-state load and save persistence facade."
     }
   ],
   "public_api": {
-    "parameters": []
+    "parameters": [
+      {
+        "python": "StudyBuilder.build_domain_mesh",
+        "type": "`() -> StudyBuilder`",
+        "default": "n/a",
+        "si_unit": "$1$",
+        "validation": "validates authored policies before Gmsh generation",
+        "meaning": "materializes the shared domain mesh (`study.build_domain_mesh()`)",
+        "backend_support": "FEM CPU/GPU; FDM not applicable to this mesh policy",
+        "problem_ir": "`mesh_workflow.build`"
+      },
+      {
+        "python": "StudyBuilder.build_mesh",
+        "type": "`() -> StudyBuilder`",
+        "default": "n/a",
+        "si_unit": "$1$",
+        "validation": "delegates to `build_domain_mesh()`",
+        "meaning": "legacy mesh build entry point (`study.build_mesh()`)",
+        "backend_support": "FEM CPU/GPU; FDM not applicable to this mesh policy",
+        "problem_ir": "`mesh_workflow.build`"
+      },
+      {
+        "python": "fullmag.world.StudyMeshHandle.save",
+        "type": "`(path: str | Path) -> Path`",
+        "default": "required",
+        "si_unit": "$1$",
+        "validation": "requires realized shared-domain FEM mesh",
+        "meaning": "save the mesh artifact (`study.mesh.save(path)`)",
+        "backend_support": "FEM CPU/GPU; FDM not applicable to this mesh policy",
+        "problem_ir": "`mesh_workflow.build`"
+      },
+      {
+        "python": "fullmag.world.StudyMeshHandle.load",
+        "type": "`(path: str | Path, *, expected_sha256: str | None = None, build_requested: bool | None = None) -> MeshPersistenceResult`",
+        "default": "`None`",
+        "si_unit": "$1$",
+        "validation": "validates authoring fingerprint and optional SHA-256 digest",
+        "meaning": "load a persisted mesh artifact (`study.mesh.load(path)`)",
+        "backend_support": "FEM CPU/GPU; FDM not applicable to this mesh policy",
+        "problem_ir": "`mesh_workflow.build`"
+      },
+      {
+        "python": "fullmag.world.StudyMeshHandle.save_or_load",
+        "type": "`(path: str | Path) -> MeshPersistenceResult`",
+        "default": "required",
+        "si_unit": "$1$",
+        "validation": "reloads when authoring matches, otherwise rebuilds and saves",
+        "meaning": "cache-or-build shared-domain mesh (`study.mesh.save_or_load(path)`)",
+        "backend_support": "FEM CPU/GPU; FDM not applicable to this mesh policy",
+        "problem_ir": "`mesh_workflow.build`"
+      },
+      {
+        "python": "fullmag.world.StudyMeshHandle.export",
+        "type": "`(path: str | Path, *, format: str = \"auto\") -> Path`",
+        "default": "`format=\"auto\"`",
+        "si_unit": "$1$",
+        "validation": "`format` must be `\"auto\"`, `\"comsol\"`, or `\"gmsh\"`",
+        "meaning": "exports realized mesh to Gmsh `.msh` or COMSOL `.mphtxt` (`study.mesh.export(path)`)",
+        "backend_support": "FEM CPU/GPU; FDM not applicable to this mesh policy",
+        "problem_ir": "`mesh_workflow.build`"
+      },
+      {
+        "python": "fullmag.world.StudyMeshHandle.import_",
+        "type": "`(path: str | Path, *, region_map=None, boundary_map=None, region_entity_map=None, boundary_entity_map=None, coordinate_unit=None) -> MeshPersistenceResult`",
+        "default": "optional maps",
+        "si_unit": "$1$",
+        "validation": "validates Gmsh/COMSOL format, coordinate unit, and marker maps",
+        "meaning": "imports and binds an external shared-domain mesh (`study.mesh.import_(path, ...)`)",
+        "backend_support": "FEM CPU/GPU; FDM not applicable to this mesh policy",
+        "problem_ir": "`backend_policy.discretization_hints.fem.mesh`"
+      },
+      {
+        "python": "fullmag.world.StudyAirboxHandle.load",
+        "type": "`(path: str | Path, *, quantity: object, format: str = \"auto\", dataset: str | None = None, sample: int = -1, mode: str = \"attach\") -> FieldState`",
+        "default": "`mode=\"attach\"`",
+        "si_unit": "$1$",
+        "validation": "`mode` must be `\"attach\"` or `\"auto\"`; quantity must match file payload",
+        "meaning": "loads and attaches an airbox field state (`study.airbox.load(...)`)",
+        "backend_support": "FEM CPU/GPU airbox field I/O",
+        "problem_ir": "`runtime_metadata.loaded_field_states`"
+      },
+      {
+        "python": "fullmag.world.StudyAirboxHandle.save",
+        "type": "`(path: str | Path, *, quantity: object, format: str = \"auto\", dataset: str | None = None, units: str | None = None) -> Path`",
+        "default": "`format=\"auto\"`",
+        "si_unit": "$1$",
+        "validation": "requires a previously loaded explicit `FieldState` for `quantity`",
+        "meaning": "saves an attached airbox field state to disk (`study.airbox.save(...)`)",
+        "backend_support": "FEM CPU/GPU airbox field I/O",
+        "problem_ir": "`runtime_metadata.loaded_field_states`"
+      }
+    ]
   }
 }

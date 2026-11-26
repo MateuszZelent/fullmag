@@ -1,21 +1,22 @@
 {
   "document": {
     "path": "public_docs/site/numerical-methods/demag-solvers/fem-poisson-airbox.md",
-    "reviewed_revision": "a1de38b4d7dad275dccbdbfd937b757d6ca7ee99",
+    "reviewed_revision": "752450f8d259ab97c76c36fe666d5474b02abe9a",
     "source_of_truth": "Current repository source declarations and public Python API contracts."
   },
   "backend_matrix": [
     {"solver": "FEM", "device": "CPU", "status": "implemented"},
-    {"solver": "FEM", "device": "GPU", "status": "source-backed", "reason": "Device Poisson sources exist; executed-device qualification remains separate."},
+    {"solver": "FEM", "device": "GPU", "status": "implemented"},
     {"solver": "FDM", "device": "CPU", "status": "not-applicable", "reason": "FDM uses the cell-averaged convolution realization."},
     {"solver": "FDM", "device": "GPU", "status": "not-applicable", "reason": "FDM CUDA uses tensor spectra and cuFFT rather than a shared FEM airbox."}
   ],
   "equations": [
     {"id": "eq-numerical-demag-poisson-field", "symbols": ["Hd", "u"], "sources": ["recovery"]},
     {"id": "eq-numerical-demag-poisson-strong", "symbols": ["u", "M", "Oma", "Omegam"], "sources": ["rhs"]},
-    {"id": "eq-numerical-demag-poisson-robin-weak", "symbols": ["u", "v", "beta", "Gammaa", "M", "Oma"], "sources": ["rhs", "boundary"]},
-    {"id": "eq-numerical-demag-poisson-robin", "symbols": ["u", "beta", "Gammaa", "n", "c", "Rstar"], "sources": ["boundary"]},
-    {"id": "eq-numerical-demag-poisson-energy", "symbols": ["Ed", "mu0", "M", "Hd", "Omegam"], "sources": ["energy"]}
+    {"id": "eq-numerical-demag-poisson-robin-weak", "symbols": ["u", "v", "beta", "Gammaa", "M", "Oma"], "sources": ["rhs", "boundary", "gpu-cudss"]},
+    {"id": "eq-numerical-demag-poisson-robin", "symbols": ["u", "beta", "Gammaa", "n", "c", "Rstar"], "sources": ["boundary", "film-pin"]},
+    {"id": "eq-numerical-demag-poisson-energy", "symbols": ["Ed", "mu0", "M", "Hd", "Omegam"], "sources": ["energy"]},
+    {"id": "eq-numerical-demag-poisson-predictor", "symbols": ["phi0", "phin", "teval"], "sources": ["gpu-predictor", "gpu-cert"]}
   ],
   "symbols": [
     {"id": "u", "latex": "$u$", "meaning": "magnetic scalar potential", "si_unit": "$\\mathrm{A}$"},
@@ -30,24 +31,36 @@
     {"id": "c", "latex": "$c$", "meaning": "dimensionless Robin coefficient", "si_unit": "$1$"},
     {"id": "Rstar", "latex": "$R_\\star$", "meaning": "open-axis reference radius", "si_unit": "$\\mathrm{m}$"},
     {"id": "mu0", "latex": "$\\mu_0$", "meaning": "vacuum permeability", "si_unit": "$\\mathrm{N\\,A^{-2}}$"},
-    {"id": "Ed", "latex": "$E_{\\mathrm d}$", "meaning": "demagnetization energy", "si_unit": "$\\mathrm{J}$"}
+    {"id": "Ed", "latex": "$E_{\\mathrm d}$", "meaning": "demagnetization energy", "si_unit": "$\\mathrm{J}$"},
+    {"id": "phi0", "latex": "$\\phi^{(0)}$", "meaning": "predicted initial scalar potential for Krylov warm start", "si_unit": "$\\mathrm{A}$"},
+    {"id": "phin", "latex": "$\\phi_n, \\phi_{n-1}$", "meaning": "accepted scalar potentials at steps $n$ and $n-1$", "si_unit": "$\\mathrm{A}$"},
+    {"id": "teval", "latex": "$t_{\\mathrm{eval}}, t_n, t_{n-1}$", "meaning": "RK stage evaluation and accepted step timestamps", "si_unit": "$\\mathrm{s}$"}
   ],
   "sources": [
     {"id": "api-demag", "path": "packages/fullmag-py/src/fullmag/model/energy.py", "symbol": "class Demag", "responsibility": "Public realization and variant normalization."},
-    {"id": "fem-policy", "path": "packages/fullmag-py/src/fullmag/model/discretization.py", "symbol": "class FemLinearSolverPolicy", "responsibility": "FEM linear solver policy."},
-    {"id": "rhs", "path": "backends/fem/cpu/mfem/interactions/demag_poisson_rhs.cpp", "symbol": "assemble_demag_poisson_rhs", "responsibility": "Magnetic Poisson RHS assembly."},
-    {"id": "boundary", "path": "backends/fem/cpu/mfem/interactions/demag_poisson_boundary.cpp", "symbol": "initialize_demag_poisson_boundary_operator", "responsibility": "Dirichlet and Robin boundary construction."},
+    {"id": "fem-policy", "path": "packages/fullmag-py/src/fullmag/model/discretization.py", "symbol": "class FemLinearSolverPolicy", "responsibility": "FEM linear solver and GPU strategy policy."},
+    {"id": "pure-prism", "path": "packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py", "symbol": "generate_pure_prism_box_airbox_mesh", "responsibility": "100% prism6 P2-capable shared-domain mesher."},
+    {"id": "default-policy", "path": "crates/fullmag-runner/src/native_fem/plan.rs", "symbol": "resolved_native_fem_demag_solver_policy", "responsibility": "Unified CG/AMG and gpu_strategy resolution."},
+    {"id": "rhs", "path": "backends/fem/cpu/mfem/interactions/demag_poisson_rhs.cpp", "symbol": "assemble_demag_poisson_rhs", "responsibility": "Magnetic Poisson RHS assembly and CPU transfer caching."},
+    {"id": "boundary", "path": "backends/fem/cpu/mfem/interactions/demag_poisson_boundary.cpp", "symbol": "initialize_demag_poisson_boundary_operator", "responsibility": "Dirichlet, Robin, and 2D-film pure-Neumann boundary construction."},
+    {"id": "film-pin", "path": "backends/fem/cpu/mfem/interactions/demag_poisson_boundary.cpp", "symbol": "film_neumann_gauge_pin_tdof", "responsibility": "Singleton open-boundary gauge pin for 2D-periodic films."},
     {"id": "solve", "path": "backends/fem/cpu/mfem/interactions/demag_poisson_hypre.cpp", "symbol": "solve_demag_poisson_hypre", "responsibility": "CPU Hypre/MFEM solve and telemetry."},
-    {"id": "recovery", "path": "backends/fem/cpu/mfem/interactions/demag_poisson_recovery.cpp", "symbol": "recover_demag_poisson_field", "responsibility": "Field recovery and masking."},
+    {"id": "recovery", "path": "backends/fem/cpu/mfem/interactions/demag_poisson_recovery.cpp", "symbol": "recover_demag_poisson_field", "responsibility": "Field recovery, masking, and CPU recovery transfer caching."},
     {"id": "energy", "path": "backends/fem/cpu/mfem/interactions/demag_poisson_energy.cpp", "symbol": "demag_poisson_energy_from_field", "responsibility": "Field-based demagnetization energy reduction."},
-    {"id": "gpu-rhs", "path": "backends/fem/gpu/cuda/demag_poisson/demag_kernels.cu", "symbol": "demag_rhs_csr_kernel", "responsibility": "Device CSR RHS."}
+    {"id": "gpu-rhs", "path": "backends/fem/gpu/cuda/demag_poisson/demag_kernels.cu", "symbol": "demag_rhs_csr_kernel", "responsibility": "Device CSR RHS."},
+    {"id": "gpu-cudss", "path": "backends/fem/gpu/cuda/demag_poisson/cudss_direct_solver.cpp", "symbol": "try_initialize_demag_cudss_direct", "responsibility": "VRAM-guarded cuDSS Cholesky direct solver resolver."},
+    {"id": "gpu-hypre", "path": "backends/fem/gpu/cuda/demag_poisson/hypre_device_solver.cpp", "symbol": "initialize_demag_poisson_hypre_device_solver", "responsibility": "Three-state GPU solver initialization and BoomerAMG coarse_relax_type=18."},
+    {"id": "gpu-predictor", "path": "backends/fem/gpu/cuda/demag_poisson/demag_predictor.cu", "symbol": "gpu_demag_predictor_apply_warm_start", "responsibility": "Two-step linear potential predictor warm start for Krylov solves."},
+    {"id": "gpu-cert", "path": "backends/fem/gpu/cuda/demag_poisson/hypre_residual_certification.cpp", "symbol": "certify_gpu_hypre_demag_residual", "responsibility": "Shared multi-block CUB residual certification."},
+    {"id": "create-v6", "path": "backends/fem/src/api.cpp", "symbol": "fullmag_fem_backend_create_v6", "responsibility": "Creation-time C ABI passing gpu_strategy before demag init."}
   ],
   "public_api": {
     "parameters": [
-      {"python": "Demag.variant", "type": "str | None", "default": "None", "si_unit": "$1$", "validation": "with `model=\"airbox\"`: `auto`, `robin`, `dirichlet`", "meaning": "outer closure", "backend_support": "FEM CPU/GPU subject to qualification", "problem_ir": "`energy[].realization`"},
+      {"python": "Demag.variant", "type": "str | None", "default": "None", "si_unit": "$1$", "validation": "with `model=\"airbox\"`: `auto`, `robin`, `dirichlet`", "meaning": "outer closure", "backend_support": "FEM CPU/GPU", "problem_ir": "`energy[].realization`"},
       {"python": "FEM.order", "type": "int", "default": "required", "si_unit": "$1$", "validation": "integer greater than or equal to $1$", "meaning": "finite-element polynomial order", "backend_support": "FEM CPU/GPU", "problem_ir": "`backend_policy.discretization_hints.fem.order`"},
-      {"python": "FemLinearSolverPolicy.rtol", "type": "float", "default": "1e-8", "si_unit": "$1$", "validation": "finite and strictly positive", "meaning": "relative algebraic tolerance", "backend_support": "FEM CPU/GPU", "problem_ir": "`demag_solver_policy.rtol`"},
-      {"python": "FemLinearSolverPolicy.max_iterations", "type": "int", "default": "500", "si_unit": "$1$", "validation": "integer greater than or equal to $1$", "meaning": "Krylov iteration ceiling", "backend_support": "FEM CPU/GPU", "problem_ir": "`demag_solver_policy.max_iterations`"}
+      {"python": "FemLinearSolverPolicy.gpu_strategy", "type": "Literal[\"auto\",\"cg_amg\",\"cudss\"]", "default": "\"auto\"", "si_unit": "$1$", "validation": "`auto`, `cg_amg`, or `cudss`", "meaning": "GPU demag direct-vs-Krylov selection policy delivered via `fullmag_fem_backend_create_v6`", "backend_support": "FEM GPU (ignored on FEM CPU)", "problem_ir": "`demag_solver_policy.gpu_strategy`"},
+      {"python": "FemLinearSolverPolicy.rtol", "type": "float", "default": "1e-8", "si_unit": "$1$", "validation": "finite and strictly positive", "meaning": "relative algebraic tolerance certifying every solve", "backend_support": "FEM CPU/GPU", "problem_ir": "`demag_solver_policy.rtol`"},
+      {"python": "FemLinearSolverPolicy.max_iterations", "type": "int", "default": "500", "si_unit": "$1$", "validation": "integer greater than or equal to $1$", "meaning": "Krylov iteration ceiling (direct solves report 1 iteration)", "backend_support": "FEM CPU/GPU", "problem_ir": "`demag_solver_policy.max_iterations`"}
     ]
   }
 }

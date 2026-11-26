@@ -1,7 +1,7 @@
 {
   "document": {
     "path": "public_docs/site/python-api/geometry/boolean-operations.md",
-    "reviewed_revision": "ab3c8802a691a535063102c12f9a79bb0043b367"
+    "reviewed_revision": "752450f8d259ab97c76c36fe666d5474b02abe9a"
   },
   "backend_matrix": [
     {
@@ -36,31 +36,159 @@
       "id": "source_geometry_boolean",
       "path": "packages/fullmag-py/src/fullmag/model/geometry.py",
       "symbol": "class Difference",
-      "responsibility": "public constructor and IR lowering"
+      "responsibility": "Boolean CSG constructors and IR lowering"
+    },
+    {
+      "id": "source_geometry_xor",
+      "path": "packages/fullmag-py/src/fullmag/model/geometry.py",
+      "symbol": "class Xor",
+      "responsibility": "Symmetric-difference CSG constructor and IR lowering"
+    },
+    {
+      "id": "source_geometry_slice_plane",
+      "path": "packages/fullmag-py/src/fullmag/model/geometry.py",
+      "symbol": "class SlicePlane",
+      "responsibility": "Half-space plane clipping modifier and IR lowering"
+    },
+    {
+      "id": "source_geometry_array3d",
+      "path": "packages/fullmag-py/src/fullmag/model/geometry.py",
+      "symbol": "class Array3D",
+      "responsibility": "3D lattice array replication modifier and IR lowering"
     }
   ],
   "public_api": {
-    "owner": "fm.Difference(base, tool, name=\"difference\"), fm.Union(a, b), fm.Intersection(a, b)",
+    "owner": "fm.Difference, fm.Union, fm.Intersection, fm.Xor, fm.SlicePlane, fm.Array3D, fm.ArrayAxisSpec",
     "parameters": [
       {
-        "python": "base/tool or a/b",
+        "python": "Difference.base",
         "type": "Geometry",
         "default": "required",
         "si_unit": "$1$",
-        "validation": "typed geometry operands",
-        "meaning": "boolean operands",
-        "backend_support": "FEM CPU/GPU: IR; FDM CPU/GPU: resolver-specific",
-        "problem_ir": "operands"
+        "validation": "typed geometry operand",
+        "meaning": "base solid for Boolean subtraction",
+        "backend_support": "FEM/FDM CPU/GPU: IR; resolver-specific",
+        "problem_ir": "base"
       },
       {
-        "python": "name",
-        "type": "str",
-        "default": "operation default",
+        "python": "Difference.tool",
+        "type": "Geometry",
+        "default": "required",
         "si_unit": "$1$",
-        "validation": "non-empty",
-        "meaning": "result name",
+        "validation": "typed geometry operand",
+        "meaning": "subtracted tool solid",
         "backend_support": "FEM/FDM CPU/GPU: IR; resolver-specific",
-        "problem_ir": "name"
+        "problem_ir": "tool"
+      },
+      {
+        "python": "Union.a",
+        "type": "Geometry",
+        "default": "required",
+        "si_unit": "$1$",
+        "validation": "typed geometry operand",
+        "meaning": "first operand of `Union` (`Intersection.a` mirrors this contract)",
+        "backend_support": "FEM/FDM CPU/GPU: IR; resolver-specific",
+        "problem_ir": "a"
+      },
+      {
+        "python": "Union.b",
+        "type": "Geometry",
+        "default": "required",
+        "si_unit": "$1$",
+        "validation": "typed geometry operand",
+        "meaning": "second operand of `Union` (`Intersection.b` mirrors this contract)",
+        "backend_support": "FEM/FDM CPU/GPU: IR; resolver-specific",
+        "problem_ir": "b"
+      },
+      {
+        "python": "Xor.left",
+        "type": "Geometry",
+        "default": "required",
+        "si_unit": "$1$",
+        "validation": "typed geometry operand",
+        "meaning": "first operand of symmetric difference",
+        "backend_support": "FEM/FDM CPU/GPU: IR; resolver-specific",
+        "problem_ir": "left"
+      },
+      {
+        "python": "Xor.right",
+        "type": "Geometry",
+        "default": "required",
+        "si_unit": "$1$",
+        "validation": "typed geometry operand",
+        "meaning": "second operand of symmetric difference",
+        "backend_support": "FEM/FDM CPU/GPU: IR; resolver-specific",
+        "problem_ir": "right"
+      },
+      {
+        "python": "SlicePlane.child",
+        "type": "Geometry",
+        "default": "required",
+        "si_unit": "$1$",
+        "validation": "typed geometry operand",
+        "meaning": "geometry clipped by half-space plane",
+        "backend_support": "FEM/FDM CPU/GPU: IR; resolver-specific",
+        "problem_ir": "child"
+      },
+      {
+        "python": "SlicePlane.plane_origin",
+        "type": "tuple[float, float, float]",
+        "default": "(0.0, 0.0, 0.0)",
+        "si_unit": "$\\mathrm{m}$",
+        "validation": "finite 3-vector",
+        "meaning": "point lying on the cutting plane",
+        "backend_support": "FEM/FDM CPU/GPU: IR; resolver-specific",
+        "problem_ir": "plane_origin"
+      },
+      {
+        "python": "SlicePlane.plane_normal",
+        "type": "tuple[float, float, float]",
+        "default": "(0.0, 0.0, 1.0)",
+        "si_unit": "$1$",
+        "validation": "finite non-zero 3-vector",
+        "meaning": "outward normal of the positive half-space",
+        "backend_support": "FEM/FDM CPU/GPU: IR; resolver-specific",
+        "problem_ir": "plane_normal"
+      },
+      {
+        "python": "SlicePlane.keep_side",
+        "type": "Literal[\"positive\", \"negative\"]",
+        "default": "\"positive\"",
+        "si_unit": "$1$",
+        "validation": "`\"positive\"` or `\"negative\"`",
+        "meaning": "half-space retained after clipping",
+        "backend_support": "FEM/FDM CPU/GPU: IR; resolver-specific",
+        "problem_ir": "keep_side"
+      },
+      {
+        "python": "Array3D.child",
+        "type": "Geometry",
+        "default": "required",
+        "si_unit": "$1$",
+        "validation": "typed geometry operand",
+        "meaning": "unit-cell solid replicated across the lattice",
+        "backend_support": "FEM/FDM CPU/GPU: IR; resolver-specific",
+        "problem_ir": "child"
+      },
+      {
+        "python": "Array3D.axes",
+        "type": "Sequence[ArrayAxisSpec | Mapping[str, object]]",
+        "default": "required",
+        "si_unit": "$1$",
+        "validation": "valid `ArrayAxisSpec` sequence",
+        "meaning": "per-axis repeat counts, spacing mode, pitch/gap, and step transforms",
+        "backend_support": "FEM/FDM CPU/GPU: IR; resolver-specific",
+        "problem_ir": "axes"
+      },
+      {
+        "python": "Array3D.merge_overlapping",
+        "type": "bool",
+        "default": "False",
+        "si_unit": "$1$",
+        "validation": "boolean",
+        "meaning": "boolean-fuse touching/overlapping array copies",
+        "backend_support": "FEM/FDM CPU/GPU: IR; resolver-specific",
+        "problem_ir": "merge_overlapping"
       }
     ],
     "returns": "typed ProblemIR record at to_ir()"

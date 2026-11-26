@@ -1,6 +1,7 @@
 {
   "document": {
-    "reviewed_revision": "ab3c8802a691a535063102c12f9a79bb0043b367",
+    "reviewed_revision": "752450f8d259ab97c76c36fe666d5474b02abe9a",
+    "reviewed_at": "2026-11-26",
     "path": "public_docs/site/physics/interactions/anisotropy/cubic.md",
     "title": "Cubic magnetocrystalline anisotropy",
     "interaction": "cubic magnetocrystalline anisotropy"
@@ -9,14 +10,16 @@
     {"solver": "FDM", "device": "CPU", "status": "reference", "reason": "Double-precision cell-local reference field and energy realization."},
     {"solver": "FDM", "device": "GPU", "status": "implemented", "reason": "FP64/FP32 local CUDA field and energy paths are present; executed-device qualification is separate."},
     {"solver": "FEM", "device": "CPU", "status": "implemented", "reason": "Strict crystal-frame validation and nodal/quadrature paths are present."},
-    {"solver": "FEM", "device": "GPU", "status": "implemented", "reason": "Device cubic field/energy kernels and reductions are present; executed-device parity remains a gate."}
+    {"solver": "FEM", "device": "GPU", "status": "implemented", "reason": "Template-gated ComputeEnergy CUDA cubic kernel with non-contracted FP64 parity and single-launch fused H_eff qualified on RTX 4080 SUPER (0-ULP field parity, 0 memcheck errors)."}
   ],
   "sources": [
     {"id": "python-cubic", "path": "packages/fullmag-py/src/fullmag/model/energy.py", "symbol": "class CubicAnisotropy", "responsibility": "Compatibility public constructor and serialization."},
     {"id": "python-material", "path": "packages/fullmag-py/src/fullmag/model/structure.py", "symbol": "class Material", "responsibility": "Canonical Kc constants, axes, and spatial fields."},
+    {"id": "python-handle", "path": "packages/fullmag-py/src/fullmag/world.py", "symbol": "class MagnetHandle", "responsibility": "Stage-first direct Kc1, Kc2, Kc3, anisC1, and anisC2 authoring."},
     {"id": "python-migration", "path": "packages/fullmag-py/src/fullmag/model/problem.py", "symbol": "_migrate_legacy_anisotropy_energy_terms", "responsibility": "Conflict-checked migration to material-owned IR."},
     {"id": "planner-fdm", "path": "crates/fullmag-plan/src/fdm.rs", "symbol": "plan_fdm", "responsibility": "FDM native cubic material resolution."},
-    {"id": "planner-fem", "path": "crates/fullmag-plan/src/fem.rs", "symbol": "plan_fem", "responsibility": "FEM cubic material resolution and axis legality."},
+    {"id": "planner-fem", "path": "crates/fullmag-plan/src/fem.rs", "symbol": "plan_fem", "responsibility": "FEM cubic material resolution."},
+    {"id": "planner-fem-axes", "path": "crates/fullmag-plan/src/fem.rs", "symbol": "validate_cubic_anisotropy_axes", "responsibility": "FEM cubic axis orthogonality check."},
     {"id": "fdm-cpu-field", "path": "crates/fullmag-engine/src/fdm/cpu/fields/anisotropy.rs", "symbol": "anisotropy_field", "responsibility": "FDM CPU cubic field composition."},
     {"id": "fdm-cpu-energy", "path": "crates/fullmag-engine/src/fdm/cpu/fields/energy.rs", "symbol": "anisotropy_energy_density_from_vectors", "responsibility": "FDM CPU cubic energy density."},
     {"id": "fdm-gpu-fp64", "path": "backends/fdm/gpu/cuda/interactions/demag_fp64.cu", "symbol": "anisotropy_field_fp64_kernel", "responsibility": "FDM CUDA FP64 local cubic field kernel."},
@@ -24,9 +27,10 @@
     {"id": "fdm-gpu-energy", "path": "backends/fdm/gpu/cuda/runtime/reductions_fp64.cu", "symbol": "reduce_cubic_anisotropy_energy_fp64", "responsibility": "FDM CUDA cubic energy reduction."},
     {"id": "fem-cpu-field", "path": "backends/fem/cpu/mfem/interactions/anisotropy_cubic.cpp", "symbol": "compute_cubic_anisotropy_field", "responsibility": "FEM CPU cubic field and lumped energy."},
     {"id": "fem-cpu-quadrature", "path": "backends/fem/cpu/mfem/interactions/anisotropy_cubic.cpp", "symbol": "cubic_anisotropy_energy_from_element_quadrature_material", "responsibility": "FEM CPU spatial-material energy."},
-    {"id": "fem-gpu-kernel", "path": "backends/fem/gpu/cuda/interactions/anisotropy/anisotropy_kernels.cu", "symbol": "cubic_anisotropy_field_energy_blocks_kernel", "responsibility": "FEM CUDA cubic field and energy block kernel."},
+    {"id": "fem-gpu-kernel", "path": "backends/fem/gpu/cuda/interactions/anisotropy/anisotropy_kernels.cu", "symbol": "cubic_anisotropy_field_energy_blocks_kernel", "responsibility": "FEM CUDA template-gated cubic field/energy block kernel with non-contracted FP64 parity."},
     {"id": "fem-gpu-field", "path": "backends/fem/gpu/cuda/integrators/rk/rk_anisotropy_field.cu", "symbol": "gpu_rk_compute_anisotropy_field_contributions", "responsibility": "FEM CUDA field dispatch and device checks."},
-    {"id": "fem-gpu-energy", "path": "backends/fem/gpu/cuda/integrators/rk/rk_anisotropy_energy_reductions.cu", "symbol": "gpu_rk_reduce_final_anisotropy_energy_terms", "responsibility": "FEM CUDA cubic final energy reduction."}
+    {"id": "fem-gpu-energy", "path": "backends/fem/gpu/cuda/integrators/rk/rk_anisotropy_energy_reductions.cu", "symbol": "gpu_rk_reduce_final_anisotropy_energy_terms", "responsibility": "FEM CUDA cubic final energy reduction."},
+    {"id": "fem-gpu-fused-heff", "path": "backends/fem/gpu/cuda/fields/vector_field_kernels.hpp", "symbol": "fullmag_cuda_accumulate_heff_fused_xyz", "responsibility": "FEM CUDA single-launch fused H_eff accumulation."}
   ],
   "symbols": [
     {"id": "M", "latex": "$\\mathbf M$", "meaning": "magnetization", "si_unit": "$\\mathrm{A\\,m^{-1}}$"},
@@ -53,7 +57,7 @@
   "equations": [
     {"id": "eq-cubic-crystal-frame", "symbols": ["c1", "c2", "c3", "alpha", "m"], "sources": ["fdm-cpu-field", "fem-cpu-field"]},
     {"id": "eq-cubic-invariant", "symbols": ["Sigma", "alpha"], "sources": ["fdm-cpu-field", "fem-cpu-field"]},
-    {"id": "eq-cubic-energy", "symbols": ["wc", "Kc1", "Kc2", "Kc3", "Sigma", "alpha", "Ec", "Omega"], "sources": ["fdm-cpu-energy", "fem-cpu-field"]},
+    {"id": "eq-cubic-energy", "symbols": ["wc", "Kc1", "Kc2", "Kc3", "Sigma", "alpha", "Ec", "Omega"], "sources": ["fdm-cpu-energy", "fem-cpu-field", "fem-gpu-kernel"]},
     {"id": "eq-cubic-field-components", "symbols": ["ga", "Kc1", "Kc2", "Kc3", "alpha", "Sigma", "mu0", "Ms"], "sources": ["fem-cpu-field", "fem-gpu-kernel"]},
     {"id": "eq-cubic-effective-field", "symbols": ["Hc", "ga", "c1", "c2", "c3"], "sources": ["fem-cpu-field", "fem-gpu-kernel"]},
     {"id": "eq-cubic-fdm-energy", "symbols": ["Ec", "Kc1", "Kc2", "Kc3", "Sigma", "alpha", "i", "Vi"], "sources": ["fdm-cpu-energy", "fdm-gpu-energy"]}

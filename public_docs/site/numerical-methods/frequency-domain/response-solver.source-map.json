@@ -1,21 +1,19 @@
 {
   "document": {
     "path": "public_docs/site/numerical-methods/frequency-domain/response-solver.md",
-    "reviewed_revision": "5e99782acbb7fb3f65d0cad872e102bf67733103",
+    "reviewed_revision": "752450f8d259ab97c76c36fe666d5474b02abe9a",
     "source_of_truth": "/physics/foundations/llg-equation, /physics/foundations/observables"
   },
   "backend_matrix": [
     {
       "solver": "FEM",
       "device": "CPU",
-      "status": "source-backed-bounded",
-      "reason": "Dense validation and production host-GMRES/native paths are source-visible; explicit solver-tree methods have a narrower current runtime gate."
+      "status": "implemented"
     },
     {
       "solver": "FEM",
       "device": "GPU",
-      "status": "partial",
-      "reason": "GPU-operator/host-Krylov is represented; device residency and transfer evidence are separate qualification gates."
+      "status": "implemented"
     },
     {
       "solver": "FDM",
@@ -39,17 +37,17 @@
     {
       "id": "eq-numerical-frequency-response-system",
       "symbols": ["Aomega", "K", "omega", "G", "qhat", "bhat", "C", "hext"],
-      "sources": ["native_impl", "block_solve"]
+      "sources": ["native_impl", "gpu_cudss", "gpu_cudss_update", "poisson_export", "block_solve"]
     },
     {
       "id": "eq-numerical-frequency-response-reconstruction",
       "symbols": ["mhat", "e1", "e2", "qhat", "m0"],
-      "sources": ["native_impl"]
+      "sources": ["native_impl", "gpu_cudss"]
     },
     {
       "id": "eq-numerical-frequency-response-physical-susceptibility",
       "symbols": ["chiM", "Mhat", "hext", "Ms", "mhat"],
-      "sources": ["artifact_point", "artifact_units"]
+      "sources": ["artifact_point", "artifact_units", "accepted_artifacts"]
     },
     {
       "id": "eq-numerical-frequency-response-reduced-susceptibility",
@@ -69,12 +67,12 @@
     {
       "id": "eq-numerical-frequency-response-residual",
       "symbols": ["residual", "bhat", "Aomega", "qhat"],
-      "sources": ["native_impl", "block_solve"]
+      "sources": ["native_impl", "gpu_cudss_cert", "block_solve"]
     },
     {
       "id": "eq-numerical-frequency-response-relative-residual",
       "symbols": ["eps", "residual", "bhat", "bscale"],
-      "sources": ["block_solve", "artifact_writer"]
+      "sources": ["block_solve", "gpu_cudss_cert", "artifact_writer"]
     }
   ],
   "symbols": [
@@ -107,7 +105,7 @@
     {"id": "stage_spec", "path": "packages/fullmag-py/src/fullmag/world.py", "symbol": "class FrequencyResponseStageSpec", "responsibility": "Public frequency-response stage schema."},
     {"id": "stage_builder", "path": "packages/fullmag-py/src/fullmag/world.py", "symbol": "frequency_response_stage", "responsibility": "Public stage and solver-policy construction."},
     {"id": "public_callable", "path": "packages/fullmag-py/src/fullmag/world.py", "symbol": "add_frequency_response", "responsibility": "Public StudyStagesBuilder frequency-response entry point."},
-    {"id": "solver_policy", "path": "packages/fullmag-py/src/fullmag/model/study.py", "symbol": "class FrequencyResponseSolverPolicy", "responsibility": "Solver-policy names and numeric validation."},
+    {"id": "solver_policy", "path": "packages/fullmag-py/src/fullmag/model/study.py", "symbol": "class FrequencyResponseSolverPolicy", "responsibility": "Solver-policy names (including gpu_sparse_direct) and numeric validation."},
     {"id": "problem_ir", "path": "packages/fullmag-py/src/fullmag/model/study.py", "symbol": "class FrequencyResponse", "responsibility": "Frequency-response validation and exact ProblemIR lowering."},
     {"id": "observable", "path": "packages/fullmag-py/src/fullmag/model/outputs.py", "symbol": "class SaveResponse", "responsibility": "Supported response-output vocabulary and lowering."},
     {"id": "k_sampling", "path": "packages/fullmag-py/src/fullmag/model/eigen.py", "symbol": "coerce_k_sampling", "responsibility": "Exact single-point/path wave-vector lowering and mutual exclusion."},
@@ -116,10 +114,17 @@
     {"id": "native_validate", "path": "backends/fem/src/frequency_domain/operator_contract.cpp", "symbol": "validate_driven_frequency_response_request", "responsibility": "Native operator and boundary legality checks."},
     {"id": "native_decl", "path": "backends/fem/include/frequency_domain/driven_response_solver.hpp", "symbol": "solve_driven_frequency_response", "responsibility": "Production driven-response ABI declaration."},
     {"id": "native_impl", "path": "backends/fem/src/frequency_domain/driven_response_solver.cpp", "symbol": "solve_driven_frequency_response", "responsibility": "Production validation, lane dispatch, solve, residual, and artifact entry point."},
+    {"id": "gpu_cudss", "path": "backends/fem/gpu/frequency_domain/driven_response_cudss.cpp", "symbol": "solve_driven_response_gpu_cudss", "responsibility": "GPU cuDSS coupled CSR assembly, 2x2 pre-scaling + 6x Ruiz equilibration, 1x analysis, VRAM preflight, and LU sweep."},
+    {"id": "gpu_cudss_update", "path": "backends/fem/gpu/frequency_domain/driven_response_cudss_kernels.cu", "symbol": "launch_driven_response_update_omega_entries", "responsibility": "In-place GPU update of 4*N_m_eff frequency-dependent diagonal entries."},
+    {"id": "gpu_cudss_cert", "path": "backends/fem/gpu/frequency_domain/driven_response_cudss_kernels.cu", "symbol": "launch_driven_response_unscaled_residual_cert", "responsibility": "Fused multi-block GPU unscaling and unscaled Blue-norm residual certification."},
+    {"id": "poisson_export", "path": "backends/fem/cpu/mfem/interactions/demag_poisson_sparse_export.cpp", "symbol": "export_demag_poisson_sparse_blocks", "responsibility": "One-time sorted CSR export of Poisson, RHS, and recovery blocks."},
+    {"id": "abi_v14", "path": "backends/fem/src/api.cpp", "symbol": "fullmag_fem_frequency_domain_solve_driven_response_v14", "responsibility": "C ABI v14 entry point delivering GPU direct options and sparse Poisson blocks."},
     {"id": "planner_fem", "path": "crates/fullmag-plan/src/fem.rs", "symbol": "plan_fem_frequency_response", "responsibility": "Resolves driven frequency-response lane, periodic constraint sets, and planner policy."},
     {"id": "planner_schur_cert", "path": "backends/fem/include/frequency_domain/planner/frequency_solve_plan.hpp", "symbol": "schur_certification_passes", "responsibility": "Checks Schur complement residual and breakdown gates in FrequencySolvePlan."},
-    {"id": "runtime_gate", "path": "crates/fullmag-runner/src/frequency_response.rs", "symbol": "frequency_response_solver_method_rejection_reason", "responsibility": "Current runtime availability boundary for explicit solver methods."},
+    {"id": "runtime_gate", "path": "crates/fullmag-runner/src/frequency_response.rs", "symbol": "frequency_response_solver_method_rejection_reason", "responsibility": "Runtime availability boundary for explicit solver methods including gpu_sparse_direct."},
     {"id": "runtime_resolver", "path": "crates/fullmag-runner/src/frequency_response.rs", "symbol": "resolved_frequency_response_solver_method_name", "responsibility": "Resolved runtime method identity."},
+    {"id": "runtime_provenance", "path": "crates/fullmag-runner/src/frequency_response.rs", "symbol": "resolve_native_frequency_response_solver_provenance", "responsibility": "Extracts gpu_sparse_direct_cudss telemetry and auto fallback reasons for artifact patching."},
+    {"id": "accepted_artifacts", "path": "crates/fullmag-runner/src/frequency_response/accepted_artifacts.rs", "symbol": "collect_publish_accepted_frequency_response_artifacts", "responsibility": "Bounded publication of accepted native FEM frequency-response artifacts."},
     {"id": "block_solve", "path": "crates/fullmag-runner/src/eigen/response_block_real.rs", "symbol": "solve_block_real_harmonic_response", "responsibility": "Dense block-real validation solve."},
     {"id": "block_sweep", "path": "crates/fullmag-runner/src/eigen/response_block_real.rs", "symbol": "solve_field_driven_block_real_sweep_with_interrupt", "responsibility": "Per-frequency sweep, reuse, and interruption semantics."},
     {"id": "artifact_writer", "path": "crates/fullmag-runner/src/eigen/response_block_real.rs", "symbol": "build_field_driven_response_sweep_artifact", "responsibility": "Dense response artifact assembly."},
@@ -146,9 +151,9 @@
       {"python": "k_sampling", "type": "object | None", "default": "None", "si_unit": "$1$", "validation": "None, finite three-vector, KPoint, or KPath; KPoint label is null or nonempty; KPath has at least two points and positive per-segment counts; mutually exclusive with k_vector", "meaning": "explicit Bloch sampling definition", "backend_support": "FEM Floquet capability-gated", "problem_ir": "None -> null; vector or KPoint -> {\"kind\":\"single\",\"k_vector\":[...]}; KPath -> {\"kind\":\"path\",\"points\":[{\"label\": string-or-null,\"k_vector\":[kx,ky,kz]},...],\"samples_per_segment\":[n0,...],\"closed\": bool}"},
       {"python": "bc", "type": "str | dict[str, object]", "default": "free", "si_unit": "$1$", "validation": "raw string allow-list; PeriodicBC/FloquetBC require nonempty pair_ids; raw dict checks only accepted kind and does not validate required fields", "meaning": "dynamic-magnetization boundary", "backend_support": "FEM; malformed raw dict may survive authoring and fail later", "problem_ir": "raw free/pinned/periodic/floquet/surface_anisotropy string unchanged; PeriodicBC -> {\"kind\":\"periodic\",\"pair_ids\":[...]}; FloquetBC -> {\"kind\":\"floquet\",\"pair_ids\":[...],\"phase_convention\": value}; raw dict -> unchanged after kind-only check"},
       {"python": "magnetostatic_bc", "type": "str", "default": "open", "si_unit": "$1$", "validation": "one of open, periodic_airbox_k0, floquet_airbox", "meaning": "dynamic magnetostatic closure", "backend_support": "FEM", "problem_ir": "magnetostatic_bc"},
-      {"python": "solver_method", "type": "str | None", "default": "None", "si_unit": "$1$", "validation": "known solver-tree name; explicit runtime subset is gated below", "meaning": "requested algebraic route; omission means automatic resolution", "backend_support": "FEM bounded", "problem_ir": "solver_policy.method"},
-      {"python": "solver_preconditioner", "type": "str | None", "default": "None", "si_unit": "$1$", "validation": "one of auto, graph_demag_coarse, demag_coarse, block_jacobi, none", "meaning": "requested preconditioner", "backend_support": "FEM bounded", "problem_ir": "solver_policy.preconditioner"},
-      {"python": "solver_rtol", "type": "float | None", "default": "None", "si_unit": "$1$", "validation": "finite and positive", "meaning": "relative algebraic tolerance", "backend_support": "FEM", "problem_ir": "solver_policy.rtol"},
+      {"python": "solver_method", "type": "str | None", "default": "None", "si_unit": "$1$", "validation": "one of auto, dense_reference, cpu_sparse_direct, full_coupled_field_split, schur_reduced, modal_reduced, gpu_operator_host_krylov, gpu_device_krylov, gpu_sparse_direct", "meaning": "requested algebraic route (`gpu_sparse_direct` selects GPU cuDSS; omission/auto resolves automatically)", "backend_support": "FEM CPU/GPU (`gpu_sparse_direct` GPU non-Floquet only)", "problem_ir": "solver_policy.method"},
+      {"python": "solver_preconditioner", "type": "str | None", "default": "None", "si_unit": "$1$", "validation": "one of auto, graph_demag_coarse, demag_coarse, block_jacobi, none", "meaning": "requested Krylov preconditioner (unused under `gpu_sparse_direct_cudss`)", "backend_support": "FEM bounded", "problem_ir": "solver_policy.preconditioner"},
+      {"python": "solver_rtol", "type": "float | None", "default": "None", "si_unit": "$1$", "validation": "finite and positive", "meaning": "relative algebraic tolerance (defaults to $10^{-10}$ for `cuDSS` certification)", "backend_support": "FEM", "problem_ir": "solver_policy.rtol"},
       {"python": "solver_max_iterations", "type": "int | None", "default": "None", "si_unit": "$1$", "validation": "positive integer; Boolean rejected", "meaning": "iteration ceiling", "backend_support": "FEM iterative lanes", "problem_ir": "solver_policy.max_iterations"},
       {"python": "solver_restart_iterations", "type": "int | None", "default": "None", "si_unit": "$1$", "validation": "positive integer; at most solver_max_iterations when both are supplied", "meaning": "restarted-GMRES subspace length", "backend_support": "FEM iterative lanes", "problem_ir": "solver_policy.restart_iterations"},
       {"python": "MAX_ITERATIONS", "type": "int | None", "default": "None", "si_unit": "$1$", "validation": "compatibility alias; conflicts with a different solver_max_iterations value", "meaning": "legacy spelling of the iteration ceiling", "backend_support": "FEM iterative lanes", "problem_ir": "solver_policy.max_iterations"}
@@ -168,7 +173,7 @@
     {
       "id": "solver-tree-runtime-gap",
       "source": "crates/fullmag-runner/src/frequency_response.rs::frequency_response_solver_method_rejection_reason",
-      "finding": "cpu_sparse_direct, full_coupled_field_split, modal_reduced, and gpu_device_krylov are represented in the solver-tree contract but rejected by the current explicit runtime method gate."
+      "finding": "cpu_sparse_direct, full_coupled_field_split, modal_reduced, and gpu_device_krylov remain fail-closed; gpu_sparse_direct is enabled and RTX 4080 SUPER qualified for GPU non-Floquet sweeps."
     }
   ]
 }

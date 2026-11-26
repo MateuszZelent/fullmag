@@ -1,7 +1,8 @@
 {
   "document": {
     "path": "public_docs/site/physics/foundations/llg-equation.md",
-    "reviewed_revision": "5e99782acbb7fb3f65d0cad872e102bf67733103"
+    "reviewed_revision": "752450f8d259ab97c76c36fe666d5474b02abe9a",
+    "reviewed_at": "2026-11-26"
   },
   "backend_matrix": [
     {
@@ -13,7 +14,7 @@
       "solver": "FEM",
       "device": "GPU",
       "status": "source-backed",
-      "reason": "Device-resident CUDA kernel fullmag_cuda_llg_rhs_fused and adaptive RK attempt loop; executed-device qualification is reported per run."
+      "reason": "Device-resident CUDA kernel fullmag_cuda_llg_rhs_fused, adaptive RK attempt loop, Heun/RK4/PBC FSAL k0 reuse, and fused short-range H_eff; executed-device qualification is reported per run."
     },
     {
       "solver": "FDM",
@@ -24,7 +25,7 @@
       "solver": "FDM",
       "device": "GPU",
       "status": "source-backed",
-      "reason": "CUDA LLG right-hand-side and reduction kernels; parity and device qualification depend on precision and active interactions."
+      "reason": "CUDA LLG steppers with fused FP64 RK45 prescribed spin torques; parity and device qualification depend on precision and active interactions."
     }
   ],
   "equations": [
@@ -41,7 +42,7 @@
     {
       "id": "eq-llg-explicit",
       "symbols": ["m", "t", "gamma0", "alpha", "s_prec", "H_eff", "tau_direct"],
-      "sources": ["fem-cpu-llg", "fem-gpu-llg"]
+      "sources": ["fem-cpu-llg", "fem-gpu-llg", "fdm-gpu-torques"]
     },
     {
       "id": "eq-llg-effective-field",
@@ -138,7 +139,7 @@
       "id": "python-adaptive",
       "path": "packages/fullmag-py/src/fullmag/model/dynamics.py",
       "symbol": "class AdaptiveTimestep",
-      "responsibility": "Embedded RK adaptive error tolerances and step-ratio bounds"
+      "responsibility": "Embedded RK and coupled ARS step-doubling tolerances, rotation and norm guards"
     },
     {
       "id": "python-refresh",
@@ -163,6 +164,18 @@
       "path": "backends/fem/gpu/cuda/integrators/llg/llg_rhs_kernels.cu",
       "symbol": "fullmag_cuda_llg_rhs_fused",
       "responsibility": "Native FEM CUDA fused LLG right-hand-side kernel"
+    },
+    {
+      "id": "fem-gpu-fsal",
+      "path": "backends/fem/gpu/cuda/integrators/rk/rk_fsal_policy.cpp",
+      "symbol": "gpu_rk_rhs_allows_fsal_reuse",
+      "responsibility": "FEM GPU FSAL stage-reuse eligibility guard"
+    },
+    {
+      "id": "fdm-gpu-torques",
+      "path": "backends/fdm/gpu/cuda/integrators/prescribed_spin_torques_fp64.cuh",
+      "symbol": "add_prescribed_spin_torques_fp64",
+      "responsibility": "Fused FP64 CUDA RK45 prescribed Slonczewski and SOT torque accumulation"
     }
   ],
   "public_api": {
@@ -182,9 +195,9 @@
         "type": "`str`",
         "default": "`\"auto\"`",
         "si_unit": "$1$",
-        "validation": "`\"heun\"`, `\"rk4\"`, `\"rk23\"`, `\"rk45\"`, `\"abm3\"`, `\"coupled_imex_ark2\"`, `\"auto\"` (aliases `\"euler\"`, `\"dopri5\"` normalize)",
+        "validation": "`\"heun\"`, `\"rk4\"`, `\"rk23\"`, `\"rk45\"`, `\"abm3\"`, `\"coupled_imex_ark2\"`, `\"auto\"` (aliases `\"dp54\"` $\\to$ `\"rk45\"`, `\"bs23\"`/`\"rk32\"` $\\to$ `\"rk23\"`)",
         "meaning": "time-integration scheme request",
-        "backend_support": "FEM: `heun`/`rk4`/`rk23`/`rk45`/`auto`; FDM adds `abm3` and `coupled_imex_ark2`",
+        "backend_support": "FEM: `heun`/`rk4`/`rk23`/`rk45`/`auto`; FDM adds `abm3` and `coupled_imex_ark2` (transient M3 spin transport)",
         "problem_ir": "`study.dynamics.integrator`"
       },
       {
@@ -192,7 +205,7 @@
         "type": "`float | None`",
         "default": "`None`",
         "si_unit": "$\\mathrm{s}$",
-        "validation": "finite and $> 0$; mutually exclusive with `adaptive_timestep`; rejected on `rk23`/`rk45`",
+        "validation": "finite and $> 0$; mutually exclusive with `adaptive_timestep`; planner enforces integrator compatibility",
         "meaning": "constant integration step $\\Delta t$ for fixed-step methods",
         "backend_support": "FEM/FDM CPU/GPU on fixed-step methods",
         "problem_ir": "`study.dynamics.fixed_timestep`"
@@ -202,17 +215,37 @@
         "type": "`AdaptiveTimestep | None`",
         "default": "`None`",
         "si_unit": "$1$",
-        "validation": "valid `AdaptiveTimestep`; rejected on fixed-step methods (`heun`, `rk4`, `abm3`, `coupled_imex_ark2`)",
-        "meaning": "embedded Runge–Kutta adaptive step-size controller contract",
-        "backend_support": "FEM/FDM CPU/GPU on `rk23`/`rk45`/`auto`",
+        "validation": "valid `AdaptiveTimestep`; allowed on `\"rk23\"`, `\"rk45\"`, `\"coupled_imex_ark2\"`, and `\"auto\"`, rejected on `\"heun\"`, `\"rk4\"`, `\"abm3\"`",
+        "meaning": "embedded RK or coupled ARS step-doubling adaptive step-size controller contract",
+        "backend_support": "FEM/FDM CPU/GPU on `rk23`/`rk45`/`auto`; FDM CPU on `coupled_imex_ark2`",
         "problem_ir": "`study.dynamics.adaptive_timestep`"
+      },
+      {
+        "python": "`AdaptiveTimestep.max_spin_rotation`",
+        "type": "`float | None`",
+        "default": "`None`",
+        "si_unit": "$\\mathrm{rad}$",
+        "validation": "finite and $> 0$ when set",
+        "meaning": "maximum allowed per-step spin rotation angle guard",
+        "backend_support": "FEM/FDM adaptive lanes supporting step guards",
+        "problem_ir": "`study.dynamics.adaptive_timestep.max_spin_rotation`"
+      },
+      {
+        "python": "`AdaptiveTimestep.norm_tolerance`",
+        "type": "`float | None`",
+        "default": "`None`",
+        "si_unit": "$1$",
+        "validation": "finite and $> 0$ when set",
+        "meaning": "maximum allowed pre-renormalization $\\lVert\\mathbf{m}\\rVert_2 - 1$ drift guard",
+        "backend_support": "FEM/FDM adaptive lanes supporting step guards",
+        "problem_ir": "`study.dynamics.adaptive_timestep.norm_tolerance`"
       },
       {
         "python": "`LLG.field_refresh`",
         "type": "`FieldRefreshPolicy | None`",
         "default": "`None`",
         "si_unit": "$1$",
-        "validation": "valid `FieldRefreshPolicy`",
+        "validation": "valid `FieldRefreshPolicy` with positive `demag_interval_s`",
         "meaning": "optional demagnetization field refresh cadence",
         "backend_support": "FEM/FDM CPU/GPU subject to planner checks",
         "problem_ir": "`study.dynamics.field_refresh`"
@@ -232,7 +265,7 @@
         "type": "`float | FieldSpec`",
         "default": "material-dependent",
         "si_unit": "$\\mathrm{A\\,m^{-1}}$",
-        "validation": "finite and $\\ge 0$",
+        "validation": "finite and $> 0$",
         "meaning": "saturation magnetization $M_s(\\mathbf{x})$",
         "backend_support": "FEM/FDM CPU/GPU",
         "problem_ir": "`materials[].ms`"

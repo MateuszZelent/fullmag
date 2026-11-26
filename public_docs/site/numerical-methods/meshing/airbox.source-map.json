@@ -1,7 +1,7 @@
 {
   "document": {
     "path": "public_docs/site/numerical-methods/meshing/airbox.md",
-    "reviewed_revision": "969efa0941905825ac569d525f4bdaefc059e2af"
+    "reviewed_revision": "752450f8d259ab97c76c36fe666d5474b02abe9a"
   },
   "backend_matrix": [
     {
@@ -226,7 +226,7 @@
         "type": "float or None",
         "default": "None",
         "si_unit": "$1$",
-        "validation": "positive when supplied",
+        "validation": "finite, strictly greater than `1.0`, and at most `2.5`",
         "meaning": "requested neighbor growth limit",
         "backend_support": "FEM authoring/lowering; runtime not qualified here",
         "problem_ir": "runtime_metadata.study_universe.airbox_growth_rate"
@@ -236,7 +236,7 @@
         "type": "str or None",
         "default": "None",
         "si_unit": "$1$",
-        "validation": "stored as requested grading mode",
+        "validation": "normalized to `auto`, `geometric`, or `linear`",
         "meaning": "requested exterior grading mode",
         "backend_support": "FEM authoring/lowering; runtime not qualified here",
         "problem_ir": "runtime_metadata.study_universe.airbox_grading"
@@ -270,6 +270,26 @@
         "meaning": "requested outer geometry",
         "backend_support": "FEM realization only",
         "problem_ir": "`runtime_metadata.study_universe` to route-specific `AirboxOptions.shape`"
+      },
+      {
+        "python": "study.universe.mesh(curvature_factor=...)",
+        "type": "float or None",
+        "default": "None",
+        "si_unit": "$1$",
+        "validation": "finite and strictly positive; requires `maximum_element_size`",
+        "meaning": "air curvature-refinement factor next to curved magnetic surfaces",
+        "backend_support": "FEM authoring/lowering; runtime not qualified here",
+        "problem_ir": "runtime_metadata.study_universe.airbox_curvature_factor"
+      },
+      {
+        "python": "study.universe.mesh(narrow_region_resolution=...)",
+        "type": "float or None",
+        "default": "None",
+        "si_unit": "$1$",
+        "validation": "finite and strictly positive; requires `maximum_element_size`",
+        "meaning": "air gap refinement between bodies or body and outer boundary",
+        "backend_support": "FEM authoring/lowering; runtime not qualified here",
+        "problem_ir": "runtime_metadata.study_universe.airbox_narrow_region_resolution"
       }
     ]
   }

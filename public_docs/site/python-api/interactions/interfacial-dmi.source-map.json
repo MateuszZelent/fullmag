@@ -1,32 +1,32 @@
 {
   "document": {
     "path": "public_docs/site/python-api/interactions/interfacial-dmi.md",
-    "reviewed_revision": "ab3c8802a691a535063102c12f9a79bb0043b367"
+    "reviewed_revision": "752450f8d259ab97c76c36fe666d5474b02abe9a"
   },
   "backend_matrix": [
     {
       "solver": "FEM",
       "device": "CPU",
-      "status": "documented",
-      "reason": "authoring and IR documented; runtime qualification separate"
+      "status": "implemented",
+      "reason": "Interfacial and rotated interfacial DMI weak-form assembly implemented on FEM CPU"
     },
     {
       "solver": "FEM",
       "device": "GPU",
-      "status": "documented",
-      "reason": "authoring and IR documented; runtime qualification separate"
+      "status": "implemented",
+      "reason": "Unified preassembled CSR GPU DMI (PR #577) implemented on FEM GPU"
     },
     {
       "solver": "FDM",
       "device": "CPU",
-      "status": "documented",
-      "reason": "authoring and IR documented; runtime qualification separate"
+      "status": "implemented",
+      "reason": "Chiral finite-difference interfacial DMI stencil implemented on FDM CPU"
     },
     {
       "solver": "FDM",
       "device": "GPU",
-      "status": "documented",
-      "reason": "authoring and IR documented; runtime qualification separate"
+      "status": "implemented",
+      "reason": "CUDA chiral finite-difference interfacial DMI kernel implemented on FDM GPU"
     }
   ],
   "equations": [],
@@ -36,31 +36,69 @@
       "id": "source_interfacial_dmi",
       "path": "packages/fullmag-py/src/fullmag/model/energy.py",
       "symbol": "class InterfacialDMI",
-      "responsibility": "public constructor and IR lowering"
+      "responsibility": "interfacial DMI constructor and IR lowering"
+    },
+    {
+      "id": "source_rotated_interfacial_dmi",
+      "path": "packages/fullmag-py/src/fullmag/model/energy.py",
+      "symbol": "class RotatedInterfacialDMI",
+      "responsibility": "rotated interfacial DMI constructor, object_ids validation, and IR lowering"
+    },
+    {
+      "id": "source_as_vector3",
+      "path": "packages/fullmag-py/src/fullmag/_validation.py",
+      "symbol": "as_vector3",
+      "responsibility": "length-3 tuple conversion without normalization or finiteness rejection"
+    },
+    {
+      "id": "source_study_energy_terms",
+      "path": "packages/fullmag-py/src/fullmag/world.py",
+      "symbol": "class StudyEnergyTermRegistry",
+      "responsibility": "study.terms.add(...) registration for RotatedInterfacialDMI"
     }
   ],
   "public_api": {
-    "owner": "fm.InterfacialDMI(D, interface_normal=None)",
+    "owner": "fm.InterfacialDMI(D, interface_normal=None), fm.RotatedInterfacialDMI(D, object_ids=None)",
     "parameters": [
       {
         "python": "fm.InterfacialDMI.D",
         "type": "float",
         "default": "required",
         "si_unit": "$\\mathrm{J\\,m^{-2}}$",
-        "validation": "finite; sign preserved",
+        "validation": "finite scalar via `require_finite`; sign preserved",
         "meaning": "interfacial DMI constant",
-        "backend_support": "FEM/FDM CPU/GPU: IR; resolved support required",
+        "backend_support": "FEM/FDM CPU/GPU: IR and chiral exchange/DMI kernels",
         "problem_ir": "D"
       },
       {
         "python": "fm.InterfacialDMI.interface_normal",
-        "type": "tuple[float,float,float] or None",
+        "type": "Sequence[float] | None",
         "default": "None",
         "si_unit": "$1$",
-        "validation": "finite non-zero when supplied; normalized",
+        "validation": "length-3 sequence via `as_vector3` when supplied; planner/backend validates finiteness, non-zero norm, and normalizes",
         "meaning": "interface normal",
-        "backend_support": "FEM/FDM CPU/GPU: IR; resolved support required",
+        "backend_support": "FEM/FDM CPU/GPU: IR; off-axis support is backend-specific",
         "problem_ir": "interface_normal"
+      },
+      {
+        "python": "fm.RotatedInterfacialDMI.D",
+        "type": "float",
+        "default": "required",
+        "si_unit": "$\\mathrm{J\\,m^{-2}}$",
+        "validation": "finite scalar via `require_finite`; sign preserved",
+        "meaning": "rotated interfacial DMI constant",
+        "backend_support": "FEM/FDM CPU/GPU: IR; observables `E_rotated_dmi`, `H_rotated_dmi`",
+        "problem_ir": "D"
+      },
+      {
+        "python": "fm.RotatedInterfacialDMI.object_ids",
+        "type": "Sequence[str] | None",
+        "default": "None",
+        "si_unit": "$1$",
+        "validation": "non-empty sequence of unique non-empty strings when supplied",
+        "meaning": "target magnetic object IDs for rotated DMI",
+        "backend_support": "FEM/FDM CPU/GPU: IR; planner resolves object scope",
+        "problem_ir": "object_ids"
       }
     ],
     "returns": "typed ProblemIR record at to_ir()"
