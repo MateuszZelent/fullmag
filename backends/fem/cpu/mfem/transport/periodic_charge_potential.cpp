@@ -947,7 +947,7 @@ PeriodicChargePotentialSolver::Solve(
                 serial_request.conductivity = &conductivity;
                 serial_request.stable_vertex_identities = std::move(serial_ids);
                 serial_request.boundary_faces = std::move(serial_boundaries);
-                serial_request.reference_mpi_gather_rank0_broadcast = false;
+                serial_request.reference_mpi_gather_rank0_broadcast = true;
                 root_snapshot = Solve(serial_request);
             } catch (const std::exception &error) {
                 const std::string message = error.what();
@@ -1230,6 +1230,9 @@ PeriodicChargePotentialSolver::Solve(
         128.0 * std::numeric_limits<double>::epsilon();
     trace_request.algebraic_relative_tolerance = request.algebraic_relative_tolerance;
     trace_request.maximum_iterations = request.maximum_iterations;
+    trace_request.cpu_backend = request.reference_mpi_gather_rank0_broadcast
+        ? fullmag::fem::multiphysics::SparseCpuBackendPolicy::MfemSerial
+        : fullmag::fem::multiphysics::SparseCpuBackendPolicy::Auto;
     const auto charge = antenna_field_solve::solve_charge_trace_workspace(trace_request);
     if (coincident && charge->component_ids.size() != 1)
         throw std::runtime_error("coincident cut v2 requires one accepted electrical component");

@@ -4,8 +4,10 @@
 
 #include <algorithm>
 #include <array>
+#include <cctype>
 #include <cmath>
 #include <cstdint>
+#include <cstdlib>
 #include <iostream>
 #include <stdexcept>
 #include <string>
@@ -467,9 +469,15 @@ void run_closed_geometry_rt0_contract()
             "tangential_A_h1_0.v1",
         "public RT0 OE-F2 gauge identity is wrong");
     require(vector_potential_result.harmonic_count == 0 &&
+            vector_potential_result.essential_nd_dof_count > 0 &&
+            vector_potential_result.essential_h1_dof_count > 0 &&
             vector_potential_result.first_block_residual < 1.0e-7 &&
             vector_potential_result.constraint_residual < 1.0e-7 &&
-            vector_potential_result.compatible_divergence_residual < 1.0e-7,
+            std::isfinite(vector_potential_result.weak_ampere_residual) &&
+            vector_potential_result.weak_ampere_residual < 1.0e-7 &&
+            vector_potential_result.compatible_divergence_residual < 1.0e-7 &&
+            std::isfinite(vector_potential_result.source_pairing_norm) &&
+            vector_potential_result.source_pairing_norm > 0.0,
         "public RT0 OE-F2 residual certificate is outside the fixture tolerance");
     require(std::all_of(a_dofs_t_m.begin(),
                 a_dofs_t_m.begin() + vector_potential_result.a_dofs_t_m_len,
@@ -481,9 +489,25 @@ void run_closed_geometry_rt0_contract()
                 nodal_h_xyz_apm.begin() + vector_potential_result.nodal_h_xyz_apm_len,
                 [](double value) { return std::isfinite(value); }),
         "public RT0 OE-F2 field contains a non-finite value");
-    require(std::string(vector_potential_result.diagnostics_json).find(
-                "fem_oersted_hcurl_h1_gauge.v1") != std::string::npos,
+    const std::string vp_diagnostics_json(vector_potential_result.diagnostics_json);
+    require(vp_diagnostics_json.find("fem_oersted_hcurl_h1_gauge.v1") != std::string::npos,
         "public RT0 OE-F2 diagnostics schema is missing");
+    {
+        const std::string key = "\"nodal_projection_residual\":";
+        const std::size_t key_pos = vp_diagnostics_json.find(key);
+        require(key_pos != std::string::npos,
+            "public RT0 OE-F2 diagnostics JSON is missing nodal_projection_residual");
+        const char *num_start = vp_diagnostics_json.c_str() + key_pos + key.size();
+        char *num_end = nullptr;
+        const double nodal_projection_residual = std::strtod(num_start, &num_end);
+        require(num_end != num_start &&
+                (*num_end == ',' || *num_end == '}' ||
+                    std::isspace(static_cast<unsigned char>(*num_end)) != 0) &&
+                std::isfinite(nodal_projection_residual) &&
+                nodal_projection_residual >= 0.0 &&
+                nodal_projection_residual <= 1.0e-10,
+            "public RT0 OE-F2 nodal_projection_residual exceeded 1e-10");
+    }
     require(fullmag_fem_solve_steady_transport_rt0_oersted_vector_potential_with_charge_snapshot_v1(
                 &vector_potential_request, &vector_potential_result, &charge_snapshot) ==
                 FULLMAG_FEM_OK,

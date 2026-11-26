@@ -2,7 +2,7 @@
 
 - Status: draft — implementation-blocking normative physics
 - Owners: Fullmag core
-- Last updated: 2026-08-12
+- Last updated: 2026-11-26
 - Related ADRs: `docs/adr/0019-spin-transport-and-prescribed-sot-semantics.md`
 - Related specs: `docs/specs/spin-transport-runtime-contract-v1.md`
 - Formula versions: `transport_constitutive.one_way.fullmag.v1`,
@@ -2633,20 +2633,59 @@ interfaces under formula
 `transport_constitutive.one_way.fullmag.v1` and operator
 `fem_charge_spin_conforming_h1_p1.transparent.v1`. It owns charge/spin spaces,
 assembly, essential voltage/spin-potential boundary data, insulating natural
-boundaries, charge gauge validation, CG/GMRES solves, consistent `L2` torque
-projection, independently reassembled weak residuals, and global conservative
+boundaries, charge gauge validation, consistent `L2` torque projection,
+independently reassembled weak residuals, and global conservative
 flux/reaction balance outside `Context` and `mfem_bridge.cpp`.
+
+All sparse linear solves in `SteadyTransportOracle` and `ChargeTraceWorkspace`
+(`backends/fem/cpu/mfem/workflows/antenna_field_solve/charge_trace_workspace.*`)
+now delegate to the shared 3-tier `SparseLinearSolver`
+(`backends/fem/cpu/mfem/common/sparse_linear_solver.{hpp,cpp}`):
+- **Charge (`solve_charge`, `solve_charge_terminal_currents`, `ChargeTraceWorkspace`):**
+  Tier 1 uses PETSc+MUMPS Cholesky/LU with METIS ordering (`ICNTL(7)=5`) and
+  extended-precision iterative refinement; Tier 2 (`FULLMAG_FEM_WITH_SLEPC=0`
+  or explicit `Hypre`) uses `HypreBoomerAMG` + `HyprePCG` on `MPI_COMM_SELF`
+  after checking host memory/execution policy; Tier 3 (TSan / non-MPI) uses
+  MFEM serial `GSSmoother` + `CGSolver`. `solve_charge_terminal_currents`
+  assembles and factors the eliminated SPD stiffness matrix once per call and
+  reuses that factorization across all $T - C$ unit-terminal right-hand sides
+  (via `diffusion_form.FullMult(true_bdr, rhs_full)` for conforming and
+  nonconforming `H1` compatibility) and the final prescribed-current solve,
+  without retaining factors across calls (preserving safety under external
+  `Coefficient` mutation). `ChargeTraceWorkspace` validates
+  `0 <= anchor.full_dof < count` eagerly in its constructor and caches the
+  invariant quotient factorization for thread-safe concurrent `const solve()`
+  calls.
+- **Spin M1 (`solve_spin`) and torque projection (`project_torque`):**
+  `solve_spin` solves the 3-component `mfem::Ordering::byNODES` nonsymmetric
+  diffusion-precession system via Tier 1 PETSc+MUMPS LU + refinement, Tier 2
+  block-diagonal `HypreBoomerAMG` right-preconditioned `GMRESSolver` with
+  deterministic escalation to `HypreILU(1)` + `HypreGMRES`, or Tier 3
+  `GSSmoother` + `GMRESSolver`. `project_torque` factors the scalar `H1` mass
+  matrix once and solves all three torque components against that single factor.
+- **Explicit C++ `GpuCudss` opt-in vs public C ABI v1/v2/v3 contract:**
+  `SteadyTransportParameters::execution_target` exposes an explicit C++
+  `SparseExecutionTarget::GpuCudss` path (direct cuDSS SPD/LU with VRAM
+  preflight and fail-closed errors without CPU fallback). The public C ABI
+  v1/v2/v3 negative gate (`FULLMAG_FEM_STEADY_TRANSPORT_GPU_DOUBLE` returning
+  `FULLMAG_FEM_ERR_UNAVAILABLE`) and the `semantic_only` FEM GPU capability
+  status remain unchanged.
 
 The managed gate `just verify-fem-steady-transport-native-contract` executes a
 linear charge bar, an aligned two-material series-resistance interface, missing
 gauge rejection, the one-dimensional spin-diffusion `sinh` profile, direct-SHE
 sign and balance, torque projection, and fail-closed mixing-interface behavior.
+Source-level contract regressions for multi-terminal factor-once reuse,
+stiff-precession/high-contrast M1/M2 convergence, and explicit `GpuCudss`
+parity/fail-closed behavior are added in `steady_transport_contract.cpp`
+(pending Wave 2 Phase 2 managed Docker DEV matrix execution; they do not
+promote capability claims beyond `reference_executable`).
 This evidence publishes only the named `reference_executable`, CPU-double,
 conforming-`H1 P1`, transparent-interface M1 slice through ProblemIR, planner,
 native runtime, canonical quantities, artifacts, and v2 reads. It is not a full
 production transport capability. Total-current and periodic electrodes,
 specified spin flux, `H(curl)`/broken-H1 mortar mixing or SML,
-hypre/libCEED production preconditioners, GPU residency, stage coupling, and
+GPU residency on the public ABI, stage coupling, and
 general heterogeneous FDM/FEM common-limit convergence remain unchecked work;
 the bounded uniform M1/M2 fixtures are documented below.
 
@@ -2654,10 +2693,14 @@ the bounded uniform M1/M2 fixtures are documented below.
 
 The native FEM CPU lane now contains a deliberately bounded M2 realization. It
 uses one monolithic conforming `H1 P1` block system for
-`(V,mu_sx,mu_sy,mu_sz)` and the reciprocal constitutive tensor from section
-2.2. The charge block includes the symmetric AMR/PHE tensor and AHE term;
-the `P` and SHE/iSHE off-diagonal blocks are assembled together and solved by
-GMRES. The C ABI is a separate symbol,
+`(V,mu_sx,mu_sy,mu_sz)` in `mfem::Ordering::byNODES` and the reciprocal
+constitutive tensor from section 2.2. The charge block includes the symmetric
+AMR/PHE tensor and AHE term; the `P` and SHE/iSHE off-diagonal blocks are
+assembled together and solved via `SparseLinearSolver`
+(`GeneralNonsymmetric`, `by_nodes_component_count = 4`: Tier 1 PETSc+MUMPS LU
+with METIS + iterative refinement, Tier 2 4-block `HypreBoomerAMG` +
+`HypreILU(1)` GMRES, or Tier 3 `GSSmoother` + GMRES), keeping the exact
+independent relative residual verification unchanged. The C ABI is a separate symbol,
 `fullmag_fem_solve_steady_transport_m2_v1`, and its request appends
 `sigma_parallel`, `sigma_perpendicular`, and `sigma_AHE` after a nested,
 self-describing `fullmag_fem_steady_transport_request_v1` prefix. This keeps
@@ -3986,9 +4029,12 @@ a qualified workload without the validation gates above.
 | Adapter BORIS v2 | scripts/compare_boris_fullmag_she_nf.py | normalize_boris_artifact; _concat_qia | flow-major rows i raw-OVF provenance | raw OVF fixture, nie parity solverów |
 | Strumień interfejsu BORIS | scripts/verify_boris_nf_interface.py | compute_interface_slice | wszystkie polaryzacje wiersza z | oba znaki normalnej na fixture |
 | Regresja adaptera BORIS | scripts/verify_boris_tensor_adapter.py | main | 8 punktów N/F, 72 komponenty, jednostki i torque refusal | RED→GREEN, bez solve |
-| M1 charge realization | backends/fem/cpu/mfem/transport/steady_transport.cpp | SteadyTransportOracle::solve_charge | FEM CPU charge assembly and solve | managed native M1 contract |
-| M1 spin realization | backends/fem/cpu/mfem/transport/steady_transport.cpp | SteadyTransportOracle::solve_spin | FEM CPU spin assembly and solve | managed native M1 contract |
-| M2 reciprocal realization | backends/fem/cpu/mfem/transport/steady_transport.cpp | SteadyTransportOracle::solve_reciprocal | monolithic reciprocal FEM block solve | focused managed M2 runtime test |
+| M1 charge realization | backends/fem/cpu/mfem/transport/steady_transport.cpp | SteadyTransportOracle::solve_charge | FEM CPU charge assembly and 3-tier sparse SPD solve | managed native M1 contract |
+| M1 multi-terminal charge factor-once | backends/fem/cpu/mfem/transport/steady_transport.cpp | SteadyTransportOracle::solve_charge_terminal_currents | per-call factor-once multi-RHS terminal current solve using FullMult | source-implemented; Wave 2 Phase 2 managed Docker DEV verification pending |
+| M1 spin realization | backends/fem/cpu/mfem/transport/steady_transport.cpp | SteadyTransportOracle::solve_spin | FEM CPU 3-field byNODES spin assembly and MUMPS/Block-AMG/ILU sparse solve | managed native M1 contract |
+| M2 reciprocal realization | backends/fem/cpu/mfem/transport/steady_transport.cpp | SteadyTransportOracle::solve_reciprocal | monolithic 4-field byNODES reciprocal FEM block MUMPS/Block-AMG/ILU solve | focused managed M2 runtime test |
+| Shared FEM sparse linear solver | backends/fem/cpu/mfem/common/sparse_linear_solver.hpp | class SparseLinearSolver | 3-tier CPU (PETSc/MUMPS, HYPRE BoomerAMG/Block-AMG/ILU, MFEM serial) and opt-in cuDSS direct solver | Wave 2 Phase 0 contract; Phase 2 full matrix verification pending |
+| Cached quotient charge trace workspace | backends/fem/cpu/mfem/workflows/antenna_field_solve/charge_trace_workspace.cpp | ChargeTraceWorkspace::Impl::solve | eagerly factored quotient SPD solve with TSan-safe concurrent const reuse | source-implemented; Wave 2 Phase 2 TSan and MPI verification pending |
 | M2 C ABI | native/include/fullmag_fem.h | fullmag_fem_solve_steady_transport_m2_v1 | stable request and result contract | native ABI contract |
 | Planner resolution | crates/fullmag-plan/src/spin_transport.rs | resolve_m1_fem_spin_transport | bounded M1/M2 descriptor and Schur checks | planner M2 test |
 | Resolved transport execution tuple | crates/fullmag-plan/src/spin_transport.rs | resolve_spin_transport_with_active_graph | complete typed requested/resolved discretization, device, precision, and execution-mode provenance | bounded FDM GPU M1 planner and serde round-trip test; unvalidated |

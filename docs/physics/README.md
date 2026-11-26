@@ -62,5 +62,6 @@ Recommended filenames:
 - `0950-quasistatic-microwave-antenna-field-basis-and-k-selective-excitation.md`
 - [0952 · Harmoniczne źródło antenowe RF dla CPW](0952-harmonic-rf-antenna-cpw.md) — projekt modelu RF i kwalifikacji względem Maxwella.
 - `0960-canonical-llg-time-domain-solver-and-qualification-contract.md`
+- `1005-fem-multiphysics-sparse-and-parallel-solvers.md` — modernizacja rzadkich i równoległych solverów multifizycznych FEM (OE-F2, OE-F1, transport ładunku/spinu, OE-T0 KKT).
 
 The numbering is semantic, not bureaucratic.

@@ -1,5 +1,6 @@
 #pragma once
 
+#include "cpu/mfem/common/sparse_linear_solver.hpp"
 #include "cpu/mfem/transport/affine_trace_relations.hpp"
 #include "cpu/mfem/transport/periodic_charge_potential.hpp"
 
@@ -27,6 +28,8 @@ struct ChargeTraceSolveRequest {
     double relative_jump_tolerance = 1.0e-12;
     double algebraic_relative_tolerance = 1.0e-12;
     int maximum_iterations = 1000;
+    multiphysics::SparseCpuBackendPolicy cpu_backend =
+        multiphysics::SparseCpuBackendPolicy::Auto;
 };
 
 // All payloads are owned; reactions are K*V before any boundary elimination.

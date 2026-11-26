@@ -5,7 +5,10 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cmath>
+#include <cstdlib>
+#include <cstring>
 #include <iomanip>
 #include <initializer_list>
 #include <iostream>
@@ -551,6 +554,534 @@ void direct_tetra_fdm_midpoint_common_limit_contract()
         "FDM midpoint finest field did not approach the FEM reference oracle");
 }
 
+void direct_tetra_multithread_is_bit_exact_and_observer_monotonic()
+{
+    auto mesh = mfem::Mesh::MakeCartesian3D(
+        4, 4, 4, mfem::Element::TETRAHEDRON, 1.0, 1.0, 1.0);
+    require(mesh.GetNE() == 384, "4x4x4 tetrahedral fixture must contain 384 elements");
+    mfem::RT_FECollection collection(0, 3);
+    mfem::FiniteElementSpace space(&mesh, &collection);
+    mfem::GridFunction current(&space);
+    mfem::VectorFunctionCoefficient coefficient(3,
+        [](const mfem::Vector &point, mfem::Vector &value) {
+            value[0] = 4.0 + 0.5 * point[0];
+            value[1] = -1.5 * point[1];
+            value[2] = 0.75 * point[2];
+        });
+    current.ProjectCoefficient(coefficient);
+
+    mfem::Array<int> verts;
+    mesh.GetElementVertices(0, verts);
+    require(verts.Size() == 4, "element 0 must be a tetrahedron");
+    std::array<std::array<double, 3>, 4> v{};
+    for (int local = 0; local < 4; ++local) {
+        const auto *coord = mesh.GetVertex(verts[local]);
+        v[local] = {coord[0], coord[1], coord[2]};
+    }
+    const auto avg = [&](std::initializer_list<int> idx) {
+        std::array<double, 3> out{0.0, 0.0, 0.0};
+        for (int i : idx) {
+            for (int c = 0; c < 3; ++c) out[c] += v[i][c];
+        }
+        const double inv = 1.0 / static_cast<double>(idx.size());
+        for (double &c : out) c *= inv;
+        return out;
+    };
+
+    mfem::Array<int> bdr_verts;
+    mesh.GetBdrElementVertices(0, bdr_verts);
+    require(bdr_verts.Size() == 3, "boundary element 0 must be a triangle");
+    std::array<double, 3> exterior_face{0.0, 0.0, 0.0};
+    for (int local = 0; local < 3; ++local) {
+        const auto *coord = mesh.GetVertex(bdr_verts[local]);
+        for (int c = 0; c < 3; ++c) exterior_face[c] += coord[c] / 3.0;
+    }
+
+    std::vector<std::array<double, 3>> many_targets{
+        avg({0, 1, 2, 3}), // interior
+        exterior_face,     // exterior boundary face
+        avg({0, 1}),       // edge
+        v[0],              // vertex
+        {-0.15, 0.20, 0.30},
+        {1.15, 0.40, 0.60},
+        {0.30, -0.15, 0.70},
+        {0.60, 0.80, 1.15},
+    };
+    for (int i = 0; i < 24; ++i) {
+        many_targets.push_back({
+            2.0 + 0.25 * static_cast<double>(i % 6),
+            0.10 + 0.25 * static_cast<double>((i / 6) % 4),
+            0.20 + 0.15 * static_cast<double>(i % 5)});
+    }
+    require(many_targets.size() == 32u, "scenario (a) must contain 32 targets");
+
+    const std::vector<std::array<double, 3>> few_targets{
+        {2.25, 0.35, 0.65},
+        avg({0, 1, 2, 3}),
+    };
+
+    const auto run_observed = [&](const std::vector<std::array<double, 3>> &targets,
+                                  int worker_threads) {
+        DirectTetraQuadratureOptions options;
+        options.base_quadrature_order = 4;
+        options.maximum_subdivision_depth = 6;
+        options.absolute_tolerance_apm = 1.0e-9;
+        options.relative_tolerance = 1.0e-5;
+        options.worker_threads = worker_threads;
+        options.execution_policy =
+            fullmag::fem::oersted::DirectTetraExecutionPolicy::CpuDeterministic;
+
+        struct Progress {
+            std::atomic<int> active{0};
+            std::uint64_t calls = 0;
+            std::uint64_t completed = 0;
+            bool valid = true;
+            bool reentrant = false;
+            std::uint64_t expected_total = 0;
+            std::uint64_t expected_cells = 0;
+        } progress;
+        progress.expected_total = static_cast<std::uint64_t>(targets.size());
+        progress.expected_cells = static_cast<std::uint64_t>(mesh.GetNE());
+
+        const fullmag::fem::oersted::SurfaceRt0ProgressObserver observer{&progress,
+            [](void *context, fullmag::fem::oersted::AntennaProgressPhase phase,
+                std::uint64_t completed, std::uint64_t total, std::uint64_t cells) noexcept {
+                auto &p = *static_cast<Progress *>(context);
+                if (p.active.fetch_add(1, std::memory_order_acq_rel) != 0) {
+                    p.reentrant = true;
+                }
+                p.valid = p.valid &&
+                    phase == fullmag::fem::oersted::AntennaProgressPhase::evaluating_field &&
+                    completed == p.calls && total == p.expected_total && cells == p.expected_cells;
+                ++p.calls;
+                p.completed = completed;
+                p.active.fetch_sub(1, std::memory_order_acq_rel);
+            }};
+
+        auto res = DirectTetraQuadrature::EvaluateField(mesh, current, targets, options, &observer);
+        require(!progress.reentrant && progress.valid &&
+                progress.calls == static_cast<std::uint64_t>(targets.size()) + 1u &&
+                progress.completed == static_cast<std::uint64_t>(targets.size()),
+            "multithreaded observer must be strictly monotonic and non-reentrant");
+        std::uint64_t sample_sum = 0;
+        std::uint64_t visit_sum = 0;
+        for (const auto &td : res.target_diagnostics) {
+            sample_sum += td.kernel_evaluations;
+            visit_sum += td.ledger_leaf_visits;
+        }
+        require(sample_sum == res.diagnostics.kernel_evaluations &&
+                visit_sum == res.diagnostics.ledger_leaf_visits,
+            "aggregate kernel_evaluations/ledger_leaf_visits must equal exact sum over targets");
+        require(res.diagnostics.effective_worker_threads == worker_threads,
+            "effective_worker_threads did not match requested CPU thread count");
+        require(res.diagnostics.resolved_execution_policy == "cpu_deterministic",
+            "resolved_execution_policy must report cpu_deterministic");
+        return res;
+    };
+
+    const auto require_bit_exact = [](const auto &baseline, const auto &candidate) {
+        require(baseline.h_xyz_apm.size() == candidate.h_xyz_apm.size() &&
+                std::memcmp(baseline.h_xyz_apm.data(), candidate.h_xyz_apm.data(),
+                    baseline.h_xyz_apm.size() * sizeof(double)) == 0,
+            "multithreaded CPU DTQ field is not 0-ULP bit-exact with single-threaded baseline");
+        require(baseline.diagnostics.kernel_evaluations == candidate.diagnostics.kernel_evaluations &&
+                baseline.diagnostics.ledger_leaf_visits == candidate.diagnostics.ledger_leaf_visits &&
+                baseline.diagnostics.refined_pairs == candidate.diagnostics.refined_pairs &&
+                baseline.diagnostics.unconverged_pair_count == 0 &&
+                candidate.diagnostics.unconverged_pair_count == 0 &&
+                std::memcmp(&baseline.diagnostics.maximum_pair_error_apm,
+                    &candidate.diagnostics.maximum_pair_error_apm, sizeof(double)) == 0,
+            "multithreaded CPU DTQ diagnostics diverged from single-threaded baseline");
+        require(baseline.target_diagnostics.size() == candidate.target_diagnostics.size(),
+            "multithreaded target_diagnostics size mismatch");
+        for (std::size_t t = 0; t < baseline.target_diagnostics.size(); ++t) {
+            const auto &a = baseline.target_diagnostics[t];
+            const auto &b = candidate.target_diagnostics[t];
+            require(std::memcmp(&a.estimated_error_apm, &b.estimated_error_apm, sizeof(double)) == 0 &&
+                    std::memcmp(&a.tolerance_apm, &b.tolerance_apm, sizeof(double)) == 0 &&
+                    std::memcmp(&a.roundoff_indicator_apm, &b.roundoff_indicator_apm, sizeof(double)) == 0 &&
+                    a.final_leaf_count == b.final_leaf_count &&
+                    a.kernel_evaluations == b.kernel_evaluations &&
+                    a.ledger_leaf_visits == b.ledger_leaf_visits,
+                "multithreaded target_diagnostics entry diverged from single-threaded baseline");
+        }
+    };
+
+    const auto many_w1 = run_observed(many_targets, 1);
+    const auto many_w4 = run_observed(many_targets, 4);
+    const auto many_w8 = run_observed(many_targets, 8);
+    require_bit_exact(many_w1, many_w4);
+    require_bit_exact(many_w1, many_w8);
+
+    const auto few_w1 = run_observed(few_targets, 1);
+    const auto few_w4 = run_observed(few_targets, 4);
+    const auto few_w8 = run_observed(few_targets, 8);
+    require_bit_exact(few_w1, few_w4);
+    require_bit_exact(few_w1, few_w8);
+
+    DirectTetraQuadratureOptions invalid_threads;
+    invalid_threads.worker_threads = -1;
+    bool rejected = false;
+    try {
+        (void)DirectTetraQuadrature::ResolveWorkLimits(invalid_threads);
+    } catch (const std::invalid_argument &) {
+        rejected = true;
+    }
+    require(rejected, "negative worker_threads must be rejected");
+}
+
+void direct_tetra_parallel_budget_exceeded_fails_cleanly()
+{
+    auto mesh = mfem::Mesh::MakeCartesian3D(
+        4, 4, 4, mfem::Element::TETRAHEDRON, 1.0, 1.0, 1.0);
+    mfem::RT_FECollection collection(0, 3);
+    mfem::FiniteElementSpace space(&mesh, &collection);
+    mfem::GridFunction current(&space);
+    mfem::Vector vec(3);
+    vec = 0.0;
+    vec[0] = 4.0;
+    mfem::VectorConstantCoefficient coeff(vec);
+    current.ProjectCoefficient(coeff);
+
+    mfem::Array<int> verts;
+    mesh.GetElementVertices(0, verts);
+    std::array<std::array<double, 3>, 4> v{};
+    for (int local = 0; local < 4; ++local) {
+        const auto *coord = mesh.GetVertex(verts[local]);
+        v[local] = {coord[0], coord[1], coord[2]};
+    }
+    const std::array<double, 3> interior{
+        0.25 * (v[0][0] + v[1][0] + v[2][0] + v[3][0]),
+        0.25 * (v[0][1] + v[1][1] + v[2][1] + v[3][1]),
+        0.25 * (v[0][2] + v[1][2] + v[2][2] + v[3][2])};
+
+    std::vector<std::array<double, 3>> targets(16, interior);
+    for (std::size_t i = 0; i < 8; ++i) {
+        targets[i] = {2.0 + 0.1 * static_cast<double>(i), 0.5, 0.5};
+    }
+
+    // (a) Tight pair budget rejected cleanly before launching threads.
+    DirectTetraQuadratureOptions pair_capped;
+    pair_capped.worker_threads = 4;
+    pair_capped.maximum_source_target_pairs = 10;
+    bool pair_rejected = false;
+    try {
+        (void)DirectTetraQuadrature::EvaluateField(mesh, current, targets, pair_capped);
+    } catch (const std::invalid_argument &) {
+        pair_rejected = true;
+    }
+    require(pair_rejected, "parallel DTQ did not reject exceeded pair budget");
+
+    // (b) Concurrent worker failure under target-level parallelism (N_t = 16, W = 4).
+    DirectTetraQuadratureOptions depth_capped;
+    depth_capped.base_quadrature_order = 8;
+    depth_capped.maximum_subdivision_depth = 0;
+    depth_capped.worker_threads = 4;
+    bool parallel_failed = false;
+    std::string parallel_error;
+    std::ostringstream captured_stderr;
+    auto *prev_stderr = std::cerr.rdbuf(captured_stderr.rdbuf());
+    try {
+        (void)DirectTetraQuadrature::EvaluateField(mesh, current, targets, depth_capped);
+    } catch (const std::runtime_error &error) {
+        parallel_failed = true;
+        parallel_error = error.what();
+    } catch (...) {
+        std::cerr.rdbuf(prev_stderr);
+        throw;
+    }
+    std::cerr.rdbuf(prev_stderr);
+    require(parallel_failed &&
+            parallel_error.find("global_target_depth_exhausted") != std::string::npos,
+        "target-parallel failure did not propagate std::runtime_error cleanly");
+
+    // (c) Failure under source-root parallelism (N_t = 2, W = 4).
+    const std::vector<std::array<double, 3>> two_targets{{2.0, 0.5, 0.5}, interior};
+    bool root_parallel_failed = false;
+    prev_stderr = std::cerr.rdbuf(captured_stderr.rdbuf());
+    try {
+        (void)DirectTetraQuadrature::EvaluateField(mesh, current, two_targets, depth_capped);
+    } catch (const std::runtime_error &) {
+        root_parallel_failed = true;
+    } catch (...) {
+        std::cerr.rdbuf(prev_stderr);
+        throw;
+    }
+    std::cerr.rdbuf(prev_stderr);
+    require(root_parallel_failed,
+        "source-root-parallel failure did not propagate std::runtime_error cleanly");
+}
+
+void direct_tetra_project_field_single_pass_parity()
+{
+    auto source_mesh = mfem::Mesh::MakeCartesian3D(
+        2, 2, 2, mfem::Element::TETRAHEDRON, 1.0, 1.0, 1.0);
+    auto target_mesh = mfem::Mesh::MakeCartesian3D(
+        2, 2, 2, mfem::Element::TETRAHEDRON, 1.0, 1.0, 1.0);
+    for (int vertex = 0; vertex < target_mesh.GetNV(); ++vertex) {
+        target_mesh.GetVertex(vertex)[0] += 2.0;
+    }
+    mfem::RT_FECollection source_collection(0, 3);
+    mfem::FiniteElementSpace source_space(&source_mesh, &source_collection);
+    mfem::GridFunction current(&source_space);
+    mfem::Vector vec(3);
+    vec = 0.0;
+    vec[0] = 4.0;
+    vec[1] = -1.25;
+    mfem::VectorConstantCoefficient coeff(vec);
+    current.ProjectCoefficient(coeff);
+
+    mfem::H1_FECollection target_collection(1, 3);
+    mfem::FiniteElementSpace target_space(
+        &target_mesh, &target_collection, 3, mfem::Ordering::byVDIM);
+    mfem::GridFunction proj_w1(&target_space);
+    mfem::GridFunction proj_w4(&target_space);
+    proj_w1 = 0.0;
+    proj_w4 = 0.0;
+
+    DirectTetraQuadratureOptions opt_w1;
+    opt_w1.base_quadrature_order = 4;
+    opt_w1.maximum_subdivision_depth = 4;
+    opt_w1.relative_tolerance = 1.0e-5;
+    opt_w1.absolute_tolerance_apm = 1.0e-9;
+    opt_w1.worker_threads = 1;
+    const auto diag_w1 = DirectTetraQuadrature::ProjectField(current, proj_w1, opt_w1);
+
+    auto opt_w4 = opt_w1;
+    opt_w4.worker_threads = 4;
+    const auto diag_w4 = DirectTetraQuadrature::ProjectField(current, proj_w4, opt_w4);
+
+    require(diag_w1.unconverged_pair_count == 0 && diag_w4.unconverged_pair_count == 0,
+        "fused H1 projection left unconverged pairs");
+    require(diag_w1.source_target_pairs == diag_w4.source_target_pairs &&
+            diag_w1.kernel_evaluations == diag_w4.kernel_evaluations &&
+            diag_w1.ledger_leaf_visits == diag_w4.ledger_leaf_visits,
+        "fused H1 projection work counters differed between worker_threads=1 and 4");
+
+    mfem::Vector diff(proj_w1.Size());
+    diff = proj_w4;
+    diff -= proj_w1;
+    const double rel_diff = diff.Norml2() / std::max(1.0, proj_w1.Norml2());
+    require(std::isfinite(rel_diff) && rel_diff <= 1.0e-12,
+        "fused H1 projection differed between worker_threads=1 and 4");
+
+    // Verify byVDIM scatter: pointwise GetVectorValue() matches EvaluateField()
+    // up to P1 L2-projection discretization error (catches byNODES/byVDIM scrambling).
+    std::vector<std::array<double, 3>> sample_points;
+    std::vector<int> sample_elements;
+    mfem::IntegrationPoint centroid_ip;
+    centroid_ip.Set3(0.25, 0.25, 0.25);
+    mfem::Vector phys(3);
+    const int elem_step = std::max(1, target_mesh.GetNE() / 8);
+    for (int elem = 0; elem < target_mesh.GetNE(); elem += elem_step) {
+        mfem::ElementTransformation *tr = target_mesh.GetElementTransformation(elem);
+        tr->Transform(centroid_ip, phys);
+        sample_points.push_back({phys[0], phys[1], phys[2]});
+        sample_elements.push_back(elem);
+    }
+    const auto direct_samples = DirectTetraQuadrature::EvaluateField(
+        source_mesh, current, sample_points, opt_w1);
+    mfem::Vector projected_val(3);
+    for (std::size_t idx = 0; idx < sample_elements.size(); ++idx) {
+        mfem::ElementTransformation *tr =
+            target_mesh.GetElementTransformation(sample_elements[idx]);
+        tr->SetIntPoint(&centroid_ip);
+        proj_w1.GetVectorValue(*tr, centroid_ip, projected_val);
+        const std::array<double, 3> h_proj{
+            projected_val[0], projected_val[1], projected_val[2]};
+        const std::array<double, 3> h_direct{
+            direct_samples.h_xyz_apm[3u * idx + 0u],
+            direct_samples.h_xyz_apm[3u * idx + 1u],
+            direct_samples.h_xyz_apm[3u * idx + 2u]};
+        const double direct_norm = field_distance(h_direct, {0.0, 0.0, 0.0});
+        const double pointwise_err = field_distance(h_proj, h_direct);
+        require(direct_norm > 0.0 && std::isfinite(pointwise_err) &&
+                pointwise_err <= 0.15 * direct_norm,
+            "projected H1 GetVectorValue() diverged from DirectTetraQuadrature::EvaluateField()");
+    }
+
+    // Verify 3x single-pass fusion: total source-target pairs, kernel evaluations,
+    // and ledger visits match a single EvaluateField pass across all target
+    // quadrature points (exact 1x work vs legacy 3x separate scalar passes).
+    const int target_order = std::max(2, opt_w1.base_quadrature_order + 2);
+    const auto &target_rule =
+        mfem::IntRules.Get(mfem::Geometry::TETRAHEDRON, target_order);
+    const auto npts = static_cast<std::uint64_t>(target_rule.GetNPoints());
+    const auto single_pass_pairs =
+        static_cast<std::uint64_t>(source_mesh.GetNE()) *
+        static_cast<std::uint64_t>(target_mesh.GetNE()) * npts;
+    std::vector<std::array<double, 3>> all_target_points;
+    all_target_points.reserve(
+        static_cast<std::size_t>(target_mesh.GetNE()) * static_cast<std::size_t>(npts));
+    for (int elem = 0; elem < target_mesh.GetNE(); ++elem) {
+        mfem::ElementTransformation *tr = target_mesh.GetElementTransformation(elem);
+        for (int p = 0; p < target_rule.GetNPoints(); ++p) {
+            tr->Transform(target_rule.IntPoint(p), phys);
+            all_target_points.push_back({phys[0], phys[1], phys[2]});
+        }
+    }
+    const auto single_pass_eval = DirectTetraQuadrature::EvaluateField(
+        source_mesh, current, all_target_points, opt_w1);
+    require(diag_w1.source_target_pairs == single_pass_pairs &&
+            diag_w1.source_target_pairs == single_pass_eval.diagnostics.source_target_pairs,
+        "fused H1 projection evaluated more than one pass of source-target pairs");
+    require(diag_w1.kernel_evaluations == single_pass_eval.diagnostics.kernel_evaluations &&
+            diag_w1.ledger_leaf_visits == single_pass_eval.diagnostics.ledger_leaf_visits &&
+            diag_w1.refined_pairs == single_pass_eval.diagnostics.refined_pairs,
+        "fused H1 projection did not match exact single-pass (1/3 of legacy 3-pass) work counts");
+
+    // Verify ProjectField bypasses pointwise pair cap while retaining shared WorkBudget.
+    auto opt_small_pair_cap = opt_w4;
+    opt_small_pair_cap.maximum_source_target_pairs =
+        static_cast<std::uint64_t>(source_mesh.GetNE());
+    mfem::GridFunction proj_capped(&target_space);
+    proj_capped = 0.0;
+    const auto diag_capped = DirectTetraQuadrature::ProjectField(
+        current, proj_capped, opt_small_pair_cap);
+    require(diag_capped.unconverged_pair_count == 0 &&
+            diag_capped.source_target_pairs == single_pass_pairs,
+        "fused H1 projection falsely triggered pointwise pair cap");
+    diff = proj_capped;
+    diff -= proj_w1;
+    require(diff.Norml2() <= 1.0e-12 * std::max(1.0, proj_w1.Norml2()),
+        "pair-cap-bypassed H1 projection differed from baseline");
+}
+
+void direct_tetra_gpu_hybrid_farfield_parity_and_singular_handoff()
+{
+    auto mesh = mfem::Mesh::MakeCartesian3D(
+        4, 4, 4, mfem::Element::TETRAHEDRON, 1.0, 1.0, 1.0);
+    mfem::RT_FECollection collection(0, 3);
+    mfem::FiniteElementSpace space(&mesh, &collection);
+    mfem::GridFunction current(&space);
+    mfem::VectorFunctionCoefficient coefficient(3,
+        [](const mfem::Vector &point, mfem::Vector &value) {
+            value[0] = 4.0 + 0.5 * point[0];
+            value[1] = -1.5 * point[1];
+            value[2] = 0.75 * point[2];
+        });
+    current.ProjectCoefficient(coefficient);
+
+    mfem::Array<int> verts;
+    mesh.GetElementVertices(0, verts);
+    std::array<std::array<double, 3>, 4> v{};
+    std::array<double, 3> c0{0.0, 0.0, 0.0};
+    for (int local = 0; local < 4; ++local) {
+        const auto *coord = mesh.GetVertex(verts[local]);
+        v[local] = {coord[0], coord[1], coord[2]};
+        for (int c = 0; c < 3; ++c) c0[c] += 0.25 * coord[c];
+    }
+    double r0 = 0.0;
+    for (int local = 0; local < 4; ++local) {
+        r0 = std::max(r0, field_distance(v[local], c0));
+    }
+
+    mfem::Array<int> bdr_verts;
+    mesh.GetBdrElementVertices(0, bdr_verts);
+    require(bdr_verts.Size() == 3, "boundary element 0 must be a triangle");
+    std::array<double, 3> exterior_face{0.0, 0.0, 0.0};
+    for (int local = 0; local < 3; ++local) {
+        const auto *coord = mesh.GetVertex(bdr_verts[local]);
+        for (int c = 0; c < 3; ++c) exterior_face[c] += coord[c] / 3.0;
+    }
+
+    const std::vector<std::array<double, 3>> targets{
+        {3.0, 0.5, 0.5},                                       // far (d > 5 Rs)
+        {-2.0, 0.25, 0.75},                                    // far (d > 5 Rs)
+        {0.5, 3.5, 0.5},                                       // far (d > 5 Rs)
+        {0.5, 0.5, -2.5},                                      // far (d > 5 Rs)
+        {c0[0] - 2.5 * r0, c0[1], c0[2]},                      // near boundary (d ~ 2.5 Rs)
+        {c0[0], c0[1] - 2.5 * r0, c0[2]},                      // near boundary (d ~ 2.5 Rs)
+        v[0],                                                  // vertex singularity
+        {0.5 * (v[0][0] + v[1][0]), 0.5 * (v[0][1] + v[1][1]),
+            0.5 * (v[0][2] + v[1][2])},                        // edge singularity
+        exterior_face,                                         // exterior face singularity
+        c0,                                                    // interior singularity
+    };
+
+    DirectTetraQuadratureOptions cpu_options;
+    cpu_options.base_quadrature_order = 4;
+    cpu_options.maximum_subdivision_depth = 6;
+    cpu_options.absolute_tolerance_apm = 1.0e-9;
+    cpu_options.relative_tolerance = 1.0e-5;
+    cpu_options.worker_threads = 4;
+    cpu_options.execution_policy =
+        fullmag::fem::oersted::DirectTetraExecutionPolicy::CpuDeterministic;
+
+    auto gpu_options = cpu_options;
+    gpu_options.execution_policy =
+        fullmag::fem::oersted::DirectTetraExecutionPolicy::GpuHybridFarField;
+
+#if defined(FULLMAG_HAS_CUDA_RUNTIME) && FULLMAG_HAS_CUDA_RUNTIME
+    const char *cuda_visible = std::getenv("CUDA_VISIBLE_DEVICES");
+    const bool cuda_hidden = cuda_visible != nullptr && std::string(cuda_visible).empty();
+    if (cuda_hidden) {
+        bool rejected = false;
+        try {
+            (void)DirectTetraQuadrature::EvaluateField(mesh, current, targets, gpu_options);
+        } catch (const std::runtime_error &) {
+            rejected = true;
+        }
+        require(rejected,
+            "GPU hybrid policy must fail closed when CUDA_VISIBLE_DEVICES is empty");
+    } else {
+        const auto cpu_res = DirectTetraQuadrature::EvaluateField(
+            mesh, current, targets, cpu_options);
+        const auto gpu_res = DirectTetraQuadrature::EvaluateField(
+            mesh, current, targets, gpu_options);
+        const auto gpu_repeat = DirectTetraQuadrature::EvaluateField(
+            mesh, current, targets, gpu_options);
+
+        require(gpu_res.diagnostics.unconverged_pair_count == 0,
+            "GPU hybrid far-field left unconverged pairs");
+        require(gpu_res.diagnostics.resolved_execution_policy == "gpu_hybrid_farfield",
+            "GPU hybrid policy did not report gpu_hybrid_farfield");
+        require(gpu_res.diagnostics.gpu_farfield_pairs > 0 &&
+                gpu_res.diagnostics.cpu_near_singular_pairs > 0 &&
+                gpu_res.diagnostics.gpu_farfield_pairs +
+                    gpu_res.diagnostics.cpu_near_singular_pairs ==
+                    gpu_res.diagnostics.source_target_pairs,
+            "GPU hybrid far-field pair partitioning counts are invalid");
+        require(gpu_res.h_xyz_apm == gpu_repeat.h_xyz_apm,
+            "GPU hybrid far-field TwoSum accumulation is not deterministic");
+
+        std::uint64_t sample_sum = 0;
+        std::uint64_t visit_sum = 0;
+        for (const auto &td : gpu_res.target_diagnostics) {
+            sample_sum += td.kernel_evaluations;
+            visit_sum += td.ledger_leaf_visits;
+        }
+        require(sample_sum == gpu_res.diagnostics.kernel_evaluations &&
+                visit_sum == gpu_res.diagnostics.ledger_leaf_visits,
+            "GPU hybrid aggregate work counters do not match target sums");
+
+        for (std::size_t t = 0; t < targets.size(); ++t) {
+            const std::array<double, 3> h_cpu{
+                cpu_res.h_xyz_apm[3u * t + 0u],
+                cpu_res.h_xyz_apm[3u * t + 1u],
+                cpu_res.h_xyz_apm[3u * t + 2u]};
+            const std::array<double, 3> h_gpu{
+                gpu_res.h_xyz_apm[3u * t + 0u],
+                gpu_res.h_xyz_apm[3u * t + 1u],
+                gpu_res.h_xyz_apm[3u * t + 2u]};
+            const double cpu_norm = field_distance(h_cpu, {0.0, 0.0, 0.0});
+            const double err = field_distance(h_gpu, h_cpu);
+            require(std::isfinite(err) && err <= 1.0e-13 * std::max(1.0, cpu_norm),
+                "GPU hybrid far-field + CPU singular handoff exceeded 1e-13 parity tolerance");
+        }
+    }
+#else
+    bool rejected = false;
+    try {
+        (void)DirectTetraQuadrature::EvaluateField(mesh, current, targets, gpu_options);
+    } catch (const std::runtime_error &) {
+        rejected = true;
+    }
+    require(rejected,
+        "GPU hybrid policy must fail closed with std::runtime_error when CUDA runtime is absent");
+#endif
+}
+
 // Failure-only test diagnostics; the original contract remains fatal.
 void diagnose_singular_targets_after_failure()
 {
@@ -697,31 +1228,53 @@ void diagnose_singular_targets_after_failure()
 
 } // namespace
 
-int main()
+int main(int argc, char **argv)
 {
+    bool wave2_only = false;
+    for (int i = 1; i < argc; ++i) {
+        if (std::string(argv[i]) == "--wave2") {
+            wave2_only = true;
+        } else {
+            std::cerr << "fem direct tetrahedral Oersted contract: unknown argument: "
+                      << argv[i] << '\n';
+            return 2;
+        }
+    }
     try {
-        std::cerr << "OE-F1 CASE direct_tetra_signed_current_and_budget_contract\n";
-        direct_tetra_signed_current_and_budget_contract();
-        std::cerr << "OE-F1 CASE direct_tetra_explicit_volume_profile_contract\n";
-        direct_tetra_explicit_volume_profile_contract();
-        std::cerr << "OE-F1 CASE direct_tetra_singular_target_contract\n";
-        direct_tetra_singular_target_contract();
-        std::cerr << "OE-F1 CASE direct_tetra_consistent_h1_projection_contract\n";
-        direct_tetra_consistent_h1_projection_contract();
-        std::cerr << "OE-F1 CASE direct_tetra_h_refinement_contract\n";
-        direct_tetra_h_refinement_contract();
-        std::cerr << "OE-F1 CASE direct_tetra_fdm_midpoint_common_limit_contract\n";
-        direct_tetra_fdm_midpoint_common_limit_contract();
+        if (!wave2_only) {
+            std::cerr << "OE-F1 CASE direct_tetra_signed_current_and_budget_contract\n";
+            direct_tetra_signed_current_and_budget_contract();
+            std::cerr << "OE-F1 CASE direct_tetra_explicit_volume_profile_contract\n";
+            direct_tetra_explicit_volume_profile_contract();
+            std::cerr << "OE-F1 CASE direct_tetra_singular_target_contract\n";
+            direct_tetra_singular_target_contract();
+            std::cerr << "OE-F1 CASE direct_tetra_consistent_h1_projection_contract\n";
+            direct_tetra_consistent_h1_projection_contract();
+            std::cerr << "OE-F1 CASE direct_tetra_h_refinement_contract\n";
+            direct_tetra_h_refinement_contract();
+            std::cerr << "OE-F1 CASE direct_tetra_fdm_midpoint_common_limit_contract\n";
+            direct_tetra_fdm_midpoint_common_limit_contract();
+        }
+        std::cerr << "OE-F1 CASE direct_tetra_multithread_is_bit_exact_and_observer_monotonic\n";
+        direct_tetra_multithread_is_bit_exact_and_observer_monotonic();
+        std::cerr << "OE-F1 CASE direct_tetra_parallel_budget_exceeded_fails_cleanly\n";
+        direct_tetra_parallel_budget_exceeded_fails_cleanly();
+        std::cerr << "OE-F1 CASE direct_tetra_project_field_single_pass_parity\n";
+        direct_tetra_project_field_single_pass_parity();
+        std::cerr << "OE-F1 CASE direct_tetra_gpu_hybrid_farfield_parity_and_singular_handoff\n";
+        direct_tetra_gpu_hybrid_farfield_parity_and_singular_handoff();
         std::cout << "fem direct tetrahedral Oersted contract: PASS\n";
         return 0;
     } catch (const std::exception &error) {
         std::cerr << "fem direct tetrahedral Oersted contract: FAIL: "
                   << error.what() << '\n';
-        try {
-            diagnose_singular_targets_after_failure();
-        } catch (const std::exception &diagnostic_error) {
-            std::cerr << "OE-F1 DIAGNOSTIC SETUP REFUSED exception="
-                      << diagnostic_error.what() << '\n';
+        if (!wave2_only) {
+            try {
+                diagnose_singular_targets_after_failure();
+            } catch (const std::exception &diagnostic_error) {
+                std::cerr << "OE-F1 DIAGNOSTIC SETUP REFUSED exception="
+                          << diagnostic_error.what() << '\n';
+            }
         }
         return 1;
     }

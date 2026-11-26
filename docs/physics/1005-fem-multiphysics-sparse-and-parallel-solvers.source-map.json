@@ -1,0 +1,208 @@
+{
+  "document": {
+    "path": "docs/physics/1005-fem-multiphysics-sparse-and-parallel-solvers.md"
+  },
+  "backend_matrix": [
+    {
+      "solver": "FEM",
+      "device": "CPU",
+      "status": "verified-reference-bounded",
+      "reason": "Verified across Profiles 1, 2 (13/13 + LARGE_MESH 3/3), 3 (TSan build), 4 (2-rank MPI byte-identity), and 5 (13/13 + CUDA_VISIBLE_DEVICES=\"\" 4/4 + LARGE_MESH 3/3) plus A/B benchmarks in docs/audits/2026-11-26-fem-multiphysics-solvers-ab.md."
+    },
+    {
+      "solver": "FEM",
+      "device": "GPU",
+      "status": "unsupported",
+      "reason": "Opt-in C++ GpuCudss and GpuHybridFarField lanes passed RTX 4080 SUPER parity and A/B benchmarks behind strict fail-closed flags, while public C ABI v1/v2/v3 and planner GPU promotion remain unsupported until a separate ABI/planner PR."
+    },
+    {
+      "solver": "FDM",
+      "device": "CPU",
+      "status": "not-applicable",
+      "reason": "FDM uses cell-integrated charge and FFT Oersted convolution operators and does not consume the FEM sparse linear solver or tetrahedral quadrature."
+    },
+    {
+      "solver": "FDM",
+      "device": "GPU",
+      "status": "not-applicable",
+      "reason": "FDM GPU uses FFT/CUDA grid kernels rather than MFEM/PETSc/cuDSS sparse FEM solvers."
+    }
+  ],
+  "equations": [
+    {
+      "id": "multiphysics-equilibrated-saddle",
+      "symbols": ["A", "B", "beta", "S_beta", "u", "p", "p_tilde", "f", "g"],
+      "sources": ["equilibration-beta", "equilibrated-csr"]
+    },
+    {
+      "id": "multiphysics-independent-residual",
+      "symbols": ["M", "x", "b", "r_rel", "r_floor", "eps_rel", "k_ref"],
+      "sources": ["independent-residual", "sparse-solver-api"]
+    },
+    {
+      "id": "multiphysics-oersted-ams-preconditioner",
+      "symbols": ["mu_0", "L", "gamma", "K_curl", "M_ND", "L_H1", "P_OEF2", "beta"],
+      "sources": ["sparse-solver-api", "antenna-nd-cap", "antenna-h1-cap"]
+    },
+    {
+      "id": "multiphysics-direct-tetra-partition",
+      "symbols": ["H", "J_s", "x_t", "c_s", "R_s", "kappa_near", "N_s"],
+      "sources": ["cuda-farfield-kernel"]
+    },
+    {
+      "id": "multiphysics-oet0-schur-preconditioner",
+      "symbols": ["S_tilde", "beta", "M_f", "C_f_tilde", "K_sigma"],
+      "sources": ["sparse-solver-api", "sparse-solver-contract"]
+    }
+  ],
+  "symbols": [
+    {"id": "A", "latex": "A", "meaning": "top-left sparse block operator", "si_unit": "\\mathrm{(discrete\\;SI)}"},
+    {"id": "B", "latex": "B", "meaning": "sparse saddle-point coupling block", "si_unit": "\\mathrm{(discrete\\;SI)}"},
+    {"id": "beta", "latex": "\\beta", "meaning": "symmetric saddle-point equilibration scalar", "si_unit": "1"},
+    {"id": "S_beta", "latex": "S_\\beta", "meaning": "symmetrically equilibrated CSR saddle-point matrix", "si_unit": "\\mathrm{(discrete\\;SI)}"},
+    {"id": "u", "latex": "u", "meaning": "primary finite-element solution vector", "si_unit": "\\mathrm{T\\,m}"},
+    {"id": "p", "latex": "p", "meaning": "physical Lagrange multiplier vector", "si_unit": "\\mathrm{A\\,m^{-1}}"},
+    {"id": "p_tilde", "latex": "\\tilde{p}", "meaning": "equilibrated Lagrange multiplier vector", "si_unit": "\\beta^{-1}\\cdot\\text{dual unit}"},
+    {"id": "f", "latex": "f", "meaning": "primary block right-hand side", "si_unit": "\\mathrm{(discrete\\;SI)}"},
+    {"id": "g", "latex": "g", "meaning": "constraint block right-hand side", "si_unit": "\\mathrm{(discrete\\;SI)}"},
+    {"id": "M", "latex": "M", "meaning": "general assembled sparse linear system matrix", "si_unit": "\\mathrm{(discrete\\;SI)}"},
+    {"id": "x", "latex": "x", "meaning": "discrete solution vector", "si_unit": "\\mathrm{(discrete\\;SI)}"},
+    {"id": "b", "latex": "b", "meaning": "discrete right-hand-side vector", "si_unit": "\\mathrm{(discrete\\;SI)}"},
+    {"id": "r_rel", "latex": "r_{\\mathrm{rel}}", "meaning": "extended-precision independent unpreconditioned relative residual", "si_unit": "1"},
+    {"id": "r_floor", "latex": "r_{\\mathrm{floor}}", "meaning": "relative-residual denominator floor", "si_unit": "1"},
+    {"id": "eps_rel", "latex": "\\varepsilon_{\\mathrm{rel}}", "meaning": "solver relative residual tolerance", "si_unit": "1"},
+    {"id": "k_ref", "latex": "k_{\\mathrm{ref}}", "meaning": "maximum direct-solver iterative-refinement sweeps", "si_unit": "1"},
+    {"id": "mu_0", "latex": "\\mu_0", "meaning": "vacuum permeability", "si_unit": "\\mathrm{H\\,m^{-1}}"},
+    {"id": "L", "latex": "L", "meaning": "finite-element mesh bounding-box diameter", "si_unit": "\\mathrm{m}"},
+    {"id": "gamma", "latex": "\\gamma", "meaning": "AMS solenoidal stabilization weight", "si_unit": "\\mathrm{A\\,V^{-1}\\,s^{-1}\\,m^{-1}}"},
+    {"id": "K_curl", "latex": "K_{\\mathrm{curl}}", "meaning": "stiffness matrix", "si_unit": "\\mathrm{A\\,T^{-1}\\,m^{-1}}"},
+    {"id": "M_ND", "latex": "M_{\\mathrm{ND}}", "meaning": "mass matrix", "si_unit": "\\mathrm{m}"},
+    {"id": "L_H1", "latex": "L_{H^1}", "meaning": "scalar Laplacian matrix", "si_unit": "\\mathrm{m}"},
+    {"id": "P_OEF2", "latex": "\\mathcal{P}_{\\mathrm{OE-F2}}", "meaning": "block-diagonal AMS/BoomerAMG SPD preconditioner", "si_unit": "\\mathrm{(discrete\\;SI)}"},
+    {"id": "H", "latex": "H", "meaning": "magnetic field intensity", "si_unit": "\\mathrm{A\\,m^{-1}}"},
+    {"id": "J_s", "latex": "J_s", "meaning": "affine RT0 source current density on tetrahedron", "si_unit": "\\mathrm{A\\,m^{-2}}"},
+    {"id": "x_t", "latex": "x_t", "meaning": "target evaluation coordinate", "si_unit": "\\mathrm{m}"},
+    {"id": "c_s", "latex": "c_s", "meaning": "source tetrahedron bounding-sphere center", "si_unit": "\\mathrm{m}"},
+    {"id": "R_s", "latex": "R_s", "meaning": "source tetrahedron bounding-sphere radius", "si_unit": "\\mathrm{m}"},
+    {"id": "kappa_near", "latex": "\\kappa_{\\mathrm{near}}", "meaning": "near-singular handoff radius multiplier", "si_unit": "1"},
+    {"id": "N_s", "latex": "N_s", "meaning": "source tetrahedron count", "si_unit": "1"},
+    {"id": "K_sigma", "latex": "K_\\sigma", "meaning": "conductivity stiffness matrix", "si_unit": "\\mathrm{S}"},
+    {"id": "S_tilde", "latex": "\\tilde{S}", "meaning": "degree-guarded SPD Schur-complement preconditioner for OE-T0 KKT", "si_unit": "\\mathrm{(discrete\\;SI)}"},
+    {"id": "M_f", "latex": "M_f", "meaning": "free-DOF RT0 weighted mass matrix", "si_unit": "\\mathrm{(discrete\\;SI)}"},
+    {"id": "C_f_tilde", "latex": "\\tilde{C}_f", "meaning": "degree-guarded constraint matrix used only in preconditioner", "si_unit": "1"}
+  ],
+  "sources": [
+    {
+      "id": "sparse-solver-api",
+      "path": "backends/fem/cpu/mfem/common/sparse_linear_solver.hpp",
+      "symbol": "class SparseLinearSolver",
+      "responsibility": "Public API for reusable 3-tier CPU and opt-in cuDSS sparse linear solver."
+    },
+    {
+      "id": "equilibration-beta",
+      "path": "backends/fem/cpu/mfem/common/sparse_linear_solver.cpp",
+      "symbol": "compute_saddle_point_equilibration_beta",
+      "responsibility": "Computes symmetric equilibration scalar beta for nanometer-scale saddle-point blocks."
+    },
+    {
+      "id": "equilibrated-csr",
+      "path": "backends/fem/cpu/mfem/common/sparse_linear_solver.cpp",
+      "symbol": "assemble_equilibrated_saddle_point_csr",
+      "responsibility": "Assembles O(nnz) equilibrated CSR saddle-point matrix without dense allocation."
+    },
+    {
+      "id": "independent-residual",
+      "path": "backends/fem/cpu/mfem/common/sparse_linear_solver.cpp",
+      "symbol": "sparse_independent_relative_residual",
+      "responsibility": "Computes extended-precision unpreconditioned CSR residual."
+    },
+    {
+      "id": "sparse-solver-contract",
+      "path": "backends/fem/tests/sparse_linear_solver_contract.cpp",
+      "symbol": "main",
+      "responsibility": "Contract suite for multi-RHS SPD, nanometer saddle-point, nonsymmetric byNODES, thread safety, and cuDSS fail-closed semantics."
+    },
+    {
+      "id": "cuda-farfield-kernel",
+      "path": "backends/fem/gpu/cuda/interactions/oersted/direct_tetra_farfield_kernels.cu",
+      "symbol": "fullmag_cuda_direct_tetra_evaluate_root_farfield",
+      "responsibility": "Opt-in 106-bit DoubleDouble CUDA far-field Biot-Savart evaluator with sorted CSR near-pair handoff."
+    },
+    {
+      "id": "antenna-nd-cap",
+      "path": "crates/fullmag-ir/src/antenna.rs",
+      "symbol": "ANTENNA_VECTOR_POTENTIAL_MAX_ND_DOFS",
+      "responsibility": "Raised OE-F2 Nedelec DOF cap (2_000_000) matching sparse C++ solver."
+    },
+    {
+      "id": "antenna-h1-cap",
+      "path": "crates/fullmag-ir/src/antenna.rs",
+      "symbol": "ANTENNA_VECTOR_POTENTIAL_MAX_H1_DOFS",
+      "responsibility": "Raised OE-F2 H1 gauge DOF cap (1_000_000) matching sparse C++ solver."
+    }
+  ],
+  "public_api": {
+    "parameters": [
+      {
+        "python": "CurrentTransport.name",
+        "type": "str",
+        "default": "required",
+        "si_unit": "1",
+        "validation": "non-empty unique identifier",
+        "meaning": "named charge/current source",
+        "backend_support": "FEM/FDM authoring",
+        "problem_ir": "current_transport[].name"
+      },
+      {
+        "python": "CurrentTransport.model",
+        "type": "str",
+        "default": "prescribed_density",
+        "si_unit": "1",
+        "validation": "supported transport constitutive model",
+        "meaning": "charge/spin source formulation",
+        "backend_support": "FEM/FDM per planner",
+        "problem_ir": "current_transport[].model"
+      },
+      {
+        "python": "OerstedField.source",
+        "type": "str",
+        "default": "required",
+        "si_unit": "1",
+        "validation": "matches one CurrentTransport.name",
+        "meaning": "current source feeding OE-F1/OE-F2",
+        "backend_support": "FEM/FDM authoring",
+        "problem_ir": "oersted[].source"
+      },
+      {
+        "python": "OerstedField.model",
+        "type": "str",
+        "default": "from_current_solution",
+        "si_unit": "1",
+        "validation": "supported Oersted model",
+        "meaning": "field realization intent",
+        "backend_support": "FEM/FDM per planner",
+        "problem_ir": "oersted[].model"
+      },
+      {
+        "python": "ANTENNA_VECTOR_POTENTIAL_MAX_ND_DOFS",
+        "type": "usize",
+        "default": "2_000_000",
+        "si_unit": "1",
+        "validation": "positive bound checked on mesh/space",
+        "meaning": "maximum OE-F2 Nédélec DOFs",
+        "backend_support": "FEM CPU sparse lane",
+        "problem_ir": "antenna.vector_potential.max_nd_dofs"
+      },
+      {
+        "python": "ANTENNA_VECTOR_POTENTIAL_MAX_H1_DOFS",
+        "type": "usize",
+        "default": "1_000_000",
+        "si_unit": "1",
+        "validation": "positive bound checked on mesh/space",
+        "meaning": "maximum OE-F2 $H^1$ gauge DOFs",
+        "backend_support": "FEM CPU sparse lane",
+        "problem_ir": "antenna.vector_potential.max_h1_dofs"
+      }
+    ]
+  }
+}
