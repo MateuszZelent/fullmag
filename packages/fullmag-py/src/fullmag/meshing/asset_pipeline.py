@@ -55,6 +55,7 @@ from ._gmsh_swept import (
     _mixed_v2_body_aabb,
     attach_disconnected_mixed_p1_certificate_v2,
     generate_disconnected_mixed_p1_mesh,
+    generate_pure_prism_box_airbox_mesh,
     _supports_scoped_layer_partitioned_box,
 )
 from ._gmsh_types import FEM_TOPOLOGY_VOLUME_EPS, MeshQualityReport, _MIXED_CELL_LOCAL_FACETS
@@ -221,6 +222,7 @@ _DEFAULT_AIRBOX_GRADING = "geometric"
 _AIRBOX_FEATURE_UNSUPPORTED_BUILD_MODES = frozenset(
     {
         "multi_geometry_geo_mixed_v2",
+        "pure_prism_extruded_shared_domain",
         "single_geometry_geo_mixed",
         "single_geometry_geo_ring",
         "single_geometry_geo_layered_box",
@@ -2620,6 +2622,27 @@ def realize_fem_domain_mesh_asset(
     return mesh, region_markers
 
 
+def _resolved_swept_transition_policy(
+    mesh_workflow: Mapping[str, object] | None,
+) -> str | None:
+    if not isinstance(mesh_workflow, Mapping):
+        return None
+    raw_per_geometry = mesh_workflow.get("per_geometry")
+    if isinstance(raw_per_geometry, list) and len(raw_per_geometry) == 1:
+        recipe = raw_per_geometry[0]
+        if isinstance(recipe, Mapping):
+            value = recipe.get("transition_policy")
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+    for section in ("mesh_options", "default_mesh"):
+        block = mesh_workflow.get(section)
+        if isinstance(block, Mapping):
+            value = block.get("transition_policy")
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+    return None
+
+
 def _qualified_mixed_per_geometry_body_hmax(
     mesh_workflow: Mapping[str, object] | None,
     geometries: list[Geometry],
@@ -2693,6 +2716,20 @@ def _qualified_mixed_per_geometry_body_hmax(
         and recipe.get("hmin") is None
     ) or (body_hmin is not None and alias_hmin == body_hmin)
     geometry_names = _geometry_name_aliases(geometries[0].geometry_name)
+    transition_policy = recipe.get("transition_policy")
+    is_pure_prism = transition_policy == "pure_prism"
+    raw_layers = recipe.get("through_thickness_elements")
+    layers_valid = (
+        raw_layers is not None
+        and not isinstance(raw_layers, bool)
+        and isinstance(raw_layers, int)
+        and (int(raw_layers) >= 1 if is_pure_prism else int(raw_layers) in (1, 2, 3))
+    )
+    sweep_direction_valid = (
+        recipe.get("sweep_direction") in {"auto", "x", "y", "z"}
+        if is_pure_prism
+        else recipe.get("sweep_direction") == "auto"
+    )
     canonical = (
         recipe.get("geometry") in geometry_names
         and recipe.get("mode") == "custom"
@@ -2702,16 +2739,13 @@ def _qualified_mixed_per_geometry_body_hmax(
         and not invalid_size_keys
         and recipe.get("order") == 1
         and recipe.get("mesh_strategy") == "swept_prism"
-        and recipe.get("through_thickness_elements") is not None
-        and not isinstance(recipe.get("through_thickness_elements"), bool)
-        and isinstance(recipe.get("through_thickness_elements"), int)
-        and int(recipe["through_thickness_elements"]) in (1, 2, 3)
+        and layers_valid
         and recipe.get("through_thickness_distribution") == "fixed"
         and recipe.get("sweep_face_meshing") == "triangular"
         and recipe.get("topology") in (None, "prismatic")
-        and recipe.get("sweep_direction") == "auto"
+        and sweep_direction_valid
         and recipe.get("element_family") == "prism"
-        and recipe.get("transition_policy") == "pyramid_to_tetrahedra"
+        and transition_policy in {"pyramid_to_tetrahedra", "pure_prism"}
         and recipe.get("exact_layer_count") is True
     )
     if unsupported or not canonical:
@@ -3000,6 +3034,8 @@ def _realize_fem_domain_mesh_asset_from_components_impl(
             "mixed_v2_mesh_policy_requires: the Box body must request the "
             "qualified swept_prism shared-domain route"
         )
+    resolved_transition_policy = _resolved_swept_transition_policy(mesh_workflow)
+    is_pure_prism_policy = resolved_transition_policy == "pure_prism"
     if surface_mesh_options.mesh_strategy == "swept_prism" and not mixed_v2_candidate:
         qualified_mixed_body_hmax = _qualified_mixed_per_geometry_body_hmax(
             mesh_workflow,
@@ -3025,8 +3061,11 @@ def _realize_fem_domain_mesh_asset_from_components_impl(
             if raw_mesh_options.get("size_fields"):
                 reasons.append("local/size fields")
             if (
-                raw_mesh_options.get("hmin") is not None
-                or raw_mesh_options.get("minimum_element_size") is not None
+                not is_pure_prism_policy
+                and (
+                    raw_mesh_options.get("hmin") is not None
+                    or raw_mesh_options.get("minimum_element_size") is not None
+                )
             ):
                 reasons.append("minimum element size")
             if raw_mesh_options.get("recombine") is True:
@@ -3038,14 +3077,19 @@ def _realize_fem_domain_mesh_asset_from_components_impl(
             ("periodic pairs", bool(surface_mesh_options.periodic_pair_ids)),
             (
                 "layer count",
-                surface_mesh_options.through_thickness_elements not in (None, 1, 2, 3),
+                (
+                    surface_mesh_options.through_thickness_elements is not None
+                    and surface_mesh_options.through_thickness_elements < 1
+                )
+                if is_pure_prism_policy
+                else surface_mesh_options.through_thickness_elements not in (None, 1, 2, 3),
             ),
             ("non-fixed distribution", surface_mesh_options.through_thickness_distribution not in (None, "fixed")),
             ("graded distribution", surface_mesh_options.through_thickness_element_ratio not in (None, 1.0)),
             ("symmetric distribution", surface_mesh_options.through_thickness_symmetric),
             ("non-triangular sweep face", surface_mesh_options.sweep_face_meshing not in (None, "triangular")),
-            ("2D algorithm", surface_mesh_options.algorithm_2d != 6),
-            ("3D algorithm", surface_mesh_options.algorithm_3d != 1),
+            ("2D algorithm", (not is_pure_prism_policy) and surface_mesh_options.algorithm_2d != 6),
+            ("3D algorithm", (not is_pure_prism_policy) and surface_mesh_options.algorithm_3d != 1),
         ):
             if active:
                 reasons.append(name)
@@ -3053,11 +3097,19 @@ def _realize_fem_domain_mesh_asset_from_components_impl(
             raise ValueError(
                 "qualified mixed shared-domain route rejects: " + ", ".join(reasons)
             )
+    pure_prism_shared_geo_direct = (
+        len(geometries) == 1
+        and isinstance(geometries[0], Box)
+        and airbox is not None
+        and surface_mesh_options.mesh_strategy == "swept_prism"
+        and is_pure_prism_policy
+    )
     mixed_shared_geo_direct = (
         len(geometries) == 1
         and isinstance(geometries[0], Box)
         and airbox is not None
         and surface_mesh_options.mesh_strategy == "swept_prism"
+        and not pure_prism_shared_geo_direct
     )
     ring_shared_geo_direct = (
         len(geometries) == 1
@@ -3077,7 +3129,12 @@ def _realize_fem_domain_mesh_asset_from_components_impl(
         # admission as its generator before excluding the generic OCC route.
         and _coincident_ring_airbox_bounds(geometries[0], airbox) is not None
     )
-    single_geometry_occ_direct = mixed_shared_geo_direct or ring_shared_geo_direct or box_layered_geo_direct
+    single_geometry_occ_direct = (
+        pure_prism_shared_geo_direct
+        or mixed_shared_geo_direct
+        or ring_shared_geo_direct
+        or box_layered_geo_direct
+    )
     if (
         isinstance(mesh_workflow, Mapping)
         and bool(mesh_workflow.get("single_geometry_occ_direct")) is True
@@ -3231,6 +3288,8 @@ def _realize_fem_domain_mesh_asset_from_components_impl(
         used_size_field_kinds = _unique_size_field_kinds(list(mesh_options.size_fields))
         if mixed_v2_direct:
             planned_build_mode = "multi_geometry_geo_mixed_v2"
+        elif pure_prism_shared_geo_direct:
+            planned_build_mode = "pure_prism_extruded_shared_domain"
         elif mixed_shared_geo_direct:
             planned_build_mode = "single_geometry_geo_mixed"
         elif ring_shared_geo_direct:
@@ -3345,7 +3404,8 @@ def _realize_fem_domain_mesh_asset_from_components_impl(
                 if mixed_v2_direct and mixed_v2_hmaxes is not None
                 else (
                     qualified_mixed_body_hmax
-                    if mixed_shared_geo_direct and qualified_mixed_body_hmax is not None
+                    if (mixed_shared_geo_direct or pure_prism_shared_geo_direct)
+                    and qualified_mixed_body_hmax is not None
                     else float(hints.hmax)
                 )
             )
@@ -3391,6 +3451,7 @@ def _realize_fem_domain_mesh_asset_from_components_impl(
             if (
                 not (
                     mixed_v2_direct
+                    or pure_prism_shared_geo_direct
                     or mixed_shared_geo_direct
                     or ring_shared_geo_direct
                     or box_layered_geo_direct
@@ -3402,6 +3463,7 @@ def _realize_fem_domain_mesh_asset_from_components_impl(
                 effective_hmax = float(airbox.maximum_element_size)
             if not (
                 mixed_v2_direct
+                or pure_prism_shared_geo_direct
                 or mixed_shared_geo_direct
                 or ring_shared_geo_direct
                 or box_layered_geo_direct
@@ -3550,6 +3612,40 @@ def _realize_fem_domain_mesh_asset_from_components_impl(
                         if mixed_options.optimize is not None
                         else 0
                     ),
+                )
+            elif pure_prism_shared_geo_direct:
+                build_mode = "pure_prism_extruded_shared_domain"
+                emit_progress_event(
+                    {
+                        "kind": "mesh_build_phase",
+                        "phase": "meshing",
+                        "message": "Generating pure-prism extruded shared-domain mesh",
+                    }
+                )
+                emit_progress(
+                    "Single-geometry pure-prism extruded shared-domain mesh path selected"
+                )
+                box_geom = geometries[0]
+                assert isinstance(box_geom, Box)
+                box_dims = tuple(float(value) for value in box_geom.size)
+                default_thin_axis = int(
+                    np.argmin(np.asarray(box_dims, dtype=np.float64))
+                )
+                pure_prism_options = _dc_replace(
+                    mesh_options,
+                    size_fields=[],
+                    lower_bound_fields=[],
+                )
+                mesh = generate_pure_prism_box_airbox_mesh(
+                    box_dims,
+                    hmax=effective_hmax,
+                    n_layers=int(pure_prism_options.through_thickness_elements or 1),
+                    airbox=airbox,
+                    thin_axis=default_thin_axis,
+                    order=hints.order,
+                    options=pure_prism_options,
+                    geometry_name=box_geom.geometry_name,
+                    requested_direction=pure_prism_options.sweep_direction,
                 )
             elif single_geometry_occ_direct:
                 build_mode = (
@@ -3915,8 +4011,9 @@ def _realize_fem_domain_mesh_asset_from_components_impl(
             }
         )
         if (
-            build_mode not in {"conformal_occ", "single_geometry_geo_ring"}
+            build_mode not in {"conformal_occ", "single_geometry_geo_ring", "pure_prism_extruded_shared_domain"}
             and getattr(mesh, "mixed_layer_topology_certificate", None) is None
+            and getattr(mesh, "pure_prism_topology_certificate", None) is None
         ):
             mesh = _drop_degenerate_tetrahedra(
                 mesh,
@@ -4060,6 +4157,11 @@ def _realize_fem_domain_mesh_asset_from_components_impl(
                     if markers_unchanged
                     else None
                 ),
+                pure_prism_topology_certificate=(
+                    mesh.pure_prism_topology_certificate
+                    if markers_unchanged
+                    else None
+                ),
             )
         requested_airbox_hmax, requested_hmax_by_geometry = _resolve_requested_partition_hmaxs(
             geometries, hints, airbox=airbox, mesh_workflow=mesh_workflow,
@@ -4114,6 +4216,14 @@ def _realize_fem_domain_mesh_asset_from_components_impl(
                 mixed_layer_topology_certificate_v2=(
                     certificate_payload if is_v2 else None
                 ),
+            )
+        if classified_mesh.pure_prism_topology_certificate is not None:
+            report = _dc_replace(
+                report,
+                pure_prism_topology_certificate=dict(
+                    classified_mesh.pure_prism_topology_certificate
+                ),
+                degraded=False,
             )
         if object_regions is not None:
             report = _dc_replace(

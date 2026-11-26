@@ -1488,6 +1488,7 @@ def build_geometry_assets_for_request(
                     if (
                         v2_cache_enabled
                         and domain_mesh.mixed_layer_topology_certificate is not None
+                        and getattr(domain_mesh, "pure_prism_topology_certificate", None) is None
                     ):
                         from fullmag._core import (
                             certify_mixed_mesh_arrays,
@@ -2653,7 +2654,7 @@ def _validate_authored_mixed_p1_scope(
     requests_mixed_p1 = any(
         isinstance(recipe, dict)
         and recipe.get("mesh_strategy") == "swept_prism"
-        and recipe.get("transition_policy") == "pyramid_to_tetrahedra"
+        and recipe.get("transition_policy") in {"pyramid_to_tetrahedra", "pure_prism"}
         and recipe.get("order") == 1
         for recipe in per_geometry
     )
@@ -2671,28 +2672,6 @@ def _validate_authored_mixed_p1_scope(
         if hasattr(term, "to_ir")
     ]
     device = runtime_selection.get("device")
-    dmi_kinds = {"interfacial_dmi", "bulk_dmi", "rotated_interfacial_dmi"}
-
-    def has_nonzero_value(value: object) -> bool:
-        if value is None or isinstance(value, bool):
-            return False
-        if isinstance(value, (int, float)):
-            # NaN is non-zero here so malformed authored input remains visible
-            # to the normal finite-value validators instead of being silently
-            # treated as an inactive interaction.
-            return value != 0.0
-        if isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
-            return any(has_nonzero_value(item) for item in value)
-        return False
-
-    has_dmi = any(
-        payload.get("kind") in dmi_kinds and has_nonzero_value(payload.get("D"))
-        for payload in energy_payloads
-    ) or any(
-        has_nonzero_value(payload.get(key))
-        for payload in material_payloads
-        for key in ("interfacial_dmi", "bulk_dmi", "dind_field", "dbulk_field")
-    )
     failed: list[str] = []
     if device not in {"cpu", "cuda", "gpu"}:
         failed.append("device_not_explicit_cpu_or_gpu")
@@ -2726,8 +2705,6 @@ def _validate_authored_mixed_p1_scope(
         for payload in energy_payloads
     ):
         failed.append("unsupported_energy_term")
-    if device in {"cuda", "gpu"} and has_dmi:
-        failed.append("gpu_dmi_kernel_not_mixed_p1")
     if mixed_v2_candidate:
         if len(material_payloads) != 2:
             failed.append("material_count_not_two_for_mixed_v2")
@@ -2748,7 +2725,7 @@ def _validate_authored_mixed_p1_scope(
         raise ValueError(
             "fem_mixed_p1_scope_rejected: "
             f"phase=authored_preflight; failed_predicates=[{','.join(failed)}]; "
-            "qualified_scope=exchange+uniform_or_nodal_uniaxial_or_cubic_anisotropy+cpu_dmi_only+auto_or_poisson_open_boundary_order_one; fallback=none"
+            "qualified_scope=exchange+uniform_or_nodal_uniaxial_or_cubic_anisotropy+dmi_cpu_or_gpu+auto_or_poisson_open_boundary_order_one; fallback=none"
         )
 
 

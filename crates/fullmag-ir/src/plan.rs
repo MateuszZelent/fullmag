@@ -1485,6 +1485,7 @@ impl ResolvedFemDemagIR {
 #[serde(rename_all = "snake_case")]
 pub enum FemMeshTopologyFamilyIR {
     MixedP1,
+    PurePrismP2,
 }
 
 /// Capability status of a requested mixed-P1 FEM execution lane.

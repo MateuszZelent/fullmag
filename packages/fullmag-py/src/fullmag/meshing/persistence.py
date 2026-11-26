@@ -166,6 +166,11 @@ def mesh_data_from_ir(payload: Mapping[str, object]) -> MeshData:
             if payload.get("mixed_layer_topology_certificate") is not None
             else None
         ),
+        pure_prism_topology_certificate=(
+            dict(payload["pure_prism_topology_certificate"])
+            if payload.get("pure_prism_topology_certificate") is not None
+            else None
+        ),
     )
 
 
@@ -301,6 +306,11 @@ def _serialize_mesh(mesh: MeshData) -> bytes:
                         if mesh.mixed_layer_topology_certificate is not None
                         else None
                     ),
+                    "pure_prism_topology_certificate": (
+                        dict(mesh.pure_prism_topology_certificate)
+                        if mesh.pure_prism_topology_certificate is not None
+                        else None
+                    ),
                 },
                 sort_keys=True,
             )
@@ -317,6 +327,11 @@ def _deserialize_mesh_with_detached_certificate(
         metadata = json.loads(str(data["metadata_json"]))
         realization = metadata.get("realization_report")
         certificate_payload = metadata.get("mixed_layer_topology_certificate")
+        pure_prism_payload = metadata.get("pure_prism_topology_certificate")
+        if certificate_payload is not None and pure_prism_payload is not None:
+            raise MeshArtifactCorruptionError(
+                "topology.npz cannot carry both mixed and pure-prism certificates"
+            )
         certificate = (
             _mixed_layer_topology_certificate_from_serialized(certificate_payload)
             if certificate_payload is not None
@@ -348,6 +363,9 @@ def _deserialize_mesh_with_detached_certificate(
                 MeshRealizationReport.from_dict(realization) if realization is not None else None
             ),
             mixed_layer_topology_certificate=None,
+            pure_prism_topology_certificate=(
+                dict(pure_prism_payload) if pure_prism_payload is not None else None
+            ),
         )
         return mesh, certificate
     except MeshArtifactError:

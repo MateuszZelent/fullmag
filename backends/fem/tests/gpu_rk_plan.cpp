@@ -120,9 +120,9 @@ void gpu_rk_audit04_demag_and_dmi_contracts_are_source_visible() {
             gpu_rk_rhs.find("gpu_rk_accumulate_effective_field_for_magnetization(") != std::string::npos,
         "GPU RK RHS runtime must expose an effective-field-only path for direct minimizers");
     check(
-        gpu_rk_dmi_fields.find("fullmag_cuda_dmi_field_energy(") != std::string::npos &&
+        gpu_rk_dmi_fields.find("fullmag_cuda_dmi_csr_field_energy(") != std::string::npos &&
             gpu_rk_dmi_fields.find("fullmag_cuda_dmi_field_energy_serial(") == std::string::npos,
-        "GPU RK must call the parallel DMI kernel wrapper, not the serial placeholder");
+        "GPU RK must call the CSR DMI kernel wrapper, not the serial placeholder");
     check(
         dmi_kernels_header.find("fullmag_cuda_dmi_field_energy(") != std::string::npos &&
             dmi_kernels_header.find("fullmag_cuda_dmi_field_energy_serial(") == std::string::npos,
@@ -243,11 +243,26 @@ int main() {
         "GPU RK must not reject demag as unsupported after hybrid CPU-demag upload support");
 
     ctx.demag.enabled = false;
-    auto require_blocked = [&](const fullmag::fem::Context &blocked_ctx,
+    auto init_ready_ctx = [](fullmag::fem::Context &target,
+                             fullmag_fem_integrator integrator = FULLMAG_FEM_INTEGRATOR_HEUN) {
+        target.mesh.n_nodes = 8;
+        target.base_plan.integrator = integrator;
+        target.exchange.enabled = true;
+        target.demag.enabled = false;
+        target.gpu_state.device.lifecycle.initialized = true;
+        target.gpu_state.device.lifecycle.allocated = true;
+        target.gpu_state.device.lifecycle.node_count = target.mesh.n_nodes;
+        target.gpu_state.device.lifecycle.dof_len =
+            static_cast<uint64_t>(target.mesh.n_nodes) * 3ull;
+        target.gpu_state.device.lifecycle.stage_count =
+            fullmag::fem::gpu_rk_stage_count(integrator);
+        target.gpu_state.legacy_exchange.legacy_sparse_metadata_ready = false;
+        target.gpu_state.legacy_exchange.lumped_mass_ready = false;
+    };
+    auto require_blocked = [&](fullmag::fem::Context &ready_ctx,
                                const char *reason_fragment,
                                const char *message) {
         reason.clear();
-        auto ready_ctx = blocked_ctx;
         ready_ctx.gpu_state.device.lifecycle.initialized = true;
         ready_ctx.gpu_state.device.lifecycle.allocated = true;
         ready_ctx.gpu_state.device.lifecycle.node_count = ctx.mesh.n_nodes;
@@ -266,43 +281,56 @@ int main() {
     };
 
     {
-        auto blocked = ctx;
+        fullmag::fem::Context blocked;
+        init_ready_ctx(blocked);
         blocked.dmi.interfacial_enabled = true;
         require_blocked(
             blocked,
-            "device-resident mesh geometry",
-            "GPU RK device-resident path must reject DMI without device mesh geometry");
+            "device-resident CSR operator for interfacial DMI",
+            "GPU RK device-resident path must reject interfacial DMI without device CSR operator");
     }
     {
-        auto blocked = ctx;
+        fullmag::fem::Context blocked;
+        init_ready_ctx(blocked);
+        blocked.dmi.bulk_enabled = true;
+        require_blocked(
+            blocked,
+            "device-resident CSR operator for bulk DMI",
+            "GPU RK device-resident path must reject bulk DMI without device CSR operator");
+    }
+    {
+        fullmag::fem::Context blocked;
+        init_ready_ctx(blocked);
         blocked.dmi.interfacial_enabled = true;
-        blocked.gpu_state.device.mesh_geometry.uploaded = true;
-        blocked.gpu_state.device.mesh_geometry.element_count = ctx.mesh.n_elements;
+        blocked.gpu_state.device.dmi_csr.interfacial.uploaded = true;
+        blocked.gpu_state.device.dmi_csr.interfacial.rows = ctx.mesh.n_nodes;
         reason.clear();
         const auto dmi_plan = fullmag::fem::gpu_rk_plan_device_resident(blocked, reason);
         check(
             dmi_plan.stage_count == 2,
-            "GPU RK device-resident path should preserve Heun stages with device interfacial DMI");
+            "GPU RK device-resident path should preserve Heun stages with device interfacial CSR DMI");
         check(
             reason.find("DMI") == std::string::npos,
-            "GPU RK device-resident path must not reject interfacial DMI after device residual support");
+            "GPU RK device-resident path must not reject interfacial DMI after device CSR support");
     }
     {
-        auto blocked = ctx;
+        fullmag::fem::Context blocked;
+        init_ready_ctx(blocked);
         blocked.dmi.bulk_enabled = true;
-        blocked.gpu_state.device.mesh_geometry.uploaded = true;
-        blocked.gpu_state.device.mesh_geometry.element_count = ctx.mesh.n_elements;
+        blocked.gpu_state.device.dmi_csr.bulk.uploaded = true;
+        blocked.gpu_state.device.dmi_csr.bulk.rows = ctx.mesh.n_nodes;
         reason.clear();
         const auto dmi_plan = fullmag::fem::gpu_rk_plan_device_resident(blocked, reason);
         check(
             dmi_plan.stage_count == 2,
-            "GPU RK device-resident path should preserve Heun stages with device bulk DMI");
+            "GPU RK device-resident path should preserve Heun stages with device bulk CSR DMI");
         check(
             reason.find("bulk DMI") == std::string::npos,
-            "GPU RK device-resident path must not reject bulk DMI after device residual support");
+            "GPU RK device-resident path must not reject bulk DMI after device CSR support");
     }
     {
-        auto blocked = ctx;
+        fullmag::fem::Context blocked;
+        init_ready_ctx(blocked);
         blocked.zeeman.has_external_field = true;
         reason.clear();
         const auto external_plan = fullmag::fem::gpu_rk_plan_device_resident(blocked, reason);
@@ -314,7 +342,8 @@ int main() {
             "GPU RK device-resident path must not reject uniform external field after device energy support");
     }
     {
-        auto blocked = ctx;
+        fullmag::fem::Context blocked;
+        init_ready_ctx(blocked);
         blocked.anisotropy.uniaxial_enabled = true;
         blocked.anisotropy.uniaxial_Ku = 1.0;
         reason.clear();
@@ -327,7 +356,8 @@ int main() {
             "GPU RK device-resident path must not reject uniaxial anisotropy after device field/energy support");
     }
     {
-        auto blocked = ctx;
+        fullmag::fem::Context blocked;
+        init_ready_ctx(blocked);
         blocked.anisotropy.cubic_enabled = true;
         blocked.anisotropy.cubic_Kc1 = 1.0;
         reason.clear();
@@ -340,7 +370,8 @@ int main() {
             "GPU RK device-resident path must not reject cubic anisotropy after device field/energy support");
     }
     {
-        auto blocked = ctx;
+        fullmag::fem::Context blocked;
+        init_ready_ctx(blocked);
         blocked.stt.slonczewski_enabled = true;
         blocked.stt.current_density_am2 = {1.0e11, 0.0, 0.0};
         blocked.stt.spin_polarization = {0.0, 0.0, 1.0};
@@ -366,7 +397,8 @@ int main() {
             "GPU RK device-resident path must not reject geometry-derived Slonczewski free-layer thickness");
     }
     {
-        auto blocked = ctx;
+        fullmag::fem::Context blocked;
+        init_ready_ctx(blocked);
         blocked.stt.slonczewski_enabled = true;
         require_blocked(
             blocked,
@@ -374,7 +406,8 @@ int main() {
             "GPU RK device-resident path must reject Slonczewski STT without explicit or geometry-derived free-layer thickness");
     }
     {
-        auto blocked = ctx;
+        fullmag::fem::Context blocked;
+        init_ready_ctx(blocked);
         blocked.stt.slonczewski_enabled = true;
         blocked.stt.current_density_am2 = {1.0e11, 0.0, 0.0};
         blocked.stt.spin_polarization = {0.0, 0.0, 1.0};
@@ -389,7 +422,8 @@ int main() {
             "GPU RK device-resident path must not reject Slonczewski STT after device RHS support");
     }
     {
-        auto blocked = ctx;
+        fullmag::fem::Context blocked;
+        init_ready_ctx(blocked);
         blocked.stt.zhang_li_enabled = true;
         require_blocked(
             blocked,
@@ -397,7 +431,8 @@ int main() {
             "GPU RK device-resident path must reject Zhang-Li STT without device mesh geometry");
     }
     {
-        auto blocked = ctx;
+        fullmag::fem::Context blocked;
+        init_ready_ctx(blocked);
         blocked.stt.zhang_li_enabled = true;
         blocked.gpu_state.device.mesh_geometry.uploaded = true;
         blocked.gpu_state.device.mesh_geometry.element_count = ctx.mesh.n_elements;
@@ -411,7 +446,8 @@ int main() {
             "GPU RK device-resident path must not reject Zhang-Li STT after device geometry support");
     }
     {
-        auto blocked = ctx;
+        fullmag::fem::Context blocked;
+        init_ready_ctx(blocked);
         blocked.stt.zhang_li_enabled = true;
         blocked.stt.formula_version = FULLMAG_FEM_STT_FORMULA_ZHANG_LI_V1;
         blocked.stt.active_element_mask = {1u};
@@ -434,12 +470,14 @@ int main() {
             "canonical GPU Zhang-Li must preserve the selected Heun stage count");
     }
     {
-        auto blocked = ctx;
+        fullmag::fem::Context blocked;
+        init_ready_ctx(blocked);
         blocked.oersted.has_explicit_field = true;
         require_blocked(blocked, "Oersted", "GPU RK device-resident path must reject Oersted field");
     }
     {
-        auto blocked = ctx;
+        fullmag::fem::Context blocked;
+        init_ready_ctx(blocked);
         blocked.oersted.has_explicit_field = true;
         blocked.oersted.h_xyz.assign(static_cast<size_t>(ctx.mesh.n_nodes) * 3u, 0.0);
         reason.clear();
@@ -452,7 +490,8 @@ int main() {
             "GPU RK device-resident path must not reject precomputed Oersted field after device accumulation support");
     }
     {
-        auto blocked = ctx;
+        fullmag::fem::Context blocked;
+        init_ready_ctx(blocked);
         blocked.magnetoelastic.enabled = true;
         blocked.magnetoelastic.uniform_strain = false;
         blocked.magnetoelastic.strain_voigt.assign(static_cast<size_t>(ctx.mesh.n_nodes) * 6u, 0.0);
@@ -462,7 +501,8 @@ int main() {
             "GPU RK device-resident path must reject per-node magnetoelastic strain without device upload");
     }
     {
-        auto blocked = ctx;
+        fullmag::fem::Context blocked;
+        init_ready_ctx(blocked);
         blocked.magnetoelastic.enabled = true;
         blocked.magnetoelastic.uniform_strain = false;
         blocked.magnetoelastic.strain_voigt.assign(static_cast<size_t>(ctx.mesh.n_nodes) * 6u, 0.0);
@@ -478,7 +518,8 @@ int main() {
             "GPU RK device-resident path must not reject uploaded per-node magnetoelastic strain after device support");
     }
     {
-        auto blocked = ctx;
+        fullmag::fem::Context blocked;
+        init_ready_ctx(blocked);
         blocked.magnetoelastic.enabled = true;
         blocked.magnetoelastic.uniform_strain = true;
         blocked.magnetoelastic.strain_voigt.assign(6u, 0.0);
@@ -492,7 +533,8 @@ int main() {
             "GPU RK device-resident path must not reject uniform magnetoelastic strain after device field/energy support");
     }
     {
-        auto blocked = ctx;
+        fullmag::fem::Context blocked;
+        init_ready_ctx(blocked);
         blocked.thermal_brown.temperature = 300.0;
         require_blocked(
             blocked,
@@ -500,7 +542,8 @@ int main() {
             "GPU RK device-resident path must reject thermal field without deterministic seed");
     }
     {
-        auto blocked = ctx;
+        fullmag::fem::Context blocked;
+        init_ready_ctx(blocked);
         blocked.thermal_brown.temperature = 300.0;
         blocked.thermal_brown.seed = 1234;
         reason.clear();
@@ -513,7 +556,8 @@ int main() {
             "GPU RK device-resident path must not reject deterministic thermal field after device RNG support");
     }
     {
-        auto blocked = ctx;
+        fullmag::fem::Context blocked;
+        init_ready_ctx(blocked);
         blocked.material_fields.alpha_field.assign(
             static_cast<size_t>(ctx.mesh.n_nodes),
             ctx.material_fields.material.damping);
@@ -527,12 +571,14 @@ int main() {
             "GPU RK device-resident path must not reject per-node damping after device alpha support");
     }
     {
-        auto blocked = ctx;
+        fullmag::fem::Context blocked;
+        init_ready_ctx(blocked);
         blocked.magnetoelastic.enabled = true;
         require_blocked(blocked, "magnetoelastic", "GPU RK device-resident path must reject magnetoelastic field");
     }
     {
-        auto blocked = ctx;
+        fullmag::fem::Context blocked;
+        init_ready_ctx(blocked);
         blocked.mesh.periodic_reduced_node.push_back(0);
 #if FULLMAG_HAS_CUDA_RUNTIME && FULLMAG_HAS_MFEM_STACK
         require_blocked(blocked, "periodic", "GPU RK device-resident path must reject PBC");
@@ -542,7 +588,8 @@ int main() {
     }
 #if FULLMAG_HAS_MFEM_STACK
     {
-        auto blocked = ctx;
+        fullmag::fem::Context blocked;
+        init_ready_ctx(blocked);
         blocked.exchange.mfem.use_consistent_mass = true;
 #if FULLMAG_HAS_CUDA_RUNTIME && FULLMAG_HAS_MFEM_STACK
         require_blocked(blocked, "consistent-mass", "GPU RK device-resident path must reject consistent mass");
@@ -572,7 +619,8 @@ int main() {
     check(!rk23_plan.enabled, "fixed-step RK23 GPU RK must stay blocked until device stage exchange is ready");
 
     {
-        auto adaptive = ctx;
+        fullmag::fem::Context adaptive;
+        init_ready_ctx(adaptive, FULLMAG_FEM_INTEGRATOR_RK23_BS);
         adaptive.adaptive_dt.enabled = true;
         reason.clear();
         const auto adaptive_rk23_plan = fullmag::fem::gpu_rk_plan_device_resident(adaptive, reason);

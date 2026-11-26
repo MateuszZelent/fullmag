@@ -11,7 +11,14 @@ from fullmag.model.problem import _validate_authored_mixed_p1_scope
 from fullmag.model.structure import Material
 
 
-def _validate_mixed_p1(*, device: str, material: Material, energy_terms: list[object]) -> None:
+def _validate_mixed_p1(
+    *,
+    device: str,
+    material: Material,
+    energy_terms: list[object],
+    transition_policy: str = "pyramid_to_tetrahedra",
+    through_thickness_elements: int = 1,
+) -> None:
     _validate_authored_mixed_p1_scope(
         runtime_selection={
             "backend": "fem",
@@ -22,7 +29,8 @@ def _validate_mixed_p1(*, device: str, material: Material, energy_terms: list[ob
             "per_geometry": [
                 {
                     "mesh_strategy": "swept_prism",
-                    "transition_policy": "pyramid_to_tetrahedra",
+                    "transition_policy": transition_policy,
+                    "through_thickness_elements": through_thickness_elements,
                     "order": 1,
                 }
             ]
@@ -87,47 +95,79 @@ def test_mixed_p1_preflight_accepts_cpu_dmi_terms_and_nodal_d_fields() -> None:
     )
 
 
-def test_mixed_p1_preflight_rejects_gpu_dmi_with_stable_predicate() -> None:
-    material = Material(name="Py", Ms=8.0e5, A=1.3e-11, alpha=0.02, Dbulk=3.0e-3)
+@pytest.mark.parametrize("device", ["cpu", "cuda", "gpu"])
+@pytest.mark.parametrize("transition_policy", ["pyramid_to_tetrahedra", "pure_prism"])
+def test_mixed_p1_preflight_accepts_gpu_dmi_terms_and_nodal_d_fields(
+    device: str,
+    transition_policy: str,
+) -> None:
+    material = Material(
+        name="Py",
+        Ms=8.0e5,
+        A=1.3e-11,
+        alpha=0.02,
+        Dind=2.0e-3,
+        Dbulk=3.0e-3,
+        Dind_field=[2.0e-3, 2.1e-3],
+        Dbulk_field=[3.0e-3, 3.1e-3],
+    )
 
-    with pytest.raises(ValueError, match="gpu_dmi_kernel_not_mixed_p1") as error:
-        _validate_mixed_p1(
-            device="cuda",
-            material=material,
-            energy_terms=[Exchange(), Demag(realization="auto"), BulkDMI(3.0e-3)],
-        )
+    _validate_mixed_p1(
+        device=device,
+        material=material,
+        energy_terms=[
+            Exchange(),
+            Demag(realization="auto"),
+            InterfacialDMI(2.0e-3),
+            BulkDMI(3.0e-3),
+        ],
+        transition_policy=transition_policy,
+        through_thickness_elements=4 if transition_policy == "pure_prism" else 1,
+    )
 
-    assert "failed_predicates=[gpu_dmi_kernel_not_mixed_p1]" in str(error.value)
-    assert "fallback=none" in str(error.value)
 
-
-def test_mixed_p1_preflight_accepts_cpu_rotated_dmi() -> None:
+@pytest.mark.parametrize("device", ["cpu", "cuda", "gpu"])
+@pytest.mark.parametrize("transition_policy", ["pyramid_to_tetrahedra", "pure_prism"])
+def test_mixed_p1_preflight_accepts_rotated_dmi_on_cpu_and_gpu(
+    device: str,
+    transition_policy: str,
+) -> None:
     material = Material(name="Py", Ms=8.0e5, A=1.3e-11, alpha=0.02)
 
     _validate_mixed_p1(
-        device="cpu",
+        device=device,
         material=material,
         energy_terms=[
             Exchange(),
             Demag(realization="poisson_robin"),
             RotatedInterfacialDMI(3.0e-3),
         ],
+        transition_policy=transition_policy,
     )
 
 
-def test_mixed_p1_preflight_rejects_nonzero_rotated_dmi_on_gpu() -> None:
+def test_pure_prism_preflight_rejects_fem_bem_and_auto_device_fail_closed() -> None:
     material = Material(name="Py", Ms=8.0e5, A=1.3e-11, alpha=0.02)
 
-    with pytest.raises(ValueError, match="gpu_dmi_kernel_not_mixed_p1"):
+    with pytest.raises(ValueError, match="missing_qualified_demag") as error:
         _validate_mixed_p1(
             device="gpu",
             material=material,
-            energy_terms=[
-                Exchange(),
-                Demag(realization="poisson_dirichlet"),
-                RotatedInterfacialDMI(3.0e-3),
-            ],
+            energy_terms=[Exchange(), Demag(realization="fredkin_koehler")],
+            transition_policy="pure_prism",
+            through_thickness_elements=4,
         )
+    assert "fallback=none" in str(error.value)
+
+    with pytest.raises(ValueError, match="device_not_explicit_cpu_or_gpu") as error:
+        _validate_mixed_p1(
+            device="auto",
+            material=material,
+            energy_terms=[Exchange(), Demag(realization="poisson_robin")],
+            transition_policy="pure_prism",
+            through_thickness_elements=4,
+        )
+    assert "fallback=none" in str(error.value)
 
 
 def test_mixed_p1_preflight_ignores_zero_rotated_dmi_on_gpu() -> None:
@@ -144,7 +184,8 @@ def test_mixed_p1_preflight_ignores_zero_rotated_dmi_on_gpu() -> None:
     )
 
 
-def test_mixed_p1_preflight_keeps_ms_field_rejected() -> None:
+@pytest.mark.parametrize("transition_policy", ["pyramid_to_tetrahedra", "pure_prism"])
+def test_mixed_p1_preflight_keeps_ms_field_rejected(transition_policy: str) -> None:
     material = Material(
         name="Py",
         Ms=8.0e5,
@@ -158,4 +199,5 @@ def test_mixed_p1_preflight_keeps_ms_field_rejected() -> None:
             device="cpu",
             material=material,
             energy_terms=[Exchange(), Demag(realization="auto")],
+            transition_policy=transition_policy,
         )

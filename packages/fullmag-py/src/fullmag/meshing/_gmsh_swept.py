@@ -20,6 +20,8 @@ References:
 
 from __future__ import annotations
 
+from collections import deque
+import itertools
 import math
 import numbers
 import hashlib
@@ -73,6 +75,13 @@ from ._gmsh_types import (
     MIXED_QUALITY_METRIC,
     MIXED_INTERFACE_MARKER,
     MIXED_SHARED_GEO_STRATEGY,
+    PURE_PRISM_CERT_SCHEMA_VERSION,
+    PURE_PRISM_SHARED_GEO_STRATEGY,
+    _bounds_relative_error,
+    _cell_counts_by_marker,
+    _cell_counts_by_part,
+    _cluster_coordinate_planes,
+    _facet_counts_by_role_marker,
     _is_sha256_digest,
 )
 from ._gmsh_infra import (
@@ -2126,12 +2135,782 @@ def _optimize_mixed_pyramid_apices(
             "mixed shared-domain pyramid apex optimization could not satisfy all-family "
             f"scaled-Jacobian p05 >= {MIXED_SCALED_JACOBIAN_P05_MIN}: {p05}"
         )
+    untangle_moved = _untangle_same_side_mixed_tetrahedra(gmsh)
+    if untangle_moved:
+        post_untangle_degenerate = _mixed_tet_degeneracy_report(
+            gmsh,
+            use_global_scale=True,
+        )
+        if post_untangle_degenerate.element_tags:
+            raise RuntimeError(
+                "post-apex tet untangling left degenerate tet4: "
+                f"count={len(post_untangle_degenerate.element_tags)}, "
+                f"worst_element_tag={post_untangle_degenerate.worst_element_tag}"
+            )
+        p05 = _mixed_gmsh_scaled_jacobian_p05(gmsh)
+        if not p05 or any(
+            value < MIXED_SCALED_JACOBIAN_P05_MIN for value in p05.values()
+        ):
+            raise RuntimeError(
+                "post-apex tet untangling violated scaled-Jacobian p05 >= "
+                f"{MIXED_SCALED_JACOBIAN_P05_MIN}: {p05}"
+            )
     emit_progress(
         "Gmsh mixed pyramid apex quality optimization: "
         f"moved={sum(factor > 1.0 for factor in selected_factors)}/{len(selected_factors)}, "
         f"max_scale={max(selected_factors):.3f}, p05={p05}"
     )
     return max(selected_factors)
+
+
+def _chebyshev_center_3d_numpy(
+    normals: NDArray[np.float64],
+    offsets: NDArray[np.float64],
+    *,
+    lo: NDArray[np.float64] | None,
+    hi: NDArray[np.float64] | None,
+) -> tuple[NDArray[np.float64] | None, float]:
+    """Deterministic pure-NumPy Chebyshev center of 3D half-spaces u_k . x - o_k >= r."""
+    m = int(normals.shape[0])
+    if m < 4:
+        return None, 0.0
+    a_full = np.hstack((-normals, np.ones((m, 1), dtype=np.float64)))
+    b_full = -offsets
+
+    def _solve_subset(indices: list[int]) -> tuple[NDArray[np.float64] | None, float]:
+        combos = np.asarray(
+            list(itertools.combinations(indices, 4)),
+            dtype=np.intp,
+        )
+        if combos.size == 0:
+            return None, 0.0
+        best_x: NDArray[np.float64] | None = None
+        best_r = 0.0
+        chunk_size = 4096
+        for start in range(0, len(combos), chunk_size):
+            chunk = combos[start : start + chunk_size]
+            a_batch = a_full[chunk]
+            b_batch = b_full[chunk]
+            dets = np.abs(np.linalg.det(a_batch))
+            good = dets > 1.0e-12
+            if not np.any(good):
+                continue
+            sols = np.linalg.solve(
+                a_batch[good],
+                b_batch[good][..., np.newaxis],
+            )[..., 0]
+            finite = np.all(np.isfinite(sols), axis=1) & (sols[:, 3] > 0.0)
+            if not np.any(finite):
+                continue
+            sols = sols[finite]
+            pts = sols[:, :3]
+            if lo is not None and hi is not None:
+                in_box = np.all((pts >= lo[np.newaxis, :]) & (pts <= hi[np.newaxis, :]), axis=1)
+                if not np.any(in_box):
+                    continue
+                pts = pts[in_box]
+            margins = pts @ normals.T - offsets[np.newaxis, :]
+            min_margins = np.min(margins, axis=1)
+            local_best = int(np.argmax(min_margins))
+            local_r = float(min_margins[local_best])
+            if local_r > best_r:
+                best_r = local_r
+                best_x = np.array(pts[local_best], dtype=np.float64, copy=True)
+        return best_x, best_r
+
+    if m <= 24:
+        return _solve_subset(list(range(m)))
+
+    # Deterministic active-set fallback for large stars (> 24 half-spaces).
+    anchor = (
+        0.5 * (lo + hi)
+        if (lo is not None and hi is not None)
+        else np.zeros(3, dtype=np.float64)
+    )
+    active = list(np.argsort(normals @ anchor - offsets)[:24].astype(int))
+    best_x: NDArray[np.float64] | None = None
+    best_r = 0.0
+    for _ in range(16):
+        cand_x, cand_r = _solve_subset(active)
+        if cand_x is not None and cand_r > best_r:
+            best_x = cand_x
+            best_r = cand_r
+        probe = cand_x if cand_x is not None else anchor
+        all_margins = normals @ probe - offsets
+        worst = int(np.argmin(all_margins))
+        if worst in active:
+            break
+        active_margins = all_margins[np.asarray(active, dtype=np.intp)]
+        drop_pos = int(np.argmax(active_margins))
+        active[drop_pos] = worst
+        active.sort()
+    return best_x, best_r
+
+
+def _chebyshev_center_3d(
+    normals: NDArray[np.float64],
+    offsets: NDArray[np.float64],
+    *,
+    bounds_min: NDArray[np.float64] | None = None,
+    bounds_max: NDArray[np.float64] | None = None,
+    use_scipy: bool = True,
+) -> tuple[NDArray[np.float64] | None, float]:
+    """Compute the exact Chebyshev center maximizing margin r in u_k . x - o_k >= r."""
+    u = np.asarray(normals, dtype=np.float64)
+    o = np.asarray(offsets, dtype=np.float64).reshape(-1)
+    if u.ndim != 2 or u.shape[1] != 3 or u.shape[0] != o.shape[0] or u.shape[0] < 4:
+        return None, 0.0
+    if not np.all(np.isfinite(u)) or not np.all(np.isfinite(o)):
+        return None, 0.0
+    norms = np.linalg.norm(u, axis=1)
+    if np.any(norms <= 0.0):
+        return None, 0.0
+    u = u / norms[:, np.newaxis]
+    o = o / norms
+
+    lo: NDArray[np.float64] | None = None
+    hi: NDArray[np.float64] | None = None
+    lp_bounds: list[tuple[float | None, float | None]]
+    if bounds_min is not None and bounds_max is not None:
+        bmin = np.asarray(bounds_min, dtype=np.float64).reshape(3)
+        bmax = np.asarray(bounds_max, dtype=np.float64).reshape(3)
+        span = np.maximum(bmax - bmin, 1.0e-12)
+        lo = bmin - 5.0 * span
+        hi = bmax + 5.0 * span
+        lp_bounds = [(float(lo[d]), float(hi[d])) for d in range(3)] + [(None, None)]
+    else:
+        lp_bounds = [(None, None), (None, None), (None, None), (None, None)]
+
+    linprog = None
+    if use_scipy:
+        try:
+            from scipy.optimize import linprog as _scipy_linprog
+
+            linprog = _scipy_linprog
+        except ImportError:
+            linprog = None
+
+    if linprog is not None:
+        m = int(u.shape[0])
+        a_ub = np.hstack((-u, np.ones((m, 1), dtype=np.float64)))
+        b_ub = -o
+        c = np.asarray([0.0, 0.0, 0.0, -1.0], dtype=np.float64)
+        res = linprog(c, A_ub=a_ub, b_ub=b_ub, bounds=lp_bounds, method="highs")
+        if res.success and res.x is not None and np.all(np.isfinite(res.x)):
+            x_sol = np.asarray(res.x[:3], dtype=np.float64)
+            margin = float(np.min(u @ x_sol - o))
+            if math.isfinite(margin) and margin > 0.0:
+                return x_sol, margin
+        return None, 0.0
+
+    return _chebyshev_center_3d_numpy(u, o, lo=lo, hi=hi)
+
+
+def _detect_same_side_triangular_faces(
+    sorted_coords: NDArray[np.float64],
+    tet_dense: NDArray[np.int64],
+    pyr_dense: NDArray[np.int64],
+    prism_dense: NDArray[np.int64],
+) -> tuple[
+    NDArray[np.int64],
+    NDArray[np.int64],
+    NDArray[np.int64],
+    NDArray[np.float64],
+    NDArray[np.float64],
+    NDArray[np.bool_],
+    NDArray[np.int64],
+]:
+    """Vectorized O(F log F) detection of same_side_two_owner_face on tri faces.
+
+    Returns ``(faces2, owner0, owner1, opp_pos0, opp_pos1, bad_mask, single_owner_tets)``
+    where ``owner0``/``owner1`` store tet indices (``>= 0``) or ``-1`` for
+    immutable ``pyramid5``/``prism6`` owners.
+    """
+    face_blocks: list[NDArray[np.int64]] = []
+    opp_blocks: list[NDArray[np.float64]] = []
+    owner_blocks: list[NDArray[np.int64]] = []
+
+    n_tet = int(tet_dense.shape[0])
+    if n_tet > 0:
+        tet_indices = np.arange(n_tet, dtype=np.int64)
+        for local_face, opp_local in (
+            ((0, 1, 2), 3),
+            ((0, 1, 3), 2),
+            ((0, 2, 3), 1),
+            ((1, 2, 3), 0),
+        ):
+            face_blocks.append(tet_dense[:, local_face])
+            opp_blocks.append(sorted_coords[tet_dense[:, opp_local]])
+            owner_blocks.append(tet_indices)
+
+    n_pyr = int(pyr_dense.shape[0])
+    if n_pyr > 0:
+        imm = np.full(n_pyr, -1, dtype=np.int64)
+        for local_face, (o0, o1) in (
+            ((0, 1, 4), (2, 3)),
+            ((1, 2, 4), (3, 0)),
+            ((2, 3, 4), (0, 1)),
+            ((3, 0, 4), (1, 2)),
+        ):
+            face_blocks.append(pyr_dense[:, local_face])
+            opp_blocks.append(
+                0.5 * (sorted_coords[pyr_dense[:, o0]] + sorted_coords[pyr_dense[:, o1]])
+            )
+            owner_blocks.append(imm)
+
+    n_prism = int(prism_dense.shape[0])
+    if n_prism > 0:
+        imm = np.full(n_prism, -1, dtype=np.int64)
+        for local_face, (o0, o1, o2) in (
+            ((0, 1, 2), (3, 4, 5)),
+            ((3, 5, 4), (0, 1, 2)),
+        ):
+            face_blocks.append(prism_dense[:, local_face])
+            opp_blocks.append(
+                (
+                    sorted_coords[prism_dense[:, o0]]
+                    + sorted_coords[prism_dense[:, o1]]
+                    + sorted_coords[prism_dense[:, o2]]
+                )
+                / 3.0
+            )
+            owner_blocks.append(imm)
+
+    if not face_blocks:
+        empty_f = np.zeros((0, 3), dtype=np.int64)
+        empty_i = np.zeros(0, dtype=np.int64)
+        empty_p = np.zeros((0, 3), dtype=np.float64)
+        empty_b = np.zeros(0, dtype=np.bool_)
+        return empty_f, empty_i, empty_i, empty_p, empty_p, empty_b, empty_i
+
+    tri_faces = np.sort(np.vstack(face_blocks), axis=1)
+    opp_all = np.vstack(opp_blocks)
+    owner_all = np.concatenate(owner_blocks)
+
+    lex = np.lexsort((tri_faces[:, 2], tri_faces[:, 1], tri_faces[:, 0]))
+    sorted_faces = tri_faces[lex]
+    diff = np.any(sorted_faces[1:] != sorted_faces[:-1], axis=1)
+    starts = np.concatenate(([0], np.flatnonzero(diff) + 1))
+    ends = np.concatenate((starts[1:], [len(sorted_faces)]))
+    counts = ends - starts
+
+    single_starts = starts[counts == 1]
+    single_owners = owner_all[lex[single_starts]]
+    single_owner_tets = single_owners[single_owners >= 0]
+
+    two_starts = starts[counts == 2]
+    if two_starts.size == 0:
+        empty_f = np.zeros((0, 3), dtype=np.int64)
+        empty_i = np.zeros(0, dtype=np.int64)
+        empty_p = np.zeros((0, 3), dtype=np.float64)
+        empty_b = np.zeros(0, dtype=np.bool_)
+        return empty_f, empty_i, empty_i, empty_p, empty_p, empty_b, single_owner_tets
+
+    idx0 = lex[two_starts]
+    idx1 = lex[two_starts + 1]
+    faces2 = tri_faces[idx0]
+    owner0 = owner_all[idx0]
+    owner1 = owner_all[idx1]
+    opp0 = opp_all[idx0]
+    opp1 = opp_all[idx1]
+
+    p0 = sorted_coords[faces2[:, 0]]
+    p1 = sorted_coords[faces2[:, 1]]
+    p2 = sorted_coords[faces2[:, 2]]
+    normal = np.cross(p1 - p0, p2 - p0)
+    norm_len = np.linalg.norm(normal, axis=1)
+    safe_len = np.where(norm_len > 0.0, norm_len, 1.0)
+    unit_normal = normal / safe_len[:, np.newaxis]
+    d0 = np.einsum("ij,ij->i", opp0 - p0, unit_normal)
+    d1 = np.einsum("ij,ij->i", opp1 - p0, unit_normal)
+    bad_mask = (norm_len == 0.0) | (d0 * d1 > 0.0)
+    return faces2, owner0, owner1, opp0, opp1, bad_mask, single_owner_tets
+
+
+def _classify_inverted_tets_bfs(
+    n_tets: int,
+    owner0: NDArray[np.int64],
+    owner1: NDArray[np.int64],
+    bad_mask: NDArray[np.bool_],
+    single_owner_tets: NDArray[np.int64],
+) -> set[int]:
+    """Propagate consistent orientation signs across the 2-owner dual graph."""
+    adj: list[list[tuple[int, int]]] = [[] for _ in range(n_tets)]
+    anchor_seeds: list[tuple[int, int]] = []
+    for o0, o1, is_bad in zip(owner0.tolist(), owner1.tolist(), bad_mask.tolist(), strict=True):
+        edge_sign = -1 if is_bad else 1
+        if o0 >= 0 and o1 >= 0:
+            adj[o0].append((o1, edge_sign))
+            adj[o1].append((o0, edge_sign))
+        elif o0 >= 0 and o1 < 0:
+            anchor_seeds.append((o0, edge_sign))
+        elif o1 >= 0 and o0 < 0:
+            anchor_seeds.append((o1, edge_sign))
+
+    labels = np.zeros(n_tets, dtype=np.int8)
+    queue: deque[int] = deque()
+    for tet_idx, sign in anchor_seeds:
+        if labels[tet_idx] == 0:
+            labels[tet_idx] = sign
+            queue.append(tet_idx)
+    while queue:
+        u = queue.popleft()
+        lu = int(labels[u])
+        for v, edge_sign in adj[u]:
+            if labels[v] == 0:
+                labels[v] = lu * edge_sign
+                queue.append(v)
+
+    # Handle components without pyramid/prism anchors (e.g. pure-tet stars)
+    # by seeding from boundary tets or choosing the minority sign class.
+    bad_tets = sorted(
+        {
+            int(o)
+            for idx in np.flatnonzero(bad_mask).tolist()
+            for o in (int(owner0[idx]), int(owner1[idx]))
+            if o >= 0 and labels[o] == 0
+        }
+    )
+    boundary_set = set(int(t) for t in single_owner_tets.tolist())
+    for start_tet in bad_tets:
+        if labels[start_tet] != 0:
+            continue
+        comp_labels: dict[int, int] = {start_tet: 1}
+        q: deque[int] = deque([start_tet])
+        while q:
+            u = q.popleft()
+            lu = comp_labels[u]
+            for v, edge_sign in adj[u]:
+                if v not in comp_labels:
+                    comp_labels[v] = lu * edge_sign
+                    q.append(v)
+        pos_nodes = [t for t, s in comp_labels.items() if s > 0]
+        neg_nodes = [t for t, s in comp_labels.items() if s < 0]
+        pos_bdr = sum(1 for t in pos_nodes if t in boundary_set)
+        neg_bdr = sum(1 for t in neg_nodes if t in boundary_set)
+        if pos_bdr != neg_bdr:
+            flip = -1 if neg_bdr > pos_bdr else 1
+        elif len(neg_nodes) > len(pos_nodes):
+            flip = -1
+        else:
+            flip = 1
+        for t, s in comp_labels.items():
+            labels[t] = s * flip
+
+    return {int(i) for i in np.flatnonzero(labels < 0).tolist()}
+
+
+def _untangle_same_side_mixed_tetrahedra(
+    gmsh: Any,
+    *,
+    max_passes: int = 8,
+    use_scipy: bool = True,
+) -> int:
+    """Deterministically untangle inverted tet4 cells causing same_side faces.
+
+    Moves only interior volume nodes (``dim == 3``) that do not belong to any
+    ``pyramid5`` or ``prism6`` element, using the exact Chebyshev center of the
+    consistently oriented half-space star, and reorients crossed ``tet4`` cells
+    in Gmsh while preserving element tags and physical groups.  Fails closed if
+    any ``same_side_two_owner_face`` remains after ``max_passes``.
+    """
+    total_moved = 0
+    has_entities = callable(getattr(gmsh.model, "getEntities", None))
+
+    for _pass_index in range(max_passes):
+        tet_tags_raw, tet_nodes_raw = gmsh.model.mesh.getElementsByType(4)
+        tet_tags = np.asarray(tet_tags_raw, dtype=np.int64)
+        if tet_tags.size == 0:
+            return total_moved
+        tet_nodes = np.asarray(tet_nodes_raw, dtype=np.int64).reshape((-1, 4))
+
+        if has_entities:
+            pyr_tags_raw, pyr_nodes_raw = gmsh.model.mesh.getElementsByType(7)
+            pyr_nodes = (
+                np.asarray(pyr_nodes_raw, dtype=np.int64).reshape((-1, 5))
+                if len(pyr_tags_raw)
+                else np.zeros((0, 5), dtype=np.int64)
+            )
+            prism_tags_raw, prism_nodes_raw = gmsh.model.mesh.getElementsByType(6)
+            prism_nodes = (
+                np.asarray(prism_nodes_raw, dtype=np.int64).reshape((-1, 6))
+                if len(prism_tags_raw)
+                else np.zeros((0, 6), dtype=np.int64)
+            )
+        else:
+            pyr_nodes = np.zeros((0, 5), dtype=np.int64)
+            prism_nodes = np.zeros((0, 6), dtype=np.int64)
+
+        node_tags_raw, node_coords_raw, _ = gmsh.model.mesh.getNodes()
+        node_tags_arr = np.asarray(node_tags_raw, dtype=np.int64)
+        coords_raw = np.asarray(node_coords_raw, dtype=np.float64).reshape((-1, 3))
+        order = np.argsort(node_tags_arr)
+        sorted_tags = node_tags_arr[order]
+        sorted_coords = coords_raw[order]
+        global_threshold = _mixed_tet_global_determinant_threshold(sorted_coords)
+        if global_threshold is None:
+            return total_moved
+
+        tet_dense = np.searchsorted(sorted_tags, tet_nodes)
+        pyr_dense = (
+            np.searchsorted(sorted_tags, pyr_nodes)
+            if pyr_nodes.size
+            else np.zeros((0, 5), dtype=np.int64)
+        )
+        prism_dense = (
+            np.searchsorted(sorted_tags, prism_nodes)
+            if prism_nodes.size
+            else np.zeros((0, 6), dtype=np.int64)
+        )
+
+        (
+            faces2,
+            owner0,
+            owner1,
+            opp0,
+            opp1,
+            bad_mask,
+            single_owner_tets,
+        ) = _detect_same_side_triangular_faces(
+            sorted_coords,
+            tet_dense,
+            pyr_dense,
+            prism_dense,
+        )
+        bad_indices = np.flatnonzero(bad_mask)
+        if bad_indices.size == 0:
+            return total_moved
+
+        bad_face_count: dict[int, int] = {}
+        for pair_idx in bad_indices.tolist():
+            for owner in (int(owner0[pair_idx]), int(owner1[pair_idx])):
+                if owner >= 0:
+                    bad_face_count[owner] = bad_face_count.get(owner, 0) + 1
+
+        primary_inverted = {
+            tet_idx for tet_idx, count in bad_face_count.items() if count >= 2
+        }
+        bfs_inverted = _classify_inverted_tets_bfs(
+            int(tet_dense.shape[0]),
+            owner0,
+            owner1,
+            bad_mask,
+            single_owner_tets,
+        )
+        candidate_inverted_sets: list[set[int]] = []
+        if primary_inverted:
+            candidate_inverted_sets.append(primary_inverted)
+        if bfs_inverted and bfs_inverted != primary_inverted:
+            candidate_inverted_sets.append(bfs_inverted)
+
+        protected_tags = (
+            set(int(tag) for tag in pyr_nodes.reshape(-1).tolist())
+            | set(int(tag) for tag in prism_nodes.reshape(-1).tolist())
+        )
+
+        # Build a lookup from sorted face tuple to its pair index for exact flat-tet fallback.
+        pair_by_face: dict[tuple[int, int, int], int] | None = None
+
+        def _evaluate_candidate_set(
+            inverted_set: set[int],
+        ) -> tuple[int, float, int, int, int, NDArray[np.float64], NDArray[np.int64], list[float]] | None:
+            nonlocal pair_by_face
+            inv_nodes = sorted(
+                {
+                    int(tag)
+                    for tet_idx in inverted_set
+                    for tag in tet_nodes[tet_idx].tolist()
+                    if int(tag) not in protected_tags
+                }
+            )
+            best_move: tuple[
+                int,
+                float,
+                int,
+                int,
+                int,
+                NDArray[np.float64],
+                NDArray[np.int64],
+                list[float],
+            ] | None = None
+
+            for vid in inv_nodes:
+                metadata = _mixed_gmsh_node_metadata(gmsh, vid)
+                if metadata is None or metadata[1] != 3:
+                    continue
+                parameters, _dim = metadata
+                vd = int(np.searchsorted(sorted_tags, vid))
+                star_tets = np.flatnonzero(np.any(tet_dense == vd, axis=1))
+                if star_tets.size < 4:
+                    continue
+
+                star_unique_nodes = np.unique(tet_dense[star_tets])
+                star_pts = sorted_coords[star_unique_nodes]
+                bmin = np.min(star_pts, axis=0)
+                bmax = np.max(star_pts, axis=0)
+                star_char_len = float(np.max(bmax - bmin))
+                if not math.isfinite(star_char_len) or star_char_len <= 0.0:
+                    continue
+                x0 = sorted_coords[vd]
+
+                normals_list: list[NDArray[np.float64]] = []
+                offsets_list: list[float] = []
+                halfspace_ok = True
+                for t_idx in star_tets.tolist():
+                    row = tet_dense[t_idx]
+                    opp = [int(n) for n in row.tolist() if int(n) != vd]
+                    if len(opp) != 3:
+                        halfspace_ok = False
+                        break
+                    pa = sorted_coords[opp[0]]
+                    pb = sorted_coords[opp[1]]
+                    pc = sorted_coords[opp[2]]
+                    n_vec = np.cross(pb - pa, pc - pa)
+                    n_len = float(np.linalg.norm(n_vec))
+                    if not math.isfinite(n_len) or n_len <= 0.0:
+                        halfspace_ok = False
+                        break
+                    u_vec = n_vec / n_len
+                    signed_dist = float(np.dot(u_vec, x0 - pa))
+                    if abs(signed_dist) > 1.0e-15 * max(star_char_len, 1.0e-30):
+                        sgn = 1.0 if signed_dist > 0.0 else -1.0
+                        u_in = (-sgn * u_vec) if (t_idx in inverted_set) else (sgn * u_vec)
+                    else:
+                        if pair_by_face is None:
+                            pair_by_face = {
+                                (int(f[0]), int(f[1]), int(f[2])): p_i
+                                for p_i, f in enumerate(faces2.tolist())
+                            }
+                        fkey = tuple(sorted(opp))
+                        p_idx = pair_by_face.get(fkey)  # type: ignore[arg-type]
+                        if p_idx is None:
+                            halfspace_ok = False
+                            break
+                        if int(owner0[p_idx]) == t_idx:
+                            neigh_tet = int(owner1[p_idx])
+                            neigh_pos = opp1[p_idx]
+                        else:
+                            neigh_tet = int(owner0[p_idx])
+                            neigh_pos = opp0[p_idx]
+                        neigh_dist = float(np.dot(u_vec, neigh_pos - pa))
+                        if abs(neigh_dist) <= 1.0e-15 * max(star_char_len, 1.0e-30):
+                            halfspace_ok = False
+                            break
+                        neigh_sgn = 1.0 if neigh_dist > 0.0 else -1.0
+                        u_in = (
+                            (neigh_sgn * u_vec)
+                            if (neigh_tet >= 0 and neigh_tet in inverted_set)
+                            else (-neigh_sgn * u_vec)
+                        )
+                    normals_list.append(u_in)
+                    offsets_list.append(float(np.dot(u_in, pa)))
+                if not halfspace_ok:
+                    continue
+
+                x_new, margin = _chebyshev_center_3d(
+                    np.asarray(normals_list, dtype=np.float64),
+                    np.asarray(offsets_list, dtype=np.float64),
+                    bounds_min=bmin,
+                    bounds_max=bmax,
+                    use_scipy=use_scipy,
+                )
+                eps_geom = 1.0e-9 * max(star_char_len, 1.0e-30)
+                if x_new is None or not math.isfinite(margin) or margin <= eps_geom:
+                    continue
+
+                # Verify all star tets remain strictly non-degenerate at x_new.
+                tets_valid = True
+                for t_idx in star_tets.tolist():
+                    row = tet_dense[t_idx]
+                    pts_old = sorted_coords[row]
+                    pts_new = pts_old.copy()
+                    pts_new[row == vd] = x_new
+                    det_old, _thr_old, _q_old = _mixed_tet_local_quality(
+                        pts_old,
+                        determinant_threshold=global_threshold,
+                    )
+                    det_new, thr_global, _q_new = _mixed_tet_local_quality(
+                        pts_new,
+                        determinant_threshold=global_threshold,
+                    )
+                    _det_loc, thr_local, _q_loc = _mixed_tet_local_quality(
+                        pts_new,
+                        determinant_threshold=None,
+                    )
+                    if (
+                        not math.isfinite(det_new)
+                        or abs(det_new) <= max(thr_global, thr_local)
+                    ):
+                        tets_valid = False
+                        break
+                    if t_idx not in inverted_set and det_old != 0.0 and det_new * det_old <= 0.0:
+                        tets_valid = False
+                        break
+                if not tets_valid:
+                    continue
+
+                # Evaluate ALL 2-owner faces touching any tet in star_tets.
+                star_mask = np.isin(owner0, star_tets) | np.isin(owner1, star_tets)
+                local_pairs = np.flatnonzero(star_mask)
+                local_bad_before_mask = bad_mask[local_pairs]
+                local_bad_before = int(np.count_nonzero(local_bad_before_mask))
+                if local_bad_before == 0:
+                    continue
+
+                local_bad_after_mask = np.zeros(local_pairs.size, dtype=np.bool_)
+                for pos, pair_idx in enumerate(local_pairs.tolist()):
+                    f_nodes = faces2[pair_idx]
+                    fp = sorted_coords[f_nodes].copy()
+                    fp[f_nodes == vd] = x_new
+                    fn = np.cross(fp[1] - fp[0], fp[2] - fp[0])
+                    fn_len = float(np.linalg.norm(fn))
+                    if fn_len <= 0.0 or not math.isfinite(fn_len):
+                        local_bad_after_mask[pos] = True
+                        continue
+                    fu = fn / fn_len
+                    o_vals: list[float] = []
+                    for owner_id, orig_opp in (
+                        (int(owner0[pair_idx]), opp0[pair_idx]),
+                        (int(owner1[pair_idx]), opp1[pair_idx]),
+                    ):
+                        if owner_id >= 0 and np.any(tet_dense[owner_id] == vd):
+                            # Check if vd is the opposite vertex of this face
+                            if vd not in f_nodes:
+                                opp_pt = x_new
+                            else:
+                                opp_pt = orig_opp
+                        else:
+                            opp_pt = orig_opp
+                        o_vals.append(float(np.dot(opp_pt - fp[0], fu)))
+                    if o_vals[0] * o_vals[1] > 0.0:
+                        local_bad_after_mask[pos] = True
+
+                # Reject if any previously healthy shared face becomes same_side.
+                if np.any(local_bad_after_mask & ~local_bad_before_mask):
+                    continue
+                local_bad_after = int(np.count_nonzero(local_bad_after_mask))
+                reduction = local_bad_before - local_bad_after
+                if reduction <= 0:
+                    continue
+
+                cand_key = (
+                    reduction,
+                    margin,
+                    -vid,
+                    vid,
+                    vd,
+                    x_new,
+                    star_tets,
+                    parameters,
+                )
+                if best_move is None or cand_key[:3] > best_move[:3]:
+                    best_move = cand_key
+            return best_move
+
+        chosen_move = None
+        for inverted_set in candidate_inverted_sets:
+            chosen_move = _evaluate_candidate_set(inverted_set)
+            if chosen_move is not None:
+                break
+
+        if chosen_move is None:
+            break
+
+        reduction, margin, _neg_vid, vid, vd, x_new, star_tets, parameters = chosen_move
+        gmsh.model.mesh.setNode(vid, x_new.tolist(), parameters)
+
+        # Reorient any tet in star_tets whose raw Gmsh Jacobian became negative.
+        flip_tet_tags: set[int] = set()
+        for t_idx in star_tets.tolist():
+            row = tet_dense[t_idx]
+            pts_new = sorted_coords[row].copy()
+            pts_new[row == vd] = x_new
+            det_new, _thr, _q = _mixed_tet_local_quality(
+                pts_new,
+                determinant_threshold=global_threshold,
+            )
+            if det_new < 0.0:
+                flip_tet_tags.add(int(tet_tags[t_idx]))
+
+        if flip_tet_tags:
+            if has_entities:
+                reoriented_count = 0
+                for _dim, vtag in sorted(gmsh.model.getEntities(3)):
+                    v_etags_raw, v_enodes_raw = gmsh.model.mesh.getElementsByType(4, int(vtag))
+                    if len(v_etags_raw) == 0:
+                        continue
+                    v_etags = np.asarray(v_etags_raw, dtype=np.int64)
+                    v_mask = np.isin(v_etags, np.asarray(sorted(flip_tet_tags), dtype=np.int64))
+                    if not np.any(v_mask):
+                        continue
+                    v_enodes = np.asarray(v_enodes_raw, dtype=np.int64).reshape((-1, 4))
+                    sub_tags = v_etags[v_mask].tolist()
+                    sub_nodes = v_enodes[v_mask].copy()
+                    sub_nodes[:, [2, 3]] = sub_nodes[:, [3, 2]]
+                    gmsh.model.mesh.removeElements(3, int(vtag), sub_tags)
+                    gmsh.model.mesh.addElementsByType(
+                        int(vtag),
+                        4,
+                        sub_tags,
+                        sub_nodes.ravel().tolist(),
+                    )
+                    reoriented_count += len(sub_tags)
+                if reoriented_count != len(flip_tet_tags):
+                    raise RuntimeError(
+                        "mixed_tet_untangle_failed: could not reorient all crossed "
+                        f"tet4 cells ({reoriented_count}/{len(flip_tet_tags)})"
+                    )
+            else:
+                raise RuntimeError(
+                    "mixed_tet_untangle_failed: Gmsh model does not expose volume "
+                    "entities for tet4 reorientation"
+                )
+
+        total_moved += 1
+        emit_progress(
+            "Gmsh mixed same_side tet untangler: "
+            f"node={vid}, same_side_reduced={reduction}, "
+            f"reoriented_tets={len(flip_tet_tags)}, margin={margin:.3e}"
+        )
+
+    # Final fail-closed verification that zero same_side faces remain.
+    tet_tags_raw, tet_nodes_raw = gmsh.model.mesh.getElementsByType(4)
+    if len(tet_tags_raw):
+        tet_nodes = np.asarray(tet_nodes_raw, dtype=np.int64).reshape((-1, 4))
+        if has_entities:
+            pyr_tags_raw, pyr_nodes_raw = gmsh.model.mesh.getElementsByType(7)
+            pyr_nodes = (
+                np.asarray(pyr_nodes_raw, dtype=np.int64).reshape((-1, 5))
+                if len(pyr_tags_raw)
+                else np.zeros((0, 5), dtype=np.int64)
+            )
+            prism_tags_raw, prism_nodes_raw = gmsh.model.mesh.getElementsByType(6)
+            prism_nodes = (
+                np.asarray(prism_nodes_raw, dtype=np.int64).reshape((-1, 6))
+                if len(prism_tags_raw)
+                else np.zeros((0, 6), dtype=np.int64)
+            )
+        else:
+            pyr_nodes = np.zeros((0, 5), dtype=np.int64)
+            prism_nodes = np.zeros((0, 6), dtype=np.int64)
+        node_tags_raw, node_coords_raw, _ = gmsh.model.mesh.getNodes()
+        node_tags_arr = np.asarray(node_tags_raw, dtype=np.int64)
+        coords_raw = np.asarray(node_coords_raw, dtype=np.float64).reshape((-1, 3))
+        order = np.argsort(node_tags_arr)
+        sorted_tags = node_tags_arr[order]
+        sorted_coords = coords_raw[order]
+        _f2, _o0, _o1, _p0, _p1, final_bad_mask, _s = _detect_same_side_triangular_faces(
+            sorted_coords,
+            np.searchsorted(sorted_tags, tet_nodes),
+            np.searchsorted(sorted_tags, pyr_nodes) if pyr_nodes.size else np.zeros((0, 5), dtype=np.int64),
+            np.searchsorted(sorted_tags, prism_nodes) if prism_nodes.size else np.zeros((0, 6), dtype=np.int64),
+        )
+        remaining = int(np.count_nonzero(final_bad_mask))
+        if remaining > 0:
+            raise RuntimeError(
+                f"mixed_tet_untangle_failed: remaining same_side_two_owner_face={remaining}"
+            )
+    return total_moved
 
 
 @dataclass(frozen=True)
@@ -2210,6 +2989,7 @@ def _execute_mixed_tet_repair_policy(
     if not isinstance(policy, _MixedTetRepairPolicy):
         raise TypeError("mixed tetrahedral repair policy has an invalid type")
     _validate_mixed_tet_repair_policy(policy)
+    _untangle_same_side_mixed_tetrahedra(gmsh)
     before = _mixed_tet_degeneracy_report(
         gmsh,
         use_global_scale=True,
@@ -2221,6 +3001,8 @@ def _execute_mixed_tet_repair_policy(
             gmsh,
             initial_report=before,
         )
+        if local_repair_moved:
+            _untangle_same_side_mixed_tetrahedra(gmsh)
         after = _mixed_tet_degeneracy_report(
             gmsh,
             use_global_scale=True,
@@ -2246,12 +3028,14 @@ def _execute_mixed_tet_repair_policy(
         )
     finally:
         gmsh.option.setNumber("Mesh.OptimizeThreshold", previous_threshold)
+    _untangle_same_side_mixed_tetrahedra(gmsh)
     after = _mixed_tet_degeneracy_report(
         gmsh,
         use_global_scale=True,
     )
     if after.element_tags:
         _repair_remaining_mixed_tet_slivers(gmsh, initial_report=after)
+        _untangle_same_side_mixed_tetrahedra(gmsh)
         after = _mixed_tet_degeneracy_report(
             gmsh,
             use_global_scale=True,
@@ -5714,6 +6498,864 @@ def generate_swept_box_mesh(
             requested_layers=n_layers,
             requested_direction=requested_direction,
         )
+    finally:
+        gmsh.finalize()
+
+
+def _pure_prism_conformity_counts(
+    mesh: MeshData,
+    *,
+    interface_marker: int,
+    outer_boundary_marker: int,
+    plane_tolerance: float,
+) -> dict[str, int]:
+    """Audit full face conformity (including same_side on tri3 and quad4) for pure prism."""
+    incidence = _mixed_v2_face_incidence(mesh)
+    nonmanifold = int(np.count_nonzero(incidence.cell_owner_counts > 2))
+    orphan = int(
+        np.count_nonzero(
+            (incidence.cell_owner_counts == 1) & (incidence.explicit_counts == 0)
+        )
+    )
+
+    n_faces = int(incidence.arity.size)
+    face_of_member = np.repeat(
+        np.arange(n_faces, dtype=np.int64),
+        np.diff(incidence.offsets),
+    )
+    is_facet_member = incidence.members < 0
+    facet_ordinals = -(incidence.members[is_facet_member] + 1)
+    facet_faces = face_of_member[is_facet_member]
+    exterior_counts = np.zeros(n_faces, dtype=np.int64)
+    interface_counts = np.zeros(n_faces, dtype=np.int64)
+    coincident_interface = 0
+    nonconforming = 0
+
+    for face_idx, f_ord in zip(facet_faces.tolist(), facet_ordinals.tolist(), strict=True):
+        role = str(mesh.facet_roles[f_ord])
+        marker = int(mesh.boundary_markers[f_ord])
+        if role == "exterior":
+            exterior_counts[face_idx] += 1
+            if marker != outer_boundary_marker:
+                nonconforming += 1
+        elif role == "material_interface":
+            interface_counts[face_idx] += 1
+            if marker != interface_marker:
+                nonconforming += 1
+        else:
+            nonconforming += 1
+
+    # Check 1-owner faces must have exactly 1 exterior facet and 0 interface facets.
+    one_owner_mask = incidence.cell_owner_counts == 1
+    nonconforming += int(
+        np.count_nonzero(
+            one_owner_mask
+            & ((exterior_counts != 1) | (interface_counts != 0))
+        )
+    )
+    coincident_interface += int(
+        np.count_nonzero(exterior_counts > 1) + np.count_nonzero(interface_counts > 1)
+    )
+
+    # Check 2-owner faces: marker transitions must match material_interface,
+    # and the two owners must lie on opposite sides of the face plane.
+    is_cell_member = incidence.members >= 0
+    two_owner_cell_mask = is_cell_member & (
+        incidence.cell_owner_counts[face_of_member] == 2
+    )
+    two_owner_cells = incidence.members[two_owner_cell_mask].reshape(-1, 2)
+    two_owner_faces = face_of_member[two_owner_cell_mask][::2]
+    m0 = mesh.element_markers[two_owner_cells[:, 0]]
+    m1 = mesh.element_markers[two_owner_cells[:, 1]]
+    cross_material = m0 != m1
+    same_material = ~cross_material
+    nonconforming += int(
+        np.count_nonzero(
+            cross_material
+            & ((interface_counts[two_owner_faces] != 1) | (exterior_counts[two_owner_faces] != 0))
+        )
+    )
+    coincident_interface += int(
+        np.count_nonzero(
+            same_material & (interface_counts[two_owner_faces] > 0)
+        )
+    )
+    nonconforming += int(
+        np.count_nonzero(
+            same_material & (exterior_counts[two_owner_faces] > 0)
+        )
+    )
+
+    # Vectorized opposite-side check for all 2-owner tri3 and quad4 prism faces.
+    # For pure prism6, every cell has 6 nodes.
+    prism_nodes = mesh.cell_nodes.reshape((-1, 6))
+    nodes = mesh.nodes
+
+    # Build dense face->node keys directly from prism6 cells for fast vectorized side test.
+    for arity, local_specs in (
+        (
+            3,
+            (
+                ((0, 1, 2), (3, 4, 5)),
+                ((3, 5, 4), (0, 1, 2)),
+            ),
+        ),
+        (
+            4,
+            (
+                ((0, 3, 4, 1), (2, 5)),
+                ((1, 4, 5, 2), (0, 3)),
+                ((2, 5, 3, 0), (1, 4)),
+            ),
+        ),
+    ):
+        f_blocks: list[NDArray[np.int32]] = []
+        o_blocks: list[NDArray[np.float64]] = []
+        for lf, opp in local_specs:
+            f_blocks.append(prism_nodes[:, lf])
+            o_blocks.append(np.mean(nodes[prism_nodes[:, opp]], axis=1))
+        raw_faces = np.vstack(f_blocks)
+        sorted_keys = np.sort(raw_faces, axis=1)
+        opp_pts = np.vstack(o_blocks)
+        lex = np.lexsort(tuple(sorted_keys[:, col] for col in range(arity - 1, -1, -1)))
+        s_keys = sorted_keys[lex]
+        diff = np.any(s_keys[1:] != s_keys[:-1], axis=1)
+        starts = np.concatenate(([0], np.flatnonzero(diff) + 1))
+        ends = np.concatenate((starts[1:], [len(s_keys)]))
+        two_s = starts[(ends - starts) == 2]
+        if two_s.size == 0:
+            continue
+        i0 = lex[two_s]
+        i1 = lex[two_s + 1]
+        # Use original ordered vertex ring of owner0 for well-defined quad/tri normal.
+        f_pts = nodes[raw_faces[i0]]
+        normal = np.cross(f_pts[:, 1] - f_pts[:, 0], f_pts[:, 2] - f_pts[:, 0])
+        norm_len = np.linalg.norm(normal, axis=1)
+        if arity == 4:
+            zero_n = norm_len == 0.0
+            if np.any(zero_n):
+                alt = np.cross(
+                    f_pts[zero_n, 2] - f_pts[zero_n, 0],
+                    f_pts[zero_n, 3] - f_pts[zero_n, 0],
+                )
+                normal[zero_n] = alt
+                norm_len[zero_n] = np.linalg.norm(alt, axis=1)
+        safe_len = np.where(norm_len > 0.0, norm_len, 1.0)
+        u_norm = normal / safe_len[:, np.newaxis]
+        d0 = np.einsum("ij,ij->i", opp_pts[i0] - f_pts[:, 0], u_norm)
+        d1 = np.einsum("ij,ij->i", opp_pts[i1] - f_pts[:, 0], u_norm)
+        edges = np.linalg.norm(
+            f_pts[:, :, np.newaxis, :] - f_pts[:, np.newaxis, :, :],
+            axis=3,
+        )
+        face_scale = np.max(edges, axis=(1, 2))
+        side_tol = np.maximum(
+            plane_tolerance,
+            64.0 * np.finfo(np.float64).eps * np.maximum(face_scale, 1.0e-30),
+        )
+        same_side = (norm_len == 0.0) | (
+            (np.abs(d0) > side_tol) & (np.abs(d1) > side_tol) & (d0 * d1 > 0.0)
+        )
+        nonconforming += int(np.count_nonzero(same_side))
+
+    return {
+        "nonconforming_face_count": int(nonconforming),
+        "orphan_face_count": int(orphan),
+        "nonmanifold_face_count": int(nonmanifold),
+        "coincident_interface_face_count": int(coincident_interface),
+    }
+
+
+def generate_pure_prism_box_airbox_mesh(
+    size: tuple[float, float, float],
+    hmax: float,
+    n_layers: int,
+    *,
+    airbox: AirboxOptions,
+    thin_axis: int = 2,
+    order: int = 1,
+    distribution: str = DISTRIBUTION_FIXED,
+    element_ratio: float = 1.0,
+    symmetric: bool = False,
+    options: MeshOptions | None = None,
+    geometry_name: str | None = None,
+    requested_direction: str | None = None,
+) -> MeshData:
+    """Generate a 100% conforming ``prism6``-only Box+airbox shared-domain mesh.
+
+    Builds two coplanar 2D GEO regions sharing the exact 4 film boundary edges
+    on the bottom airbox plane, applies deterministic ``MathEval`` smooth 2D
+    lateral grading in the outer frame, and performs three sequential GEO
+    extrusions (lower air, magnetic film + lateral air, upper air) with
+    ``recombine=True`` so every 3D element is ``prism6`` (zero ``pyramid5``,
+    zero ``tet4``) for arbitrary ``n_layers >= 1``, attaching a validated
+    ``pure_prism_topology_certificate.v1``.
+    """
+    del geometry_name
+    opts = options or MeshOptions()
+    if requested_direction is None:
+        requested_direction = opts.sweep_direction
+    if requested_direction not in (None, "auto", "x", "y", "z"):
+        raise ValueError(
+            "requested sweep direction must be one of 'auto', 'x', 'y', or 'z'"
+        )
+    if requested_direction in _SWEEP_AXIS_INDEX:
+        thin_axis = _SWEEP_AXIS_INDEX[requested_direction]
+    for name, value in (
+        ("n_layers", n_layers),
+        ("order", order),
+        ("thin_axis", thin_axis),
+    ):
+        if isinstance(value, bool) or not isinstance(value, numbers.Integral):
+            raise TypeError(f"{name} must be an integer")
+    n_layers = int(n_layers)
+    order = int(order)
+    thin_axis = int(thin_axis)
+    if n_layers < 1:
+        raise ValueError("pure_prism shared-domain meshing requires n_layers >= 1")
+    if order != 1:
+        raise ValueError(
+            f"pure_prism shared-domain meshing supports order=1; requested order={order}"
+        )
+    if thin_axis not in (0, 1, 2):
+        raise ValueError("thin_axis must be one of 0 (x), 1 (y), or 2 (z)")
+    if distribution != DISTRIBUTION_FIXED or element_ratio != 1.0 or symmetric:
+        raise ValueError(
+            "pure_prism shared-domain meshing currently supports only fixed uniform film layers"
+        )
+    if airbox is None:
+        raise ValueError("pure_prism shared-domain meshing requires an airbox")
+    require_no_airbox_feature_refinement(
+        airbox,
+        route=PURE_PRISM_SHARED_GEO_STRATEGY,
+    )
+    if str(airbox.shape).strip().lower() != "bbox":
+        raise ValueError("pure_prism shared-domain meshing supports only a bbox airbox")
+    outer_boundary_marker = int(airbox.boundary_marker)
+    if outer_boundary_marker < 1 or outer_boundary_marker == MIXED_INTERFACE_MARKER:
+        raise ValueError(
+            "pure_prism shared-domain interface and outer boundary markers must be positive and distinct"
+        )
+    unsupported: list[str] = []
+    if opts.periodic_pair_ids:
+        unsupported.append("periodic pairs")
+    if opts.boundary_layer_count is not None:
+        unsupported.append("boundary layers")
+    if opts.optimize is not None:
+        unsupported.append("optimizer")
+    if opts.size_fields:
+        unsupported.append("size_fields")
+    if opts.lower_bound_fields:
+        unsupported.append("lower_bound_fields")
+    if opts.sweep_face_meshing not in (None, "triangular"):
+        unsupported.append("sweep_face_meshing")
+    if unsupported:
+        raise ValueError(
+            "pure_prism shared-domain strategy is not qualified for: "
+            + ", ".join(unsupported)
+        )
+
+    try:
+        sx, sy, sz = (float(value) for value in size)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("size must contain exactly three finite positive values") from exc
+    for index, value in enumerate((sx, sy, sz)):
+        if not math.isfinite(value) or value <= 0.0:
+            raise ValueError(f"size[{index}] must be finite and positive")
+    if isinstance(hmax, bool) or not math.isfinite(float(hmax)) or float(hmax) <= 0.0:
+        raise ValueError("hmax must be finite and positive")
+    hmax = float(hmax)
+    if opts.hmin is not None and (
+        isinstance(opts.hmin, bool)
+        or not math.isfinite(float(opts.hmin))
+        or float(opts.hmin) <= 0.0
+    ):
+        raise ValueError("hmin must be finite and positive")
+
+    body_size = np.asarray([sx, sy, sz], dtype=np.float64)
+    body_min = -0.5 * body_size
+    body_max = 0.5 * body_size
+    if airbox.size is None:
+        if not math.isfinite(float(airbox.padding_factor)) or airbox.padding_factor <= 1.0:
+            raise ValueError("pure_prism airbox padding_factor must be greater than 1")
+        outer_size = body_size * float(airbox.padding_factor)
+    else:
+        outer_size = np.asarray(airbox.size, dtype=np.float64)
+    airbox_center = (
+        np.zeros(3, dtype=np.float64)
+        if airbox.center is None
+        else np.asarray(airbox.center, dtype=np.float64)
+    )
+    if (
+        outer_size.shape != (3,)
+        or airbox_center.shape != (3,)
+        or not np.all(np.isfinite(outer_size))
+        or not np.all(np.isfinite(airbox_center))
+        or np.any(outer_size <= 0.0)
+    ):
+        raise ValueError("pure_prism airbox size/center must be finite positive 3-vectors")
+    air_min = airbox_center - 0.5 * outer_size
+    air_max = airbox_center + 0.5 * outer_size
+    containment_tol = np.finfo(np.float64).eps * max(1.0, float(np.max(outer_size)))
+    if np.any(body_min <= air_min + containment_tol) or np.any(
+        body_max >= air_max - containment_tol
+    ):
+        raise ValueError(
+            "pure_prism shared-domain airbox must strictly contain the magnetic Box"
+        )
+
+    # Cyclic right-handed local axes (u, v, w) where w == thin_axis.
+    w_axis = thin_axis
+    u_axis = (w_axis + 1) % 3
+    v_axis = (w_axis + 2) % 3
+    l_u = float(body_size[u_axis])
+    l_v = float(body_size[v_axis])
+    l_w = float(body_size[w_axis])
+    a_u = float(outer_size[u_axis])
+    a_v = float(outer_size[v_axis])
+    dw_film = l_w / n_layers
+
+    raw_growth = float(airbox.grading_ratio)
+    if not math.isfinite(raw_growth) or raw_growth <= 0.0:
+        raise ValueError("pure_prism airbox grading_ratio must be finite and positive")
+    growth_rate = max(raw_growth, 1.25)
+
+    if airbox.maximum_element_size is not None:
+        h_air = float(airbox.maximum_element_size)
+        if not math.isfinite(h_air) or h_air <= 0.0:
+            raise ValueError("pure_prism airbox maximum_element_size must be positive")
+    else:
+        h_air = max(hmax, dw_film) * (growth_rate**4)
+
+    h_w_inner = min(dw_film, h_air)
+    h_w_outer = max(h_w_inner, h_air)
+    all_levels = _box_airbox_layer_levels(
+        float(body_min[w_axis]),
+        float(body_max[w_axis]),
+        float(air_min[w_axis]),
+        float(air_max[w_axis]),
+        n_layers,
+        h_inner=h_w_inner,
+        h_outer=h_w_outer,
+        growth=growth_rate,
+    )
+    lower_planes = [v for v in all_levels if v < float(body_min[w_axis])] + [
+        float(body_min[w_axis])
+    ]
+    upper_planes = [float(body_max[w_axis])] + [
+        v for v in all_levels if v > float(body_max[w_axis])
+    ]
+    n_lower = len(lower_planes) - 1
+    n_upper = len(upper_planes) - 1
+    if n_lower < 1 or n_upper < 1:
+        raise RuntimeError(
+            "pure_prism shared-domain meshing requires at least one lower and one upper air layer"
+        )
+    h_lower = float(body_min[w_axis] - air_min[w_axis])
+    h_upper = float(air_max[w_axis] - body_max[w_axis])
+    lower_cum_heights = [
+        (lower_planes[i] - float(air_min[w_axis])) / h_lower
+        for i in range(1, n_lower + 1)
+    ]
+    lower_cum_heights[-1] = 1.0
+    upper_cum_heights = [
+        (upper_planes[i] - float(body_max[w_axis])) / h_upper
+        for i in range(1, n_upper + 1)
+    ]
+    upper_cum_heights[-1] = 1.0
+
+    SCALE = 1.0e6
+    u_min_in = float(body_min[u_axis]) * SCALE
+    u_max_in = float(body_max[u_axis]) * SCALE
+    v_min_in = float(body_min[v_axis]) * SCALE
+    v_max_in = float(body_max[v_axis]) * SCALE
+    u_min_out = float(air_min[u_axis]) * SCALE
+    u_max_out = float(air_max[u_axis]) * SCALE
+    v_min_out = float(air_min[v_axis]) * SCALE
+    v_max_out = float(air_max[v_axis]) * SCALE
+    w0_scaled = float(air_min[w_axis]) * SCALE
+    w_bot_scaled = float(body_min[w_axis]) * SCALE
+    w_top_scaled = float(body_max[w_axis]) * SCALE
+    h_in_scaled = hmax * SCALE
+    h_air_scaled = max(h_in_scaled, h_air * SCALE)
+
+    def _to_3d(u_val: float, v_val: float, w_val: float) -> tuple[float, float, float]:
+        pt = [0.0, 0.0, 0.0]
+        pt[u_axis] = u_val
+        pt[v_axis] = v_val
+        pt[w_axis] = w_val
+        return (pt[0], pt[1], pt[2])
+
+    def _vec_w(dw_val: float) -> tuple[float, float, float]:
+        vec = [0.0, 0.0, 0.0]
+        vec[w_axis] = dw_val
+        return (vec[0], vec[1], vec[2])
+
+    emit_progress(
+        f"Gmsh pure_prism: box {sx:.2e}x{sy:.2e}x{sz:.2e}, "
+        f"thin_axis={'xyz'[w_axis]}, layers={n_layers} (air {n_lower}+{n_upper})"
+    )
+
+    gmsh = _import_gmsh()
+    gmsh_version = str(getattr(gmsh, "__version__", "unknown"))
+    if gmsh_version != _MIXED_SHARED_GMSH_VERSION:
+        raise RuntimeError(
+            "pure_prism shared-domain meshing is qualified only for Gmsh "
+            f"{_MIXED_SHARED_GMSH_VERSION}; detected {gmsh_version}"
+        )
+    gmsh.initialize()
+    gmsh.option.setNumber("General.Terminal", 0)
+    try:
+        effective_gmsh_thread_count = _configure_gmsh_threads(
+            gmsh,
+            requested_threads=1,
+            honor_environment=False,
+        )
+        if effective_gmsh_thread_count != 1:
+            raise RuntimeError(
+                "pure_prism shared-domain meshing requires one effective Gmsh thread"
+            )
+        gmsh.model.add("fullmag_pure_prism_box_airbox")
+
+        # 2D base plane at w0: inner rectangle + outer frame sharing 4 edges.
+        p_in = [
+            int(gmsh.model.geo.addPoint(*_to_3d(u, v, w0_scaled), h_in_scaled))
+            for u, v in (
+                (u_min_in, v_min_in),
+                (u_max_in, v_min_in),
+                (u_max_in, v_max_in),
+                (u_min_in, v_max_in),
+            )
+        ]
+        l_in = [
+            int(gmsh.model.geo.addLine(p_in[i], p_in[(i + 1) % 4]))
+            for i in range(4)
+        ]
+        cl_in = int(gmsh.model.geo.addCurveLoop(l_in))
+        s_inner = int(gmsh.model.geo.addPlaneSurface([cl_in]))
+
+        p_out = [
+            int(gmsh.model.geo.addPoint(*_to_3d(u, v, w0_scaled), h_air_scaled))
+            for u, v in (
+                (u_min_out, v_min_out),
+                (u_max_out, v_min_out),
+                (u_max_out, v_max_out),
+                (u_min_out, v_max_out),
+            )
+        ]
+        l_out = [
+            int(gmsh.model.geo.addLine(p_out[i], p_out[(i + 1) % 4]))
+            for i in range(4)
+        ]
+        cl_out = int(gmsh.model.geo.addCurveLoop(l_out))
+        cl_hole = int(gmsh.model.geo.addCurveLoop([-l_in[3], -l_in[2], -l_in[1], -l_in[0]]))
+        s_outer = int(gmsh.model.geo.addPlaneSurface([cl_out, cl_hole]))
+
+        inner_span_u = l_u * SCALE
+        outer_span_u = a_u * SCALE
+        bbox_tol = max(1.0e-9 * max(outer_span_u, l_v * SCALE, a_v * SCALE, 1.0), 1.0e-12)
+
+        def _classify_extruded_pair(
+            entities: list[tuple[int, int]],
+            target_w: float,
+        ) -> tuple[int, int, int, int]:
+            vols = [int(tag) for dim, tag in entities if int(dim) == 3]
+            if len(vols) != 2:
+                raise RuntimeError(
+                    f"pure_prism extrusion expected 2 volumes, produced {len(vols)}"
+                )
+            inner_vols: list[int] = []
+            outer_vols: list[int] = []
+            for vtag in vols:
+                bb = gmsh.model.getBoundingBox(3, vtag)
+                u_span = float(bb[3 + u_axis] - bb[u_axis])
+                if math.isclose(u_span, inner_span_u, rel_tol=1.0e-6, abs_tol=bbox_tol):
+                    inner_vols.append(vtag)
+                elif math.isclose(u_span, outer_span_u, rel_tol=1.0e-6, abs_tol=bbox_tol):
+                    outer_vols.append(vtag)
+            if len(inner_vols) != 1 or len(outer_vols) != 1:
+                raise RuntimeError("pure_prism extrusion volume classification is ambiguous")
+
+            inner_tops: list[int] = []
+            outer_tops: list[int] = []
+            for dim, tag in entities:
+                if int(dim) != 2:
+                    continue
+                stag = int(tag)
+                bb = gmsh.model.getBoundingBox(2, stag)
+                if (
+                    abs(float(bb[w_axis]) - target_w) <= bbox_tol
+                    and abs(float(bb[3 + w_axis]) - target_w) <= bbox_tol
+                ):
+                    u_span = float(bb[3 + u_axis] - bb[u_axis])
+                    if math.isclose(u_span, inner_span_u, rel_tol=1.0e-6, abs_tol=bbox_tol):
+                        inner_tops.append(stag)
+                    elif math.isclose(u_span, outer_span_u, rel_tol=1.0e-6, abs_tol=bbox_tol):
+                        outer_tops.append(stag)
+            if len(inner_tops) != 1 or len(outer_tops) != 1:
+                raise RuntimeError("pure_prism extrusion top-face classification is ambiguous")
+            return inner_vols[0], outer_vols[0], inner_tops[0], outer_tops[0]
+
+        # Extrusion 1: lower air (w0 -> w_bot)
+        ext1 = list(
+            gmsh.model.geo.extrude(
+                [(2, s_inner), (2, s_outer)],
+                *_vec_w(h_lower * SCALE),
+                numElements=[1] * n_lower,
+                heights=lower_cum_heights,
+                recombine=True,
+            )
+        )
+        gmsh.model.geo.synchronize()
+        v_air_bot_inner, v_air_bot_outer, s_film_bot, s_frame_bot = (
+            _classify_extruded_pair(ext1, w_bot_scaled)
+        )
+
+        # Extrusion 2: magnetic film + lateral air (w_bot -> w_top)
+        ext2 = list(
+            gmsh.model.geo.extrude(
+                [(2, s_film_bot), (2, s_frame_bot)],
+                *_vec_w(l_w * SCALE),
+                numElements=[n_layers],
+                heights=[1.0],
+                recombine=True,
+            )
+        )
+        gmsh.model.geo.synchronize()
+        v_mag, v_air_lat, s_film_top, s_frame_top = _classify_extruded_pair(
+            ext2, w_top_scaled
+        )
+
+        # Extrusion 3: upper air (w_top -> w1)
+        ext3 = list(
+            gmsh.model.geo.extrude(
+                [(2, s_film_top), (2, s_frame_top)],
+                *_vec_w(h_upper * SCALE),
+                numElements=[1] * n_upper,
+                heights=upper_cum_heights,
+                recombine=True,
+            )
+        )
+        gmsh.model.geo.synchronize()
+        w1_scaled = float(air_max[w_axis]) * SCALE
+        v_air_top_inner, v_air_top_outer, _s_top_in, _s_top_out = (
+            _classify_extruded_pair(ext3, w1_scaled)
+        )
+
+        magnetic_volumes = [v_mag]
+        air_volumes = [
+            v_air_bot_inner,
+            v_air_bot_outer,
+            v_air_lat,
+            v_air_top_inner,
+            v_air_top_outer,
+        ]
+        # Gmsh forbids physical tag 0; tag=2 ("air") maps to semantic marker 0.
+        gmsh.model.addPhysicalGroup(3, magnetic_volumes, tag=1)
+        gmsh.model.setPhysicalName(3, 1, "magnetic")
+        gmsh.model.addPhysicalGroup(3, air_volumes, tag=2)
+        gmsh.model.setPhysicalName(3, 2, "air")
+
+        interface_surfaces = sorted(
+            {
+                abs(int(tag))
+                for dim, tag in gmsh.model.getBoundary(
+                    [(3, v_mag)], combined=True, oriented=False
+                )
+                if int(dim) == 2
+            }
+        )
+        outer_surfaces = sorted(
+            {
+                abs(int(tag))
+                for dim, tag in gmsh.model.getBoundary(
+                    [(3, v) for v in (*magnetic_volumes, *air_volumes)],
+                    combined=True,
+                    oriented=False,
+                )
+                if int(dim) == 2
+            }
+        )
+        if len(interface_surfaces) != 6 or not set(interface_surfaces).isdisjoint(
+            outer_surfaces
+        ):
+            raise RuntimeError(
+                "pure_prism physical surface classification failed: "
+                f"interface={len(interface_surfaces)}, outer={len(outer_surfaces)}"
+            )
+        gmsh.model.addPhysicalGroup(2, interface_surfaces, tag=MIXED_INTERFACE_MARKER)
+        gmsh.model.setPhysicalName(2, MIXED_INTERFACE_MARKER, "mag_air_interface")
+        gmsh.model.addPhysicalGroup(2, outer_surfaces, tag=outer_boundary_marker)
+        gmsh.model.setPhysicalName(2, outer_boundary_marker, "outer_boundary")
+
+        # Deterministic smooth 2D MathEval size field on the base plane.
+        u_var = "xyz"[u_axis]
+        v_var = "xyz"[v_axis]
+        cu = 0.5 * (u_min_in + u_max_in)
+        hu = 0.5 * (u_max_in - u_min_in)
+        cv = 0.5 * (v_min_in + v_max_in)
+        hv = 0.5 * (v_max_in - v_min_in)
+        slope = max(growth_rate - 1.0, 0.25)
+        du_expr = f"Max(0, Fabs({u_var} - ({cu:.17g})) - ({hu:.17g}))"
+        dv_expr = f"Max(0, Fabs({v_var} - ({cv:.17g})) - ({hv:.17g}))"
+        dist_expr = f"Sqrt(({du_expr})*({du_expr}) + ({dv_expr})*({dv_expr}))"
+        size_expr = f"Min({h_air_scaled:.17g}, {h_in_scaled:.17g} + ({slope:.17g}) * {dist_expr})"
+        math_field = gmsh.model.mesh.field.add("MathEval")
+        gmsh.model.mesh.field.setString(math_field, "F", size_expr)
+        gmsh.model.mesh.field.setAsBackgroundMesh(math_field)
+
+        gmsh.option.setNumber("Mesh.MeshSizeFromPoints", 0)
+        gmsh.option.setNumber("Mesh.MeshSizeFromCurvature", 0)
+        gmsh.option.setNumber("Mesh.MeshSizeExtendFromBoundary", 0)
+        gmsh.option.setNumber("Mesh.Algorithm", int(opts.algorithm_2d))
+        gmsh.option.setNumber("Mesh.RandomFactor", 0.0)
+        gmsh.option.setNumber("Mesh.ElementOrder", 1)
+        gmsh.option.setNumber("Mesh.RecombineAll", 0)
+        gmsh.option.setNumber("Mesh.CharacteristicLengthMax", h_air_scaled)
+        if opts.hmin is not None:
+            gmsh.option.setNumber("Mesh.CharacteristicLengthMin", float(opts.hmin) * SCALE)
+
+        with _GmshProgressLogger(gmsh):
+            gmsh.model.mesh.generate(3)
+
+        quality, per_domain_quality = (
+            _extract_quality_metrics(gmsh, opts)
+            if opts.compute_quality
+            else (None, None)
+        )
+        quality = _quality_volumes_in_si(quality, SCALE)
+        if per_domain_quality is not None:
+            per_domain_quality = {
+                marker: _quality_volumes_in_si(report, SCALE)
+                for marker, report in per_domain_quality.items()
+            }
+        raw_mesh = _extract_mesh_data(
+            gmsh,
+            quality=quality,
+            has_physical_groups=True,
+            per_domain_quality=per_domain_quality,
+            boundary_role_markers=(MIXED_INTERFACE_MARKER, outer_boundary_marker),
+        )
+        cell_mesh_parts = _gmsh_cell_parts_in_extraction_order(
+            gmsh,
+            {
+                "magnetic": magnetic_volumes,
+                "far_air": air_volumes,
+            },
+        )
+        if cell_mesh_parts.shape != (raw_mesh.n_elements,):
+            raise RuntimeError("pure_prism shared-domain cell mesh-part identity is incomplete")
+
+        mesh = MeshData(
+            nodes=np.asarray(raw_mesh.nodes, dtype=np.float64) / SCALE,
+            vertex_identity=raw_mesh.vertex_identity,
+            cell_types=raw_mesh.cell_types,
+            cell_offsets=raw_mesh.cell_offsets,
+            cell_nodes=raw_mesh.cell_nodes,
+            element_markers=raw_mesh.element_markers,
+            facet_types=raw_mesh.facet_types,
+            facet_roles=raw_mesh.facet_roles,
+            facet_offsets=raw_mesh.facet_offsets,
+            facet_nodes=raw_mesh.facet_nodes,
+            boundary_markers=raw_mesh.boundary_markers,
+            cell_global_ordinals=raw_mesh.cell_global_ordinals,
+            facet_global_ordinals=raw_mesh.facet_global_ordinals,
+            cell_mesh_parts=cell_mesh_parts,
+            quality=raw_mesh.quality,
+            per_domain_quality=raw_mesh.per_domain_quality,
+        )
+        mesh = mesh.oriented_copy()
+        mesh.validate_strict(require_positive_orientation=True)
+
+        cell_families = set(mesh.cell_types.tolist())
+        if cell_families != {"prism6"}:
+            raise RuntimeError(
+                "pure_prism shared-domain realization requires prism6-only cells; "
+                f"Gmsh produced {sorted(cell_families)}"
+            )
+        facet_families = set(mesh.facet_types.tolist())
+        if facet_families != {"tri3", "quad4"}:
+            raise RuntimeError(
+                "pure_prism shared-domain realization requires tri3 and quad4 facets; "
+                f"Gmsh produced {sorted(facet_families)}"
+            )
+        marker_counts = _cell_counts_by_marker(mesh)
+        part_counts = _cell_counts_by_part(mesh)
+        facet_counts = _facet_counts_by_role_marker(mesh)
+        if set(marker_counts) != {"0", "1"} or set(part_counts) != {"magnetic", "far_air"}:
+            raise RuntimeError(
+                "pure_prism shared-domain markers/parts must cover magnetic (1) and far_air (0)"
+            )
+        if (
+            np.any((mesh.cell_mesh_parts == "magnetic") & (mesh.element_markers != 1))
+            or np.any((mesh.cell_mesh_parts == "far_air") & (mesh.element_markers != 0))
+        ):
+            raise RuntimeError("pure_prism shared-domain marker/part binding mismatch")
+
+        # Volumes, Jacobians, and scaled Jacobians across all prism6 cells.
+        cell_volumes = np.zeros(mesh.n_elements, dtype=np.float64)
+        jacobian_blocks: list[NDArray[np.float64]] = []
+        scaled_blocks: list[NDArray[np.float64]] = []
+        for family, ordinals, coords_batch in _iter_cell_family_batches(mesh):
+            dets = _cell_jacobian_determinants_batch(family, coords_batch)
+            cell_volumes[ordinals] = _mixed_v2_cell_volume_batch(family, coords_batch, dets)
+            jacobian_blocks.append(dets.reshape(-1))
+            scaled_blocks.append(
+                _mixed_cell_scaled_jacobians_batch(family, coords_batch).reshape(-1)
+            )
+        if not np.all(np.isfinite(cell_volumes)) or np.any(cell_volumes <= 0.0):
+            raise RuntimeError("pure_prism mesh contains nonpositive cell volume")
+        all_jacs = np.concatenate(jacobian_blocks)
+        all_scaled = np.concatenate(scaled_blocks)
+        jacobian_minima = {"prism6": float(np.min(all_jacs))}
+        scaled_minima = {"prism6": float(np.min(all_scaled))}
+        scaled_p05 = {"prism6": float(np.percentile(all_scaled, 5.0))}
+        if scaled_p05["prism6"] < MIXED_SCALED_JACOBIAN_P05_MIN:
+            raise RuntimeError(
+                "pure_prism mesh scaled_jacobian_p05 is below minimum: "
+                f"{scaled_p05['prism6']:.6f} < {MIXED_SCALED_JACOBIAN_P05_MIN}"
+            )
+
+        magnetic_mask = mesh.element_markers == 1
+        magnetic_nodes = _mixed_v2_cell_nodes_where(mesh, magnetic_mask)
+        mag_planes, mag_plane_tol = _cluster_coordinate_planes(
+            mesh.nodes[magnetic_nodes], w_axis
+        )
+        if len(mag_planes) != n_layers + 1:
+            raise RuntimeError(
+                f"pure_prism realization requested {n_layers} layers but resolved {len(mag_planes) - 1}"
+            )
+        all_domain_planes, _all_tol = _cluster_coordinate_planes(mesh.nodes, w_axis)
+        realized_lower_air = sum(
+            1 for p in all_domain_planes if p < mag_planes[0] - mag_plane_tol
+        )
+        realized_upper_air = sum(
+            1 for p in all_domain_planes if p > mag_planes[-1] + mag_plane_tol
+        )
+        if realized_lower_air != n_lower or realized_upper_air != n_upper:
+            raise RuntimeError(
+                "pure_prism air layer count mismatch: "
+                f"expected ({n_lower}, {n_upper}), realized ({realized_lower_air}, {realized_upper_air})"
+            )
+
+        magnetic_bounds_min_m = tuple(float(v) for v in body_min)
+        magnetic_bounds_max_m = tuple(float(v) for v in body_max)
+        airbox_bounds_min_m = tuple(float(v) for v in air_min)
+        airbox_bounds_max_m = tuple(float(v) for v in air_max)
+        realized_mag_min = np.min(mesh.nodes[magnetic_nodes], axis=0)
+        realized_mag_max = np.max(mesh.nodes[magnetic_nodes], axis=0)
+        realized_air_min = np.min(mesh.nodes, axis=0)
+        realized_air_max = np.max(mesh.nodes, axis=0)
+        mag_bounds_err = _bounds_relative_error(
+            realized_mag_min,
+            realized_mag_max,
+            magnetic_bounds_min_m,
+            magnetic_bounds_max_m,
+        )
+        air_bounds_err = _bounds_relative_error(
+            realized_air_min,
+            realized_air_max,
+            airbox_bounds_min_m,
+            airbox_bounds_max_m,
+        )
+        if mag_bounds_err > 1.0e-8 or air_bounds_err > 1.0e-8:
+            raise RuntimeError(
+                "pure_prism realized bounds do not match authored CAD bounds: "
+                f"mag_err={mag_bounds_err:.3e}, air_err={air_bounds_err:.3e}"
+            )
+
+        magnetic_volume = float(np.sum(cell_volumes[magnetic_mask]))
+        shared_volume = float(np.sum(cell_volumes))
+        air_volume = float(shared_volume - magnetic_volume)
+        expected_magnetic_volume = float(np.prod(body_size))
+        expected_shared_volume = float(np.prod(outer_size))
+        mag_vol_err = abs(magnetic_volume - expected_magnetic_volume) / expected_magnetic_volume
+        shared_vol_err = abs(shared_volume - expected_shared_volume) / expected_shared_volume
+        if mag_vol_err > 1.0e-8 or shared_vol_err > 1.0e-8:
+            raise RuntimeError(
+                "pure_prism volume closure failed: "
+                f"mag_err={mag_vol_err:.3e}, shared_err={shared_vol_err:.3e}"
+            )
+
+        conformity = _pure_prism_conformity_counts(
+            mesh,
+            interface_marker=MIXED_INTERFACE_MARKER,
+            outer_boundary_marker=outer_boundary_marker,
+            plane_tolerance=mag_plane_tol,
+        )
+        if any(conformity.values()):
+            raise RuntimeError(f"pure_prism conformity check failed: {conformity}")
+
+        authored_direction = (
+            requested_direction
+            if requested_direction in {"auto", "x", "y", "z"}
+            else "xyz"[w_axis]
+        )
+        topology_fingerprint = mesh.topology_fingerprint_v3()
+        certificate: dict[str, Any] = {
+            "schema_version": PURE_PRISM_CERT_SCHEMA_VERSION,
+            "certificate_status": "accepted",
+            "requested_sweep_direction": authored_direction,
+            "resolved_sweep_direction": "xyz"[w_axis],
+            "requested_layer_count": int(n_layers),
+            "realized_layer_count": int(n_layers),
+            "lower_air_layer_count": int(n_lower),
+            "upper_air_layer_count": int(n_upper),
+            "magnetic_plane_coordinates_m": [float(v) for v in mag_planes],
+            "plane_tolerance_m": float(mag_plane_tol),
+            "interface_marker": int(MIXED_INTERFACE_MARKER),
+            "outer_boundary_marker": int(outer_boundary_marker),
+            "magnetic_bounds_min_m": list(magnetic_bounds_min_m),
+            "magnetic_bounds_max_m": list(magnetic_bounds_max_m),
+            "airbox_bounds_min_m": list(airbox_bounds_min_m),
+            "airbox_bounds_max_m": list(airbox_bounds_max_m),
+            "magnetic_bounds_relative_error": float(mag_bounds_err),
+            "airbox_bounds_relative_error": float(air_bounds_err),
+            "cell_family_counts_by_marker": marker_counts,
+            "cell_family_counts_by_part": part_counts,
+            "facet_family_counts_by_role_marker": facet_counts,
+            "jacobian_minima_m3_by_family": jacobian_minima,
+            "quality_metric": MIXED_QUALITY_METRIC,
+            "scaled_jacobian_minima_by_family": scaled_minima,
+            "scaled_jacobian_p05_by_family": scaled_p05,
+            "magnetic_volume_m3": magnetic_volume,
+            "expected_magnetic_volume_m3": expected_magnetic_volume,
+            "magnetic_relative_volume_error": float(mag_vol_err),
+            "air_volume_m3": air_volume,
+            "shared_domain_volume_m3": shared_volume,
+            "expected_shared_domain_volume_m3": expected_shared_volume,
+            "shared_domain_relative_volume_error": float(shared_vol_err),
+            "marker_coverage_complete": True,
+            "nonconforming_face_count": conformity["nonconforming_face_count"],
+            "orphan_face_count": conformity["orphan_face_count"],
+            "nonmanifold_face_count": conformity["nonmanifold_face_count"],
+            "coincident_interface_face_count": conformity["coincident_interface_face_count"],
+            "topology_fingerprint_version": "v3",
+            "topology_fingerprint": topology_fingerprint,
+            "gmsh_version": gmsh_version,
+            "strategy": PURE_PRISM_SHARED_GEO_STRATEGY,
+            "effective_gmsh_thread_count": int(effective_gmsh_thread_count),
+            "deterministic_inputs": {
+                "algorithm_2d": int(opts.algorithm_2d),
+                "element_order": 1,
+                "gmsh_version": gmsh_version,
+                "random_factor": 0.0,
+                "thread_count": 1,
+                "extrusion_stages": 3,
+                "lateral_grading": "math_eval_distance_linear",
+                "airbox_growth_rate": float(growth_rate),
+                "scaled_jacobian_p05_min": MIXED_SCALED_JACOBIAN_P05_MIN,
+            },
+            "fallbacks_triggered": [],
+        }
+        certified = _dc_replace(mesh, pure_prism_topology_certificate=certificate)
+        emit_progress(
+            "Gmsh pure_prism shared-domain ready: "
+            f"nodes={certified.n_nodes}, prism6={certified.n_elements}, "
+            f"facets={certified.n_boundary_faces}, layers={n_layers} "
+            f"(air {n_lower}+{n_upper}), p05={scaled_p05['prism6']:.4f}"
+        )
+        return certified
     finally:
         gmsh.finalize()
 

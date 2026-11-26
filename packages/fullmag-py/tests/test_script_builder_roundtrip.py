@@ -134,7 +134,7 @@ class LayeredMeshAuthoringRoundTripTests(unittest.TestCase):
         self.assertIs(get_origin(transition_literal), Literal)
         self.assertEqual(
             set(get_args(transition_literal)),
-            {"pyramid_to_tetrahedra", "reject"},
+            {"pyramid_to_tetrahedra", "pure_prism", "reject"},
         )
         self.assertIs(get_origin(swept_hints["distribution"]), Literal)
         self.assertEqual(
@@ -153,7 +153,7 @@ class LayeredMeshAuthoringRoundTripTests(unittest.TestCase):
             "sweep_face_meshing": {"triangular", "quadrilateral"},
             "sweep_direction": {"auto", "x", "y", "z"},
             "element_family": {"prism", "hex"},
-            "transition_policy": {"pyramid_to_tetrahedra", "reject"},
+            "transition_policy": {"pyramid_to_tetrahedra", "pure_prism", "reject"},
         }
         for method in (
             fm.world.GeometryMeshHandle.__call__,
@@ -184,6 +184,33 @@ class LayeredMeshAuthoringRoundTripTests(unittest.TestCase):
 
         self.assertIn(".mesh.thin_film(", rendered)
         self.assertIn('topology="prismatic"', rendered)
+        self.assertIn("exact_layers=True", rendered)
+        self.assertEqual(_requested_layered_mesh(rewritten), expected)
+
+    def test_pure_prism_thin_film_round_trips_scene_python_and_ir(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            loaded = self._load_layered(
+                root,
+                'film.mesh.thin_film(maximum_element_size=3e-9, layers=4, topology="prismatic", transition="pure_prism", exact_layers=True, order=1)',
+                "pure_prism_source.py",
+            )
+            expected = _requested_layered_mesh(loaded)
+            self.assertEqual(expected["transition_policy"], "pure_prism")
+            self.assertEqual(expected["through_thickness_elements"], 4)
+            scene = json.loads(
+                json.dumps(build_scene_document_from_builder(export_builder_draft(loaded)))
+            )
+            builder = build_builder_from_scene_document(scene)
+            rendered = rewrite_loaded_problem_script(loaded, overrides=builder)[
+                "rendered_source"
+            ]
+            rewritten = _load_text(str(rendered), root, "pure_prism_rewritten.py")
+
+        self.assertIn(".mesh.thin_film(", rendered)
+        self.assertIn('topology="prismatic"', rendered)
+        self.assertIn('transition="pure_prism"', rendered)
+        self.assertIn("layers=4", rendered)
         self.assertIn("exact_layers=True", rendered)
         self.assertEqual(_requested_layered_mesh(rewritten), expected)
 

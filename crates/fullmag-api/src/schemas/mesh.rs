@@ -597,9 +597,10 @@ pub struct MeshMixedTopologyProvenanceResource {
 
 impl MeshSharedDomainBuildReportResource {
     pub fn from_ir(report: &fullmag_ir::FemSharedDomainBuildReportIR) -> Option<Self> {
-        if report.mixed_layer_topology_certificate.is_some()
-            && report.mixed_layer_topology_certificate_v2.is_some()
-        {
+        let certificate_count = usize::from(report.mixed_layer_topology_certificate.is_some())
+            + usize::from(report.mixed_layer_topology_certificate_v2.is_some())
+            + usize::from(report.pure_prism_topology_certificate.is_some());
+        if certificate_count > 1 {
             return None;
         }
         // Project public metadata before serialization. In particular, never allocate
@@ -696,6 +697,30 @@ impl MeshSharedDomainBuildReportResource {
                 summary.actual_node_plane_count =
                     certificate.magnetic_plane_coordinates_m.len() as u32;
             }
+            resource.gmsh_version = Some(certificate.gmsh_version.clone());
+        }
+        if let Some(certificate) = report.pure_prism_topology_certificate.as_ref() {
+            resource.topology_schema_version = Some(2);
+            resource.element_counts_by_type =
+                aggregate_family_counts(certificate.cell_family_counts_by_marker.values());
+            resource.facet_counts_by_type_and_role =
+                aggregate_facet_counts_by_role(&certificate.facet_family_counts_by_role_marker);
+            resource.requested_layered_policy = Some(MeshLayeredPolicyResource {
+                topology: "pure_prism_p2".to_string(),
+                sweep_direction: certificate.requested_sweep_direction.clone(),
+                layers: certificate.requested_layer_count,
+                node_planes: certificate.requested_layer_count.saturating_add(1),
+                transition_policy: "pure_prism".to_string(),
+                exact_layer_count: true,
+            });
+            resource.resolved_layered_policy = Some(MeshLayeredPolicyResource {
+                topology: "pure_prism_p2".to_string(),
+                sweep_direction: certificate.resolved_sweep_direction.clone(),
+                layers: certificate.realized_layer_count,
+                node_planes: u32::try_from(certificate.magnetic_plane_coordinates_m.len()).ok()?,
+                transition_policy: "pure_prism".to_string(),
+                exact_layer_count: true,
+            });
             resource.gmsh_version = Some(certificate.gmsh_version.clone());
         }
         resource.mixed_topology_provenance =
@@ -1481,6 +1506,108 @@ mod mixed_v2_summary_tests {
         report.mixed_layer_topology_certificate = Some(
             serde_json::from_value(fixture["certificate"].clone()).unwrap()
         );
+        assert!(MeshSharedDomainBuildReportResource::from_ir(&report).is_none());
+    }
+
+    #[test]
+    fn pure_prism_summary_maps_layered_policy_and_enforces_mutual_exclusivity() {
+        let fixture: Value = serde_json::from_str(include_str!(
+            "../../../fullmag-ir/tests/fixtures/mixed_layer_topology_certificate_v1_python_golden.json"
+        ))
+        .unwrap();
+        let pure_prism_certificate: Value = serde_json::from_str(
+            r#"{
+                "schema_version": "pure_prism_topology_certificate.v1",
+                "certificate_status": "accepted",
+                "requested_sweep_direction": "z",
+                "resolved_sweep_direction": "z",
+                "requested_layer_count": 4,
+                "realized_layer_count": 4,
+                "lower_air_layer_count": 5,
+                "upper_air_layer_count": 5,
+                "magnetic_plane_coordinates_m": [-2.5e-9, -1.25e-9, 0.0, 1.25e-9, 2.5e-9],
+                "plane_tolerance_m": 1.0e-15,
+                "interface_marker": 10,
+                "outer_boundary_marker": 99,
+                "magnetic_bounds_min_m": [-150.0e-9, -150.0e-9, -2.5e-9],
+                "magnetic_bounds_max_m": [150.0e-9, 150.0e-9, 2.5e-9],
+                "airbox_bounds_min_m": [-450.0e-9, -450.0e-9, -300.0e-9],
+                "airbox_bounds_max_m": [450.0e-9, 450.0e-9, 300.0e-9],
+                "magnetic_bounds_relative_error": 0.0,
+                "airbox_bounds_relative_error": 0.0,
+                "cell_family_counts_by_marker": {
+                    "0": {"prism6": 120},
+                    "1": {"prism6": 32}
+                },
+                "cell_family_counts_by_part": {
+                    "far_air": {"prism6": 120},
+                    "magnetic": {"prism6": 32}
+                },
+                "facet_family_counts_by_role_marker": {
+                    "exterior:99": {"quad4": 56, "tri3": 40},
+                    "material_interface:10": {"quad4": 16, "tri3": 16}
+                },
+                "jacobian_minima_m3_by_family": {"prism6": 1.0e-26},
+                "quality_metric": "mixed_topology_scaled_jacobian.v1",
+                "scaled_jacobian_minima_by_family": {"prism6": 0.5},
+                "scaled_jacobian_p05_by_family": {"prism6": 0.6},
+                "magnetic_volume_m3": 4.5e-22,
+                "expected_magnetic_volume_m3": 4.5e-22,
+                "magnetic_relative_volume_error": 0.0,
+                "air_volume_m3": 4.8599955e-19,
+                "shared_domain_volume_m3": 4.86e-19,
+                "expected_shared_domain_volume_m3": 4.86e-19,
+                "shared_domain_relative_volume_error": 0.0,
+                "marker_coverage_complete": true,
+                "nonconforming_face_count": 0,
+                "orphan_face_count": 0,
+                "nonmanifold_face_count": 0,
+                "coincident_interface_face_count": 0,
+                "topology_fingerprint_version": "v3",
+                "topology_fingerprint": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "gmsh_version": "4.15.2",
+                "strategy": "pure_prism_extruded_shared_domain",
+                "effective_gmsh_thread_count": 1,
+                "deterministic_inputs": {
+                    "algorithm_2d": 6,
+                    "element_order": 1,
+                    "random_factor": 0.0,
+                    "thread_count": 1
+                },
+                "fallbacks_triggered": []
+            }"#,
+        )
+        .unwrap();
+        let mut report: fullmag_ir::FemSharedDomainBuildReportIR = serde_json::from_value(json!({
+            "build_mode": "pure_prism_extruded_shared_domain",
+            "pure_prism_topology_certificate": pure_prism_certificate,
+            "mixed_topology_provenance": {
+                "requested_topology": "pure_prism_p2",
+                "resolved_topology": "pure_prism_p2",
+                "accepted_certificate_fingerprint": format!("sha256:{}", "a".repeat(64)),
+                "requested_device": "gpu",
+                "precision": "double",
+                "capability_status": "implemented"
+            }
+        }))
+        .unwrap();
+        let summary = MeshSharedDomainBuildReportResource::from_ir(&report).unwrap();
+        let requested = summary.requested_layered_policy.as_ref().unwrap();
+        assert_eq!(requested.topology, "pure_prism_p2");
+        assert_eq!(requested.transition_policy, "pure_prism");
+        assert_eq!(requested.layers, 4);
+        assert_eq!(requested.node_planes, 5);
+        let resolved = summary.resolved_layered_policy.as_ref().unwrap();
+        assert_eq!(resolved.topology, "pure_prism_p2");
+        assert_eq!(resolved.transition_policy, "pure_prism");
+        assert_eq!(resolved.layers, 4);
+        assert_eq!(resolved.node_planes, 5);
+        let provenance = summary.mixed_topology_provenance.as_ref().unwrap();
+        assert_eq!(provenance.requested_topology, "pure_prism_p2");
+        assert_eq!(provenance.resolved_topology, "pure_prism_p2");
+
+        report.mixed_layer_topology_certificate =
+            Some(serde_json::from_value(fixture["certificate"].clone()).unwrap());
         assert!(MeshSharedDomainBuildReportResource::from_ir(&report).is_none());
     }
 }

@@ -993,9 +993,11 @@ void gpu_rk_step_stats_is_owned_by_cuda_rk_module() {
                 std::string::npos &&
             dmi_energy_source.find("GPU CUDA RK DMI final energy reductions source contract") !=
                 std::string::npos &&
-            dmi_energy_source.find("fullmag_cuda_dmi_field_energy(") !=
+            dmi_energy_source.find("fullmag_cuda_dmi_csr_field_energy(") !=
                 std::string::npos &&
-            dmi_energy_source.find("GPU RK DMI energy requires device-resident mesh geometry, Ms, lumped mass, and residual buffers") !=
+            dmi_energy_source.find("fullmag_cuda_dmi_csr_periodic_field_energy(") !=
+                std::string::npos &&
+            dmi_energy_source.find("GPU RK DMI energy requires device-resident CSR operator, Ms, and lumped mass buffers") !=
                 std::string::npos &&
             dmi_energy_source.find("ctx.dmi.interfacial_enabled") !=
                 std::string::npos &&
@@ -1005,12 +1007,13 @@ void gpu_rk_step_stats_is_owned_by_cuda_rk_module() {
                 std::string::npos &&
             dmi_energy_source.find("GpuFinalScalarSlot::BulkDmiEnergy") !=
                 std::string::npos,
-        "GPU CUDA RK DMI final energy reductions source must own DMI energy validation, kernel launch, and scalar slots");
+        "GPU CUDA RK DMI final energy reductions source must own CSR DMI energy validation, kernel launch, and scalar slots");
     check(
         energy_source.find("fullmag_cuda_dmi_field_energy(") == std::string::npos &&
+            energy_source.find("fullmag_cuda_dmi_csr_field_energy(") == std::string::npos &&
             energy_source.find("GpuFinalScalarSlot::DmiEnergy") == std::string::npos &&
             energy_source.find("GpuFinalScalarSlot::BulkDmiEnergy") == std::string::npos &&
-            energy_source.find("GPU RK DMI energy requires device-resident mesh geometry") ==
+            energy_source.find("GPU RK DMI energy requires device-resident CSR operator") ==
                 std::string::npos,
         "GPU CUDA RK final energy reductions source must delegate DMI energy internals");
     check(

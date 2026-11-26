@@ -16,6 +16,7 @@
 #include "gpu/cuda/fields/field_buffer_memory.hpp"
 #include "gpu/cuda/fields/field_buffer_upload.hpp"
 #include "gpu/cuda/integrators/rk/rk_workspace_memory.hpp"
+#include "gpu/cuda/interactions/dmi/dmi_csr_operator.hpp"
 #include "gpu/cuda/interactions/local_interaction_workspace_memory.hpp"
 #include "gpu/cuda/interactions/magnetoelastic/magnetoelastic_memory.hpp"
 #include "gpu/cuda/interactions/magnetoelastic/magnetoelastic_upload.hpp"
@@ -72,6 +73,7 @@ void reset_metadata(FemGpuState &state)
     state.legacy_exchange.cols = 0;
     state.legacy_exchange.nnz = 0;
     state.legacy_exchange.device_bytes = 0;
+    state.dmi_csr = {};
     state.materials.node_count = 0;
     state.mesh_metrics.uploaded = false;
     state.mesh_metrics.node_count = 0;
@@ -1048,6 +1050,7 @@ void gpu_state_destroy(FemGpuState &state)
         state.lifecycle,
         state.legacy_exchange,
         state.mesh_metrics);
+    gpu_dmi_csr_free(state.lifecycle, state.dmi_csr);
 #endif
     reset_metadata(state);
 }
