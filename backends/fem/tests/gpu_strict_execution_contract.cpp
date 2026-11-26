@@ -502,12 +502,15 @@ struct PeriodicHexMeshFixture {
 
     PeriodicHexMeshFixture(bool periodic_x, bool periodic_y)
     {
-        // 2x2x1 grid of HEX8 cells (18 nodes): open z=0/z=1 faces retain
-        // singleton interior nodes (1,1,0) and (1,1,1) outside both X and Y
-        // periodic seams so 2D-periodic pure Neumann has a valid gauge pin.
+        // 2x2x3 Kuhn TET4 grid (36 nodes): magnetic layer cz==1 (marker 1)
+        // sandwiched between airbox layers cz==0 and cz==2 (marker 0), as
+        // required by periodic demag (validate_periodic_plan_compatibility).
+        // Open z=0/z=3 faces retain singleton interior nodes (1,1,0) and
+        // (1,1,3) outside both X and Y periodic seams so 2D-periodic pure
+        // Neumann has a valid gauge pin.
         constexpr int nx = 2;
         constexpr int ny = 2;
-        constexpr int nz = 1;
+        constexpr int nz = 3;
         constexpr double h = 8.0e-9;
         auto node_id = [&](int ix, int iy, int iz) -> uint32_t {
             return static_cast<uint32_t>((iz * (ny + 1) + iy) * (nx + 1) + ix);
@@ -518,20 +521,21 @@ struct PeriodicHexMeshFixture {
                     nodes_xyz.push_back(ix * h);
                     nodes_xyz.push_back(iy * h);
                     nodes_xyz.push_back(iz * h);
-                    // Non-uniform unit magnetization so demag RHS is non-zero.
+                    // Non-uniform, X/Y-periodic unit magnetization so demag RHS
+                    // is non-zero (both div(M) and M.n on z=h, z=2h interfaces).
                     const double mx = (ix == 1) ? 0.6 : 0.8;
-                    const double my = (ix == 1) ? 0.8 : 0.6;
+                    const double mz = (ix == 1) ? 0.8 : 0.6;
                     initial_m.push_back(mx);
-                    initial_m.push_back(my);
                     initial_m.push_back(0.0);
+                    initial_m.push_back(mz);
                 }
             }
         }
         cell_offsets.push_back(0u);
-        auto add_tet = [&](uint32_t a, uint32_t b, uint32_t c, uint32_t d) {
+        auto add_tet = [&](uint32_t a, uint32_t b, uint32_t c, uint32_t d, uint32_t marker) {
             cell_global_ordinals.push_back(cell_types.size());
             cell_types.push_back(FULLMAG_FEM_CELL_TET4);
-            cell_markers.push_back(1u);
+            cell_markers.push_back(marker);
             cell_nodes.push_back(a);
             cell_nodes.push_back(b);
             cell_nodes.push_back(c);
@@ -539,10 +543,10 @@ struct PeriodicHexMeshFixture {
             cell_offsets.push_back(static_cast<uint32_t>(cell_nodes.size()));
         };
         facet_offsets.push_back(0u);
-        auto add_tri = [&](uint32_t a, uint32_t b, uint32_t c, uint32_t marker) {
+        auto add_tri = [&](uint32_t a, uint32_t b, uint32_t c, uint32_t marker, uint32_t role) {
             facet_global_ordinals.push_back(facet_types.size());
             facet_types.push_back(FULLMAG_FEM_FACET_TRI3);
-            facet_roles.push_back(FULLMAG_FEM_FACET_ROLE_EXTERIOR);
+            facet_roles.push_back(role);
             facet_markers.push_back(marker);
             facet_nodes.push_back(a);
             facet_nodes.push_back(b);
@@ -551,9 +555,16 @@ struct PeriodicHexMeshFixture {
         };
         const uint32_t x_min_marker = periodic_x ? 101u : 99u;
         const uint32_t x_max_marker = periodic_x ? 102u : 99u;
+        const uint32_t x_role = periodic_x
+            ? FULLMAG_FEM_FACET_ROLE_PERIODIC_SEAM
+            : FULLMAG_FEM_FACET_ROLE_EXTERIOR;
         const uint32_t y_min_marker = periodic_y ? 103u : 99u;
         const uint32_t y_max_marker = periodic_y ? 104u : 99u;
+        const uint32_t y_role = periodic_y
+            ? FULLMAG_FEM_FACET_ROLE_PERIODIC_SEAM
+            : FULLMAG_FEM_FACET_ROLE_EXTERIOR;
         for (int cz = 0; cz < nz; ++cz) {
+            const uint32_t cell_marker = (cz == 1) ? 1u : 0u;
             for (int cy = 0; cy < ny; ++cy) {
                 for (int cx = 0; cx < nx; ++cx) {
                     const uint32_t p000 = node_id(cx, cy, cz);
@@ -566,36 +577,36 @@ struct PeriodicHexMeshFixture {
                     const uint32_t p111 = node_id(cx + 1, cy + 1, cz + 1);
                     // Kuhn 6-tet-per-cube triangulation: positive volume and
                     // translation-consistent diagonals on all opposite faces.
-                    add_tet(p000, p100, p110, p111);
-                    add_tet(p000, p110, p010, p111);
-                    add_tet(p000, p010, p011, p111);
-                    add_tet(p000, p011, p001, p111);
-                    add_tet(p000, p001, p101, p111);
-                    add_tet(p000, p101, p100, p111);
+                    add_tet(p000, p100, p110, p111, cell_marker);
+                    add_tet(p000, p110, p010, p111, cell_marker);
+                    add_tet(p000, p010, p011, p111, cell_marker);
+                    add_tet(p000, p011, p001, p111, cell_marker);
+                    add_tet(p000, p001, p101, p111, cell_marker);
+                    add_tet(p000, p101, p100, p111, cell_marker);
 
                     if (cz == 0) {
-                        add_tri(p000, p110, p100, 99u);
-                        add_tri(p000, p010, p110, 99u);
+                        add_tri(p000, p110, p100, 99u, FULLMAG_FEM_FACET_ROLE_EXTERIOR);
+                        add_tri(p000, p010, p110, 99u, FULLMAG_FEM_FACET_ROLE_EXTERIOR);
                     }
                     if (cz + 1 == nz) {
-                        add_tri(p001, p101, p111, 99u);
-                        add_tri(p001, p111, p011, 99u);
+                        add_tri(p001, p101, p111, 99u, FULLMAG_FEM_FACET_ROLE_EXTERIOR);
+                        add_tri(p001, p111, p011, 99u, FULLMAG_FEM_FACET_ROLE_EXTERIOR);
                     }
                     if (cy == 0) {
-                        add_tri(p000, p100, p101, y_min_marker);
-                        add_tri(p000, p101, p001, y_min_marker);
+                        add_tri(p000, p100, p101, y_min_marker, y_role);
+                        add_tri(p000, p101, p001, y_min_marker, y_role);
                     }
                     if (cy + 1 == ny) {
-                        add_tri(p010, p111, p110, y_max_marker);
-                        add_tri(p010, p011, p111, y_max_marker);
+                        add_tri(p010, p111, p110, y_max_marker, y_role);
+                        add_tri(p010, p011, p111, y_max_marker, y_role);
                     }
                     if (cx == 0) {
-                        add_tri(p000, p001, p011, x_min_marker);
-                        add_tri(p000, p011, p010, x_min_marker);
+                        add_tri(p000, p001, p011, x_min_marker, x_role);
+                        add_tri(p000, p011, p010, x_min_marker, x_role);
                     }
                     if (cx + 1 == nx) {
-                        add_tri(p100, p110, p111, x_max_marker);
-                        add_tri(p100, p111, p101, x_max_marker);
+                        add_tri(p100, p110, p111, x_max_marker, x_role);
+                        add_tri(p100, p111, p101, x_max_marker, x_role);
                     }
                 }
             }
