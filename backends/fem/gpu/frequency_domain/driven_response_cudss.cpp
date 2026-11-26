@@ -992,6 +992,91 @@ bool compute_ruiz_equilibration(
 
     row_scale.assign(n, 1.0);
     col_scale.assign(n, 1.0);
+
+    // Exact 2x2 block geometric pre-scaling for coupled magnetic/Poisson systems.
+    // On real MFEM open-airbox meshes, K_{q phi} (~1e13) and -R_{phi q} (~1e-12)
+    // can exhibit ~1e25 off-diagonal asymmetry while interior P (~1e-7) sits many
+    // orders below unit-diagonal ess_tdofs rows. Pre-scaling equalizes the 4 block
+    // scales (||r_phi R_{phi q}|| == ||K_{q phi} c_phi|| and ||r_phi P c_phi|| ==
+    // ||K_loc||) so 6-pass Ruiz converges to a balanced O(1) fixed point with zero
+    // cuDSS pivot perturbations.
+    if (csr.n_phi > 0u && csr.n_q > 0u) {
+        const std::size_t n_q = static_cast<std::size_t>(csr.n_q);
+        double s_qq = 0.0;
+        double s_qp = 0.0;
+        double s_pq = 0.0;
+        double s_pp_interior = 0.0;
+        double s_pp_all = 0.0;
+        for (std::size_t row = 0; row < n; ++row) {
+            const std::uint32_t begin = csr.row_ptr[row];
+            const std::uint32_t end = csr.row_ptr[row + 1u];
+            if (row < n_q) {
+                for (std::uint32_t idx = begin; idx < end; ++idx) {
+                    const std::uint32_t col = csr.col_indices[idx];
+                    const double val = abs_ref[idx];
+                    if (static_cast<std::size_t>(col) < n_q) {
+                        if (val > s_qq) {
+                            s_qq = val;
+                        }
+                    } else if (val > s_qp) {
+                        s_qp = val;
+                    }
+                }
+            } else {
+                std::uint32_t p_nnz = 0u;
+                double row_p_max = 0.0;
+                for (std::uint32_t idx = begin; idx < end; ++idx) {
+                    const std::uint32_t col = csr.col_indices[idx];
+                    const double val = abs_ref[idx];
+                    if (static_cast<std::size_t>(col) < n_q) {
+                        if (val > s_pq) {
+                            s_pq = val;
+                        }
+                    } else {
+                        ++p_nnz;
+                        if (val > row_p_max) {
+                            row_p_max = val;
+                        }
+                    }
+                }
+                if (row_p_max > s_pp_all) {
+                    s_pp_all = row_p_max;
+                }
+                if (p_nnz > 1u && row_p_max > s_pp_interior) {
+                    s_pp_interior = row_p_max;
+                }
+            }
+        }
+        const double s_pp = (s_pp_interior > 0.0) ? s_pp_interior : s_pp_all;
+        if (s_qq > 0.0 && s_pp > 0.0) {
+            double r_phi = 1.0;
+            double c_phi = 1.0;
+            if (s_qp > 0.0 && s_pq > 0.0) {
+                const double log_diag = std::log(s_qq) - std::log(s_pp);
+                const double log_off = std::log(s_qp) - std::log(s_pq);
+                r_phi = std::exp(0.5 * (log_diag + log_off));
+                c_phi = std::exp(0.5 * (log_diag - log_off));
+            } else if (s_qp > 0.0) {
+                c_phi = s_qq / s_qp;
+                r_phi = s_qp / s_pp;
+            } else if (s_pq > 0.0) {
+                r_phi = s_qq / s_pq;
+                c_phi = s_pq / s_pp;
+            } else {
+                const double g = std::sqrt(s_qq / s_pp);
+                r_phi = g;
+                c_phi = g;
+            }
+            if (std::isfinite(r_phi) && r_phi > 0.0 &&
+                std::isfinite(c_phi) && c_phi > 0.0) {
+                for (std::size_t i = n_q; i < n; ++i) {
+                    row_scale[i] = r_phi;
+                    col_scale[i] = c_phi;
+                }
+            }
+        }
+    }
+
     std::vector<double> row_max(n, 0.0);
     std::vector<double> col_max(n, 0.0);
 

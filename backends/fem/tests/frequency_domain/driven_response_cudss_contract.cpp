@@ -1337,6 +1337,238 @@ bool test_static_periodic_k0_lifting_and_h_demag_recovery()
     return true;
 }
 
+bool test_asymmetric_1e25_open_airbox_block_prescaling()
+{
+    // Mirrors real MFEM open-airbox block scaling (3A_open / 3B_open_large):
+    // s_qq ~ 1e12, K_{q phi} ~ 3.5e13, -R_{phi q} ~ 2.7e-12 (~1e25 off-diagonal
+    // asymmetry), interior P ~ 1.35e-7 alongside unit-diagonal ess_tdofs row and
+    // uncoupled airbox rows. Without 2x2 block geometric pre-scaling before Ruiz,
+    // coupled P diagonals squash toward ~1e-10 and perturb pivots.
+    const std::vector<TangentFrameNode> nodes = {
+        make_frame(1.0, 0.0, 0.0),
+        make_frame(0.95, 0.3122498999199199, 0.0),
+        make_frame(0.8, 0.0, 0.6),
+    };
+    const double h_ext[3] = {5.0e4, 1.0e4, 0.0};
+    const std::vector<MfemExchangeEdgeTerm> edges = {
+        {FrequencyDomainOperatorTermKind::exchange, 0, 1, 2.2e6},
+        {FrequencyDomainOperatorTermKind::exchange, 1, 2, 2.0e6},
+    };
+    const std::vector<double> freqs = {1.0e9, 5.0e9, 11.0e9, 18.0e9, 25.0e9};
+
+    const std::size_t full_nodes = 8u;
+    const std::size_t n_phi = 8u;
+    const std::vector<std::uint32_t> mag_indices = {0u, 1u, 2u};
+    const std::vector<std::uint32_t> ess_tdofs = {7u};
+
+    // Interior Poisson stiffness ~1.35e-7 coupling magnetic {0..2} & airbox {3..6};
+    // unit-diagonal eliminated Dirichlet boundary row 7.
+    std::vector<double> p_dense(n_phi * n_phi, 0.0);
+    const double ps = 1.35e-7;
+    for (std::size_t i = 0; i < 7u; ++i) {
+        p_dense[i * n_phi + i] = 4.0 * ps;
+        if (i + 1u < 7u) {
+            p_dense[i * n_phi + (i + 1u)] = -1.0 * ps;
+            p_dense[(i + 1u) * n_phi + i] = -1.0 * ps;
+        }
+    }
+    p_dense[0 * n_phi + 3] = -0.5 * ps;
+    p_dense[3 * n_phi + 0] = -0.5 * ps;
+    p_dense[2 * n_phi + 5] = -0.5 * ps;
+    p_dense[5 * n_phi + 2] = -0.5 * ps;
+    p_dense[7 * n_phi + 7] = 1.0;
+
+    // -R_{phi q} at ~2.67e-12 on magnetic-coupled rows {0..2}; zero on uncoupled
+    // airbox rows {3..6} and ess_tdofs row {7}.
+    std::vector<double> rhs_x_d(n_phi * full_nodes, 0.0);
+    std::vector<double> rhs_y_d(n_phi * full_nodes, 0.0);
+    std::vector<double> rhs_z_d(n_phi * full_nodes, 0.0);
+    rhs_x_d[0 * full_nodes + 0] = 2.67e-12;
+    rhs_x_d[1 * full_nodes + 1] = -2.10e-12;
+    rhs_x_d[2 * full_nodes + 2] = 1.85e-12;
+    rhs_y_d[0 * full_nodes + 1] = 1.60e-12;
+    rhs_y_d[1 * full_nodes + 0] = -1.45e-12;
+    rhs_y_d[2 * full_nodes + 1] = 1.10e-12;
+    rhs_z_d[1 * full_nodes + 2] = 1.30e-12;
+    rhs_z_d[2 * full_nodes + 0] = -0.95e-12;
+
+    // Recovery G_rec at ~1.6e8 -> K_{q phi} = R_{gamma0} E^T G_rec ~ 3.54e13.
+    std::vector<double> rec_x_d(full_nodes * n_phi, 0.0);
+    std::vector<double> rec_y_d(full_nodes * n_phi, 0.0);
+    std::vector<double> rec_z_d(full_nodes * n_phi, 0.0);
+    rec_x_d[0 * n_phi + 0] = -1.60e8;
+    rec_x_d[0 * n_phi + 1] = 0.85e8;
+    rec_x_d[1 * n_phi + 1] = -1.35e8;
+    rec_x_d[2 * n_phi + 2] = -1.20e8;
+    rec_y_d[0 * n_phi + 1] = -1.10e8;
+    rec_y_d[1 * n_phi + 2] = 0.90e8;
+    rec_y_d[2 * n_phi + 3] = -0.75e8;
+    rec_z_d[2 * n_phi + 1] = -0.80e8;
+
+    const OwnedCsr p_csr = dense_to_csr(p_dense, n_phi, n_phi);
+    const OwnedCsr rx_csr = dense_to_csr(rhs_x_d, n_phi, full_nodes);
+    const OwnedCsr ry_csr = dense_to_csr(rhs_y_d, n_phi, full_nodes);
+    const OwnedCsr rz_csr = dense_to_csr(rhs_z_d, n_phi, full_nodes);
+    const OwnedCsr gx_csr = dense_to_csr(rec_x_d, full_nodes, n_phi);
+    const OwnedCsr gy_csr = dense_to_csr(rec_y_d, full_nodes, n_phi);
+    const OwnedCsr gz_csr = dense_to_csr(rec_z_d, full_nodes, n_phi);
+
+    DrivenFrequencyResponseDemagSparseBlocks blocks{};
+    blocks.is_periodic_reduced = 0u;
+    blocks.full_node_count = full_nodes;
+    blocks.phi_dof_count = n_phi;
+    blocks.magnetic_node_count = nodes.size();
+    blocks.ess_tdof_count = ess_tdofs.size();
+    blocks.poisson_matrix = p_csr.view();
+    blocks.rhs_x = rx_csr.view();
+    blocks.rhs_y = ry_csr.view();
+    blocks.rhs_z = rz_csr.view();
+    blocks.recovery_x = gx_csr.view();
+    blocks.recovery_y = gy_csr.view();
+    blocks.recovery_z = gz_csr.view();
+    blocks.magnetic_node_indices = mag_indices.data();
+    blocks.ess_tdofs = ess_tdofs.data();
+
+    auto req = make_base_request(nodes, freqs, 0.01);
+    req.gpu_direct_policy = DrivenFrequencyResponseGpuDirectPolicy::Required;
+    req.solver_options.relative_tolerance = 1.0e-10;
+    req.solve_request.operator_request.demag_kind = FrequencyDomainDemagKind::static_k0;
+    req.mfem_validation_problem.descriptor.demag_enabled = true;
+    req.mfem_validation_problem.descriptor.exchange_enabled = true;
+    req.mfem_validation_problem.exchange_edges = edges.data();
+    req.mfem_validation_problem.exchange_edge_count = edges.size();
+    req.mfem_validation_problem.descriptor.zeeman_enabled = true;
+    req.mfem_validation_problem.h_ext_a_per_m = h_ext;
+    req.mfem_validation_problem.h_ext_value_count = 3;
+    req.demag_sparse_blocks = &blocks;
+
+    const std::size_t n_q = nodes.size() * 2u;
+    const std::vector<double> drive_re = {1.0e9, -0.4e9, 0.6e9, 0.2e9, -0.7e9, 0.5e9};
+    const std::vector<double> drive_im = {0.1e9, 0.3e9, -0.2e9, 0.5e9, 0.2e9, -0.1e9};
+    std::vector<double> resp_re(freqs.size() * n_q, 0.0);
+    std::vector<double> resp_im(freqs.size() * n_q, 0.0);
+    std::vector<double> phi_re(freqs.size() * n_phi, 0.0);
+    std::vector<double> phi_im(freqs.size() * n_phi, 0.0);
+
+    DrivenResponseCudssOutcome outcome{};
+    const auto status = solve_driven_response_gpu_cudss(
+        req,
+        drive_re.data(),
+        drive_im.data(),
+        resp_re.data(),
+        resp_im.data(),
+        nullptr,
+        nullptr,
+        phi_re.data(),
+        phi_im.data(),
+        nullptr,
+        nullptr,
+        &outcome);
+    CHECK(status == FrequencyDomainStatus::ok, "1e25 asymmetric-coupling open-airbox sweep failed");
+    CHECK(outcome.used_cudss && outcome.symbolic_analysis_count == 1u &&
+              outcome.numeric_factorization_count == freqs.size(),
+          "1e25 asymmetric-coupling analysis/factorization counts mismatch");
+    CHECK(outcome.max_magnetic_relative_residual_l2 <= 1.0e-12,
+          "1e25 asymmetric-coupling magnetic residual exceeded 1e-12");
+    CHECK(outcome.max_poisson_relative_residual_l2 <= 1.0e-12,
+          "1e25 asymmetric-coupling Poisson residual exceeded 1e-12");
+
+    std::vector<double> k_loc;
+    std::vector<double> m_mat;
+    build_dense_magnetic_km(req, k_loc, m_mat);
+
+    std::vector<double> r_phi_q(n_phi * n_q, 0.0);
+    for (std::size_t p = 0; p < n_phi; ++p) {
+        if (p == 7u) {
+            continue;
+        }
+        for (std::size_t u = 0; u < nodes.size(); ++u) {
+            const std::size_t g = mag_indices[u];
+            const double rx = rhs_x_d[p * full_nodes + g];
+            const double ry = rhs_y_d[p * full_nodes + g];
+            const double rz = rhs_z_d[p * full_nodes + g];
+            r_phi_q[p * n_q + 2 * u] =
+                rx * nodes[u].e1[0] + ry * nodes[u].e1[1] + rz * nodes[u].e1[2];
+            r_phi_q[p * n_q + 2 * u + 1] =
+                rx * nodes[u].e2[0] + ry * nodes[u].e2[1] + rz * nodes[u].e2[2];
+        }
+    }
+    std::vector<double> k_q_phi(n_q * n_phi, 0.0);
+    for (std::size_t u = 0; u < nodes.size(); ++u) {
+        const std::size_t g = mag_indices[u];
+        for (std::size_t p = 0; p < n_phi; ++p) {
+            const double gx = rec_x_d[g * n_phi + p];
+            const double gy = rec_y_d[g * n_phi + p];
+            const double gz = rec_z_d[g * n_phi + p];
+            const double h1 = gx * nodes[u].e1[0] + gy * nodes[u].e1[1] + gz * nodes[u].e1[2];
+            const double h2 = gx * nodes[u].e2[0] + gy * nodes[u].e2[1] + gz * nodes[u].e2[2];
+            k_q_phi[(2 * u) * n_phi + p] = kGamma0 * h2;
+            k_q_phi[(2 * u + 1) * n_phi + p] = -kGamma0 * h1;
+        }
+    }
+
+    // Dense Schur complement oracle: K_eff = K_loc + K_{q phi} P^{-1} R_{phi q}.
+    std::vector<double> k_eff = k_loc;
+    for (std::size_t col = 0; col < n_q; ++col) {
+        std::vector<Complex> p_c(n_phi * n_phi);
+        for (std::size_t i = 0; i < n_phi * n_phi; ++i) {
+            p_c[i] = Complex(p_dense[i], 0.0);
+        }
+        std::vector<Complex> rhs_col(n_phi);
+        for (std::size_t p = 0; p < n_phi; ++p) {
+            rhs_col[p] = Complex(r_phi_q[p * n_q + col], 0.0);
+        }
+        std::vector<Complex> phi_col;
+        CHECK(solve_dense_complex_linear_system(n_phi, p_c, rhs_col, phi_col),
+              "1e25 dense P solve failed");
+        for (std::size_t r = 0; r < n_q; ++r) {
+            double acc = 0.0;
+            for (std::size_t p = 0; p < n_phi; ++p) {
+                acc += k_q_phi[r * n_phi + p] * phi_col[p].real();
+            }
+            k_eff[r * n_q + col] += acc;
+        }
+    }
+
+    for (std::size_t k = 0; k < freqs.size(); ++k) {
+        const double omega = kTwoPi * freqs[k];
+        std::vector<Complex> z_eff(n_q * n_q);
+        for (std::size_t i = 0; i < n_q * n_q; ++i) {
+            z_eff[i] = Complex(k_eff[i], -omega * m_mat[i]);
+        }
+        std::vector<Complex> rhs_q(n_q);
+        for (std::size_t i = 0; i < n_q; ++i) {
+            rhs_q[i] = Complex(drive_re[i], drive_im[i]);
+        }
+        std::vector<Complex> q_ref;
+        CHECK(solve_dense_complex_linear_system(n_q, z_eff, rhs_q, q_ref),
+              "1e25 dense Schur oracle solve failed");
+        const double err_q = relative_l2_error(
+            resp_re.data() + k * n_q, resp_im.data() + k * n_q, q_ref);
+        CHECK(err_q < 1.0e-11, "1e25 asymmetric-coupling q diverged from Schur oracle");
+
+        std::vector<Complex> p_c(n_phi * n_phi);
+        for (std::size_t i = 0; i < n_phi * n_phi; ++i) {
+            p_c[i] = Complex(p_dense[i], 0.0);
+        }
+        std::vector<Complex> rhs_phi(n_phi, Complex(0.0, 0.0));
+        for (std::size_t p = 0; p < n_phi; ++p) {
+            for (std::size_t c = 0; c < n_q; ++c) {
+                rhs_phi[p] += r_phi_q[p * n_q + c] * q_ref[c];
+            }
+        }
+        std::vector<Complex> phi_ref;
+        CHECK(solve_dense_complex_linear_system(n_phi, p_c, rhs_phi, phi_ref),
+              "1e25 dense phi oracle solve failed");
+        const double err_phi = relative_l2_error(
+            phi_re.data() + k * n_phi, phi_im.data() + k * n_phi, phi_ref);
+        CHECK(err_phi < 1.0e-11, "1e25 asymmetric-coupling delta_phi diverged from Schur oracle");
+        CHECK(std::hypot(phi_re[k * n_phi + 7u], phi_im[k * n_phi + 7u]) < 1.0e-15,
+              "1e25 Dirichlet ess_tdof node 7 must remain zero");
+    }
+    return true;
+}
+
 #endif // FULLMAG_FEM_CUDSS_DRIVEN_ENABLED
 
 } // namespace
@@ -1353,6 +1585,7 @@ int main()
     }
     if (!test_no_demag_sweep_parity_and_single_analysis() ||
         !test_coupled_airbox_demag_sweep_parity_and_ess_tdofs() ||
+        !test_asymmetric_1e25_open_airbox_block_prescaling() ||
         !test_divergence_free_mode_poisson_residual_certificate() ||
         !test_vram_budget_guard_auto_vs_required() ||
         !test_singular_undamped_resonance_hard_error_under_auto() ||

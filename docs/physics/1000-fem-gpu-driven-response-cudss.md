@@ -58,11 +58,14 @@ contribution in the tangent LLG residual using the exact recovery matrices $G_{\
 $R_{\gamma_0}$ (`2x2` blocks scaling $\delta h_{\mathrm{demag}}$ by $\gamma_0$). For no-demag problems, the
 $\delta\phi$ block is omitted and $Z_{\mathrm{aug}}(\omega_k) = K_{qq} + \sigma_{\mathrm{conv}}\,\mathrm{i}\omega_k M_{qq}$.
 
-Because the magnetic rows ($O(10^9\text{--}10^{12})\,\mathrm{rad\,s^{-1}}$) and magnetostatic Poisson rows
-($O(10^{-8}\text{--}10^{-4})\,\mathrm{m}$) can span up to 20 orders of magnitude, six passes of Ruiz row/column
-infinity-norm equilibration compute positive real diagonal scaling matrices $(D_r, D_c)$ from
-$|Z_{\mathrm{aug}}(\omega_{\mathrm{ref}})|$ at a reference sweep frequency $\omega_{\mathrm{ref}}$ before symbolic
-analysis:
+Because the magnetic rows ($O(10^9\text{--}10^{12})\,\mathrm{rad\,s^{-1}}$), magnetostatic Poisson rows
+($O(10^{-8}\text{--}10^{-4})\,\mathrm{m}$), and off-diagonal coupling blocks ($K_{q\phi} \sim O(10^{13})$ vs.
+$-R_{\phi q} \sim O(10^{-12})$) can span up to 25 orders of magnitude with strong off-diagonal asymmetry alongside
+unit-diagonal `ess_tdofs` rows, exact $2 \times 2$ block geometric pre-scaling equalizes the four block infinity scales
+(computing interior Poisson stiffness from multi-nonzero rows so unit-diagonal Dirichlet rows do not mask interior
+entries) before six passes of Ruiz row/column infinity-norm equilibration compute positive real diagonal scaling
+matrices $(D_r, D_c)$ from $|Z_{\mathrm{aug}}(\omega_{\mathrm{ref}})|$ at a reference sweep frequency
+$\omega_{\mathrm{ref}}$ prior to symbolic analysis:
 
 ```{math}
 :label: eq-driven-ruiz-equilibration
@@ -291,9 +294,11 @@ When `solver_method` is omitted or `"auto"`, the runner maps `requested_device =
    $K_{q\phi} = R_{\gamma_0} E_{\mathrm{lift}}^{\mathsf T} G_{\mathrm{rec}}$, $-R_{\phi q}$ (skipping any `ess_tdofs`
    row defensively), and $P$ into a single sorted 0-based complex CSR matrix, applying {eq}`eq-driven-static-periodic-reduction`
    when static $k=0$ periodicity is active and explicitly reserving all $4 N_{m,\mathrm{eff}}$ diagonal mass/damping slots.
-3. **Six-pass Ruiz equilibration:** Computes real positive diagonal scaling $(D_r, D_c)$ on
-   $|Z_{\mathrm{aug}}(\omega_{\mathrm{ref}})|$, stores scaled base entries and diagonal index/value maps, and uploads
-   the CSR pattern and base arrays once to the GPU.
+3. **Block geometric pre-scaling and six-pass Ruiz equilibration:** Seeds the $\delta\phi$ row and column scales from
+   exact $2 \times 2$ block geometric ratios on $|Z_{\mathrm{aug}}(\omega_{\mathrm{ref}})|$ (measuring interior
+   Poisson stiffness separately from single-entry `ess_tdofs` rows to eliminate $10^{25}$ off-diagonal asymmetry),
+   refines $(D_r, D_c)$ with six Ruiz passes, stores scaled base entries and diagonal index/value maps, and uploads the
+   CSR pattern and base arrays once to the GPU.
 4. **One-time symbolic analysis and VRAM preflight:** Executes `CUDSS_PHASE_ANALYSIS` once, queries
    `CUDSS_DATA_MEMORY_ESTIMATES` and `cudaMemGetInfo`, and checks {eq}`eq-driven-memory-budget`. Over-budget plans
    release all `cuDSS` and device allocations before `CUDSS_PHASE_FACTORIZATION` starts.
@@ -343,7 +348,8 @@ When `solver_method` is omitted or `"auto"`, the runner maps `requested_device =
    - No-demag 10-frequency sweep with exchange, Zeeman, uniaxial anisotropy, DMI, and zero-$K_{\mathrm{loc}}$ node
      parity against dense complex oracle (`symbolic_analysis_count == 1`, `numeric_factorization_count == 10`, pageable
      readback parity under `FULLMAG_FEM_FORCE_PAGEABLE_SCALAR_READBACK=1`).
-   - Coupled airbox $10^{20}$ block-scale disparity and `ess_tdofs` zeroing verified against dense Schur oracle
+   - Coupled airbox $10^{20}$ block-scale disparity, $10^{25}$ open-airbox asymmetric-coupling block geometric
+     pre-scaling with uncoupled airbox rows, and `ess_tdofs` zeroing verified against dense Schur oracle
      ($\rho_q, \rho_\phi \le 10^{-11}$, max relative solution error $< 10^{-10}$).
    - Divergence-free mode Poisson residual floor {eq}`eq-driven-poisson-atol-floor` verification.
    - Tight VRAM budget (`FULLMAG_FEM_DRIVEN_CUDSS_BUDGET_BYTES=1`) verifying clean `Auto` fallback with zero
