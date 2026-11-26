@@ -59,10 +59,19 @@ __global__ void magnetoelastic_field_energy_blocks_kernel(
         double hy = 0.0;
         double hz = 0.0;
         if (ms_i > 0.0) {
-            const double inv_mu0_ms = -1.0 / (kMu0 * ms_i);
-            hx = inv_mu0_ms * (2.0 * b1 * lmx * e11 + 2.0 * b2 * (lmy * tensor_e12 + lmz * tensor_e13));
-            hy = inv_mu0_ms * (2.0 * b1 * lmy * e22 + 2.0 * b2 * (lmx * tensor_e12 + lmz * tensor_e23));
-            hz = inv_mu0_ms * (2.0 * b1 * lmz * e33 + 2.0 * b2 * (lmx * tensor_e13 + lmy * tensor_e23));
+            // Keep field arithmetic non-contracted so ComputeEnergy=true/false
+            // produce bitwise-identical H_mel under NVCC default -fmad=true.
+            const double inv_mu0_ms = -1.0 / __dmul_rn(kMu0, ms_i);
+            const double two_b2 = __dmul_rn(2.0, b2);
+            const double diag_x = 2.0 * b1 * lmx * e11;
+            const double diag_y = 2.0 * b1 * lmy * e22;
+            const double diag_z = 2.0 * b1 * lmz * e33;
+            const double shear_x = __dadd_rn(__dmul_rn(lmy, tensor_e12), __dmul_rn(lmz, tensor_e13));
+            const double shear_y = __dadd_rn(__dmul_rn(lmx, tensor_e12), __dmul_rn(lmz, tensor_e23));
+            const double shear_z = __dadd_rn(__dmul_rn(lmx, tensor_e13), __dmul_rn(lmy, tensor_e23));
+            hx = __dmul_rn(inv_mu0_ms, __dadd_rn(diag_x, __dmul_rn(two_b2, shear_x)));
+            hy = __dmul_rn(inv_mu0_ms, __dadd_rn(diag_y, __dmul_rn(two_b2, shear_y)));
+            hz = __dmul_rn(inv_mu0_ms, __dadd_rn(diag_z, __dmul_rn(two_b2, shear_z)));
         }
         h_mel_x[i] = hx;
         h_mel_y[i] = hy;

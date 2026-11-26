@@ -1477,7 +1477,7 @@ void gpu_relaxation_pgbb_building_blocks_live_under_native_cuda() {
     const auto pgbb_step_end =
         pgbb_step_start == std::string::npos
             ? std::string::npos
-            : pgbb_source.find("#else", pgbb_step_start);
+            : pgbb_source.find("#else\n    (void)ctx;", pgbb_step_start);
     const std::string pgbb_step =
         pgbb_step_start == std::string::npos
             ? std::string()

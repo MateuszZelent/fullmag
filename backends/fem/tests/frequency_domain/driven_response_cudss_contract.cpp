@@ -863,7 +863,7 @@ bool test_coupled_airbox_demag_sweep_parity_and_ess_tdofs()
     auto req = make_base_request(nodes, freqs, 0.01);
     req.gpu_direct_policy = DrivenFrequencyResponseGpuDirectPolicy::Required;
     req.solver_options.relative_tolerance = 1.0e-10;
-    req.solve_request.operator_request.demag_kind = FrequencyDomainDemagKind::poisson_robin;
+    req.solve_request.operator_request.demag_kind = FrequencyDomainDemagKind::static_k0;
     req.mfem_validation_problem.descriptor.demag_enabled = true;
     req.mfem_validation_problem.descriptor.exchange_enabled = true;
     req.mfem_validation_problem.exchange_edges = edges.data();
