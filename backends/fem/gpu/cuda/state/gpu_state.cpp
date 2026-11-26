@@ -11,6 +11,7 @@
 #include "gpu/cuda/state/gpu_state.hpp"
 
 #include "context.hpp"
+#include "gpu/cuda/demag_poisson/demag_predictor.hpp"
 #include "gpu/cuda/exchange/exchange_upload.hpp"
 #include "gpu/cuda/fields/field_buffer_memory.hpp"
 #include "gpu/cuda/fields/field_buffer_upload.hpp"
@@ -56,6 +57,9 @@ void reset_metadata(FemGpuState &state)
     state.residency.device_state = FemGpuSyncState::HostStale;
     state.runtime_coefficients.uploaded = false;
     state.rk.fsal_valid = false;
+    state.rk.fsal_time_seconds = 0.0;
+    state.rk.fsal_operator_signature = 0;
+    state.rk.active_step_dt_s = 0.0;
     state.rk.endpoint_valid = false;
     state.rk.endpoint_integrator = 0;
     state.rk.endpoint_generation = 0;
@@ -97,14 +101,18 @@ void reset_metadata(FemGpuState &state)
     state.demag_poisson.last_evaluation_purpose = 0;
     state.demag_poisson.field_only_evaluation_count = 0;
     state.demag_poisson.field_and_energy_evaluation_count = 0;
+    gpu_demag_predictor_invalidate(state.demag_poisson.predictor);
 }
 
 void invalidate_rk_endpoint(FemGpuState &state)
 {
     gpu_relax_note_external_state_change(state.relaxation);
+    state.rk.fsal_time_seconds = 0.0;
+    state.rk.fsal_operator_signature = 0;
     state.rk.endpoint_valid = false;
     state.rk.endpoint_consumed = true;
     state.rk.endpoint_operator_signature = 0;
+    gpu_demag_predictor_invalidate(state.demag_poisson.predictor);
 }
 
 } // namespace
@@ -1001,6 +1009,7 @@ bool gpu_state_resize_demag_poisson_scalars(
     gpu_device_free_double(demag.poisson_rhs);
     gpu_device_free_double(demag.poisson_solution);
     gpu_device_free_double(demag.poisson_solution_full);
+    gpu_demag_predictor_destroy(demag.predictor);
     demag.poisson_rhs = rhs;
     demag.poisson_solution = solution;
     demag.poisson_solution_full = solution_full;
@@ -1034,6 +1043,7 @@ void gpu_state_destroy(FemGpuState &state)
     gpu_device_free_double(state.demag_poisson.poisson_solution);
     gpu_device_free_double(state.demag_poisson.poisson_solution_full);
     gpu_device_free_component(state.demag_poisson.poisson_gradient);
+    gpu_demag_predictor_destroy(state.demag_poisson.predictor);
     gpu_exchange_reset_legacy_sparse(
         state.lifecycle,
         state.legacy_exchange,

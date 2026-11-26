@@ -121,7 +121,9 @@ bool gpu_rk_prepare_step_preflight(
     }
 
     result.adaptive = tableau.order_est > 0 && ctx.adaptive_dt.enabled;
-    result.fsal_method = (result.is_rk23 || result.is_rk45) && gpu_rk_rhs_allows_fsal_reuse(ctx);
+    result.fsal_method =
+        (result.is_heun || result.is_rk4 || result.is_rk23 || result.is_rk45) &&
+        gpu_rk_rhs_allows_fsal_k0_reuse(ctx);
     return true;
 }
 

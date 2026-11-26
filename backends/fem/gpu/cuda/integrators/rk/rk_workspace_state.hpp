@@ -24,6 +24,9 @@ struct FemGpuRkWorkspaceDeviceState {
     FemGpuComponentField error;
     std::array<FemGpuComponentField, FEM_GPU_MAX_RK_STAGES> k{};
     bool fsal_valid = false;
+    double fsal_time_seconds = 0.0;
+    uint64_t fsal_operator_signature = 0;
+    double active_step_dt_s = 0.0;
     // Exact normalized endpoint captured by DP54 stage-6. The buffer uses the
     // existing error scratch until the accepted attempt is promoted.
     bool endpoint_valid = false;

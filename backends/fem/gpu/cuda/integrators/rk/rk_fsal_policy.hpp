@@ -12,6 +12,12 @@ namespace fullmag::fem {
 
 struct Context;
 
+bool gpu_rk_has_discontinuous_or_host_drive(const Context &ctx);
+
+bool gpu_rk_rhs_allows_fsal_k0_reuse(const Context &ctx);
+
+bool gpu_rk_allows_endpoint_rhs_shortcut(const Context &ctx);
+
 bool gpu_rk_rhs_allows_fsal_reuse(const Context &ctx);
 
 // Call only after the accepted m/k0 checkpoint has been restored. This never

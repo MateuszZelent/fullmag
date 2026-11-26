@@ -1,0 +1,419 @@
+{
+  "document": {
+    "path": "docs/physics/0998-fem-gpu-rk-fsal-and-potential-predictor.md",
+    "reviewed_revision": "b945f43a619b8f4c2307deff6e203c2f7f7af08a"
+  },
+  "backend_matrix": [
+    {
+      "solver": "FEM",
+      "device": "CPU",
+      "status": "unsupported",
+      "reason": "This realization optimizes the strict device-resident FEM GPU explicit RK and HYPRE Poisson pipeline; FEM CPU retains its existing RK23/RK45 FSAL and MFEM/HYPRE warm-start path."
+    },
+    {
+      "solver": "FEM",
+      "device": "GPU",
+      "status": "documented"
+    },
+    {
+      "solver": "FDM",
+      "device": "CPU",
+      "status": "not-applicable",
+      "reason": "FDM computes demag via FFT convolution and uses a separate explicit time-stepping pipeline rather than MFEM/HYPRE FEM Poisson."
+    },
+    {
+      "solver": "FDM",
+      "device": "GPU",
+      "status": "not-applicable",
+      "reason": "FDM computes demag via FFT convolution and uses a separate explicit time-stepping pipeline rather than MFEM/HYPRE FEM Poisson."
+    }
+  ],
+  "equations": [
+    {
+      "id": "eq-rk-fsal-k0-reuse",
+      "symbols": [
+        "k0_next",
+        "rhs_f",
+        "m_next",
+        "t_next",
+        "t_fsal",
+        "sigma_fsal",
+        "sigma_curr",
+        "allow_k0"
+      ],
+      "sources": [
+        "fsal-k0-policy",
+        "fsal-signature",
+        "rk-preflight",
+        "rk-attempt-setup",
+        "rk-final-refresh"
+      ]
+    },
+    {
+      "id": "eq-rk-endpoint-shortcut-gate",
+      "symbols": [
+        "allow_ep",
+        "allow_k0",
+        "frozen_flag",
+        "pbc_flag"
+      ],
+      "sources": [
+        "fsal-endpoint-policy",
+        "rk-stage-schedule",
+        "rk-final-refresh"
+      ]
+    },
+    {
+      "id": "eq-demag-linear-predictor",
+      "symbols": [
+        "phi_pred",
+        "t_eval",
+        "phi_n",
+        "phi_prev",
+        "alpha",
+        "t_n",
+        "t_prev",
+        "c_s",
+        "dt_n",
+        "dt_prev"
+      ],
+      "sources": [
+        "predictor-kernel",
+        "predictor-apply",
+        "predictor-commit"
+      ]
+    },
+    {
+      "id": "eq-demag-predictor-guards",
+      "symbols": [
+        "t_eval",
+        "t_last",
+        "dt_n",
+        "dt_prev",
+        "alpha",
+        "r_max"
+      ],
+      "sources": [
+        "predictor-apply",
+        "stage-compute",
+        "rk-attempt-setup",
+        "predictor-invalidate"
+      ]
+    }
+  ],
+  "symbols": [
+    {
+      "id": "m_n",
+      "latex": "m_n",
+      "meaning": "Normalized nodal magnetization vector at accepted step $n$",
+      "si_unit": "1"
+    },
+    {
+      "id": "m_next",
+      "latex": "m_{n+1}",
+      "meaning": "Normalized nodal magnetization vector at accepted step $n+1$",
+      "si_unit": "1"
+    },
+    {
+      "id": "t_n",
+      "latex": "t_n",
+      "meaning": "Simulation time at accepted step $n$",
+      "si_unit": "\\mathrm{s}"
+    },
+    {
+      "id": "t_next",
+      "latex": "t_{n+1}",
+      "meaning": "Simulation time at accepted step $n+1$",
+      "si_unit": "\\mathrm{s}"
+    },
+    {
+      "id": "t_prev",
+      "latex": "t_{n-1}",
+      "meaning": "Simulation time at accepted step $n-1$",
+      "si_unit": "\\mathrm{s}"
+    },
+    {
+      "id": "dt_n",
+      "latex": "\\Delta t_n",
+      "meaning": "Active RK step size advancing from $t_n$ to $t_{n+1}$",
+      "si_unit": "\\mathrm{s}"
+    },
+    {
+      "id": "dt_prev",
+      "latex": "\\Delta t_{n-1}",
+      "meaning": "Accepted previous step size $t_n - t_{n-1}$",
+      "si_unit": "\\mathrm{s}"
+    },
+    {
+      "id": "c_s",
+      "latex": "c_s",
+      "meaning": "Explicit Runge-Kutta tableau abscissa for stage $s$",
+      "si_unit": "1"
+    },
+    {
+      "id": "t_eval",
+      "latex": "t_{\\mathrm{eval}}",
+      "meaning": "RK stage evaluation time $t_n + c_s \\Delta t_n$",
+      "si_unit": "\\mathrm{s}"
+    },
+    {
+      "id": "t_last",
+      "latex": "t_{\\mathrm{last}}",
+      "meaning": "Highest RK stage time already solved within the current attempt (`last_solved_stage_time_s`)",
+      "si_unit": "\\mathrm{s}"
+    },
+    {
+      "id": "rhs_f",
+      "latex": "f(m, t)",
+      "meaning": "Device LLG right-hand side $\\mathrm{d}m/\\mathrm{d}t$ after frozen-spin zeroing",
+      "si_unit": "\\mathrm{s^{-1}}"
+    },
+    {
+      "id": "k0_next",
+      "latex": "k_0^{(n+1)}",
+      "meaning": "First-stage RK slope reused at the start of step $n+1$",
+      "si_unit": "\\mathrm{s^{-1}}"
+    },
+    {
+      "id": "t_fsal",
+      "latex": "t_{\\mathrm{fsal}}",
+      "meaning": "Timestamp stored with the cached FSAL slope (`fsal_time_seconds`)",
+      "si_unit": "\\mathrm{s}"
+    },
+    {
+      "id": "sigma_fsal",
+      "latex": "\\Sigma_{\\mathrm{fsal}}",
+      "meaning": "64-bit operator fingerprint stored with the cached FSAL slope (`fsal_operator_signature`)",
+      "si_unit": "1"
+    },
+    {
+      "id": "sigma_curr",
+      "latex": "\\Sigma(t)",
+      "meaning": "Current 64-bit operator fingerprint computed by `gpu_rk_fsal_operator_signature`",
+      "si_unit": "1"
+    },
+    {
+      "id": "allow_k0",
+      "latex": "\\mathcal{A}_{\\mathrm{k0}}",
+      "meaning": "Boolean eligibility flag for FSAL `k0` reuse (`gpu_rk_rhs_allows_fsal_k0_reuse`)",
+      "si_unit": "1"
+    },
+    {
+      "id": "allow_ep",
+      "latex": "\\mathcal{A}_{\\mathrm{ep}}",
+      "meaning": "Boolean eligibility flag for RK23/RK45 endpoint RHS shortcut (`gpu_rk_allows_endpoint_rhs_shortcut`)",
+      "si_unit": "1"
+    },
+    {
+      "id": "frozen_flag",
+      "latex": "\\mathcal{F}_{\\mathrm{frozen}}",
+      "meaning": "Boolean flag indicating active frozen-spin constraints (`ctx.frozen_spins.enabled()`)",
+      "si_unit": "1"
+    },
+    {
+      "id": "pbc_flag",
+      "latex": "\\mathcal{P}_{\\mathrm{pbc}}",
+      "meaning": "Boolean flag indicating periodic-reduced mesh nodes (`has_periodic_reduced_nodes`)",
+      "si_unit": "1"
+    },
+    {
+      "id": "phi_n",
+      "latex": "\\phi_n",
+      "meaning": "Accepted scalar magnetostatic potential vector at $t_n$",
+      "si_unit": "\\mathrm{A}"
+    },
+    {
+      "id": "phi_prev",
+      "latex": "\\phi_{n-1}",
+      "meaning": "Accepted scalar magnetostatic potential vector at $t_{n-1}$",
+      "si_unit": "\\mathrm{A}"
+    },
+    {
+      "id": "phi_pred",
+      "latex": "\\phi^{(0)}(t_{\\mathrm{eval}})",
+      "meaning": "Predicted initial scalar potential iterate for HYPRE Krylov warm start",
+      "si_unit": "\\mathrm{A}"
+    },
+    {
+      "id": "alpha",
+      "latex": "\\alpha",
+      "meaning": "Dimensionless linear extrapolation weight $(t_{\\mathrm{eval}} - t_n) / \\Delta t_{n-1}$",
+      "si_unit": "1"
+    },
+    {
+      "id": "r_max",
+      "latex": "r_{\\max}",
+      "meaning": "Maximum permitted step-size and extrapolation ratio ($2.0$)",
+      "si_unit": "1"
+    }
+  ],
+  "sources": [
+    {
+      "id": "fsal-drive-guard",
+      "path": "backends/fem/gpu/cuda/integrators/rk/rk_fsal_policy.hpp",
+      "symbol": "gpu_rk_has_discontinuous_or_host_drive",
+      "responsibility": "Fail-closed detection of pulse, host-expression, and unknown time-dependent drives.",
+      "evidence_status": "contract_test"
+    },
+    {
+      "id": "fsal-k0-policy",
+      "path": "backends/fem/gpu/cuda/integrators/rk/rk_fsal_policy.cpp",
+      "symbol": "gpu_rk_rhs_allows_fsal_k0_reuse",
+      "responsibility": "Determines whether accepted endpoint RHS may be reused as next-step k0.",
+      "evidence_status": "contract_test"
+    },
+    {
+      "id": "fsal-endpoint-policy",
+      "path": "backends/fem/gpu/cuda/integrators/rk/rk_fsal_policy.cpp",
+      "symbol": "gpu_rk_allows_endpoint_rhs_shortcut",
+      "responsibility": "Separates RK23/RK45 endpoint shortcut eligibility from k0 reuse under frozen spins and PBC.",
+      "evidence_status": "contract_test"
+    },
+    {
+      "id": "fsal-signature",
+      "path": "backends/fem/gpu/cuda/integrators/rk/rk_fsal_policy.cpp",
+      "symbol": "gpu_rk_fsal_operator_signature",
+      "responsibility": "Hashes plan, Zeeman, Oersted, STT, SOT, DMI, frozen-spin, and GPU state generation.",
+      "evidence_status": "contract_test"
+    },
+    {
+      "id": "rk-preflight",
+      "path": "backends/fem/gpu/cuda/integrators/rk/rk_step_preflight.cu",
+      "symbol": "gpu_rk_prepare_step_preflight",
+      "responsibility": "Enables fsal_method for Heun, RK4, RK23, and RK45 when k0 reuse is allowed.",
+      "evidence_status": "contract_test"
+    },
+    {
+      "id": "rk-attempt-setup",
+      "path": "backends/fem/gpu/cuda/integrators/rk/rk_attempt_setup.cu",
+      "symbol": "gpu_rk_prepare_stage_attempt",
+      "responsibility": "Validates cached FSAL time/signature and resets predictor last_solved_stage_time_s to current_time.",
+      "evidence_status": "contract_test"
+    },
+    {
+      "id": "rk-stage-schedule",
+      "path": "backends/fem/gpu/cuda/integrators/rk/rk_stage_schedule.cu",
+      "symbol": "gpu_rk_run_stage_attempt",
+      "responsibility": "Gates DP54/BS23 endpoint_valid publication with gpu_rk_allows_endpoint_rhs_shortcut.",
+      "evidence_status": "contract_test"
+    },
+    {
+      "id": "rk-final-refresh",
+      "path": "backends/fem/gpu/cuda/integrators/rk/rk_final_refresh.cu",
+      "symbol": "gpu_rk_finalize_accepted_step",
+      "responsibility": "Propagates FSAL k0 with timestamp/signature and commits accepted Krylov potential after DuringFinalFieldRefresh.",
+      "evidence_status": "contract_test"
+    },
+    {
+      "id": "predictor-kernel",
+      "path": "backends/fem/gpu/cuda/demag_poisson/demag_predictor.cu",
+      "symbol": "demag_linear_predict_potential_kernel",
+      "responsibility": "FP64 CUDA kernel evaluating phi_n + alpha * (phi_n - phi_{n-1}).",
+      "evidence_status": "contract_test"
+    },
+    {
+      "id": "predictor-apply",
+      "path": "backends/fem/gpu/cuda/demag_poisson/demag_predictor.cu",
+      "symbol": "gpu_demag_predictor_apply_warm_start",
+      "responsibility": "Enforces history, equal-stage monotonicity, dt_ratio <= 2.0, and operator-signature guards.",
+      "evidence_status": "contract_test"
+    },
+    {
+      "id": "predictor-commit",
+      "path": "backends/fem/gpu/cuda/demag_poisson/demag_predictor.cu",
+      "symbol": "gpu_demag_predictor_commit_accepted_potential",
+      "responsibility": "Lazily allocates Krylov-only history buffers and shifts accepted endpoint potentials.",
+      "evidence_status": "contract_test"
+    },
+    {
+      "id": "predictor-destroy",
+      "path": "backends/fem/gpu/cuda/demag_poisson/demag_predictor.hpp",
+      "symbol": "gpu_demag_predictor_destroy",
+      "responsibility": "Idempotently frees predictor device buffers and clears metadata.",
+      "evidence_status": "contract_test"
+    },
+    {
+      "id": "predictor-invalidate",
+      "path": "backends/fem/gpu/cuda/demag_poisson/demag_predictor.hpp",
+      "symbol": "gpu_demag_predictor_invalidate",
+      "responsibility": "Inline metadata invalidation usable from host and CUDA paths without freeing buffers.",
+      "evidence_status": "contract_test"
+    },
+    {
+      "id": "stage-compute",
+      "path": "backends/fem/gpu/cuda/demag_poisson/stage_compute.cpp",
+      "symbol": "compute_device_demag_for_device_stage_impl",
+      "responsibility": "Applies Krylov-only warm-start prediction, auto-invalidates on non-RK purposes, and advances last_solved_stage_time_s.",
+      "evidence_status": "contract_test"
+    },
+    {
+      "id": "gpu-state-destroy",
+      "path": "backends/fem/gpu/cuda/state/gpu_state.hpp",
+      "symbol": "gpu_state_destroy",
+      "responsibility": "Destroys predictor device buffers alongside FemGpuState teardown.",
+      "evidence_status": "contract_test"
+    },
+    {
+      "id": "rk-transaction",
+      "path": "backends/fem/cpu/mfem/integrators/rk_step_transaction.cpp",
+      "symbol": "rk_step_transaction_reset_workspace",
+      "responsibility": "Owns the step transaction journal snapshotting and restoring FSAL and predictor metadata.",
+      "evidence_status": "contract_test"
+    },
+    {
+      "id": "policy-python",
+      "path": "packages/fullmag-py/src/fullmag/model/discretization.py",
+      "symbol": "class FemLinearSolverPolicy",
+      "responsibility": "Public FEM linear-solver policy governing Krylov convergence and residual certification.",
+      "evidence_status": "unchanged"
+    }
+  ],
+  "public_api": {
+    "parameters": [
+      {
+        "python": "FemLinearSolverPolicy.solver",
+        "type": "str",
+        "default": "CG",
+        "si_unit": "1",
+        "validation": "CG or GMRES",
+        "meaning": "Outer Krylov method accelerated by the two-step linear potential predictor on FEM GPU",
+        "backend_support": "FEM CPU/GPU",
+        "problem_ir": "fem.demag_solver_policy.solver"
+      },
+      {
+        "python": "FemLinearSolverPolicy.preconditioner",
+        "type": "str",
+        "default": "AMG",
+        "si_unit": "1",
+        "validation": "AMG, JACOBI or NONE",
+        "meaning": "Preconditioner for HYPRE Krylov Poisson solves",
+        "backend_support": "FEM CPU/GPU",
+        "problem_ir": "fem.demag_solver_policy.preconditioner"
+      },
+      {
+        "python": "FemLinearSolverPolicy.rtol",
+        "type": "float",
+        "default": "1e-8",
+        "si_unit": "1",
+        "validation": "positive finite value",
+        "meaning": "Independent residual certification threshold preserved unchanged by the predictor",
+        "backend_support": "FEM CPU/GPU",
+        "problem_ir": "fem.demag_solver_policy.rtol"
+      },
+      {
+        "python": "FemLinearSolverPolicy.max_iterations",
+        "type": "int",
+        "default": "500",
+        "si_unit": "1",
+        "validation": "at least 1",
+        "meaning": "Krylov iteration bound per Poisson solve",
+        "backend_support": "FEM CPU/GPU",
+        "problem_ir": "fem.demag_solver_policy.max_iterations"
+      }
+    ]
+  },
+  "validation": {
+    "plan": "Execute cuda_rk_heun_rk4_fsal_predictor_contract, cuda_rk_guard_contract, source_facade_gpu_rk_contract, fullmag-runner parity.rs, and Phase 2 RTX 4080 SUPER A/B benchmarks verifying Heun 3->2 and RK4 5->4 solve reduction, endpoint_valid separation for RK23/RK45 + frozen spins, rollback atomicity at DuringFinalFieldRefresh, cuDSS zero-overhead no-op, and Krylov CG/AMG iteration reduction.",
+    "results": "Contract tests authored in Track C; Docker DEV CUDA/MFEM execution and RTX 4080 SUPER A/B measurements scheduled in Phase 2 integration."
+  }
+}

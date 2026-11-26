@@ -135,7 +135,7 @@ bool gpu_rk_run_stage_attempt(
                 n,
                 stream);
         }
-        if (fsal_method && !gpu.mesh_regions.has_periodic_reduced_nodes) {
+        if (fsal_method && gpu_rk_allows_endpoint_rhs_shortcut(ctx)) {
             gpu.rk.endpoint_valid = true;
             gpu.rk.endpoint_integrator = FULLMAG_FEM_INTEGRATOR_RK45_DP54;
             gpu.rk.endpoint_generation += 1;
@@ -188,7 +188,7 @@ bool gpu_rk_run_stage_attempt(
         if (!gpu_rk_compute_rk23_adaptive_k3(ctx, stream, n, stage_rhs_evaluations, reason)) {
             return false;
         }
-        if (fsal_method && !gpu.mesh_regions.has_periodic_reduced_nodes) {
+        if (fsal_method && gpu_rk_allows_endpoint_rhs_shortcut(ctx)) {
             gpu.rk.endpoint_valid = true;
             gpu.rk.endpoint_integrator = FULLMAG_FEM_INTEGRATOR_RK23_BS;
             gpu.rk.endpoint_generation += 1;

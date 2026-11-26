@@ -109,7 +109,8 @@ bool gpu_rk_accumulate_effective_field_for_magnetization(
     double evaluation_time_s,
     const char *label,
     std::string &reason,
-    bool fresh_demag_initial_guess = false)
+    bool fresh_demag_initial_guess = false,
+    bool pass_rk_stage_time = false)
 {
     gpu_relax_invalidate_accepted_evaluation(ctx.gpu_state.device.relaxation);
     auto &timings = ctx.gpu_state.rk_phase_timings;
@@ -165,7 +166,15 @@ bool gpu_rk_accumulate_effective_field_for_magnetization(
     }
     const bool demag_ok = fresh_demag_initial_guess
         ? gpu_rk_compute_demag_for_device_stage_fresh(ctx, m, stream, reason)
-        : gpu_rk_compute_demag_for_device_stage(ctx, m, stream, reason);
+        : (pass_rk_stage_time
+               ? gpu_rk_compute_demag_for_device_stage(
+                     ctx,
+                     m,
+                     stream,
+                     evaluation_time_s,
+                     ctx.gpu_state.device.rk.active_step_dt_s,
+                     reason)
+               : gpu_rk_compute_demag_for_device_stage(ctx, m, stream, reason));
     if (!demag_ok) {
         return false;
     }
@@ -220,7 +229,7 @@ bool gpu_rk_compute_rhs_for_magnetization(
     bool compute_metric)
 {
     if (!gpu_rk_accumulate_effective_field_for_magnetization(
-            ctx, m, stream, n, evaluation_time_s, label, reason)) {
+            ctx, m, stream, n, evaluation_time_s, label, reason, false, true)) {
         return false;
     }
 

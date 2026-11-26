@@ -471,7 +471,9 @@ void gpu_rk_step_preflight_is_owned_by_cuda_rk_module() {
                 std::string::npos &&
             preflight_source.find("result.adaptive = tableau.order_est > 0 && ctx.adaptive_dt.enabled") !=
                 std::string::npos &&
-            preflight_source.find("result.fsal_method = (result.is_rk23 || result.is_rk45) && gpu_rk_rhs_allows_fsal_reuse(ctx)") !=
+            preflight_source.find("result.is_heun || result.is_rk4 || result.is_rk23 || result.is_rk45") !=
+                std::string::npos &&
+            preflight_source.find("gpu_rk_rhs_allows_fsal_k0_reuse(ctx)") !=
                 std::string::npos,
         "GPU CUDA RK step preflight source must own stream/block setup, adaptive flagging, and FSAL policy resolution");
     check(
@@ -1224,7 +1226,11 @@ void gpu_rk_final_refresh_is_owned_by_cuda_rk_module() {
                 std::string::npos,
         "GPU CUDA RK final refresh source must own final RHS refresh, FSAL copy, and max-RHS reduction");
     check(
-        refresh_source.find("stats.rhs_evaluations = total_stage_rhs_evaluations + 1") !=
+        refresh_source.find("stats.rhs_evaluations = total_stage_rhs_evaluations + (endpoint_rhs_ready ? 0u : 1u)") !=
+                std::string::npos &&
+            refresh_source.find("gpu_rk_allows_endpoint_rhs_shortcut(ctx)") !=
+                std::string::npos &&
+            refresh_source.find("gpu_demag_predictor_commit_accepted_potential(") !=
                 std::string::npos &&
             refresh_source.find("stats.fsal_reused = fsal_reused ? 1 : 0") !=
                 std::string::npos &&
@@ -1234,7 +1240,7 @@ void gpu_rk_final_refresh_is_owned_by_cuda_rk_module() {
                 std::string::npos &&
             refresh_source.find("gpu.residency.host_state = FemGpuSyncState::HostStale") !=
                 std::string::npos,
-        "GPU CUDA RK final refresh source must own accepted-step stats and GPU residency publication");
+        "GPU CUDA RK final refresh source must own accepted-step stats, predictor commit, and GPU residency publication");
     check(
         refresh_source.find("bool gpu_rk_device_resident_step(") == std::string::npos,
         "GPU CUDA RK final refresh source must not own RK step orchestration");
@@ -1364,8 +1370,12 @@ void gpu_rk_stage_schedule_is_owned_by_cuda_rk_module() {
             schedule_source.find("#include \"gpu/cuda/integrators/rk/rk23_adaptive_k3.hpp\"") !=
                 std::string::npos &&
             schedule_source.find("gpu_rk_compute_rk23_adaptive_k3(ctx, stream, n, stage_rhs_evaluations, reason)") !=
+                std::string::npos &&
+            schedule_source.find("gpu_rk_allows_endpoint_rhs_shortcut(ctx)") !=
+                std::string::npos &&
+            schedule_source.find("fsal_method && !gpu.mesh_regions.has_periodic_reduced_nodes") ==
                 std::string::npos,
-        "GPU CUDA RK stage schedule source must own attempt setup delegation, stage-sequence delegation, and adaptive RK23 k3 dispatch");
+        "GPU CUDA RK stage schedule source must own attempt setup delegation, stage-sequence delegation, endpoint shortcut gating, and adaptive RK23 k3 dispatch");
     check(
         attempt_setup_header.find("GPU CUDA RK attempt setup module header") !=
                 std::string::npos &&
@@ -1379,7 +1389,13 @@ void gpu_rk_stage_schedule_is_owned_by_cuda_rk_module() {
                 std::string::npos &&
             attempt_setup_source.find("gpu_rk_copy_component_device(") !=
                 std::string::npos &&
-            attempt_setup_source.find("fsal_reused = fsal_method && gpu.rk.fsal_valid") !=
+            attempt_setup_source.find("fsal_reused =") !=
+                std::string::npos &&
+            attempt_setup_source.find("gpu.rk.fsal_time_seconds == ctx.state.current_time") !=
+                std::string::npos &&
+            attempt_setup_source.find("gpu.rk.fsal_operator_signature == gpu_rk_fsal_operator_signature(ctx)") !=
+                std::string::npos &&
+            attempt_setup_source.find("gpu.demag_poisson.predictor.last_solved_stage_time_s = ctx.state.current_time") !=
                 std::string::npos &&
             attempt_setup_source.find("gpu_rk_compute_rhs_for_magnetization(") !=
                 std::string::npos &&
@@ -1944,7 +1960,7 @@ void gpu_demag_hypre_validation_is_cuda_guarded_for_cpu_builds() {
         root / "gpu" / "cuda" / "demag_poisson" / "hypre_device_solver.cpp");
     const auto validation = hypre_solver.find("if (validation_needs.rhs_norm) {");
     const auto cuda_guard = hypre_solver.find("#if FULLMAG_HAS_CUDA_RUNTIME", validation);
-    const auto device_norm = hypre_solver.find("fullmag_cuda_demag_validation_norm(", cuda_guard);
+    const auto device_norm = hypre_solver.find("certify_gpu_hypre_demag_residual(", cuda_guard);
     const auto cpu_path = hypre_solver.find("#else", cuda_guard);
     const auto guard_end = hypre_solver.find("#endif", cpu_path);
     const auto cpu_rejection = hypre_solver.find("requires CUDA stream interop", cpu_path);

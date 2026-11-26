@@ -13,9 +13,11 @@
 #include "fem_common.hpp"
 #include "gpu/cuda/demag_fem_bem/fem_bem_dispatch.hpp"
 #include "gpu/cuda/demag_poisson/cudss_direct_solver.hpp"
+#include "gpu/cuda/demag_poisson/demag_predictor.hpp"
 #include "gpu/cuda/demag_poisson/hypre_device_solver.hpp"
 #include "gpu/cuda/demag_poisson/hypre_stream_interop.hpp"
 #include "gpu/cuda/demag_poisson/operators.hpp"
+#include "gpu/cuda/integrators/rk/rk_fsal_policy.hpp"
 #include "gpu/cuda/integrators/rk/rk_step_stats.hpp"
 #include "gpu/cuda/runtime/gpu_state_runtime.hpp"
 #include "gpu/cuda/runtime/execution_receipt.hpp"
@@ -30,6 +32,7 @@
 #endif
 
 #include <algorithm>
+#include <cmath>
 #include <string>
 
 namespace fullmag::fem {
@@ -253,6 +256,44 @@ bool compute_device_demag_for_device_stage_impl(
             return false;
         }
     }
+    const bool is_rk_stage_purpose =
+        request.purpose == GpuDemagSolvePurpose::IntermediateRkStage ||
+        request.purpose == GpuDemagSolvePurpose::EndpointRkStage;
+    if (workspace->direct_solver == nullptr) {
+        if (!is_rk_stage_purpose ||
+            reset_initial_solution ||
+            ctx.poisson_demag.fresh_initial_guess_required ||
+            !gpu_rk_rhs_allows_fsal_k0_reuse(ctx)) {
+            gpu_demag_predictor_invalidate(gpu.demag_poisson.predictor);
+        } else if (request.has_stage_time) {
+            bool predictor_applied = false;
+            if (!gpu_demag_predictor_apply_warm_start(
+                    gpu.demag_poisson.predictor,
+                    request.stage_time_s,
+                    request.step_dt_s,
+                    gpu_rk_fsal_operator_signature(ctx),
+                    gpu.demag_poisson.poisson_solution,
+                    gpu.demag_poisson.scalar_dof_count,
+                    stream,
+                    predictor_applied,
+                    reason)) {
+                return false;
+            }
+            if (predictor_applied && !workspace->ess_tdofs.empty()) {
+                fullmag_cuda_zero_indexed_values(
+                    gpu.demag_poisson.poisson_solution,
+                    workspace->d_ess_tdofs,
+                    static_cast<int>(workspace->ess_tdofs.size()),
+                    stream);
+                if (!cuda_ok(
+                        cudaGetLastError(),
+                        "launch GPU Poisson demag predictor essential zero",
+                        reason)) {
+                    return false;
+                }
+            }
+        }
+    }
     // The CUDA RHS kernel writes directly to the raw device pointer wrapped by
     // HypreParVector. Mark hypre/device memory as current without copying stale
     // host data back over it.
@@ -366,6 +407,9 @@ bool compute_device_demag_for_device_stage_impl(
         workspace->solver_setup_complete &&
         workspace->solver_setup_count == 1u;
     if (!solve_converged) {
+        if (workspace->direct_solver == nullptr) {
+            gpu_demag_predictor_invalidate(gpu.demag_poisson.predictor);
+        }
         if (!cuda_ok(cudaMemsetAsync(
                 gpu.demag_poisson.poisson_solution,
                 0,
@@ -377,6 +421,13 @@ bool compute_device_demag_for_device_stage_impl(
         }
         workspace->x_par->HypreWrite();
         return false;
+    }
+    if (workspace->direct_solver == nullptr &&
+        is_rk_stage_purpose &&
+        request.has_stage_time &&
+        std::isfinite(request.stage_time_s)) {
+        gpu.demag_poisson.predictor.last_solved_stage_time_s =
+            request.stage_time_s;
     }
 
     GpuDemagPhaseTimer recover_timer;
