@@ -306,6 +306,48 @@ std::optional<PoissonAirboxSharedDomainComplexCsrMatrix> assemble_scaled_gyro(
     return matrix;
 }
 
+std::optional<PoissonAirboxSharedDomainComplexCsrMatrix> assemble_scaled_gyro(
+    const PoissonAirboxSharedDomainComplexCsrMatrix &gyro,
+    const std::vector<double> &diagonal,
+    double mass_scale)
+{
+    if (gyro.row_count == 0u || gyro.row_count != gyro.column_count || gyro.values.empty() ||
+        gyro.values.size() > std::numeric_limits<std::int32_t>::max() ||
+        gyro.row_offsets.size() != gyro.row_count + 1u ||
+        gyro.column_indices.size() != gyro.values.size() || diagonal.size() < gyro.row_count ||
+        !std::isfinite(mass_scale) || mass_scale <= 0.0) {
+        return std::nullopt;
+    }
+    PoissonAirboxSharedDomainComplexCsrMatrix matrix;
+    matrix.row_count = gyro.row_count;
+    matrix.column_count = gyro.column_count;
+    matrix.row_offsets = gyro.row_offsets;
+    matrix.column_indices = gyro.column_indices;
+    matrix.values.resize(gyro.values.size());
+    for (std::size_t row = 0; row < gyro.row_count; ++row) {
+        if (matrix.row_offsets[row] > matrix.row_offsets[row + 1u] ||
+            matrix.row_offsets[row + 1u] > matrix.values.size()) {
+            return std::nullopt;
+        }
+        for (auto entry = matrix.row_offsets[row]; entry < matrix.row_offsets[row + 1u]; ++entry) {
+            const auto index = static_cast<std::size_t>(entry);
+            const auto column = matrix.column_indices[index];
+            if (column >= gyro.column_count ||
+                !std::isfinite(gyro.values[index].real()) || !std::isfinite(gyro.values[index].imag())) {
+                return std::nullopt;
+            }
+            auto value = std::complex<double>(0.0, mass_scale) * gyro.values[index];
+            value *= diagonal[row];
+            value *= diagonal[column];
+            if (!std::isfinite(value.real()) || !std::isfinite(value.imag())) {
+                return std::nullopt;
+            }
+            matrix.values[index] = value;
+        }
+    }
+    return matrix;
+}
+
 __global__ void roundoff_hermitian(int columns, double2 *g, double2 *h)
 {
     const int index = blockIdx.x * blockDim.x + threadIdx.x;
@@ -427,11 +469,96 @@ __global__ void modal_residuals(int q, int dimension, const double *scale, doubl
     }
 }
 
+__global__ void floquet_modal_residuals(int q, int dimension, const double *scale, double operator_scale,
+                                        double shift, double potential_row_scale,
+                                        const double *inverse, const double2 *vectors,
+                                        ResidualCsrView shifted, ResidualCsrView mass,
+                                        AugmentedRitzCandidate *output)
+{
+    const int mode = blockIdx.x;
+    const int lane = threadIdx.x;
+    const double lambda_scaled = 1.0 / inverse[mode];
+    const auto *vector = vectors + static_cast<std::size_t>(mode) * dimension;
+    double magnetic[4]{}, poisson[3]{};
+    for (int row = lane; row < q; row += residual_threads) {
+        double2 shifted_stiffness{}, demag{}, gyro{};
+        for (auto entry = shifted.rows[row]; entry < shifted.rows[row + 1]; ++entry) {
+            const auto column = shifted.indices[entry];
+            const auto value = cuCmul(shifted.values[entry], vector[column]);
+            if (column < static_cast<std::uint32_t>(q)) {
+                shifted_stiffness = cuCadd(shifted_stiffness, value);
+            } else {
+                demag = cuCadd(demag, value);
+            }
+        }
+        for (auto entry = mass.rows[row]; entry < mass.rows[row + 1]; ++entry) {
+            gyro = cuCadd(gyro, cuCmul(mass.values[entry], vector[mass.indices[entry]]));
+        }
+        // H_sigma + shift*(i mass_scale B) restores operator_scale*A_qq
+        // before the original eigenvalue term is applied. Keep every complex
+        // component from the Floquet assembly in all three contributions.
+        const auto local = divide(cuCadd(shifted_stiffness, cuCmul(make_double2(shift, 0.0), gyro)),
+                                  operator_scale * scale[row]);
+        const auto coupling = divide(demag, operator_scale * scale[row]);
+        const auto gyro_term = cuCmul(
+            divide(gyro, operator_scale * scale[row]), make_double2(lambda_scaled, 0.0));
+        magnetic[0] += square_norm(cuCsub(cuCadd(local, coupling), gyro_term));
+        magnetic[1] += square_norm(local);
+        magnetic[2] += square_norm(coupling);
+        magnetic[3] += square_norm(gyro_term);
+    }
+    for (int row = q + lane; row < dimension; row += residual_threads) {
+        double2 source{}, potential{};
+        for (auto entry = shifted.rows[row]; entry < shifted.rows[row + 1]; ++entry) {
+            const auto column = shifted.indices[entry];
+            const auto value = cuCmul(shifted.values[entry], vector[column]);
+            if (column < static_cast<std::uint32_t>(q)) {
+                source = cuCadd(source, value);
+            } else {
+                potential = cuCadd(potential, value);
+            }
+        }
+        const double row_scale = potential_row_scale * scale[row];
+        source = divide(source, row_scale);
+        potential = divide(potential, row_scale);
+        poisson[0] += square_norm(cuCadd(source, potential));
+        poisson[1] += square_norm(source);
+        poisson[2] += square_norm(potential);
+    }
+    __shared__ double sums[7][residual_threads];
+    for (int i = 0; i < 4; ++i) {
+        sums[i][lane] = magnetic[i];
+    }
+    for (int i = 0; i < 3; ++i) {
+        sums[i + 4][lane] = poisson[i];
+    }
+    __syncthreads();
+    for (int stride = residual_threads / 2; stride > 0; stride /= 2) {
+        if (lane < stride) {
+            for (int i = 0; i < 7; ++i) {
+                sums[i][lane] += sums[i][lane + stride];
+            }
+        }
+        __syncthreads();
+    }
+    if (lane == 0) {
+        const double q_l2 = sqrt(sums[0][0]);
+        const double phi_l2 = sqrt(sums[4][0]);
+        const double q_norm = sqrt(sums[1][0]) + sqrt(sums[2][0]) + sqrt(sums[3][0]) + 1.0e-30;
+        const double phi_norm = sqrt(sums[5][0]) + sqrt(sums[6][0]) + 1.0e-30;
+        const double q_residual = isfinite(q_norm) ? q_l2 / q_norm : CUDART_INF;
+        const double phi_residual = isfinite(phi_norm) ? phi_l2 / phi_norm : CUDART_INF;
+        output[mode] = {inverse[mode], q_residual, phi_residual, q_l2, phi_l2};
+    }
+}
+
 } // namespace
 
-std::optional<AugmentedRitzBlock> solve_open_airbox_augmented_ritz(
-    const PoissonAirboxEigenBlockProblem &problem, double operator_scale,
-    double mass_scale, double shift, double mu0, int columns, const char **failure)
+static std::optional<AugmentedRitzBlock> solve_augmented_ritz_impl(
+    const PoissonAirboxEigenBlockProblem &problem,
+    const FloquetAirboxAugmentedPencilView *floquet_blocks,
+    double operator_scale, double mass_scale, double shift, double mu0, int columns,
+    const char **failure)
 {
     if (!failure) {
         return std::nullopt;
@@ -441,22 +568,37 @@ std::optional<AugmentedRitzBlock> solve_open_airbox_augmented_ritz(
         *failure = reason;
         return std::nullopt;
     };
+    const std::uint64_t q_dofs = floquet_blocks != nullptr
+        ? floquet_blocks->a_qq.row_count
+        : problem.q_dof_count;
+    const std::uint64_t phi_dofs = floquet_blocks != nullptr
+        ? floquet_blocks->p.row_count
+        : problem.phi_dof_count;
     if (columns < 1 || columns > max_projected_pencil_dimension ||
-        static_cast<std::uint64_t>(columns) > problem.q_dof_count ||
+        q_dofs == 0u || phi_dofs == 0u ||
+        q_dofs > static_cast<std::uint64_t>(std::numeric_limits<int>::max()) ||
+        phi_dofs > static_cast<std::uint64_t>(std::numeric_limits<int>::max()) - q_dofs ||
+        static_cast<std::uint64_t>(columns) > q_dofs ||
+        (floquet_blocks != nullptr &&
+         (problem.q_dof_count != q_dofs || problem.phi_dof_count != phi_dofs)) ||
         problem.max_outer_iterations == 0 ||
         problem.max_outer_iterations >= std::numeric_limits<int>::max() / 2 ||
         !std::isfinite(mass_scale) || mass_scale <= 0.0 || !std::isfinite(shift)) {
         return fail("cudss_ritz_invalid_configuration");
     }
-    auto pencil = assemble_open_airbox_augmented_pencil(problem, operator_scale, shift * mass_scale, mu0);
+    auto pencil = floquet_blocks != nullptr
+        ? assemble_floquet_airbox_augmented_pencil(*floquet_blocks, operator_scale, shift * mass_scale, mu0)
+        : assemble_open_airbox_augmented_pencil(problem, operator_scale, shift * mass_scale, mu0);
     if (!pencil) {
         return fail("cudss_ritz_invalid_augmented_pencil");
     }
-    const auto gyro = assemble_scaled_gyro(problem.B_qq, pencil->equilibration, mass_scale);
+    const auto gyro = floquet_blocks != nullptr
+        ? assemble_scaled_gyro(floquet_blocks->b_qq, pencil->equilibration, mass_scale)
+        : assemble_scaled_gyro(problem.B_qq, pencil->equilibration, mass_scale);
     if (!gyro) {
         return fail("cudss_ritz_invalid_gyrotropic_mass");
     }
-    const int q = static_cast<int>(problem.q_dof_count);
+    const int q = static_cast<int>(q_dofs);
     const int n = static_cast<int>(pencil->complex_csr.row_count);
     const auto kb = static_cast<std::size_t>(columns);
     const auto sweeps = static_cast<int>(problem.max_outer_iterations);
@@ -605,10 +747,18 @@ std::optional<AugmentedRitzBlock> solve_open_airbox_augmented_ritz(
         CUBLAS_STATUS_SUCCESS) {
         return fail("cudss_ritz_modal_reconstruction_failed");
     }
-    modal_residuals<<<columns, residual_threads, 0, cuda.stream>>>(
-        q, n, diagonal.get(), operator_scale, pencil->potential_row_scale, inverse.get(), mode_vectors.get(),
-        {shifted_matrix.rows.get(), shifted_matrix.indices.get(), shifted_matrix.entries.get()},
-        {mass_matrix.rows.get(), mass_matrix.indices.get(), mass_matrix.entries.get()}, residuals.get());
+    if (floquet_blocks != nullptr) {
+        floquet_modal_residuals<<<columns, residual_threads, 0, cuda.stream>>>(
+            q, n, diagonal.get(), operator_scale, shift, pencil->potential_row_scale,
+            inverse.get(), mode_vectors.get(),
+            {shifted_matrix.rows.get(), shifted_matrix.indices.get(), shifted_matrix.entries.get()},
+            {mass_matrix.rows.get(), mass_matrix.indices.get(), mass_matrix.entries.get()}, residuals.get());
+    } else {
+        modal_residuals<<<columns, residual_threads, 0, cuda.stream>>>(
+            q, n, diagonal.get(), operator_scale, pencil->potential_row_scale, inverse.get(), mode_vectors.get(),
+            {shifted_matrix.rows.get(), shifted_matrix.indices.get(), shifted_matrix.entries.get()},
+            {mass_matrix.rows.get(), mass_matrix.indices.get(), mass_matrix.entries.get()}, residuals.get());
+    }
     if (cudaGetLastError() != cudaSuccess || await_modal_batch(cuda.stream, problem) != cudaSuccess) {
         return fail(cancelled() ? "cudss_ritz_cancelled" : "cudss_ritz_residual_execution_failed");
     }
@@ -667,6 +817,28 @@ std::optional<AugmentedRitzBlock> solve_open_airbox_augmented_ritz(
         }
     }
     return result;
+}
+
+std::optional<AugmentedRitzBlock> solve_open_airbox_augmented_ritz(
+    const PoissonAirboxEigenBlockProblem &problem, double operator_scale,
+    double mass_scale, double shift, double mu0, int columns, const char **failure)
+{
+    return solve_augmented_ritz_impl(
+        problem, nullptr, operator_scale, mass_scale, shift, mu0, columns, failure);
+}
+
+std::optional<AugmentedRitzBlock> solve_floquet_airbox_augmented_ritz(
+    const PoissonAirboxEigenBlockProblem &controls,
+    const FloquetAirboxAugmentedPencilView &blocks,
+    double operator_scale,
+    double mass_scale,
+    double shift,
+    double mu0,
+    int columns,
+    const char **failure)
+{
+    return solve_augmented_ritz_impl(
+        controls, &blocks, operator_scale, mass_scale, shift, mu0, columns, failure);
 }
 
 } // namespace fullmag::fem::frequency_domain::gpu

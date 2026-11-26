@@ -1,5 +1,6 @@
 #include "frequency_domain/modal_gpu_krylov.hpp"
 #if FULLMAG_FEM_CUDSS_SHIFT_ENABLED
+#include "gpu/frequency_domain/modal_augmented_pencil.hpp"
 #include "gpu/frequency_domain/modal_augmented_trace.hpp"
 #include <cudss.h>
 #include <iomanip>
@@ -2126,8 +2127,8 @@ std::uint64_t modal_operator_signature(
     return modal_operator_identity(problem).aggregate;
 }
 
-bool gpu_operator_scaling(
-    const PoissonAirboxEigenBlockProblem &problem,
+bool gpu_operator_scaling_from_norms(
+    double computed_mass_norm, double computed_operator_norm,
     double *mass_norm,
     double *operator_norm,
     double *angular_frequency_scale,
@@ -2139,8 +2140,6 @@ bool gpu_operator_scaling(
         operator_scale == nullptr) {
         return false;
     }
-    const double computed_mass_norm = csr_infinity_norm(problem.B_qq);
-    const double computed_operator_norm = csr_infinity_norm(problem.A_qq);
     const double computed_angular_frequency_scale = std::max(
         1.0,
         computed_operator_norm / std::max(computed_mass_norm, 1.0e-300));
@@ -2165,6 +2164,16 @@ bool gpu_operator_scaling(
     *mass_scale = computed_mass_scale;
     *operator_scale = computed_operator_scale;
     return true;
+}
+
+bool gpu_operator_scaling(
+    const PoissonAirboxEigenBlockProblem &problem,
+    double *mass_norm, double *operator_norm, double *angular_frequency_scale,
+    double *mass_scale, double *operator_scale) noexcept
+{
+    return gpu_operator_scaling_from_norms(
+        csr_infinity_norm(problem.B_qq), csr_infinity_norm(problem.A_qq),
+        mass_norm, operator_norm, angular_frequency_scale, mass_scale, operator_scale);
 }
 
 // Caller holds the shared PETSc/SLEPc process mutex.
@@ -4499,13 +4508,47 @@ bool finish_modal_gpu_native_scope_v1(
 }
 
 #if FULLMAG_FEM_CUDSS_SHIFT_ENABLED
-FrequencyDomainStatus solve_poisson_airbox_modal_eigen_gpu_augmented_robin(
-    const PoissonAirboxEigenBlockProblem &problem, double mu0,
+namespace {
+
+double floquet_csr_infinity_norm(
+    const PoissonAirboxSharedDomainComplexCsrMatrix &matrix) noexcept
+{
+    if (matrix.row_count == 0 || matrix.row_offsets.empty() ||
+        matrix.row_offsets.size() - 1 != matrix.row_count ||
+        matrix.row_offsets.front() != 0 || matrix.row_offsets.back() != matrix.values.size()) {
+        return std::numeric_limits<double>::quiet_NaN();
+    }
+    double maximum = 0.0;
+    for (std::size_t row = 0; row < matrix.row_count; ++row) {
+        const auto begin = matrix.row_offsets[row];
+        const auto end = matrix.row_offsets[row + 1];
+        if (end < begin || end > matrix.values.size()) {
+            return std::numeric_limits<double>::quiet_NaN();
+        }
+        double sum = 0.0;
+        for (auto index = begin; index < end; ++index) {
+            sum += std::abs(matrix.values[index]);
+        }
+        if (!std::isfinite(sum)) {
+            return std::numeric_limits<double>::quiet_NaN();
+        }
+        maximum = std::max(maximum, sum);
+    }
+    return maximum;
+}
+
+FrequencyDomainStatus solve_airbox_modal_eigen_gpu_augmented(
+    const PoissonAirboxEigenBlockProblem &problem,
+    const gpu::FloquetAirboxAugmentedPencilView *floquet,
+    const std::array<double, 3> *k_rad_per_m, double mu0,
     PoissonAirboxModalEigenResult *result) noexcept
 {
     if (result == nullptr) {
         return FrequencyDomainStatus::validation_error;
     }
+    const char *adapter = floquet != nullptr ? kAugmentedFloquetGpuAdapter : kAugmentedRobinGpuAdapter;
+    const char *operator_kind = floquet != nullptr
+        ? "augmented_floquet_cudss_cuda" : "augmented_robin_cudss_cuda";
     const auto report_failure = [&](FrequencyDomainStatus status, const char *reason) {
         result->status = status;
         std::snprintf(result->error_message, sizeof(result->error_message), "%s", reason);
@@ -4515,19 +4558,44 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_gpu_augmented_robin(
             "\"reason\":\"%s\",\"execution_lane\":\"production_gpu\","
             "\"solver_adapter\":\"%s\",\"fallback_used\":false}",
             status == FrequencyDomainStatus::interrupted ? "interrupted" : "failed",
-            reason, kAugmentedRobinGpuAdapter);
+            reason, adapter);
         return result->status;
     };
     try {
         const char *failure = nullptr;
-        if (!string_equals(problem.demag_kind, "open_airbox_k0") ||
-            !std::isfinite(mu0) || mu0 <= 0.0 || !validate_problem(problem, result, &failure)) {
-            return report_failure(FrequencyDomainStatus::validation_error,
-                failure != nullptr ? failure : "cudss_robin_problem_invalid");
-        }
-        if (!gpu_operator_scaling(problem, &result->descriptor_mass_norm, &result->descriptor_operator_norm,
-                                  &result->angular_frequency_scale, &result->mass_scale, &result->operator_scale)) {
-            return report_failure(FrequencyDomainStatus::operator_error, "cudss_robin_scaling_invalid");
+        if (floquet != nullptr) {
+            constexpr auto max_index = static_cast<std::uint64_t>(std::numeric_limits<int>::max());
+            if (!string_equals(problem.demag_kind, "floquet_airbox") ||
+                !string_equals(problem.target_kind, "nearest_frequency") ||
+                !std::isfinite(mu0) || mu0 <= 0.0 ||
+                problem.q_dof_count == 0 || problem.phi_dof_count == 0 ||
+                problem.q_dof_count > max_index ||
+                problem.phi_dof_count > max_index - problem.q_dof_count ||
+                problem.q_dof_count != floquet->a_qq.row_count ||
+                problem.phi_dof_count != floquet->p.row_count ||
+                !std::isfinite(problem.residual_tolerance) || problem.residual_tolerance <= 0.0) {
+                return report_failure(FrequencyDomainStatus::validation_error, "cudss_floquet_problem_invalid");
+            }
+            result->q_dof_count = problem.q_dof_count;
+            result->phi_dof_count = problem.phi_dof_count;
+            result->augmented_dof_count = problem.q_dof_count + problem.phi_dof_count;
+            result->q_layout_interleaved_node_component = true;
+            if (!gpu_operator_scaling_from_norms(
+                    floquet_csr_infinity_norm(floquet->b_qq), floquet_csr_infinity_norm(floquet->a_qq),
+                    &result->descriptor_mass_norm, &result->descriptor_operator_norm,
+                    &result->angular_frequency_scale, &result->mass_scale, &result->operator_scale)) {
+                return report_failure(FrequencyDomainStatus::operator_error, "cudss_floquet_scaling_invalid");
+            }
+        } else {
+            if (!string_equals(problem.demag_kind, "open_airbox_k0") ||
+                !std::isfinite(mu0) || mu0 <= 0.0 || !validate_problem(problem, result, &failure)) {
+                return report_failure(FrequencyDomainStatus::validation_error,
+                    failure != nullptr ? failure : "cudss_robin_problem_invalid");
+            }
+            if (!gpu_operator_scaling(problem, &result->descriptor_mass_norm, &result->descriptor_operator_norm,
+                                      &result->angular_frequency_scale, &result->mass_scale, &result->operator_scale)) {
+                return report_failure(FrequencyDomainStatus::operator_error, "cudss_robin_scaling_invalid");
+            }
         }
 
         // CUPTI tags are process-wide. Keep the public solve and its CUDA
@@ -4536,25 +4604,36 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_gpu_augmented_robin(
         std::unique_lock<std::mutex> exclusive(stage_mutex, std::defer_lock);
         while (!exclusive.try_lock()) {
             if (poisson_airbox_modal_cancel_requested(problem)) {
-                return report_failure(FrequencyDomainStatus::interrupted, "cudss_robin_cancelled");
+                return report_failure(FrequencyDomainStatus::interrupted,
+                    floquet != nullptr ? "cudss_floquet_cancelled" : "cudss_robin_cancelled");
             }
             std::this_thread::sleep_for(std::chrono::milliseconds(10));
         }
         const auto setup_begin = fullmag::fem::cuda_trace::host_activity_timestamp_ns();
+        const auto solve_begin = std::chrono::steady_clock::now();
         const bool is_window = string_equals(problem.target_kind, "frequency_window");
         const auto solve = is_window ? gpu::solve_open_airbox_augmented_window :
                                        gpu::solve_open_airbox_augmented_nearest;
-        auto solved = solve(problem, result->operator_scale, result->mass_scale,
-                            result->angular_frequency_scale, mu0, &failure);
+        auto solved = floquet != nullptr
+            ? gpu::solve_floquet_airbox_augmented_nearest(
+                problem, *floquet, result->operator_scale, result->mass_scale,
+                result->angular_frequency_scale, mu0, &failure)
+            : solve(problem, result->operator_scale, result->mass_scale,
+                    result->angular_frequency_scale, mu0, &failure);
         if (!solved) {
             return report_failure(
                 poisson_airbox_modal_cancel_requested(problem)
                     ? FrequencyDomainStatus::interrupted : FrequencyDomainStatus::solve_error,
-                failure != nullptr ? failure : "cudss_robin_solve_failed");
+                failure != nullptr ? failure :
+                    (floquet != nullptr ? "cudss_floquet_solve_failed" : "cudss_robin_solve_failed"));
         }
 
+        const double certification_and_ritz_seconds =
+            std::chrono::duration<double>(std::chrono::steady_clock::now() - solve_begin).count();
         auto &evidence = result->gpu_execution_attestation;
-        evidence.operator_kind = FULLMAG_FEM_MODAL_OPERATOR_AUGMENTED_ROBIN_CUDSS_CUDA;
+        evidence.operator_kind = floquet != nullptr
+            ? FULLMAG_FEM_MODAL_OPERATOR_AUGMENTED_FLOQUET_CUDSS_CUDA
+            : FULLMAG_FEM_MODAL_OPERATOR_AUGMENTED_ROBIN_CUDSS_CUDA;
         evidence.production_shared_domain = true;
         evidence.operator_dimension = result->augmented_dof_count;
         evidence.host_phase_boundaries.setup_begin_ns = setup_begin;
@@ -4570,7 +4649,9 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_gpu_augmented_robin(
             cudssGetProperty(MINOR_VERSION, &cudss_minor) == CUDSS_STATUS_SUCCESS &&
             cudssGetProperty(PATCH_LEVEL, &cudss_patch) == CUDSS_STATUS_SUCCESS &&
             cudss_major >= 0 && cudss_minor >= 0 && cudss_patch >= 0;
-        CanonicalDigestBuilder graph("modal_gpu_augmented_robin_device_graph.v1");
+        CanonicalDigestBuilder graph(floquet != nullptr
+            ? "modal_gpu_augmented_floquet_device_graph.v1"
+            : "modal_gpu_augmented_robin_device_graph.v1");
         if (library_identified) {
             graph.add_u64("cudss_major", static_cast<std::uint64_t>(cudss_major));
             graph.add_u64("cudss_minor", static_cast<std::uint64_t>(cudss_minor));
@@ -4626,7 +4707,14 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_gpu_augmented_robin(
         auto *scope = active_modal_gpu_native_scope.get();
         if (scope != nullptr && resources_observed && evidence.device_residency_verified &&
             scope->subsolve_count == 0 && !scope->gpu_context_acquired) {
-            CanonicalDigestBuilder op("modal_gpu_augmented_robin_operator_key.v1");
+            CanonicalDigestBuilder op(floquet != nullptr
+                ? "modal_gpu_augmented_floquet_operator_key.v1"
+                : "modal_gpu_augmented_robin_operator_key.v1");
+            if (k_rad_per_m != nullptr) {
+                op.add_double("kx_rad_per_m", (*k_rad_per_m)[0]);
+                op.add_double("ky_rad_per_m", (*k_rad_per_m)[1]);
+                op.add_double("kz_rad_per_m", (*k_rad_per_m)[2]);
+            }
             op.add_string("mesh_generation_identity", problem.mesh_generation_identity);
             op.add_string("equilibrium_digest", problem.equilibrium_digest);
             op.add_string("bias_field_sample_signature", problem.bias_field_sample_signature);
@@ -4688,27 +4776,34 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_gpu_augmented_robin(
             "\"solver_adapter\":\"%s\",\"engine_id\":\"native_fem.frequency_domain.%s.v1\","
             "\"solve_succeeded\":true,\"fields_available\":%s,"
             "\"spectrum_completeness\":\"%s\",\"window_complete\":%s,"
-            "\"demag_kind\":\"open_airbox_k0\","
-            "\"assembly_kind\":\"mfem_weak_form_shared_domain\",\"outer_boundary_kind\":\"poisson_robin\","
-            "\"robin_beta\":%.17g,\"gauge_policy\":\"none\",\"gauge_reason\":\"coercive_outer_boundary\","
+            "\"demag_kind\":\"%s\","
+            "\"assembly_kind\":\"mfem_weak_form_shared_domain\",\"outer_boundary_kind\":\"%s\","
+            "\"robin_beta\":%.17g,\"gauge_policy\":\"%s\",\"gauge_reason\":\"%s\","
             "\"target_kind\":\"%s\",\"frequency_window_complete\":%s,\"certified_mode_count\":%llu,"
             "\"accepted_mode_count\":%u,\"truncated_by_requested_count\":%s,"
+            "\"cudss_certification_and_ritz_seconds\":%.17g,"
+            "\"cudss_certified_inertia_factorizations\":%zu,\"cudss_reused_inertia_probes\":%zu,"
             "\"magnetic_block_backward_error\":%.17g,\"poisson_block_backward_error\":%.17g,"
-            "\"gauge_constraint_backward_error\":0,\"residual_tolerance\":%.17g,\"full_residual_certified\":true,"
+            "\"gauge_constraint_backward_error\":%s,\"residual_tolerance\":%.17g,\"full_residual_certified\":true,"
             "\"production_solver_available\":true,\"production_native_solver_available\":true,"
             "\"production_implication\":true,\"production_shared_domain\":true,\"validation_only\":false,"
             "\"fallback_used\":false,\"cpu_fallback\":\"disabled\","
-            "\"eigensolver_operator_kind\":\"augmented_robin_cudss_cuda\","
+            "\"eigensolver_operator_kind\":\"%s\","
             "\"device_residency_verified\":%s,"
             "\"gpu_device_resident_modal_eigensolver\":%s,\"persistent_solver_context\":%s,"
             "\"scalable_selected_spectrum\":true,\"host_ritz_extraction\":false}",
-            kAugmentedRobinGpuAdapter, kAugmentedRobinGpuAdapter,
+            adapter, adapter,
             result->positive_frequency_branch_found ? "true" : "false",
             spectrum_completeness, result->window_complete ? "true" : "false",
-            problem.robin_beta, problem.target_kind, result->window_complete ? "true" : "false",
+            problem.demag_kind, floquet != nullptr ? problem.outer_boundary_kind : "poisson_robin",
+            problem.robin_beta, floquet != nullptr ? problem.gauge_policy : "none",
+            floquet != nullptr ? problem.gauge_reason : "coercive_outer_boundary",
+            problem.target_kind, result->window_complete ? "true" : "false",
             static_cast<unsigned long long>(solved->certified_mode_count), result->accepted_mode_count,
-            solved->truncated_by_requested_count ? "true" : "false", result->magnetic_block_backward_error,
-            result->poisson_block_backward_error, problem.residual_tolerance,
+            solved->truncated_by_requested_count ? "true" : "false", certification_and_ritz_seconds,
+            solved->certified_inertia_factorizations, solved->reused_inertia_probes, result->magnetic_block_backward_error,
+            result->poisson_block_backward_error, floquet != nullptr ? "null" : "0",
+            problem.residual_tolerance, operator_kind,
             evidence.device_residency_verified ? "true" : "false", evidence.device_residency_verified ? "true" : "false",
             resources_observed ? "true" : "false");
         if (is_window) {
@@ -4752,8 +4847,27 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_gpu_augmented_robin(
         }
         return result->status;
     } catch (...) {
-        return report_failure(FrequencyDomainStatus::operator_error, "cudss_robin_native_exception");
+        return report_failure(FrequencyDomainStatus::operator_error,
+            floquet != nullptr ? "cudss_floquet_native_exception" : "cudss_robin_native_exception");
     }
+}
+
+} // namespace
+
+FrequencyDomainStatus solve_poisson_airbox_modal_eigen_gpu_augmented_robin(
+    const PoissonAirboxEigenBlockProblem &problem, double mu0,
+    PoissonAirboxModalEigenResult *result) noexcept
+{
+    return solve_airbox_modal_eigen_gpu_augmented(problem, nullptr, nullptr, mu0, result);
+}
+
+FrequencyDomainStatus solve_floquet_airbox_modal_eigen_gpu_augmented(
+    const PoissonAirboxEigenBlockProblem &problem,
+    const gpu::FloquetAirboxAugmentedPencilView &blocks,
+    const std::array<double, 3> &k_rad_per_m, double mu0,
+    PoissonAirboxModalEigenResult *result) noexcept
+{
+    return solve_airbox_modal_eigen_gpu_augmented(problem, &blocks, &k_rad_per_m, mu0, result);
 }
 #endif
 

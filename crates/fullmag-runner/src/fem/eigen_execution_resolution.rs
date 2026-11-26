@@ -1,4 +1,7 @@
-use super::eigen_capability::native_cpu_modal_window_has_floquet_dynamic_demag_path;
+use super::eigen_capability::{
+    native_cpu_modal_window_has_floquet_dynamic_demag_path,
+    native_gpu_modal_window_has_floquet_dynamic_demag_path,
+};
 use crate::native_fem::NativeModalExecutionTarget;
 use crate::types::{
     ExecutionProvenance, FemEigenNativeExecutionAttestation, ResolvedFallback, RunError,
@@ -144,9 +147,10 @@ pub(crate) fn resolve_fem_eigen_execution_resolution<'a>(
 ) -> Result<Option<PlannedFemEigenExecution<'a>>, RunError> {
     let bounded_k0 = super::eigen_policy::shared_domain_k0_modal_requested(plan);
     let bounded_floquet = native_cpu_modal_window_has_floquet_dynamic_demag_path(plan);
+    let bounded_floquet_gpu = native_gpu_modal_window_has_floquet_dynamic_demag_path(plan);
     let reference_oracle = fem_eigen_reference_oracle_requested(plan);
     let Some(resolution) = resolution else {
-        if bounded_k0 || bounded_floquet {
+        if bounded_k0 || bounded_floquet || bounded_floquet_gpu {
             return Err(RunError {
                 message: "planned_fem_eigen_resolution_missing: bounded modal plans must be replanned with FemEigenExecutionResolutionIR"
                     .to_string(),
@@ -161,7 +165,7 @@ pub(crate) fn resolve_fem_eigen_execution_resolution<'a>(
                 .to_string(),
         });
     }
-    if !bounded_k0 && !bounded_floquet {
+    if !bounded_k0 && !bounded_floquet && !bounded_floquet_gpu {
         return Err(RunError {
             message: "planned_fem_eigen_resolution_scope_mismatch: exact execution resolution is valid only for bounded periodic-airbox K0 or Floquet dynamic-demag plans"
                 .to_string(),
@@ -176,6 +180,11 @@ pub(crate) fn resolve_fem_eigen_execution_resolution<'a>(
     let dynamic_resolution_scope = resolution
         .selection_reason
         .starts_with("fem_eigen.floquet_airbox_dynamic_demag.");
+    let explicit_gpu_floquet_resolution = resolution.selection_reason
+        == "fem_eigen.floquet_airbox_dynamic_demag.explicit_gpu"
+        && resolution.requested_device == ExecutionDevice::Gpu
+        && resolution.resolved_device == ExecutionDevice::Gpu
+        && bounded_floquet_gpu;
     let resolution_scope_valid = match resolution.resolved_engine {
         FemEigenEngineIR::K0PoissonAirboxCpuSchurSlepc => bounded_k0,
         // A path's Gamma sample is normalized to the K0 physical lane while
@@ -184,7 +193,7 @@ pub(crate) fn resolve_fem_eigen_execution_resolution<'a>(
         FemEigenEngineIR::FloquetAirboxCpuSchurSlepc => {
             bounded_floquet || (bounded_k0 && dynamic_resolution_scope)
         }
-        FemEigenEngineIR::GpuModalDeviceKrylov => bounded_k0,
+        FemEigenEngineIR::GpuModalDeviceKrylov => bounded_k0 || explicit_gpu_floquet_resolution,
         FemEigenEngineIR::Auto => unreachable!("auto engine was rejected above"),
     };
     if !resolution_scope_valid {
@@ -281,10 +290,20 @@ pub(crate) fn resolve_planned_fem_eigen_execution<'a>(
     plan: &'a fullmag_ir::ExecutionPlanIR,
     fem: &FemEigenPlanIR,
 ) -> Result<Option<PlannedFemEigenExecution<'a>>, RunError> {
-    resolve_fem_eigen_execution_resolution(
+    let resolved = resolve_fem_eigen_execution_resolution(
         fem,
         plan.provenance.fem_eigen_execution_resolution.as_ref(),
-    )
+    )?;
+    if resolved.is_some_and(|execution| {
+        native_gpu_modal_window_has_floquet_dynamic_demag_path(fem)
+            && execution.lane() == FemEigenExecutionLane::Gpu
+            && plan.common.execution_mode != fullmag_ir::ExecutionMode::Strict
+    }) {
+        return Err(RunError {
+            message: "planned_fem_eigen_floquet_gpu_requires_strict_execution_mode".to_string(),
+        });
+    }
+    Ok(resolved)
 }
 
 pub(crate) fn validate_bias_field_sample_execution_resolutions(

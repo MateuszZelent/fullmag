@@ -253,7 +253,7 @@ Mapa źródeł: `world.py:StudyUniverseHandle.mesh`, `world.py:StudyUniverseConf
   implemented at source level, but no current-snapshot managed CPU/GPU
   qualification is available
 - Owners: Fullmag FEM frequency-domain backend
-- Last updated: 2026-08-14
+- Last updated: 2026-11-24
 - Related physics notes:
   - `0700-frequency-domain-linearized-llg.md`
   - `0800-fem-static-pbc-demag.md`
@@ -512,6 +512,11 @@ strict numerical parallel-field guard instead of inventing one.
 | $E[o,c]$, $E_{\mathrm{total}}$ | component quadratic mass measure and summed modal measure | $\mathrm{m^3}$ |
 | $p[o,c]$, $p_{\mathrm{object}}[o]$, $p_{\mathrm{global}}[c]$ | object-component, object-total and global-component participation fractions | $1$ |
 | $\varepsilon_{\mathrm{sum}}$, $\varepsilon_{\mathrm{mach}}$ | participation-sum tolerance and float64 machine epsilon | $1$ |
+| $M_{\mathrm{device}}$ | total VRAM on the active CUDA device | $\mathrm{B}$ |
+| $M_{\mathrm{free}}$ | free VRAM on the active CUDA device at cuDSS admission | $\mathrm{B}$ |
+| $M_{\mathrm{reserve}}$ | fixed VRAM reserve retained above the estimated cuDSS peak | $\mathrm{B}$ |
+| $M_{\mathrm{budget}}$ | free device memory remaining for the cuDSS peak estimate after reserve | $\mathrm{B}$ |
+| $\widehat M_{\mathrm{peak}}$ | cuDSS post-analysis peak device-memory estimate, returned in bytes | $\mathrm{B}$ |
 
 (assumptions-and-validity)=
 ### 2.3 Assumptions and validity limits
@@ -1546,6 +1551,8 @@ proof that every eigenvalue in an arbitrary interval was found.
   Toolkit for the Solution of Eigenvalue Problems,” *ACM Transactions on
   Mathematical Software* 31(3), 351–362 (2005),
   [doi:10.1145/1089014.1089019](https://doi.org/10.1145/1089014.1089019).
+- NVIDIA, *cuDSS 0.8.0 Data Types*, `CUDSS_DATA_MEMORY_ESTIMATES`,
+  [official documentation](https://docs.nvidia.com/cuda/cudss/0.8.0/types.html).
 
 (source-code-index)=
 ## 13. Source-code index
@@ -2395,6 +2402,92 @@ Provenance: `shifted_preconditioner_kind` przyjmuje
 `magnetic_shift_preconditioner`; `shifted_preconditioner_setup_seconds`
 obejmuje faktoryzację $K_{\hat\tau}$, a `shift_linear_iteration_count` pokazuje
 liczbę iteracji FGMRES/GMRES.
+
+(k0-cudss-memory-budget)=
+### Fail-closed budżet pamięci cuDSS dla K0
+
+Zarządzany test `fem-k0-modal-gpu-adapter-scale` wykonał poprawną
+faktoryzację oraz odmowę przy limicie 1 B. Próba najbliższego modu na sferze
+potwierdziła działanie z rzeczywistym budżetem urządzenia. Bramki zachowują
+pencil, cel, kryteria residuum i semantykę eigenmodes.
+
+Przed numeryczną faktoryzacją `CudssModalShift::Impl::initialize` ma pobrać
+po analizie `CUDSS_DATA_MEMORY_ESTIMATES` przez `cudssDataGet`. Pozycja `[1]`
+(zero-based) tej tablicy jest szacowanym szczytowym zapotrzebowaniem urządzenia
+w bajtach. W cuDSS 0.8.0 zapytanie jest wykonywane po fazie analysis; wynik
+może być niedostępny, a jego interpretacja jest związana z analizowanym
+układem i liczbą prawych stron [NVIDIA cuDSS 0.8.0, Data Types](https://docs.nvidia.com/cuda/cudss/0.8.0/types.html).
+
+Niezależnie od prognozy cuDSS implementacja ma odczytać całkowitą i wolną
+pamięć aktualnego urządzenia. Dopuszcza faktoryzację tylko wtedy, gdy
+szacowany szczyt mieści się poniżej wolnej pamięci pomniejszonej o rezerwę:
+
+```{math}
+:label: eq-poisson-airbox-cudss-memory-budget
+M_{\mathrm{reserve}}=\max\!\left(512\cdot 2^{20}\,\mathrm{B},\;0.05 M_{\mathrm{device}}\right),\qquad
+M_{\mathrm{budget}}=M_{\mathrm{free}}-M_{\mathrm{reserve}},\qquad
+0\le \widehat M_{\mathrm{peak}}\le M_{\mathrm{budget}}.
+```
+
+`cudss_peak_memory_estimate_unavailable` oznacza brak poprawnej prognozy po
+analysis; `cudss_device_memory_budget_unavailable` oznacza brak poprawnego
+odczytu pamięci urządzenia; `cudss_peak_memory_budget_exceeded` oznacza
+ujemny pozostały budżet albo prognozę ponad budżetem. Każdy z tych stanów
+kończy żądanie GPU przed faktoryzacją i nie przełącza go na CPU.
+
+`count_open_airbox_augmented_window` i `solve_open_airbox_augmented_ritz`
+wywołują wspólny `CudssModalShift::create`, którego właścicielem jest
+`CudssModalShift::Impl::initialize`; kontrola obejmuje zarówno faktoryzację
+używaną do bezwładności, jak i przesunięte solve'y Ritz. W wyszukiwaniu
+FrequencyWindow jedno wywołanie `AugmentedWindowSolves` zapamiętuje udaną,
+nieperturbowaną bezwładność dla dokładnego współczynnika przeskalowanego
+przesunięcia. Gdy bisekcja lub podział przedziału wraca do identycznego
+przesunięcia, ponownie używa wyłącznie wyniku indeksu bezwładności i pomija
+powtórną analizę/faktoryzację. Cache jest lokalny dla jednego solve; nie
+recyklinguje faktora numerycznego w solve'ach Ritz i nie stanowi twierdzenia o
+czasie wykonania. Test i implementacja są wspólne dla K0 oraz Floquet.
+Wyliczony limit jest wewnętrzny: bez nowej opcji publicznego DSL, pola
+`ProblemIR` ani zmiennej środowiskowej. Wyłącznie natywny test może wstrzyknąć
+mniejszy limit do `CudssModalShift::create`; domyślne wywołanie produkcyjne
+nie otrzymuje testowego override.
+
+Prognoza po analysis nie jest ograniczeniem całkowitego zużycia VRAM procesu.
+Nie cofa pamięci użytej podczas samej analizy i nie obejmuje niezależnych
+późniejszych alokacji, w tym buforów bazy kandydatów i projekcji Ritz. Sukces
+kontroli nie gwarantuje więc powodzenia każdej późniejszej alokacji ani nie
+zastępuje kontroli błędów alokacji.
+
+`verify_gpu_augmented_modal_pencil` zachowuje kontrolę macierzy i par QR oraz
+sprawdza poprawny przypadek in-budget i deterministyczną odmowę po
+przekroczeniu wewnętrznego limitu wstrzykniętego do `CudssModalShift::create`.
+Brak prognozy ma kończyć się
+kontrolowanym błędem w kodzie; test nie fałszuje odpowiedzi cuDSS ani nie
+wymaga dodatkowego mechanizmu testowego do symulowania niedostępnego estimate.
+Zidentyfikowane archiwum accepted K0
+sphere zawiera 91 plików checkpointu, oryginalną siatkę o SHA-256
+`d181307812e2eea1781680136727d63f1923743345188aa9901672efd5295dfa` i
+zarchiwizowany wynik CPU. `validate_checkpoint_source` i `load_case` wiążą
+przygotowanie oraz odtworzenie tego samego wejścia. W zarządzanym Docker DEV na RTX 4080 SUPER, na migawce źródeł
+`35da95f2a202fdae838bc5950e53d78ad88fe9f031564c8714df8b46be80367b`,
+zmierzono po jednym przebiegu najbliższego modu przy celu 1,56 GHz. CPU
+PETSc/SLEPc osiągnął 125,61 s, GPU cuDSS 82,71 s wraz z uruchomieniem
+i ponowną certyfikacją zapisanego stanu. Różnica względna częstotliwości
+wyniosła 5,0 × 10⁻¹⁵, zgodność profilu po wyrównaniu fazy 1,0, a
+residuum GPU 6,3 × 10⁻¹² przy progu 10⁻⁸. W GPU wykonano pięć
+faktoryzacji do obliczenia bezwładności i użyto ponownie pięciu wyników.
+Porównanie z poprzednim GPU oraz pełna kampania okna są kolejnymi
+bramkami [ADR 0084](../adr/0084-accepted-fem-eigenmodes.md#accepted-fem-eigenmodes-cudss-open-airbox).
+
+| Source ID | Path + stable symbol | Responsibility and evidence |
+| --- | --- | --- |
+| source-cudss-memory-budget-contract | `docs/physics/0830-fem-poisson-airbox-modal-eigen.md` + `DOC-ANCHOR:k0-cudss-memory-budget` | Kontrakt fail-closed potwierdzony w natywnym teście GPU i pojedynczym przebiegu sfery. |
+| source-cudss-memory-admission | `backends/fem/gpu/frequency_domain/modal_cudss_shift.cpp` + `check_device_memory_budget` | Odczyt prognozy po analysis i limitu urządzenia przed faktoryzacją; natywny kontrakt GPU przeszedł. |
+| source-cudss-memory-budget-regression | `backends/fem/tests/frequency_domain/gpu_augmented_modal_pencil_contract.cpp` + `verify_gpu_augmented_modal_pencil` | Sprawdza udany in-budget solve i refusal po wewnętrznym małym limicie, obok kontroli macierzy/QR; test natywny przeszedł w zarządzanym Docker DEV. |
+| source-cudss-window-inertia-cache | `backends/fem/gpu/frequency_domain/modal_augmented_window_count.cpp` + `count_airbox_augmented_window` | Cache dokładnego współczynnika scaled shift w granicach jednego solve; ponowne użycie indeksu bezwładności bez deklaracji zysku czasu. |
+| source-cudss-window-owner | `backends/fem/gpu/frequency_domain/modal_augmented_window.cpp` + `solve_airbox_augmented_window` | Przekazuje wspólny cache do wyszukiwania K0 i Floquet; nie współdzieli faktora z solve Ritz. |
+| source-cudss-accepted-sphere-checkpoint | `docs/adr/0084-accepted-fem-eigenmodes.md` + `DOC-ANCHOR:accepted-fem-eigenmodes-cudss-open-airbox` | Porównanie jednego modu CPU/GPU na checkpointcie 8006 wykonane; pomiar starej i nowej wersji GPU pozostaje otwarty. |
+| source-k0-cudss-checkpoint-admission | `scripts/prepare_fem_open_airbox_k0_convergence.py` + `validate_checkpoint_source` | Validate archived accepted-case source identity and checkpoint admission. |
+| source-k0-cudss-checkpoint-case | `examples/fem_eigen_k0_open_airbox_checkpoint_repeat_case.py` + `load_case` | Load the archived exact K0 sphere case with its accepted checkpoint identity. |
 
 ### Wariant Floquet
 

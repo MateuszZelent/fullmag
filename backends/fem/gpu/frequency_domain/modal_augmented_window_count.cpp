@@ -8,9 +8,13 @@
 
 namespace fullmag::fem::frequency_domain::gpu {
 
-std::optional<AugmentedWindowCount> count_open_airbox_augmented_window(
-    const PoissonAirboxEigenBlockProblem &problem, double operator_scale, double mass_scale,
-    double angular_frequency_scale, double mu0, double lower_hz, double upper_hz, const char **failure)
+namespace {
+
+template <typename Assemble>
+std::optional<AugmentedWindowCount> count_airbox_augmented_window(
+    const PoissonAirboxEigenBlockProblem &problem, double mass_scale,
+    double angular_frequency_scale, double lower_hz, double upper_hz,
+    Assemble assemble, AugmentedWindowInertiaCache &inertia_cache, const char **failure)
 {
     if (!failure) {
         return std::nullopt;
@@ -32,18 +36,26 @@ std::optional<AugmentedWindowCount> count_open_airbox_augmented_window(
         cudaStream_t value = nullptr;
         ~Stream() { if (value) cudaStreamDestroy(value); }
     } stream;
-    if (cudaStreamCreateWithFlags(&stream.value, cudaStreamNonBlocking) != cudaSuccess) {
-        *failure = "cudss_window_inertia_stream_failed";
-        return std::nullopt;
-    }
-
     const auto negative = [&](double frequency_hz) -> std::optional<int> {
         if (cancelled()) {
             *failure = "cudss_window_cancelled";
             return std::nullopt;
         }
         const double coefficient = (frequency_hz / angular_frequency_scale) * tau * mass_scale;
-        auto pencil = assemble_open_airbox_augmented_pencil(problem, operator_scale, coefficient, mu0);
+        if (!std::isfinite(coefficient)) {
+            *failure = "cudss_window_invalid_pencil";
+            return std::nullopt;
+        }
+        const auto cached = inertia_cache.negative_by_scaled_shift.find(coefficient);
+        if (cached != inertia_cache.negative_by_scaled_shift.end()) {
+            ++inertia_cache.reused_probes;
+            return cached->second;
+        }
+        if (!stream.value && cudaStreamCreateWithFlags(&stream.value, cudaStreamNonBlocking) != cudaSuccess) {
+            *failure = "cudss_window_inertia_stream_failed";
+            return std::nullopt;
+        }
+        auto pencil = assemble(coefficient);
         if (!pencil) {
             *failure = "cudss_window_invalid_pencil";
             return std::nullopt;
@@ -59,7 +71,9 @@ std::optional<AugmentedWindowCount> count_open_airbox_augmented_window(
         }
         if (!result) {
             *failure = "cudss_window_inertia_unavailable_or_perturbed";
+            return std::nullopt;
         }
+        inertia_cache.negative_by_scaled_shift.emplace(coefficient, *result);
         return result;
     };
 
@@ -67,7 +81,7 @@ std::optional<AugmentedWindowCount> count_open_airbox_augmented_window(
     if (!origin) {
         return std::nullopt;
     }
-    // Congruence with an SPD Schur block and the negative-definite Robin
+    // Congruence with an SPD Schur block and the negative-definite
     // potential block has exactly phi negative directions at zero shift.
     if (*origin != static_cast<int>(problem.phi_dof_count)) {
         *failure = "cudss_window_equilibrium_not_positive_definite";
@@ -109,6 +123,32 @@ std::optional<AugmentedWindowCount> count_open_airbox_augmented_window(
         return std::nullopt;
     }
     return AugmentedWindowCount{*origin, *lower, *upper};
+}
+
+} // namespace
+
+std::optional<AugmentedWindowCount> count_open_airbox_augmented_window(
+    const PoissonAirboxEigenBlockProblem &problem, double operator_scale, double mass_scale,
+    double angular_frequency_scale, double mu0, double lower_hz, double upper_hz,
+    AugmentedWindowInertiaCache &inertia_cache, const char **failure)
+{
+    return count_airbox_augmented_window(
+        problem, mass_scale, angular_frequency_scale, lower_hz, upper_hz,
+        [&](double coefficient) {
+            return assemble_open_airbox_augmented_pencil(problem, operator_scale, coefficient, mu0);
+        }, inertia_cache, failure);
+}
+
+std::optional<AugmentedWindowCount> count_floquet_airbox_augmented_window(
+    const PoissonAirboxEigenBlockProblem &problem, const FloquetAirboxAugmentedPencilView &blocks,
+    double operator_scale, double mass_scale, double angular_frequency_scale, double mu0,
+    double lower_hz, double upper_hz, AugmentedWindowInertiaCache &inertia_cache, const char **failure)
+{
+    return count_airbox_augmented_window(
+        problem, mass_scale, angular_frequency_scale, lower_hz, upper_hz,
+        [&](double coefficient) {
+            return assemble_floquet_airbox_augmented_pencil(blocks, operator_scale, coefficient, mu0);
+        }, inertia_cache, failure);
 }
 
 } // namespace fullmag::fem::frequency_domain::gpu

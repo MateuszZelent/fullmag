@@ -9,11 +9,12 @@
 namespace fullmag::fem::frequency_domain {
 
 // Returns a reason when the modal execution cannot publish a measured
-// augmented-Robin result. The existing PETSc path has its own qualification.
+// cuDSS augmented modal result. The PETSc path has its own qualification.
 inline const char *augmented_robin_attestation_failure(
     const ModalGpuExecutionAttestation &observed) noexcept
 {
-    if (observed.operator_kind != FULLMAG_FEM_MODAL_OPERATOR_AUGMENTED_ROBIN_CUDSS_CUDA) {
+    if (observed.operator_kind != FULLMAG_FEM_MODAL_OPERATOR_AUGMENTED_ROBIN_CUDSS_CUDA &&
+        observed.operator_kind != FULLMAG_FEM_MODAL_OPERATOR_AUGMENTED_FLOQUET_CUDSS_CUDA) {
         return "augmented_robin_operator_kind_mismatch";
     }
     if (!observed.device_residency_verified || !observed.production_shared_domain ||

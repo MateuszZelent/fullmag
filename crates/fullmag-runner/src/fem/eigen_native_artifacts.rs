@@ -1,3 +1,4 @@
+use super::eigen_capability::native_gpu_modal_window_has_floquet_dynamic_demag_path;
 use super::eigen_certificate::{modal_participation_for_mode, modal_participation_mesh_context};
 use super::eigen_constants::{
     NATIVE_CPU_MODAL_WINDOW_SOLVER_KIND, NATIVE_GPU_K0_KITTEL_SOLVER_KIND,
@@ -37,6 +38,8 @@ use fullmag_ir::OutputIR;
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 
+const FLOQUET_GPU_CUDSS_ADAPTER: &str = "floquet_airbox_gpu_augmented_cudss";
+
 pub(super) fn native_shared_domain_k0_artifact_capability(
     demag_kind: Option<&str>,
 ) -> Option<&'static str> {
@@ -51,7 +54,10 @@ pub(super) fn native_modal_block_residuals(
     mode: &NativeModalEigenpair,
     solver_adapter: Option<&str>,
 ) -> serde_json::Value {
-    let reduced_only = solver_adapter == Some("floquet_airbox_cpu_schur_slepc");
+    let floquet = matches!(
+        solver_adapter,
+        Some("floquet_airbox_cpu_schur_slepc" | FLOQUET_GPU_CUDSS_ADAPTER)
+    );
     let reduced_ok = [
         mode.block_residual_q,
         mode.block_residual_phi,
@@ -73,14 +79,14 @@ pub(super) fn native_modal_block_residuals(
         .block_residual_q
         .max(mode.block_residual_phi)
         .max(mode.block_residual_gauge.unwrap_or(0.0));
-    let floquet_full_descriptor_certified = reduced_only
+    let floquet_full_descriptor_certified = floquet
         && mode.floquet_descriptor_certified
         && mode.floquet_full_descriptor_certified
         && mode.floquet_seam_frame_certified
         && mode.floquet_gauge_policy_satisfied
         && gauge_residual_ok
         && full_residual.is_some_and(|value| value.is_finite() && (0.0..=1.0e-8).contains(&value));
-    let full_descriptor_certified = if reduced_only {
+    let full_descriptor_certified = if floquet {
         floquet_full_descriptor_certified
     } else {
         reduced_ok && gauge_residual_ok
@@ -90,11 +96,11 @@ pub(super) fn native_modal_block_residuals(
         "eps_q": mode.block_residual_q,
         "eps_phi": mode.block_residual_phi,
         "eps_gauge": mode.block_residual_gauge,
-        "eps_full": if reduced_only { full_residual } else { Some(mode.residual_relative_l2) },
-        "eps_reduced": reduced_only.then_some(reduced_residual),
+        "eps_full": if floquet { full_residual } else { Some(mode.residual_relative_l2) },
+        "eps_reduced": floquet.then_some(reduced_residual),
         "scope": if floquet_full_descriptor_certified {
             "full_projected_weak_form_and_periodic_seams"
-        } else if reduced_only {
+        } else if floquet {
             "reduced_original_blocks_only"
         } else {
             "native_descriptor"
@@ -102,7 +108,7 @@ pub(super) fn native_modal_block_residuals(
         "backend_reported_residual": mode.backend_reported_residual,
         "certification_tolerance": 1.0e-8,
         "certified": certified,
-        "reduced_pencil_certified": reduced_only && reduced_ok && gauge_residual_ok,
+        "reduced_pencil_certified": floquet && reduced_ok && gauge_residual_ok,
         "full_descriptor_certified": full_descriptor_certified,
         "floquet_seam_frame_certified": mode.floquet_seam_frame_certified,
         "floquet_gauge_policy_satisfied": mode.floquet_gauge_policy_satisfied,
@@ -681,11 +687,19 @@ pub(super) fn native_modal_artifacts_with_selection_binding(
         Some("sparse_csr" | "floquet_shared_domain_sparse_matshell") => Some(false),
         _ => None,
     };
+    let gpu_cudss_floquet = execution_lane == "production_gpu"
+        && solver_adapter_name == Some(FLOQUET_GPU_CUDSS_ADAPTER);
     let gpu_k0_backend = pa_e2_gpu_shared_domain_k0
         || (execution_lane == "production_gpu" && solver_kind == NATIVE_GPU_K0_KITTEL_SOLVER_KIND);
     let gpu_shared_domain_backend = pa_e2_gpu_shared_domain_k0;
     let shared_domain_k0_capability = shared_domain_k0_capability.unwrap_or("k0_periodic_airbox");
-    let solver_notes = if gpu_k0_backend {
+    let solver_notes = if gpu_cudss_floquet {
+        "native FEM production GPU single-k Floquet eigensolver using device-resident cuDSS augmented shift-invert"
+    } else if pa_e2_gpu_open_airbox_k0
+        && solver_adapter_name == Some("k0_poisson_airbox_gpu_augmented_cudss")
+    {
+        "native FEM production GPU open-airbox K0 eigensolver using device-resident cuDSS augmented shift-invert"
+    } else if gpu_k0_backend {
         if gpu_shared_domain_backend {
             if gpu_scalable_selected_spectrum {
                 if open_airbox_k0 {
@@ -709,7 +723,15 @@ pub(super) fn native_modal_artifacts_with_selection_binding(
         "native FEM production CPU modal eigensolver using dense contour interval search"
     };
     let solver_capabilities: Vec<&'static str> =
-        if gpu_shared_domain_backend && gpu_scalable_selected_spectrum {
+        if gpu_cudss_floquet {
+            vec![
+                "native_modal_eigen",
+                "production_gpu",
+                "device_resident_krylov",
+                "shared_domain_dynamic_demag",
+                "floquet_airbox",
+            ]
+        } else if gpu_shared_domain_backend && gpu_scalable_selected_spectrum {
             vec![
                 "native_modal_eigen",
                 "production_gpu",
@@ -747,7 +769,14 @@ pub(super) fn native_modal_artifacts_with_selection_binding(
             ]
         };
     let solver_limitations: Vec<&'static str> =
-        if gpu_shared_domain_backend && gpu_scalable_selected_spectrum {
+        if gpu_cudss_floquet {
+            vec![
+                "single_nonzero_k",
+                "nearest_frequency",
+                "uniform_alpha_zero_scope",
+                "anisotropy_and_dmi_tangent_terms_not_certified",
+            ]
+        } else if gpu_shared_domain_backend && gpu_scalable_selected_spectrum {
             let mut limitations = vec![
                 "k0_only",
                 "uniform_alpha_zero_scope",
@@ -775,7 +804,6 @@ pub(super) fn native_modal_artifacts_with_selection_binding(
                 "k0_only",
                 "no_demag",
                 "macrospin_larmor_validation_slice",
-                "nonzero_k_floquet_gpu_modal_not_implemented",
             ]
         } else if shift_invert_backend {
             if operator_payload_is_dense == Some(true) {
@@ -1350,10 +1378,23 @@ pub(super) fn native_gpu_modal_shared_domain_execution_provenance(
     attestation: Option<&native_fem::NativeModalGpuAttestation>,
 ) -> ExecutionProvenance {
     let resolved_demag = resolved_demag_realization(plan);
+    let floquet = attestation.map_or_else(
+        || native_gpu_modal_window_has_floquet_dynamic_demag_path(plan),
+        |value| {
+            value.operator_kind == native_fem::NativeModalGpuOperatorKind::AugmentedFloquetCudssCuda
+        },
+    );
+    let solver_kind = if floquet {
+        FLOQUET_GPU_CUDSS_ADAPTER
+    } else {
+        NATIVE_GPU_MODAL_SHARED_DOMAIN_SOLVER_KIND
+    };
+    let augmented = floquet || attestation.is_some_and(|value| {
+        value.operator_kind == native_fem::NativeModalGpuOperatorKind::AugmentedRobinCudssCuda
+    });
+    let hypre_device = attestation.filter(|_| !augmented);
     ExecutionProvenance {
-        execution_engine: format!(
-            "native_fem_modal_eigen/{NATIVE_GPU_MODAL_SHARED_DOMAIN_SOLVER_KIND}"
-        ),
+        execution_engine: format!("native_fem_modal_eigen/{solver_kind}"),
         precision: "double".to_string(),
         demag_operator_kind: resolved_demag.map(|r| r.provenance_name().to_string()),
         requested_demag_realization: if plan.enable_demag {
@@ -1376,14 +1417,28 @@ pub(super) fn native_gpu_modal_shared_domain_execution_provenance(
         cuda_runtime_version: attestation
             .and_then(|value| value.cuda_runtime_version.try_into().ok()),
         mfem_version: attestation.map(|value| value.mfem_version.clone()),
-        hypre_version: attestation.map(|value| value.hypre_version.clone()),
-        fem_execution_mode: attestation.map(|_| "full_gpu_modal_matrix_free".to_string()),
+        hypre_version: hypre_device.map(|value| value.hypre_version.clone()),
+        fem_execution_mode: attestation.map(|_| {
+            if augmented {
+                "full_gpu_modal_augmented_cudss"
+            } else {
+                "full_gpu_modal_matrix_free"
+            }
+            .to_string()
+        }),
         fem_gpu_qualification_status: attestation.map(|_| "source_visible".to_string()),
         fem_data_residency: attestation.map(|_| "device_source_of_truth".to_string()),
         uses_cuda_kernels: attestation.map(|_| true),
         uses_gpu_poisson: attestation.map(|_| true),
-        fem_demag_operator_mode: attestation.map(|_| "poisson_airbox_schur_cuda".to_string()),
-        hypre_execution_policy: attestation.map(|_| "device".to_string()),
+        fem_demag_operator_mode: attestation.map(|_| {
+            if augmented {
+                "poisson_airbox_augmented_cudss_cuda"
+            } else {
+                "poisson_airbox_schur_cuda"
+            }
+            .to_string()
+        }),
+        hypre_execution_policy: hypre_device.map(|_| "device".to_string()),
         demag_residency: attestation.map(|_| "device".to_string()),
         hot_loop_host_sync_count: attestation.map(|value| {
             value.hot_loop_computational_host_syncs + value.hot_loop_scalar_telemetry_syncs

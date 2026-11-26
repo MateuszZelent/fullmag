@@ -13,6 +13,8 @@ struct PoissonAirboxEigenBlockProblem;
 
 namespace gpu {
 
+struct FloquetAirboxAugmentedPencilView;
+
 struct AugmentedRitzCandidate {
     double inverse_scaled_eigenvalue;
     double magnetic_relative_residual;
@@ -50,6 +52,19 @@ struct AugmentedRitzBlock {
 std::optional<AugmentedRitzBlock> solve_open_airbox_augmented_ritz(
     const PoissonAirboxEigenBlockProblem &problem, double operator_scale,
     double mass_scale, double shift, double mu0, int columns, const char **failure);
+
+// The complex Floquet overload accepts the five original phase-reduced CSR
+// blocks through a non-owning view. `shift` uses the same scaled angular
+// frequency convention as the open-airbox entry above.
+std::optional<AugmentedRitzBlock> solve_floquet_airbox_augmented_ritz(
+    const PoissonAirboxEigenBlockProblem &controls,
+    const FloquetAirboxAugmentedPencilView &blocks,
+    double operator_scale,
+    double mass_scale,
+    double shift,
+    double mu0,
+    int columns,
+    const char **failure);
 
 } // namespace gpu
 } // namespace fullmag::fem::frequency_domain
