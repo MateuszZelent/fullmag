@@ -94,7 +94,8 @@ sprawdzane są zegary, zakresy i skończoność liczb. Absolutne ścieżki oraz
 wewnętrzna obwoluta rejestratora pozostają prywatne. Chwilowe zajęcie store
 zwraca `409 performance_observation_busy`: invalidator odracza odczyt,
 a cache UI zachowuje ostatnie poprawne dane z oznaczeniem odświeżania.
-Rzeczywista niezgodność próby odcina poprzednie dane.
+Control Room zachowuje odpowiedź w logu transportu jako odroczony odczyt,
+poza listą Problems. Rzeczywista niezgodność próby odcina poprzednie dane.
 
 `RunPerformanceResource.step_id` jest dokładnym ID etapu z
 `StageExecutionRecord`, a `stage_index` jest jego zerowym indeksem, zgodnym z

@@ -77,7 +77,7 @@ import {
   SIMULATION_SOLVER_STATUS_PATH,
   SIMULATION_STAGES_EXECUTION_PATH,
 } from "../api/apiPaths";
-import { ControlRoomApiError } from "../api/ControlRoomApi";
+import { ControlRoomApiError, PERFORMANCE_OBSERVATION_BUSY_CODE } from "../api/ControlRoomApi";
 import {
   describeSessionAuthoringDiscretization,
   hasSessionActiveLaneDeclaration,
@@ -3035,7 +3035,7 @@ export const RUN_PERFORMANCE_RETRY_POLICY: ResourceRetryPolicy = {
   maxAttempts: 3,
   maxConflictAttempts: 41,
   retryAfterMs: 500,
-  retryableConflictReasonCodes: ["performance_observation_busy"],
+  retryableConflictReasonCodes: [PERFORMANCE_OBSERVATION_BUSY_CODE],
 };
 
 export function useRunPerformanceResource({
@@ -3062,7 +3062,7 @@ export function isRunPerformanceObservationBusyError(error: unknown): boolean {
   return (
     error instanceof ControlRoomApiError &&
     error.status === 409 &&
-    error.code === "performance_observation_busy"
+    error.code === PERFORMANCE_OBSERVATION_BUSY_CODE
   );
 }
 

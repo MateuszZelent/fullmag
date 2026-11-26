@@ -51,7 +51,7 @@ import {
   PROJECT_STUDY_RESULT_SCALARS_PATH,
 } from "./apiPaths";
 import type { DecodedFieldVector } from "./codecs";
-import { RequestDiagnosticsController } from "./RequestDiagnosticsController";
+import { isRequestDiagnosticFailure, RequestDiagnosticsController } from "./RequestDiagnosticsController";
 import { activeLaneCapabilityFixture } from "../resources/activeLaneCapabilityFixture.testSupport";
 
 const contractHeaders = { "x-api-contract-version": "1.0.0" };
@@ -4010,6 +4010,48 @@ describe("ControlRoomApi", () => {
       object_id: "arch_Waveguide",
       energies: { anisotropy: null, demag: null, dmi: null, exchange: null, total: null, zeeman: null },
     });
+  });
+
+  it.each([
+    ["performance_observation_busy", "deferred"],
+    ["performance_attempt_changed", "error"],
+    [null, "error"],
+  ])("classifies a performance HTTP 409 with code %s as %s", async (code, outcome) => {
+    const diagnostics = new RequestDiagnosticsController();
+    const message = "Performance snapshot is temporarily unavailable";
+    const api = new ControlRoomApi({
+      baseUrl: "http://127.0.0.1:8765",
+      diagnostics,
+      fetchImpl: async () => jsonResponse({ code, message }, {
+        headers: { "content-type": "application/json" },
+        status: 409,
+      }),
+    });
+
+    await expect(api.diagnostics.runPerformance()).rejects.toMatchObject({ status: 409, code });
+    const responses = diagnostics.list().filter((entry) => entry.direction === "rx");
+    expect(responses).toMatchObject([{ outcome, status: 409 }]);
+    expect(responses.map(isRequestDiagnosticFailure)).toEqual([outcome === "error"]);
+    if (outcome === "deferred") {
+      expect(responses[0].detail).toContain("performance_observation_busy");
+    }
+  });
+
+  it("keeps an unexpected HTTP 409 on another resource as an error", async () => {
+    const diagnostics = new RequestDiagnosticsController();
+    const api = new ControlRoomApi({
+      baseUrl: "http://127.0.0.1:8765",
+      diagnostics,
+      fetchImpl: async () => jsonResponse({ code: "performance_observation_busy", message: "Conflict" }, {
+        headers: { "content-type": "application/json" },
+        status: 409,
+      }),
+    });
+
+    await expect(api.sessions.current.status()).rejects.toMatchObject({ status: 409 });
+    expect(diagnostics.list().filter((entry) => entry.direction === "rx")).toMatchObject([
+      { outcome: "error", status: 409 },
+    ]);
   });
 
   it("retries idempotent GET failures and records the final request diagnostic", async () => {
