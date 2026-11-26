@@ -1252,19 +1252,24 @@ struct SparseLinearSolver::Impl {
                  std::to_string(info) + " (singular or incompatible matrix; no CPU fallback)");
         }
 
-        std::int64_t npivots_raw = 0;
+        int npivots_i32 = 0;
         std::size_t npivots_written = 0;
-        if (cudssDataGet(cudss_handle, cudss_data, CUDSS_DATA_NPIVOTS,
-                         &npivots_raw, sizeof(npivots_raw), &npivots_written) ==
-            CUDSS_STATUS_SUCCESS) {
-            std::int64_t npivots = 0;
-            if (npivots_written == sizeof(std::int32_t)) {
-                std::int32_t np32 = 0;
-                std::memcpy(&np32, &npivots_raw, sizeof(np32));
-                npivots = static_cast<std::int64_t>(np32);
-            } else {
-                npivots = npivots_raw;
+        std::int64_t npivots = 0;
+        cudssStatus_t npivots_status = cudssDataGet(
+            cudss_handle, cudss_data, CUDSS_DATA_NPIVOTS,
+            &npivots_i32, sizeof(npivots_i32), &npivots_written);
+        if (npivots_status == CUDSS_STATUS_SUCCESS) {
+            npivots = static_cast<std::int64_t>(npivots_i32);
+        } else if (npivots_status == CUDSS_STATUS_INVALID_VALUE) {
+            std::int64_t npivots_i64 = 0;
+            npivots_status = cudssDataGet(
+                cudss_handle, cudss_data, CUDSS_DATA_NPIVOTS,
+                &npivots_i64, sizeof(npivots_i64), &npivots_written);
+            if (npivots_status == CUDSS_STATUS_SUCCESS) {
+                npivots = npivots_i64;
             }
+        }
+        if (npivots_status == CUDSS_STATUS_SUCCESS) {
             if (npivots > 0) {
                 // Static pivoting perturbed diagonal entries (expected on zero-diagonal
                 // saddle-point matrices, but also produced for genuinely singular matrices
