@@ -291,7 +291,8 @@ Two opt-in C++ GPU paths are implemented behind strict compile-time and runtime
 gates (never selected implicitly by CPU defaults or C ABI v1/v2/v3):
 
 1. `SparseExecutionTarget::GpuCudss`: NVIDIA cuDSS 0.8+ direct SPD Cholesky,
-   symmetric indefinite $LDL^{\mathsf{T}}$, and general LU with
+   symmetric indefinite saddle-point LU (full CSR, zero-diagonal-safe), and
+   general LU with
    `CUDSS_DATA_MEMORY_ESTIMATES` VRAM preflight, `CUDSS_DATA_INFO != 0` hard
    rejection, and host extended-precision verification/refinement.
 2. `DirectTetraExecutionPolicy::GpuHybridFarField`: tiled CUDA far-field

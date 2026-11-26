@@ -1006,9 +1006,7 @@ struct SparseLinearSolver::Impl {
             throw std::runtime_error(err);
         }
 
-        const bool lower_only =
-            config.kind == SparseMatrixKind::Spd ||
-            config.kind == SparseMatrixKind::SymmetricIndefinite;
+        const bool lower_only = config.kind == SparseMatrixKind::Spd;
         const int *row_ptr = matrix_copy.HostReadI();
         const int *col_idx = matrix_copy.HostReadJ();
         const double *data = matrix_copy.HostReadData();
@@ -1093,9 +1091,12 @@ struct SparseLinearSolver::Impl {
         cudssMatrixViewType_t mview = CUDSS_MVIEW_LOWER;
         std::string label = "cuda_cudss_spd";
         if (config.kind == SparseMatrixKind::SymmetricIndefinite) {
-            mtype = CUDSS_MTYPE_SYMMETRIC;
-            mview = CUDSS_MVIEW_LOWER;
-            label = "cuda_cudss_sym_ldlt";
+            // Route saddle-point matrices (which have structural zeros on the
+            // bottom-right diagonal) through full-CSR LU with pivoting, matching
+            // Tier-1 PETSc/MUMPS PCLU and avoiding symmetric zero-pivot failures.
+            mtype = CUDSS_MTYPE_GENERAL;
+            mview = CUDSS_MVIEW_FULL;
+            label = "cuda_cudss_sym_lu";
         } else if (config.kind == SparseMatrixKind::GeneralNonsymmetric) {
             mtype = CUDSS_MTYPE_GENERAL;
             mview = CUDSS_MVIEW_FULL;

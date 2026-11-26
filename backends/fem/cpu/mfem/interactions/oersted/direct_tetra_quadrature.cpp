@@ -2036,7 +2036,7 @@ DirectTetraQuadratureDiagnostics DirectTetraQuadrature::ProjectField(
                     "direct tetrahedral Oersted H1 projection mass residual exceeds tolerance");
             }
             for (int dof = 0; dof < scalar_dofs; ++dof) {
-                target_field[component * scalar_dofs + dof] = solution[dof];
+                target_field[target_field.FESpace()->DofToVDof(dof, component)] = solution[dof];
             }
         }
     }

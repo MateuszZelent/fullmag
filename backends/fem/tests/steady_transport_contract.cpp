@@ -8,6 +8,19 @@
 #include <cstdlib>
 #include <iostream>
 #include <stdexcept>
+#include <vector>
+
+#if defined(MFEM_USE_MPI) && \
+    !(defined(FULLMAG_OET0_DISABLE_MPI) && FULLMAG_OET0_DISABLE_MPI) && \
+    defined(__unix__)
+#include <sys/socket.h>
+#include <unistd.h>
+#endif
+
+#if defined(FULLMAG_FEM_CUDSS_POISSON_ENABLED) && FULLMAG_FEM_CUDSS_POISSON_ENABLED && \
+    defined(FULLMAG_HAS_CUDA_RUNTIME) && FULLMAG_HAS_CUDA_RUNTIME
+#include <cuda_runtime_api.h>
+#endif
 
 namespace {
 
@@ -23,6 +36,25 @@ void require(bool condition, const char *message)
     if (!condition) {
         throw std::runtime_error(message);
     }
+}
+
+bool can_test_hypre_backend() noexcept
+{
+#if defined(MFEM_USE_MPI) && \
+    !(defined(FULLMAG_OET0_DISABLE_MPI) && FULLMAG_OET0_DISABLE_MPI)
+#if defined(__unix__)
+    const int fd = ::socket(AF_INET, SOCK_STREAM, 0);
+    if (fd >= 0) {
+        ::close(fd);
+        return true;
+    }
+    return false;
+#else
+    return true;
+#endif
+#else
+    return false;
+#endif
 }
 
 mfem::Array<int> x_electrodes(const mfem::Mesh &mesh)
@@ -1022,11 +1054,11 @@ void multi_terminal_factor_once_matches_independent_charge_solves()
 
     std::vector<SparseCpuBackendPolicy> policies = {
         SparseCpuBackendPolicy::Auto,
-#if defined(MFEM_USE_MPI)
-        SparseCpuBackendPolicy::Hypre,
-#endif
-        SparseCpuBackendPolicy::MfemSerial,
     };
+    if (can_test_hypre_backend()) {
+        policies.push_back(SparseCpuBackendPolicy::Hypre);
+    }
+    policies.push_back(SparseCpuBackendPolicy::MfemSerial);
 
     std::vector<double> reference_voltages;
     mfem::Vector reference_potential;
@@ -1156,10 +1188,10 @@ void stiff_precession_m1_and_reciprocal_m2_converge_with_strong_ahe_and_contrast
 
     std::vector<SparseCpuBackendPolicy> policies = {
         SparseCpuBackendPolicy::Auto,
-#if defined(MFEM_USE_MPI)
-        SparseCpuBackendPolicy::Hypre,
-#endif
     };
+    if (can_test_hypre_backend()) {
+        policies.push_back(SparseCpuBackendPolicy::Hypre);
+    }
 
     mfem::Vector ref_m1_spin;
     mfem::Vector ref_m2_potential;
@@ -1260,6 +1292,24 @@ void gpu_cudss_transport_parity_when_cuda_enabled()
 
 #if defined(FULLMAG_FEM_CUDSS_POISSON_ENABLED) && FULLMAG_FEM_CUDSS_POISSON_ENABLED && \
     defined(FULLMAG_HAS_CUDA_RUNTIME) && FULLMAG_HAS_CUDA_RUNTIME
+    int device_count = 0;
+    const cudaError_t count_err = cudaGetDeviceCount(&device_count);
+    if (count_err != cudaSuccess || device_count <= 0) {
+        SteadyTransportParameters gpu_params;
+        gpu_params.sigma_s_spm = 5.0;
+        gpu_params.execution_target = SparseExecutionTarget::GpuCudss;
+        SteadyTransportOracle gpu_oracle(mesh, sigma, magnetization, gpu_params);
+        bool failed_closed = false;
+        try {
+            (void)gpu_oracle.solve_charge_terminal_currents(terminals, requested);
+        } catch (const std::runtime_error &) {
+            failed_closed = true;
+        }
+        require(failed_closed,
+            "GpuCudss transport request without visible CUDA device must throw (no silent CPU fallback)");
+        return;
+    }
+
     SteadyTransportParameters cpu_params;
     cpu_params.sigma_s_spm = 5.0;
     cpu_params.relative_tolerance = 1.0e-12;

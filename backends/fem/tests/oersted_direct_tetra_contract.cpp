@@ -856,6 +856,41 @@ void direct_tetra_project_field_single_pass_parity()
     require(std::isfinite(rel_diff) && rel_diff <= 1.0e-12,
         "fused H1 projection differed between worker_threads=1 and 4");
 
+    // Verify byVDIM scatter: pointwise GetVectorValue() matches EvaluateField()
+    // up to P1 L2-projection discretization error (catches byNODES/byVDIM scrambling).
+    std::vector<std::array<double, 3>> sample_points;
+    std::vector<int> sample_elements;
+    mfem::IntegrationPoint centroid_ip;
+    centroid_ip.Set3(0.25, 0.25, 0.25);
+    mfem::Vector phys(3);
+    const int elem_step = std::max(1, target_mesh.GetNE() / 8);
+    for (int elem = 0; elem < target_mesh.GetNE(); elem += elem_step) {
+        mfem::ElementTransformation *tr = target_mesh.GetElementTransformation(elem);
+        tr->Transform(centroid_ip, phys);
+        sample_points.push_back({phys[0], phys[1], phys[2]});
+        sample_elements.push_back(elem);
+    }
+    const auto direct_samples = DirectTetraQuadrature::EvaluateField(
+        source_mesh, current, sample_points, opt_w1);
+    mfem::Vector projected_val(3);
+    for (std::size_t idx = 0; idx < sample_elements.size(); ++idx) {
+        mfem::ElementTransformation *tr =
+            target_mesh.GetElementTransformation(sample_elements[idx]);
+        tr->SetIntPoint(&centroid_ip);
+        proj_w1.GetVectorValue(*tr, centroid_ip, projected_val);
+        const std::array<double, 3> h_proj{
+            projected_val[0], projected_val[1], projected_val[2]};
+        const std::array<double, 3> h_direct{
+            direct_samples.h_xyz_apm[3u * idx + 0u],
+            direct_samples.h_xyz_apm[3u * idx + 1u],
+            direct_samples.h_xyz_apm[3u * idx + 2u]};
+        const double direct_norm = field_distance(h_direct, {0.0, 0.0, 0.0});
+        const double pointwise_err = field_distance(h_proj, h_direct);
+        require(direct_norm > 0.0 && std::isfinite(pointwise_err) &&
+                pointwise_err <= 5.0e-2 * direct_norm,
+            "projected H1 GetVectorValue() diverged from DirectTetraQuadrature::EvaluateField()");
+    }
+
     // Verify 3x single-pass fusion: total source-target pairs and kernel evaluations
     // are at most 1/3 of legacy 3-component separate quadrature passes.
     const int target_order = std::max(2, opt_w1.base_quadrature_order + 2);

@@ -444,6 +444,63 @@ void gpu_cudss_explicit_parity_and_fail_closed()
     require(vector_rel_error(gpu_lu_sol, ns_exact) <= 1.0e-12,
             "GPU cuDSS LU exact error exceeded 1e-12");
 
+    // 2b. SymmetricIndefinite nanometer-scale zero-diagonal saddle-point parity.
+    {
+        const int n_a = 48;
+        const int n_b = 16;
+        const double k_scale = 1.0e14;
+        const double b_scale = 1.0e-8;
+        mfem::SparseMatrix k_mat(n_a, n_a);
+        for (int i = 0; i < n_a; ++i) {
+            k_mat.Add(i, i, 4.0 * k_scale);
+            if (i + 1 < n_a) {
+                k_mat.Add(i, i + 1, -1.0 * k_scale);
+                k_mat.Add(i + 1, i, -1.0 * k_scale);
+            }
+            if (i + 4 < n_a) {
+                k_mat.Add(i, i + 4, -0.25 * k_scale);
+                k_mat.Add(i + 4, i, -0.25 * k_scale);
+            }
+        }
+        k_mat.Finalize(0);
+        mfem::SparseMatrix b_mat(n_a, n_b);
+        for (int j = 0; j < n_b; ++j) {
+            const int base = 3 * j;
+            b_mat.Add(base, j, 1.0 * b_scale);
+            b_mat.Add(base + 1, j, -0.75 * b_scale);
+            b_mat.Add(base + 2, j, 0.5 * b_scale);
+        }
+        b_mat.Finalize(0);
+        const double beta = compute_saddle_point_equilibration_beta(k_mat, b_mat);
+        const mfem::SparseMatrix saddle =
+            assemble_equilibrated_saddle_point_csr(k_mat, b_mat, beta);
+        mfem::Vector exact_saddle(n_a + n_b);
+        for (int i = 0; i < n_a; ++i) {
+            exact_saddle[i] = std::cos(0.17 * static_cast<double>(i + 1));
+        }
+        for (int j = 0; j < n_b; ++j) {
+            exact_saddle[n_a + j] = std::sin(0.29 * static_cast<double>(j + 1));
+        }
+        mfem::Vector rhs_saddle(n_a + n_b);
+        saddle.Mult(exact_saddle, rhs_saddle);
+
+        SparseSolveConfig gpu_sym_cfg{};
+        gpu_sym_cfg.kind = SparseMatrixKind::SymmetricIndefinite;
+        gpu_sym_cfg.execution_target = SparseExecutionTarget::GpuCudss;
+        gpu_sym_cfg.relative_tolerance = 1.0e-11;
+        SparseLinearSolver gpu_sym(saddle, gpu_sym_cfg);
+        mfem::Vector gpu_sym_sol;
+        const SparseSolveStats gpu_sym_stats = gpu_sym.solve(rhs_saddle, gpu_sym_sol);
+        require(gpu_sym_stats.converged, "GPU cuDSS SymmetricIndefinite saddle-point solve failed");
+        require(gpu_sym_stats.resolved_solver == "cuda_cudss_sym_lu",
+                "unexpected GPU SymmetricIndefinite solver label: " +
+                    gpu_sym_stats.resolved_solver);
+        require(gpu_sym_stats.independent_relative_residual <= 1.0e-11,
+                "GPU cuDSS SymmetricIndefinite residual exceeded 1e-11");
+        require(vector_rel_error(gpu_sym_sol, exact_saddle) <= 1.0e-11,
+                "GPU cuDSS SymmetricIndefinite exact error exceeded 1e-11");
+    }
+
     // 3. Impossible VRAM cap must fail closed (zero CPU fallback).
     struct ScopedEnvGuard {
         const char *name;
