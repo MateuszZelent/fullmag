@@ -34,6 +34,14 @@ struct FemGpuPgbbFieldKey {
 struct FemGpuPgbbFieldToken {
     bool valid = false;
     FemGpuPgbbFieldKey key{};
+    bool has_cached_metrics = false;
+    double cached_total_energy_j = 0.0;
+    std::array<double, kFemGpuAcceptedEnergyTermSlots> cached_energy_terms_j{};
+    double cached_max_torque_apm = 0.0;
+    double cached_max_effective_field_amplitude = 0.0;
+    double cached_max_demag_field_amplitude = 0.0;
+    double cached_gradient_norm_sq = 0.0;
+    double cached_projected_gradient_norm_sq = 0.0;
 };
 
 inline bool gpu_relax_consume_pgbb_field(
@@ -43,6 +51,7 @@ inline bool gpu_relax_consume_pgbb_field(
 {
     const bool reuse = eligible && token.valid && token.key == key;
     token.valid = false; // No rollback or second caller may replay the token.
+    token.has_cached_metrics = false;
     return reuse;
 }
 
@@ -99,6 +108,7 @@ inline void gpu_relax_invalidate_accepted_evaluation(
     }
     state.accepted_evaluation.valid = false;
     state.pgbb_accepted_field.valid = false;
+    state.pgbb_accepted_field.has_cached_metrics = false;
 }
 
 inline void gpu_relax_reset_step_diagnostics(

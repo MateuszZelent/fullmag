@@ -118,21 +118,43 @@ fn resolve_fem_direct_minimizer_policy(
     gpu_bb_policy: Option<fullmag_ir::FemGpuBbPreconditionerIR>,
 ) -> FemDirectMinimizerPolicyProvenance {
     if gpu {
-        let policy = gpu_bb_policy.filter(|_| gpu_bb);
-        let preconditioned = policy == Some(fullmag_ir::FemGpuBbPreconditionerIR::ExchangeMass);
+        if !gpu_bb {
+            return FemDirectMinimizerPolicyProvenance {
+                direction_policy_source: None,
+                requested_direction_policy: "device_tangent_gradient".to_string(),
+                resolved_direction_policy: "device_tangent_gradient".to_string(),
+                direction_fallback_reason: None,
+                requested_linear_solver: "not_used".to_string(),
+                resolved_linear_solver: "not_used".to_string(),
+                requested_preconditioner: "not_used".to_string(),
+                resolved_preconditioner: "not_used".to_string(),
+                environment_overrides: Vec::new(),
+            };
+        }
+        let effective_policy =
+            gpu_bb_policy.unwrap_or(fullmag_ir::FemGpuBbPreconditionerIR::Auto);
+        let preconditioned = matches!(
+            effective_policy,
+            fullmag_ir::FemGpuBbPreconditionerIR::Auto
+                | fullmag_ir::FemGpuBbPreconditionerIR::ExchangeMass
+        );
         return FemDirectMinimizerPolicyProvenance {
-            direction_policy_source: policy
+            direction_policy_source: gpu_bb_policy
                 .map(|_| "discretization_hints.fem.gpu_bb_preconditioner".to_string()),
-            requested_direction_policy: policy
-                .map(|policy| policy.as_str())
-                .unwrap_or("device_tangent_gradient")
-                .to_string(),
+            requested_direction_policy: effective_policy.as_str().to_string(),
             resolved_direction_policy: if preconditioned {
                 "device_exchange_mass_preconditioned"
             } else {
                 "device_tangent_gradient"
             }
             .to_string(),
+            direction_fallback_reason: if effective_policy
+                == fullmag_ir::FemGpuBbPreconditionerIR::None
+            {
+                Some("policy_none".to_string())
+            } else {
+                None
+            },
             requested_linear_solver: if preconditioned {
                 "cooperative_device_pcg"
             } else {
@@ -200,6 +222,7 @@ fn resolve_fem_direct_minimizer_policy(
         direction_policy_source: None,
         requested_direction_policy: requested_direction.to_string(),
         resolved_direction_policy: resolved_direction.to_string(),
+        direction_fallback_reason: None,
         requested_linear_solver: requested_solver.to_string(),
         resolved_linear_solver: resolved_solver.to_string(),
         requested_preconditioner: requested_preconditioner.to_string(),
@@ -230,6 +253,39 @@ pub(crate) fn apply_fem_direct_minimizer_policy_provenance(
             .is_some_and(|control| control.algorithm == RelaxationAlgorithmIR::ProjectedGradientBb),
         gpu_bb_policy,
     ));
+}
+
+#[cfg(any(feature = "fem-gpu", feature = "fem-native", test))]
+pub(crate) fn apply_native_fem_gpu_bb_preconditioner_runtime_provenance(
+    provenance: &mut ExecutionProvenance,
+    requested_policy: Option<&str>,
+    resolved_enabled: bool,
+    solver_kind: &str,
+    preconditioner_kind: &str,
+    fallback_reason: Option<&str>,
+) {
+    if provenance.execution_engine != "fem_native_gpu"
+        || provenance.resolved_energy_minimizer.as_deref() != Some("projected_gradient_bb")
+    {
+        return;
+    }
+    let Some(policy) = provenance.fem_direct_minimizer_policy.as_mut() else {
+        return;
+    };
+    if let Some(requested) = requested_policy {
+        policy.requested_direction_policy = requested.to_string();
+    }
+    policy.resolved_direction_policy = if resolved_enabled {
+        "device_exchange_mass_preconditioned"
+    } else {
+        "device_tangent_gradient"
+    }
+    .to_string();
+    policy.resolved_linear_solver = solver_kind.to_string();
+    policy.resolved_preconditioner = preconditioner_kind.to_string();
+    policy.direction_fallback_reason = fallback_reason
+        .filter(|reason| !reason.is_empty())
+        .map(str::to_string);
 }
 
 #[cfg(test)]
@@ -324,10 +380,10 @@ mod tests {
     #[test]
     fn gpu_bb_typed_policy_preserves_request_and_ignores_cpu_environment() {
         use fullmag_ir::FemGpuBbPreconditionerIR as Policy;
-        for (requested, enabled) in [
-            (Policy::Auto, false),
-            (Policy::None, false),
-            (Policy::ExchangeMass, true),
+        for (requested, enabled, fallback) in [
+            (Policy::Auto, true, None),
+            (Policy::None, false, Some("policy_none")),
+            (Policy::ExchangeMass, true, None),
         ] {
             let policy = resolve_fem_direct_minimizer_policy(
                 true,
@@ -346,6 +402,7 @@ mod tests {
                     "device_tangent_gradient"
                 }
             );
+            assert_eq!(policy.direction_fallback_reason.as_deref(), fallback);
             assert_eq!(
                 policy.resolved_linear_solver,
                 if enabled {
@@ -365,13 +422,106 @@ mod tests {
             assert!(policy.environment_overrides.is_empty());
         }
         let default = resolve_fem_direct_minimizer_policy(true, None, None, None, true, None);
-        assert_eq!(default.requested_direction_policy, "device_tangent_gradient");
-        assert_eq!(default.resolved_direction_policy, "device_tangent_gradient");
-        assert_eq!(default.resolved_linear_solver, "not_used");
-        assert_eq!(default.resolved_preconditioner, "not_used");
+        assert_eq!(default.requested_direction_policy, "auto");
+        assert_eq!(
+            default.resolved_direction_policy,
+            "device_exchange_mass_preconditioned"
+        );
+        assert_eq!(default.direction_fallback_reason, None);
+        assert_eq!(default.resolved_linear_solver, "cooperative_device_pcg");
+        assert_eq!(default.resolved_preconditioner, "device_jacobi");
         assert!(default.direction_policy_source.is_none());
         let ncg = resolve_fem_direct_minimizer_policy(true, None, None, None, false, None);
+        assert_eq!(ncg.requested_direction_policy, "device_tangent_gradient");
+        assert_eq!(ncg.resolved_direction_policy, "device_tangent_gradient");
         assert_eq!(ncg.resolved_linear_solver, "not_used");
+        assert_eq!(ncg.direction_fallback_reason, None);
+    }
+
+    #[test]
+    fn runtime_gpu_bb_attestation_separates_auto_request_from_resolved_execution() {
+        let mut provenance = ExecutionProvenance {
+            execution_engine: "fem_native_gpu".to_string(),
+            resolved_energy_minimizer: Some("projected_gradient_bb".to_string()),
+            fem_direct_minimizer_policy: Some(resolve_fem_direct_minimizer_policy(
+                true,
+                None,
+                None,
+                None,
+                true,
+                Some(fullmag_ir::FemGpuBbPreconditionerIR::Auto),
+            )),
+            ..ExecutionProvenance::default()
+        };
+
+        apply_native_fem_gpu_bb_preconditioner_runtime_provenance(
+            &mut provenance,
+            Some("auto"),
+            true,
+            "cooperative_device_pcg",
+            "device_jacobi",
+            None,
+        );
+        let enabled = provenance
+            .fem_direct_minimizer_policy
+            .as_ref()
+            .expect("policy present");
+        assert_eq!(enabled.requested_direction_policy, "auto");
+        assert_eq!(
+            enabled.resolved_direction_policy,
+            "device_exchange_mass_preconditioned"
+        );
+        assert_eq!(enabled.resolved_linear_solver, "cooperative_device_pcg");
+        assert_eq!(enabled.resolved_preconditioner, "device_jacobi");
+        assert_eq!(enabled.direction_fallback_reason, None);
+        let enabled_json = serde_json::to_value(enabled).expect("serialize enabled policy");
+        assert!(enabled_json.get("direction_fallback_reason").is_none());
+
+        apply_native_fem_gpu_bb_preconditioner_runtime_provenance(
+            &mut provenance,
+            Some("auto"),
+            false,
+            "not_used",
+            "not_used",
+            Some("exchange_disabled"),
+        );
+        let fallback = provenance
+            .fem_direct_minimizer_policy
+            .as_ref()
+            .expect("policy present");
+        assert_eq!(fallback.requested_direction_policy, "auto");
+        assert_eq!(fallback.resolved_direction_policy, "device_tangent_gradient");
+        assert_eq!(fallback.resolved_linear_solver, "not_used");
+        assert_eq!(fallback.resolved_preconditioner, "not_used");
+        assert_eq!(
+            fallback.direction_fallback_reason.as_deref(),
+            Some("exchange_disabled")
+        );
+        let fallback_json = serde_json::to_value(fallback).expect("serialize fallback policy");
+        assert_eq!(
+            fallback_json["direction_fallback_reason"],
+            "exchange_disabled"
+        );
+
+        // Non-GPU or non-PGBB provenance must not be overwritten.
+        let mut cpu_provenance = ExecutionProvenance {
+            execution_engine: "fem_native_cpu".to_string(),
+            resolved_energy_minimizer: Some("projected_gradient_bb".to_string()),
+            fem_direct_minimizer_policy: Some(resolve_fem_direct_minimizer_policy(
+                false, None, None, None, true, None,
+            )),
+            ..ExecutionProvenance::default()
+        };
+        let before = cpu_provenance.fem_direct_minimizer_policy.clone();
+        apply_native_fem_gpu_bb_preconditioner_runtime_provenance(
+            &mut cpu_provenance,
+            Some("auto"),
+            false,
+            "not_used",
+            "not_used",
+            Some("exchange_disabled"),
+        );
+        assert_eq!(cpu_provenance.fem_direct_minimizer_policy, before);
     }
 
     #[test]

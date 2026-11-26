@@ -44,6 +44,8 @@ use crate::relaxation::apply_energy_minimizer_provenance;
 #[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
 use crate::relaxation::apply_fem_direct_minimizer_policy_provenance;
 #[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
+use crate::relaxation::apply_native_fem_gpu_bb_preconditioner_runtime_provenance;
+#[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
 use crate::relaxation::llg_overdamped_uses_pure_damping;
 #[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
 use crate::relaxation::RelaxationEnergyPlateauWindow;
@@ -3779,6 +3781,21 @@ fn execute_native_fem(
         gpu_demag_provenance.resolved_linear_solver,
         gpu_demag_provenance.fallback_reason,
     );
+    if execution_engine == "fem_native_gpu"
+        && plan.relaxation.as_ref().is_some_and(|control| {
+            control.algorithm == fullmag_ir::RelaxationAlgorithmIR::ProjectedGradientBb
+        })
+    {
+        let bb_status = backend.gpu_bb_preconditioner_status()?;
+        apply_native_fem_gpu_bb_preconditioner_runtime_provenance(
+            &mut provenance,
+            Some(bb_status.requested_policy),
+            bb_status.resolved_enabled,
+            &bb_status.solver_kind,
+            &bb_status.preconditioner_kind,
+            bb_status.fallback_reason.as_deref(),
+        );
+    }
     if execution_mode == ExecutionMode::Strict && execution_engine == "fem_native_gpu" {
         let build_info = native_fem::strict_gpu_runtime_build_info()?;
         provenance.mfem_version = Some(build_info.mfem_version);

@@ -3410,6 +3410,8 @@ pub struct FemDirectMinimizerPolicyProvenance {
     pub direction_policy_source: Option<String>,
     pub requested_direction_policy: String,
     pub resolved_direction_policy: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub direction_fallback_reason: Option<String>,
     pub requested_linear_solver: String,
     pub resolved_linear_solver: String,
     pub requested_preconditioner: String,

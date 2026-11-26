@@ -408,6 +408,21 @@ pub(crate) fn finalize_native_fem_relaxation(
         gpu_demag_provenance.resolved_linear_solver,
         gpu_demag_provenance.fallback_reason,
     );
+    if engine == FemEngine::NativeGpu
+        && plan.relaxation.as_ref().is_some_and(|control| {
+            control.algorithm == fullmag_ir::RelaxationAlgorithmIR::ProjectedGradientBb
+        })
+    {
+        let bb_status = backend.gpu_bb_preconditioner_status()?;
+        crate::relaxation::apply_native_fem_gpu_bb_preconditioner_runtime_provenance(
+            &mut final_provenance,
+            Some(bb_status.requested_policy),
+            bb_status.resolved_enabled,
+            &bb_status.solver_kind,
+            &bb_status.preconditioner_kind,
+            bb_status.fallback_reason.as_deref(),
+        );
+    }
     let gpu_state_info = backend.gpu_state_info()?;
     let gpu_rk_plan_info = backend.gpu_rk_plan_info()?;
     apply_native_fem_runtime_contract(
