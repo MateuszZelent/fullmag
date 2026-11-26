@@ -1,6 +1,6 @@
 # FEM GPU. Short-Range Kernel Optimizations: Intermediate Reduction Gating, Explicit-RK FMA Exchange, Fused Effective-Field Accumulation, and Device AoS/SoA Pack-Unpack
 
-Status `implemented / contract-tested / pending Phase 2 GPU qualification`. This note specifies four numerical and systems realization optimizations inside the strict device-resident FEM GPU short-range interaction and state-I/O pipeline:
+Status `implemented / contract-tested / qualified on RTX 4080 SUPER` (see [2026-11-26-fem-pgbb-kernels-dr-ab.md](../audits/2026-11-26-fem-pgbb-kernels-dr-ab.md)). This note specifies four numerical and systems realization optimizations inside the strict device-resident FEM GPU short-range interaction and state-I/O pipeline:
 
 1. **Intermediate RK reduction gating and lazy `h_drive` zeroing:** passing `nullptr` for unused intermediate-stage reduction outputs (`energy_out`, `block_sums`, `block_max_sigma`) in `rk_dmi_fields.cu`, `rk_anisotropy_field.cu`, `rk_magnetoelastic_field.cu`, and `rk_thermal_field.cu`, specializing the corresponding CUDA kernels via `template <bool ComputeEnergy>` / `template <bool ComputeMaxSigma>` (with deadlock-free predicated `cub::BlockReduce` for final DMI energy evaluation), and gating zero-drive `cudaMemsetAsync` via `FemGpuFieldBufferDeviceState::h_drive_zeroed` (default `false` after raw `cudaMalloc`).
 2. **Dual-path sparse exchange accumulation:** dispatching hardware FP64 FMA graph-Laplacian accumulation (`Compensated = false`, ~6 FP64 operations/NNZ) on explicit Runge-Kutta dynamics stages while retaining software double-double (`gpu_relax_dd`, `Compensated = true`) for direct-minimizer relaxation (`PGBB`/`NCG`) and keeping `ExchangeDoubleDouble` untouched in polarized energy-difference kernels.
@@ -15,7 +15,7 @@ The physical definitions of Heisenberg exchange, interfacial/rotated/bulk Dzyalo
 | Realization | Scope of this note | Evidence |
 |---|---|---|
 | FEM CPU | Unchanged; retains existing CPU MFEM field assembly, consistent-mass exchange projection, and host-resident state buffers | Source unchanged |
-| FEM GPU | Template-gated intermediate RK reductions, deadlock-free `cub::BlockReduce` DMI energy, lazy `h_drive_zeroed` memset skip, dual-path FMA/DD sparse exchange, single-launch fused `H_eff`, and device-side AoS/SoA pack-unpack transfers | Unit, source-facade, and CUDA contract tests (`cuda_shortrange_kernels_contract.cpp`, `source_facade_cuda_kernels_contract.cpp`, `gpu_state_runtime_contract.cpp`, `state_io_contract.cpp`); RTX 4080 SUPER A/B verification scheduled in Phase 2 |
+| FEM GPU | Template-gated intermediate RK reductions, deadlock-free `cub::BlockReduce` DMI energy, lazy `h_drive_zeroed` memset skip, dual-path FMA/DD sparse exchange, single-launch fused `H_eff`, and device-side AoS/SoA pack-unpack transfers | Qualified on RTX 4080 SUPER (SM `89-real`, Docker DEV): `fem_cuda_shortrange_kernels_contract` + `compute-sanitizer --tool memcheck` (0 errors), `fem_gpu_state_runtime_contract`, `fem_state_io_contract`, `fem_oersted_contract` PASS; `1.80×` RK4 E2E (`m_rel = 4.53e-16`), `8.02×` exchange FMA, `2.54×` DMI RK, `17.5×` fused `H_eff`, `13.93×` `state_io` (`40.5×` D2H / `6.30×` H2D); see `docs/audits/2026-11-26-fem-pgbb-kernels-dr-ab.md` |
 | FDM CPU | Not applicable | FDM uses structured-grid finite-difference stencils and host arrays, not unstructured FEM CSR exchange, tetrahedral DMI, or SoA/AoS GPU transfer buffers |
 | FDM GPU | Not applicable | FDM uses structured-grid CUDA stencil kernels and its own device memory layout, not the FEM GPU RK field pipeline |
 
@@ -238,14 +238,18 @@ These optimizations are internal FEM GPU realization improvements and add no new
 4. **Fused `H_eff` bitwise parity (`cuda_shortrange_kernels_contract.cpp`, `source_facade_cuda_kernels_contract.cpp`, `oersted_contract.cpp`):** Verify `memcmp == 0` for `h_eff.{x,y,z}` and `h_oe.{x,y,z}` on `N = 1031` nodes across all 10 interaction terms (with scaled Oersted `2.75`), base-only subset, and explicit Oersted subset.
 5. **Packed AoS/SoA transfer round-trip (`cuda_shortrange_kernels_contract.cpp`, `gpu_state_runtime_contract.cpp`, `state_io_contract.cpp`):** Verify bit-exact round-trip for $N \in \{1, 3, 257, 1031\}$, null-stream rejection, exact $24N$-byte H2D/D2H audit accounting, and removal of redundant pre-copy synchronization in `stage_compute.cpp`.
 
-**Evidence status.** Implementation and contract tests are authored in Wave 3 Track 2; Docker DEV CUDA/MFEM execution, non-MFEM build verification, and RTX 4080 SUPER A/B timing benchmarks are executed in Phase 2 integration.
+**Evidence status (qualified on RTX 4080 SUPER, SM `89-real`, Docker DEV, `311062d617` vs `9ab99132d5`, `docs/audits/2026-11-26-fem-pgbb-kernels-dr-ab.md`):**
+- **Contract & memory safety:** `fem_cuda_shortrange_kernels_contract` (**PASS**, `compute-sanitizer --tool memcheck` **0 errors**, 0-ULP bitwise parity verified for cubic anisotropy and magnetoelasticity via explicit non-contracted `__dmul_rn`/`__dadd_rn`/`__dsub_rn`), `fem_gpu_state_runtime_contract`, `fem_state_io_contract`, `fem_oersted_contract`, and `fem_relaxation_energy_derivative_contract` all **PASS**; non-MFEM CI build **10/10 PASS**.
+- **Full 50-step RK4 E2E (`33,150` nodes / `180,000` TET4, Exchange + iDMI + bDMI + Uniaxial + Cubic + MEL + Zeeman, `regional_drive_count = 0`):** **`277.463 ms`** vs `498.562 ms` (**`1.80×`**); trajectory parity `ΔE_tot = ΔE_ex = ΔE_ani = ΔE_mel = 0.0`, `ΔE_dmi = 1.622e-15`, `max_rel(m) = 4.531e-16`, `max_rel(H_eff) = 1.648e-15` (`<< 1e-13`).
+- **`state_io` 20× `copy_field_f64` (`10× M + 10× H_eff`):** **`5.284 ms`** vs `73.621 ms` (**`13.93×`**, exceeding `>= 5×` gate).
+- **CUDA-event kernel microbenchmarks (100 repeats):** DMI RK `energy_out = nullptr` **`2.54×`** (`0.3095 ms` vs `0.7873 ms`) and `cub::BlockReduce` **`2.17×`** (`0.3632 ms`); Exchange RK FMA **`8.02×`** (`0.0517 ms` vs `0.4144 ms`); Fused `H_eff` (`21 → 1` launches) **`17.5×`** (`0.0130 ms` vs `0.2275 ms`); packed transfers **`40.5×`** D2H (`0.1944 ms` vs `7.8800 ms`) and **`6.30×`** H2D (`0.1729 ms` vs `1.0896 ms`).
 
 (limitations)=
 ## Limitations
 
 - The fast FP64 FMA exchange kernel (`Compensated = false`) is intentionally restricted to explicit RK stages and must not replace compensated double-double accumulation in PGBB/NCG relaxation or polarized energy-difference evaluations where $10^{-15}$ Armijo cancellation bounds are required.
 - Final DMI energy evaluation still issues one FP64 `atomicAdd` per element block ($\lceil N_e / 256 \rceil$ atomics rather than $N_e$); this path runs only once per accepted step during final observable statistics, not on intermediate RK stages.
-- `api.cpp` (`device_apply_demag_tangent_with_potential`) cleanup off `gpu_state_download_component_aos` is deferred to Phase 2 integration to preserve strict Phase 1 file ownership boundaries.
+- `api.cpp` (`device_apply_demag_tangent_with_potential`) now also routes `delta_H_demag` through `gpu_state_download_component_aos_packed` (removing the redundant pre-copy stream sync) when `compute_stream` and persistent AoS scratch are active.
 - Legacy `fullmag_cuda_upload_aos_to_soa` and `fullmag_cuda_download_soa_to_aos` remain exported as streamless compatibility fallbacks for unit tests that do not construct a `compute_stream`.
 
 (scientific-bibliography)=

@@ -1,6 +1,6 @@
 # FEM GPU. Direct sparse frequency-domain driven response (cuDSS)
 
-Status `implemented / VRAM-guarded / pending RTX 4080 SUPER qualification`. Branch
+Status `implemented / VRAM-guarded / qualified on RTX 4080 SUPER` (see [2026-11-26-fem-pgbb-kernels-dr-ab.md](../audits/2026-11-26-fem-pgbb-kernels-dr-ab.md)). Branch
 `codex/fem-pgbb-kernels-dr-20261126`. The realization is governed by the public solver method policy
 `FrequencyResponseSolverPolicy.method` (`"auto"`, `"gpu_sparse_direct"`, `"gpu_operator_host_krylov"`, default `"auto"`),
 delivered to the native frequency-domain solver via `fullmag_fem_frequency_domain_gpu_direct_options` and
@@ -23,7 +23,7 @@ equations.
 | Realization | Scope of this note | Evidence |
 |---|---|---|
 | FEM CPU | Not changed; host GMRES / Schur-reduced Krylov solvers remain unchanged | Source unchanged |
-| FEM GPU | Guarded `auto` / `gpu_sparse_direct` / `gpu_operator_host_krylov` dispatch using 1x symbolic analysis `cuDSS` general complex LU with Ruiz equilibration, VRAM preflight, independent GPU residual certification, and explicit fallback provenance across open, no-demag, and $k=0$ periodic airbox problems | Contract tests (`driven_response_cudss_contract.cpp`), Rust runner policy & provenance tests (`frequency_response.rs`), Python round-trip test (`test_api.py`); RTX 4080 SUPER qualification pending |
+| FEM GPU | Guarded `auto` / `gpu_sparse_direct` / `gpu_operator_host_krylov` dispatch using 1x symbolic analysis `cuDSS` general complex LU with 2x2 block geometric pre-scaling + 6-pass Ruiz equilibration, VRAM preflight, independent GPU residual certification, and explicit fallback provenance across open, no-demag, and $k=0$ periodic airbox problems | Qualified on RTX 4080 SUPER (SM `89-real`, Docker DEV): `fem_driven_response_cudss_contract` (+ `compute-sanitizer --tool memcheck` 0 errors), non-MFEM CI 10/10, Rust `frequency_response` (55/55 default + 67/67 `fem-gpu`), Python round-trip PASS; `151.3×–454×` vs CPU GMRES (open P2 Robin), `2.89×–4.22×` vs GPU GMRES (`periodic_airbox_k0`), scales to `42,907` DOFs in `6.08 s` (`449.6 MiB`, 0 perturbed pivots, `r_q <= 1.15e-14`, `r_phi <= 1.45e-14`); see `docs/audits/2026-11-26-fem-pgbb-kernels-dr-ab.md` |
 | FDM CPU | Not applicable | FDM uses structured-grid operators without FEM sparse CSR assembly |
 | FDM GPU | Not applicable | FDM uses structured-grid operators without FEM sparse CSR assembly |
 
@@ -366,11 +366,11 @@ When `solver_method` is omitted or `"auto"`, the runner maps `requested_device =
 4. Docker DEV RTX 4080 SUPER qualification (build + `fem_driven_response_cudss_contract` + multi-frequency open and
    `periodic_airbox_k0` parity vs. Krylov reference) pending coordinator validation phase.
 
-**Results.**
-
-Contract tests, Rust unit tests, and Python round-trip tests are implemented on branch
-`codex/fem-pgbb-kernels-dr-20261126`; RTX 4080 SUPER runtime timings and parity numbers will be recorded after the
-Docker DEV qualification sweep completes.
+**Results (qualified on RTX 4080 SUPER, SM `89-real`, Docker DEV, `311062d617` vs `9ab99132d5`, `docs/audits/2026-11-26-fem-pgbb-kernels-dr-ab.md`):**
+- **Contract, non-MFEM, and memory safety:** `fem_driven_response_cudss_contract` (including `test_asymmetric_1e25_open_airbox_block_prescaling`, `compute-sanitizer --tool memcheck` **0 errors**), `fem_driven_response_contract`, `fem_frequency_domain_contract`, non-MFEM CI (`10/10 PASS`), Rust `fullmag-fem-sys` (`54/54`), `fullmag-ir` (`289/289`), `fullmag-plan` (`688/688`), `fullmag-runner` (`frequency_response` `55/55` default + `67/67` `fem-gpu`), and Python round-trip test (`test_api.py`) all **PASS**.
+- **Open-airbox P2 Robin (`3A_open_small`, `1,687` complex DOFs, $\alpha = 0.01$, $\mathrm{rtol} = 10^{-10}$):** 8-frequency sweep `208.02 ms` vs `31,473.60 ms` CPU GMRES (**`151.3×`** E2E; `216.44 ms` = `8.66 ms/freq` over 25 frequencies = **`454×`** amortized ms/freq; `1` analysis / `25` factorizations; `11.7 MiB` peak VRAM; 8-frequency `vector_tangent_complex` parity **`5.32e-10`**).
+- **2D periodic airbox `k=0` (`3C_periodic_k0`, `1,690` DOFs & `3C_periodic_k0_large`, `4,410` DOFs, 25 frequencies):** **`692.69 ms`** vs `2,919.94 ms` GPU GMRES (**`4.22×`**, parity **`3.08e-11`**) and **`1,248.18 ms`** vs `3,603.07 ms` (**`2.89×`**, parity **`3.04e-11`**); `vram_cap_auto` (`1 MiB`) triggers clean explicit fallback with `0.000e+00` parity vs GPU GMRES.
+- **Large open-airbox P2 Robin scaling (25 frequencies `1–25 GHz`, 2×2 block geometric pre-scaling + 6-pass Ruiz):** `7,987` DOFs in `965.26 ms` (`63.6 MiB`), `21,991` DOFs in `2,690.40 ms` (`203.8 MiB`, `r_q = 3.01e-15`, `r_phi = 1.02e-14`), `42,907` DOFs in **`6,076.59 ms`** (`449.6 MiB`, `r_q = 1.15e-14`, `r_phi = 1.45e-14`), **25/25 PASS**, `1` symbolic analysis / `25` numeric factorizations, **`0` perturbed pivots**; `vram_cap_req` (`1 MiB`, `Required`) fails closed before factorization with `cudss_peak_memory_budget_exceeded` (`1 / 0`).
 
 (limitations)=
 ## Limitations

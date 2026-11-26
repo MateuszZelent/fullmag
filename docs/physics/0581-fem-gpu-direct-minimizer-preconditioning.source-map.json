@@ -11,7 +11,7 @@
     {
       "solver": "FEM",
       "device": "GPU",
-      "status": "implemented-unvalidated"
+      "status": "qualified-rtx4080-super"
     },
     {
       "solver": "FDM",

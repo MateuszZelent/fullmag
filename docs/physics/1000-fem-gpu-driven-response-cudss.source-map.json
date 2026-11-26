@@ -1,7 +1,7 @@
 {
   "document": {
     "path": "docs/physics/1000-fem-gpu-driven-response-cudss.md",
-    "reviewed_revision": "ee943449fd"
+    "reviewed_revision": "311062d617"
   },
   "backend_matrix": [
     {
@@ -13,7 +13,7 @@
     {
       "solver": "FEM",
       "device": "GPU",
-      "status": "implemented / VRAM-guarded / pending RTX 4080 SUPER qualification"
+      "status": "implemented / VRAM-guarded / qualified on RTX 4080 SUPER"
     },
     {
       "solver": "FDM",
@@ -549,7 +549,7 @@
     ]
   },
   "validation": {
-    "plan": "Contract suite driven_response_cudss_contract.cpp covering policy and env-cap fail-closed checks, no-demag 10-frequency sweep parity with DMI and pageable readback, coupled airbox 10^20 scaling and ess_tdofs zeroing against dense Schur oracle, divergence-free Poisson residual floor, VRAM budget=1 auto fallback vs required refusal, singular alpha=0 resonance hard solve_error, and periodic_airbox_k0 lifting and G_rec recovery; Rust policy and provenance unit tests in frequency_response.rs; Python ProblemIR round-trip test in test_api.py; RTX 4080 SUPER Docker DEV qualification pending.",
-    "results": "Contract, Rust unit, and Python round-trip tests implemented on branch codex/fem-pgbb-kernels-dr-20261126; RTX 4080 SUPER qualification results pending."
+    "plan": "Contract suite driven_response_cudss_contract.cpp covering policy and env-cap fail-closed checks, no-demag 10-frequency sweep parity with DMI and pageable readback, coupled airbox 10^20 scaling and 10^25 open-airbox asymmetric-coupling block geometric pre-scaling + ess_tdofs zeroing against dense Schur oracle, divergence-free Poisson residual floor, VRAM budget=1 auto fallback vs required refusal, singular alpha=0 resonance hard solve_error, and periodic_airbox_k0 lifting and G_rec recovery; Rust policy and provenance unit tests in frequency_response.rs; Python ProblemIR round-trip test in test_api.py; RTX 4080 SUPER Docker DEV qualification.",
+    "results": "PASS on RTX 4080 SUPER (SM 89-real, Docker DEV, candidate 311062d617 vs baseline 9ab99132d5; docs/audits/2026-11-26-fem-pgbb-kernels-dr-ab.md): fem_driven_response_cudss_contract (+ compute-sanitizer memcheck 0 errors), non-MFEM CI 10/10, Rust frequency_response (55/55 default + 67/67 fem-gpu), Python round-trip PASS; 3A_open_small 151.3x E2E (454x amortized ms/freq) vs CPU GMRES (parity 5.32e-10), 3C_periodic_k0 4.22x (parity 3.08e-11) and 3C_periodic_k0_large 2.89x (parity 3.04e-11) vs GPU GMRES, open-airbox P2 Robin scaling to 42,907 DOFs in 6.08 s (449.6 MiB VRAM, 1 analysis / 25 factorizations, 0 perturbed pivots, r_q<=1.15e-14, r_phi<=1.45e-14), strict VRAM preflight verified for AUTO fallback (0.0 parity) and REQUIRED fail-closed."
   }
 }

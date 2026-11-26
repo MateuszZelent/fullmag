@@ -12,7 +12,7 @@
     {
       "solver": "FEM",
       "device": "GPU",
-      "status": "documented"
+      "status": "qualified-rtx4080-super"
     },
     {
       "solver": "FDM",
@@ -515,6 +515,6 @@
   },
   "validation": {
     "plan": "Execute fem_cuda_shortrange_kernels_contract, fem_source_facade_cuda_kernels_contract, fem_oersted_contract, fem_gpu_state_runtime_contract, fem_state_io_contract, fem_relaxation_energy_derivative_contract, and Phase 2 RTX 4080 SUPER A/B benchmarks verifying null-reduction bitwise parity, deadlock-free DMI BlockReduce, lazy h_drive zeroing, RK FMA exchange <= 1e-13 parity and >= 2.5x speedup, single-launch fused H_eff memcmp == 0, and packed AoS/SoA transfer >= 5x speedup.",
-    "results": "Implementation and contract tests authored in Wave 3 Track 2; Docker DEV CUDA/MFEM execution and RTX 4080 SUPER A/B measurements scheduled in Phase 2 integration."
+    "results": "PASS on RTX 4080 SUPER (SM 89-real, Docker DEV, candidate 311062d617 vs baseline 9ab99132d5; docs/audits/2026-11-26-fem-pgbb-kernels-dr-ab.md): fem_cuda_shortrange_kernels_contract (+ compute-sanitizer memcheck 0 errors), fem_gpu_state_runtime_contract, fem_state_io_contract, fem_oersted_contract, fem_relaxation_energy_derivative_contract PASS; 50-step RK4 E2E 1.80x (277.46 ms vs 498.56 ms, m_rel=4.53e-16, H_eff_rel=1.65e-15), state_io 13.93x (5.28 ms vs 73.62 ms), DMI RK 2.54x (BlockReduce 2.17x), Exchange RK FMA 8.02x, Fused H_eff 17.5x (21->1 launches), packed D2H 40.5x / H2D 6.30x."
   }
 }
