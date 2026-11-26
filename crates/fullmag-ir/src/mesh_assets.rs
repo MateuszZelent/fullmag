@@ -1229,17 +1229,14 @@ mod mesh_asset_validation_tests {
         let mut facet_offsets = vec![0u32];
         let mut facet_nodes = Vec::new();
         let mut boundary_markers = Vec::new();
-        let mut push_tri = |role: crate::FemFacetRoleIR, marker: u32, tri: [u32; 3]| {
-            facet_types.push(crate::FemFacetTypeIR::Tri3);
+        let mut push_facet = |role: crate::FemFacetRoleIR, marker: u32, nodes: &[u32]| {
+            facet_types.push(if nodes.len() == 3 {
+                crate::FemFacetTypeIR::Tri3
+            } else {
+                crate::FemFacetTypeIR::Quad4
+            });
             facet_roles.push(role);
-            facet_nodes.extend(tri);
-            facet_offsets.push(facet_nodes.len() as u32);
-            boundary_markers.push(marker);
-        };
-        let mut push_quad = |role: crate::FemFacetRoleIR, marker: u32, quad: [u32; 4]| {
-            facet_types.push(crate::FemFacetTypeIR::Quad4);
-            facet_roles.push(role);
-            facet_nodes.extend(quad);
+            facet_nodes.extend_from_slice(nodes);
             facet_offsets.push(facet_nodes.len() as u32);
             boundary_markers.push(marker);
         };
@@ -1247,11 +1244,11 @@ mod mesh_asset_validation_tests {
         // Bottom & top exterior tri3 facets (marker 3).
         let top_off = (total_layers * 8) as u32;
         for [a, b, c] in inner_tris.iter().chain(outer_tris.iter()).copied() {
-            push_tri(crate::FemFacetRoleIR::Exterior, 3, [a, c, b]);
-            push_tri(
+            push_facet(crate::FemFacetRoleIR::Exterior, 3, &[a, c, b]);
+            push_facet(
                 crate::FemFacetRoleIR::Exterior,
                 3,
-                [top_off + a, top_off + b, top_off + c],
+                &[top_off + a, top_off + b, top_off + c],
             );
         }
         // Outer lateral exterior quad4 facets (marker 3).
@@ -1259,10 +1256,10 @@ mod mesh_asset_validation_tests {
             let lo = (layer * 8) as u32;
             let hi = ((layer + 1) * 8) as u32;
             for [a, b] in [[4u32, 5], [5, 6], [6, 7], [7, 4]] {
-                push_quad(
+                push_facet(
                     crate::FemFacetRoleIR::Exterior,
                     3,
-                    [lo + a, lo + b, hi + b, hi + a],
+                    &[lo + a, lo + b, hi + b, hi + a],
                 );
             }
         }
@@ -1270,15 +1267,15 @@ mod mesh_asset_validation_tests {
         let mag_bot_off = 8u32;
         let mag_top_off = ((layer_count as usize + 1) * 8) as u32;
         for [a, b, c] in inner_tris {
-            push_tri(
+            push_facet(
                 crate::FemFacetRoleIR::MaterialInterface,
                 2,
-                [mag_bot_off + a, mag_bot_off + b, mag_bot_off + c],
+                &[mag_bot_off + a, mag_bot_off + b, mag_bot_off + c],
             );
-            push_tri(
+            push_facet(
                 crate::FemFacetRoleIR::MaterialInterface,
                 2,
-                [mag_top_off + a, mag_top_off + b, mag_top_off + c],
+                &[mag_top_off + a, mag_top_off + b, mag_top_off + c],
             );
         }
         // Magnetic lateral material-interface quad4 facets (marker 2).
@@ -1286,10 +1283,10 @@ mod mesh_asset_validation_tests {
             let lo = (layer * 8) as u32;
             let hi = ((layer + 1) * 8) as u32;
             for [a, b] in [[0u32, 1], [1, 2], [2, 3], [3, 0]] {
-                push_quad(
+                push_facet(
                     crate::FemFacetRoleIR::MaterialInterface,
                     2,
-                    [lo + a, lo + b, hi + b, hi + a],
+                    &[lo + a, lo + b, hi + b, hi + a],
                 );
             }
         }

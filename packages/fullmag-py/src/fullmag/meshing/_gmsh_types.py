@@ -3311,10 +3311,15 @@ class MeshData:
         per_domain_quality: dict[int, MeshQualityReport] | None = None,
         realization_report: MeshRealizationReport | None = None,
         mixed_layer_topology_certificate: MixedLayerTopologyCertificateLike | None = None,
+        pure_prism_topology_certificate: Mapping[str, object] | None = None,
         vertex_identity: Mapping[str, object] | None = None,
         size_field_realization: Mapping[str, object] | None = None,
     ) -> "MeshData":
         """Normalize the explicit legacy tet4/tri3 boundary into canonical CSR."""
+        if pure_prism_topology_certificate is not None:
+            raise ValueError(
+                "legacy tet4 mesh payload cannot carry pure_prism_topology_certificate"
+            )
         tet = np.asarray(elements, dtype=np.int32)
         tri = np.asarray(boundary_faces, dtype=np.int32)
         if tet.size == 0:
@@ -4152,8 +4157,14 @@ class MeshData:
         if legacy:
             if "elements" not in payload or "boundary_faces" not in payload:
                 raise ValueError("legacy mesh payload requires elements and boundary_faces")
+            legacy_common = dict(common)
+            legacy_pure_prism = legacy_common.pop("pure_prism_topology_certificate", None)
+            if legacy_pure_prism is not None:
+                raise ValueError(
+                    "legacy tet4 mesh payload cannot carry pure_prism_topology_certificate"
+                )
             return cls.from_legacy_tet4(
-                **common,
+                **legacy_common,
                 elements=payload["elements"],
                 boundary_faces=payload["boundary_faces"],
             )

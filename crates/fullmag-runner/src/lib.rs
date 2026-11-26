@@ -9103,62 +9103,59 @@ mod tests {
         let mut facet_offsets = vec![0u32];
         let mut facet_nodes = Vec::new();
         let mut boundary_markers = Vec::new();
-        let mut push_tri = |role: fullmag_ir::FemFacetRoleIR, marker: u32, tri: [u32; 3]| {
-            facet_types.push(fullmag_ir::FemFacetTypeIR::Tri3);
+        let mut push_facet = |role: fullmag_ir::FemFacetRoleIR, marker: u32, nodes: &[u32]| {
+            facet_types.push(if nodes.len() == 3 {
+                fullmag_ir::FemFacetTypeIR::Tri3
+            } else {
+                fullmag_ir::FemFacetTypeIR::Quad4
+            });
             facet_roles.push(role);
-            facet_nodes.extend(tri);
-            facet_offsets.push(facet_nodes.len() as u32);
-            boundary_markers.push(marker);
-        };
-        let mut push_quad = |role: fullmag_ir::FemFacetRoleIR, marker: u32, quad: [u32; 4]| {
-            facet_types.push(fullmag_ir::FemFacetTypeIR::Quad4);
-            facet_roles.push(role);
-            facet_nodes.extend(quad);
+            facet_nodes.extend_from_slice(nodes);
             facet_offsets.push(facet_nodes.len() as u32);
             boundary_markers.push(marker);
         };
         let top_off = (total_layers * 8) as u32;
         for [a, b, c] in inner_tris.iter().chain(outer_tris.iter()).copied() {
-            push_tri(fullmag_ir::FemFacetRoleIR::Exterior, 3, [a, c, b]);
-            push_tri(
+            push_facet(fullmag_ir::FemFacetRoleIR::Exterior, 3, &[a, c, b]);
+            push_facet(
                 fullmag_ir::FemFacetRoleIR::Exterior,
                 3,
-                [top_off + a, top_off + b, top_off + c],
+                &[top_off + a, top_off + b, top_off + c],
             );
         }
         for layer in 0..total_layers {
             let lo = (layer * 8) as u32;
             let hi = ((layer + 1) * 8) as u32;
             for [a, b] in [[4u32, 5], [5, 6], [6, 7], [7, 4]] {
-                push_quad(
+                push_facet(
                     fullmag_ir::FemFacetRoleIR::Exterior,
                     3,
-                    [lo + a, lo + b, hi + b, hi + a],
+                    &[lo + a, lo + b, hi + b, hi + a],
                 );
             }
         }
         let mag_bot_off = 8u32;
         let mag_top_off = ((layer_count as usize + 1) * 8) as u32;
         for [a, b, c] in inner_tris {
-            push_tri(
+            push_facet(
                 fullmag_ir::FemFacetRoleIR::MaterialInterface,
                 2,
-                [mag_bot_off + a, mag_bot_off + b, mag_bot_off + c],
+                &[mag_bot_off + a, mag_bot_off + b, mag_bot_off + c],
             );
-            push_tri(
+            push_facet(
                 fullmag_ir::FemFacetRoleIR::MaterialInterface,
                 2,
-                [mag_top_off + a, mag_top_off + b, mag_top_off + c],
+                &[mag_top_off + a, mag_top_off + b, mag_top_off + c],
             );
         }
         for layer in 1..=layer_count as usize {
             let lo = (layer * 8) as u32;
             let hi = ((layer + 1) * 8) as u32;
             for [a, b] in [[0u32, 1], [1, 2], [2, 3], [3, 0]] {
-                push_quad(
+                push_facet(
                     fullmag_ir::FemFacetRoleIR::MaterialInterface,
                     2,
-                    [lo + a, lo + b, hi + b, hi + a],
+                    &[lo + a, lo + b, hi + b, hi + a],
                 );
             }
         }

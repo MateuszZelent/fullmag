@@ -25,10 +25,15 @@
 
 #include <algorithm>
 #include <array>
+#include <cerrno>
 #include <cmath>
 #include <cstdint>
+#include <cstring>
 #include <string>
 #include <vector>
+
+#include <sys/wait.h>
+#include <unistd.h>
 
 namespace {
 
@@ -342,24 +347,192 @@ double max_magnetic_vector_diff(
     return max_err;
 }
 
-void run_parity_for_strategy(
+constexpr int kPgbbSteps = 3;
+
+struct CpuReferenceHeader {
+    double rk_exchange_energy_joules;
+    double rk_demag_energy_joules;
+    double rk_dmi_energy_joules;
+    double rk_total_energy_joules;
+    double pgbb_total_energy_joules[kPgbbSteps];
+    double pgbb_dmi_energy_joules[kPgbbSteps];
+    double pgbb_demag_energy_joules[kPgbbSteps];
+    uint64_t m_len;
+    uint64_t mag_mask_len;
+};
+
+struct CpuReferenceData {
+    CpuReferenceHeader header{};
+    std::vector<double> rk_m_xyz;
+    std::vector<uint8_t> mag_mask;
+};
+
+bool write_all(int fd, const void *buf, size_t nbytes)
+{
+    const auto *ptr = static_cast<const uint8_t *>(buf);
+    size_t written = 0u;
+    while (written < nbytes) {
+        const ssize_t rc = write(fd, ptr + written, nbytes - written);
+        if (rc < 0) {
+            if (errno == EINTR) {
+                continue;
+            }
+            return false;
+        }
+        if (rc == 0) {
+            return false;
+        }
+        written += static_cast<size_t>(rc);
+    }
+    return true;
+}
+
+bool read_all(int fd, void *buf, size_t nbytes)
+{
+    auto *ptr = static_cast<uint8_t *>(buf);
+    size_t got = 0u;
+    while (got < nbytes) {
+        const ssize_t rc = read(fd, ptr + got, nbytes - got);
+        if (rc < 0) {
+            if (errno == EINTR) {
+                continue;
+            }
+            return false;
+        }
+        if (rc == 0) {
+            return false;
+        }
+        got += static_cast<size_t>(rc);
+    }
+    return true;
+}
+
+CpuReferenceData compute_cpu_reference(
+    const PurePrismMeshBuffers &mesh,
+    const std::vector<double> &init_m)
+{
+    const uint32_t boundary_marker = 99u;
+    const fullmag_fem_plan_desc cpu_plan = make_plan(mesh, init_m, "cpu");
+    std::string error;
+
+    CpuReferenceData ref{};
+    {
+        ScopedBackend cpu_rk{};
+        check(fullmag::fem::initialize_backend_runtime(
+                  cpu_rk.ctx, cpu_plan, error, nullptr, &boundary_marker),
+              error.c_str());
+        check(cpu_rk.ctx.poisson_demag.potential_order == 2,
+              "CPU pure_prism_p2 must resolve P2 scalar potential");
+        fullmag_fem_step_stats cpu_stats{};
+        error.clear();
+        check(fullmag::fem::run_backend_step(
+                  cpu_rk.ctx, cpu_plan.dt_seconds, cpu_stats, error) == FULLMAG_FEM_OK,
+              error.c_str());
+        ref.header.rk_exchange_energy_joules = cpu_stats.exchange_energy_joules;
+        ref.header.rk_demag_energy_joules = cpu_stats.demag_energy_joules;
+        ref.header.rk_dmi_energy_joules = cpu_stats.dmi_energy_joules;
+        ref.header.rk_total_energy_joules = cpu_stats.total_energy_joules;
+        ref.rk_m_xyz = cpu_rk.ctx.state.m_xyz;
+        ref.mag_mask = cpu_rk.ctx.mesh.magnetic_node_mask;
+        ref.header.m_len = static_cast<uint64_t>(ref.rk_m_xyz.size());
+        ref.header.mag_mask_len = static_cast<uint64_t>(ref.mag_mask.size());
+    }
+
+    {
+        ScopedBackend cpu_pgbb{};
+        error.clear();
+        check(fullmag::fem::initialize_backend_runtime(
+                  cpu_pgbb.ctx, cpu_plan, error, nullptr, &boundary_marker),
+              error.c_str());
+        for (int step = 0; step < kPgbbSteps; ++step) {
+            fullmag_fem_step_stats c_rel{};
+            error.clear();
+            check(fullmag::fem::run_backend_relaxation_step(
+                      cpu_pgbb.ctx, FULLMAG_FEM_RELAX_PROJECTED_GRADIENT_BB, c_rel, error) ==
+                      FULLMAG_FEM_OK,
+                  error.c_str());
+            ref.header.pgbb_total_energy_joules[step] = c_rel.total_energy_joules;
+            ref.header.pgbb_dmi_energy_joules[step] = c_rel.dmi_energy_joules;
+            ref.header.pgbb_demag_energy_joules[step] = c_rel.demag_energy_joules;
+        }
+    }
+
+    return ref;
+}
+
+// Public MFEM/HYPRE backend creation binds process-wide mfem::Device and
+// HYPRE_SetMemoryLocation (HOST vs DEVICE). Run the CPU MFEM reference in a
+// clean forked child BEFORE the parent initializes CUDA/MFEM/HYPRE.
+CpuReferenceData run_cpu_reference_in_subprocess(
+    const PurePrismMeshBuffers &mesh,
+    const std::vector<double> &init_m)
+{
+    std::fflush(nullptr);
+    int pipe_fds[2] = {-1, -1};
+    check(pipe(pipe_fds) == 0, "pipe() failed for CPU reference subprocess");
+    const pid_t child = fork();
+    check(child >= 0, "fork() failed for CPU reference subprocess");
+    if (child == 0) {
+        close(pipe_fds[0]);
+        const CpuReferenceData ref = compute_cpu_reference(mesh, init_m);
+        const bool ok =
+            write_all(pipe_fds[1], &ref.header, sizeof(ref.header)) &&
+            write_all(
+                pipe_fds[1],
+                ref.rk_m_xyz.data(),
+                static_cast<size_t>(ref.header.m_len) * sizeof(double)) &&
+            write_all(
+                pipe_fds[1],
+                ref.mag_mask.data(),
+                static_cast<size_t>(ref.header.mag_mask_len) * sizeof(uint8_t));
+        close(pipe_fds[1]);
+        std::fflush(nullptr);
+        _exit(ok ? 0 : 2);
+    }
+
+    close(pipe_fds[1]);
+    CpuReferenceData ref{};
+    const bool hdr_ok = read_all(pipe_fds[0], &ref.header, sizeof(ref.header));
+    bool payload_ok = false;
+    if (hdr_ok) {
+        ref.rk_m_xyz.resize(static_cast<size_t>(ref.header.m_len));
+        ref.mag_mask.resize(static_cast<size_t>(ref.header.mag_mask_len));
+        payload_ok =
+            read_all(
+                pipe_fds[0],
+                ref.rk_m_xyz.data(),
+                static_cast<size_t>(ref.header.m_len) * sizeof(double)) &&
+            read_all(
+                pipe_fds[0],
+                ref.mag_mask.data(),
+                static_cast<size_t>(ref.header.mag_mask_len) * sizeof(uint8_t));
+    }
+    close(pipe_fds[0]);
+
+    int status = 0;
+    pid_t waited = -1;
+    do {
+        waited = waitpid(child, &status, 0);
+    } while (waited < 0 && errno == EINTR);
+    check(waited == child && WIFEXITED(status) && WEXITSTATUS(status) == 0,
+          "CPU reference subprocess failed");
+    check(hdr_ok && payload_ok, "failed to receive CPU reference payload from subprocess");
+    return ref;
+}
+
+void run_gpu_parity_for_strategy(
     const PurePrismMeshBuffers &mesh,
     const std::vector<double> &init_m,
+    const CpuReferenceData &cpu_ref,
     fullmag::fem::GpuDemagSolverStrategy strategy,
     const char *label)
 {
     const uint32_t boundary_marker = 99u;
-    ScopedBackend cpu_rk{};
     ScopedBackend gpu_rk{};
     gpu_rk.ctx.poisson_demag.gpu_solver_strategy = strategy;
 
-    const fullmag_fem_plan_desc cpu_plan = make_plan(mesh, init_m, "cpu");
     const fullmag_fem_plan_desc gpu_plan = make_plan(mesh, init_m, "cuda");
     std::string error;
-    check(fullmag::fem::initialize_backend_runtime(
-              cpu_rk.ctx, cpu_plan, error, nullptr, &boundary_marker),
-          error.c_str());
-    error.clear();
     if (!fullmag::fem::initialize_backend_runtime(
             gpu_rk.ctx, gpu_plan, error, nullptr, &boundary_marker)) {
         if (strategy == fullmag::fem::GpuDemagSolverStrategy::Cudss &&
@@ -371,8 +544,6 @@ void run_parity_for_strategy(
     }
 
     // Verify pure_prism_p2 GPU invariants: P2 scalar potential, no tet4 mesh_geometry, CSR DMI ready.
-    check(cpu_rk.ctx.poisson_demag.potential_order == 2,
-          "CPU pure_prism_p2 must resolve P2 scalar potential");
     check(gpu_rk.ctx.poisson_demag.potential_order == 2,
           "GPU pure_prism_p2 must resolve P2 scalar potential");
     check(gpu_rk.ctx.gpu_state.device.demag_poisson.scalar_dof_count > gpu_rk.ctx.mesh.n_nodes,
@@ -392,13 +563,8 @@ void run_parity_for_strategy(
               "CG+AMG strategy on pure_prism_p2 must resolve HypreKrylov");
     }
 
-    // 1. Explicit RK4 step parity vs CPU MFEM.
-    fullmag_fem_step_stats cpu_stats{};
+    // 1. Explicit RK4 step parity vs CPU MFEM reference.
     fullmag_fem_step_stats gpu_stats{};
-    error.clear();
-    check(fullmag::fem::run_backend_step(
-              cpu_rk.ctx, cpu_plan.dt_seconds, cpu_stats, error) == FULLMAG_FEM_OK,
-          error.c_str());
     error.clear();
     check(fullmag::fem::run_backend_step(
               gpu_rk.ctx, gpu_plan.dt_seconds, gpu_stats, error) == FULLMAG_FEM_OK,
@@ -413,50 +579,39 @@ void run_parity_for_strategy(
               error),
           error.c_str());
 
-    check(rel_diff(gpu_stats.exchange_energy_joules, cpu_stats.exchange_energy_joules) <= 1.0e-10,
+    check(rel_diff(gpu_stats.exchange_energy_joules, cpu_ref.header.rk_exchange_energy_joules) <= 1.0e-10,
           "pure_prism_p2 RK4 exchange energy GPU vs CPU parity failed");
-    check(rel_diff(gpu_stats.demag_energy_joules, cpu_stats.demag_energy_joules) <= 1.0e-10,
+    check(rel_diff(gpu_stats.demag_energy_joules, cpu_ref.header.rk_demag_energy_joules) <= 1.0e-10,
           "pure_prism_p2 RK4 P2 demag energy GPU vs CPU parity failed");
-    check(rel_diff(gpu_stats.dmi_energy_joules, cpu_stats.dmi_energy_joules) <= 1.0e-10,
+    check(rel_diff(gpu_stats.dmi_energy_joules, cpu_ref.header.rk_dmi_energy_joules) <= 1.0e-10,
           "pure_prism_p2 RK4 CSR DMI energy GPU vs CPU parity failed");
-    check(rel_diff(gpu_stats.total_energy_joules, cpu_stats.total_energy_joules) <= 1.0e-10,
+    check(rel_diff(gpu_stats.total_energy_joules, cpu_ref.header.rk_total_energy_joules) <= 1.0e-10,
           "pure_prism_p2 RK4 total energy GPU vs CPU parity failed");
     check(max_magnetic_vector_diff(
-              gpu_m_after_rk, cpu_rk.ctx.state.m_xyz, cpu_rk.ctx.mesh.magnetic_node_mask) <= 1.0e-10,
+              gpu_m_after_rk, cpu_ref.rk_m_xyz, cpu_ref.mag_mask) <= 1.0e-10,
           "pure_prism_p2 RK4 magnetization GPU vs CPU parity failed");
 
     // 2. Direct minimizer PGBB step parity (exercises CSR DMI double-double Armijo energy increment).
-    ScopedBackend cpu_pgbb{};
     ScopedBackend gpu_pgbb{};
     gpu_pgbb.ctx.poisson_demag.gpu_solver_strategy = strategy;
-    error.clear();
-    check(fullmag::fem::initialize_backend_runtime(
-              cpu_pgbb.ctx, cpu_plan, error, nullptr, &boundary_marker),
-          error.c_str());
     error.clear();
     check(fullmag::fem::initialize_backend_runtime(
               gpu_pgbb.ctx, gpu_plan, error, nullptr, &boundary_marker),
           error.c_str());
 
-    for (int step = 0; step < 3; ++step) {
-        fullmag_fem_step_stats c_rel{};
+    for (int step = 0; step < kPgbbSteps; ++step) {
         fullmag_fem_step_stats g_rel{};
-        error.clear();
-        check(fullmag::fem::run_backend_relaxation_step(
-                  cpu_pgbb.ctx, FULLMAG_FEM_RELAX_PROJECTED_GRADIENT_BB, c_rel, error) ==
-                  FULLMAG_FEM_OK,
-              error.c_str());
         error.clear();
         check(fullmag::fem::run_backend_relaxation_step(
                   gpu_pgbb.ctx, FULLMAG_FEM_RELAX_PROJECTED_GRADIENT_BB, g_rel, error) ==
                   FULLMAG_FEM_OK,
               error.c_str());
         check(std::isfinite(g_rel.total_energy_joules) &&
-                  rel_diff(g_rel.total_energy_joules, c_rel.total_energy_joules) <= 1.0e-9,
+                  rel_diff(g_rel.total_energy_joules, cpu_ref.header.pgbb_total_energy_joules[step]) <= 1.0e-9,
               "pure_prism_p2 PGBB total energy GPU vs CPU parity failed");
-        check(rel_diff(g_rel.dmi_energy_joules, c_rel.dmi_energy_joules) <= 1.0e-9,
+        check(rel_diff(g_rel.dmi_energy_joules, cpu_ref.header.pgbb_dmi_energy_joules[step]) <= 1.0e-9,
               "pure_prism_p2 PGBB DMI energy GPU vs CPU parity failed");
-        check(rel_diff(g_rel.demag_energy_joules, c_rel.demag_energy_joules) <= 1.0e-9,
+        check(rel_diff(g_rel.demag_energy_joules, cpu_ref.header.pgbb_demag_energy_joules[step]) <= 1.0e-9,
               "pure_prism_p2 PGBB P2 demag energy GPU vs CPU parity failed");
     }
 
@@ -472,6 +627,13 @@ void run_parity_for_strategy(
 
 int main()
 {
+    const PurePrismMeshBuffers mesh = build_conforming_pure_prism_shared_domain();
+    const std::vector<double> init_m = build_twisted_magnetization(mesh);
+
+    // Fork and run the CPU MFEM reference BEFORE calling any CUDA/MFEM/HYPRE API
+    // in the parent process so mfem::Device / HYPRE_SetMemoryLocation stay isolated.
+    const CpuReferenceData cpu_ref = run_cpu_reference_in_subprocess(mesh, init_m);
+
     int device_count = 0;
     const cudaError_t rc = cudaGetDeviceCount(&device_count);
     if (rc != cudaSuccess || device_count <= 0) {
@@ -479,13 +641,10 @@ int main()
         return 0;
     }
 
-    const PurePrismMeshBuffers mesh = build_conforming_pure_prism_shared_domain();
-    const std::vector<double> init_m = build_twisted_magnetization(mesh);
-
-    run_parity_for_strategy(
-        mesh, init_m, fullmag::fem::GpuDemagSolverStrategy::CgAmg, "pure_prism_p2_gpu_cg_amg");
-    run_parity_for_strategy(
-        mesh, init_m, fullmag::fem::GpuDemagSolverStrategy::Cudss, "pure_prism_p2_gpu_cudss");
+    run_gpu_parity_for_strategy(
+        mesh, init_m, cpu_ref, fullmag::fem::GpuDemagSolverStrategy::CgAmg, "pure_prism_p2_gpu_cg_amg");
+    run_gpu_parity_for_strategy(
+        mesh, init_m, cpu_ref, fullmag::fem::GpuDemagSolverStrategy::Cudss, "pure_prism_p2_gpu_cudss");
     return 0;
 }
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
+import json
 from pathlib import Path
 
 import numpy as np
@@ -284,6 +285,30 @@ def test_pure_prism_persistence_and_ir_roundtrip(tmp_path: Path) -> None:
     tampered["topology_fingerprint"] = "sha256:" + "0" * 64
     with pytest.raises(ValueError, match="fingerprint is stale"):
         replace(mesh, pure_prism_topology_certificate=tampered)
+
+    # 5. Legacy tet4 payloads must reject pure_prism_topology_certificate fail-closed
+    legacy_payload = {
+        "mesh_name": "legacy-tet4",
+        "nodes": [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
+        "elements": [[0, 1, 2, 3]],
+        "element_markers": [1],
+        "boundary_faces": [[0, 2, 1]],
+        "boundary_markers": [2],
+        "pure_prism_topology_certificate": dict(expected_cert),
+    }
+    legacy_bad_path = tmp_path / "legacy_with_pure_prism.json"
+    legacy_bad_path.write_text(json.dumps(legacy_payload), encoding="utf-8")
+    with pytest.raises(ValueError, match="legacy tet4.*pure_prism_topology_certificate"):
+        MeshData.load(legacy_bad_path)
+    with pytest.raises(ValueError, match="legacy tet4.*pure_prism_topology_certificate"):
+        MeshData.from_legacy_tet4(
+            nodes=legacy_payload["nodes"],
+            elements=legacy_payload["elements"],
+            element_markers=legacy_payload["element_markers"],
+            boundary_faces=legacy_payload["boundary_faces"],
+            boundary_markers=legacy_payload["boundary_markers"],
+            pure_prism_topology_certificate=dict(expected_cert),
+        )
 
 
 def test_pure_prism_dsl_and_discretization_validation() -> None:
