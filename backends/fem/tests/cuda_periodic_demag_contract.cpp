@@ -191,6 +191,8 @@ int main()
         read_text_file(root / "gpu" / "cuda" / "demag_poisson" / "operators.cpp");
     const std::string gpu_hypre =
         read_text_file(root / "gpu" / "cuda" / "demag_poisson" / "hypre_device_solver.cpp");
+    const std::string gpu_cert =
+        read_text_file(root / "gpu" / "cuda" / "demag_poisson" / "hypre_residual_certification.cpp");
     const std::string demag_kernels =
         read_text_file(root / "gpu" / "cuda" / "demag_poisson" / "demag_kernels.cu");
     const std::string gpu_stage =
@@ -212,24 +214,61 @@ int main()
             gpu_hypre.find("demag_periodic_poisson_reduction_requested(ctx)") !=
                 std::string::npos,
         "strict GPU Hypre demag solver must use the periodic reduced Poisson matrix for PBC");
-    const size_t matvec_pos = gpu_hypre.find("workspace.A_par->Mult(");
-    const size_t axpy_pos = gpu_hypre.find("HYPRE_ParVectorAxpy(", matvec_pos);
-    const size_t residual_norm_pos = gpu_hypre.find("read_validation_norm(", axpy_pos);
-    const size_t certify_pos = gpu_hypre.find("residual_independently_certified = true");
-    const size_t norm_wrapper_pos =
-        demag_kernels.find("cudaError_t fullmag_cuda_demag_validation_norm(");
-    const size_t norm_launch_pos =
-        demag_kernels.find("demag_validation_norm_kernel<<<1, kBlockSize, 0, stream>>>",
-                           norm_wrapper_pos);
-    const size_t copy_pos = demag_kernels.find("cudaMemcpyAsync(", norm_launch_pos);
-    const size_t fence_pos = demag_kernels.find("cudaStreamSynchronize(stream)", copy_pos);
+    const size_t cert_matvec_pos = gpu_cert.find("input.A_par->Mult(");
+    const size_t cert_axpy_pos = gpu_cert.find("HYPRE_ParVectorAxpy(", cert_matvec_pos);
+    const size_t cert_norm_pair_pos =
+        gpu_cert.find("fullmag_cuda_demag_validation_norm_pair(", cert_axpy_pos);
+    const size_t cert_rhs_finite_pos =
+        gpu_cert.find("!std::isfinite(output.rhs_norm)", cert_norm_pair_pos);
+    const size_t cert_res_finite_pos =
+        gpu_cert.find("!std::isfinite(output.absolute_residual)", cert_rhs_finite_pos);
+    const size_t hypre_cert_call_pos =
+        gpu_hypre.find("certify_gpu_hypre_demag_residual(");
+    const size_t hypre_cert_flag_pos =
+        gpu_hypre.find("residual_independently_certified", hypre_cert_call_pos);
+    const size_t pair_blocks_def_pos =
+        demag_kernels.find("__global__ void demag_validation_norm_pair_blocks_kernel(");
+    const size_t pair_finalize_def_pos =
+        demag_kernels.find("__global__ void demag_validation_norm_pair_finalize_kernel(",
+                           pair_blocks_def_pos);
+    const size_t pair_wrapper_pos =
+        demag_kernels.find("cudaError_t fullmag_cuda_demag_validation_norm_pair(");
+    const size_t pair_blocks_launch_pos =
+        demag_kernels.find("demag_validation_norm_pair_blocks_kernel<<<", pair_wrapper_pos);
+    const size_t pair_finalize_launch_pos =
+        demag_kernels.find("demag_validation_norm_pair_finalize_kernel<<<", pair_blocks_launch_pos);
+    const size_t pair_copy_pos =
+        demag_kernels.find("cudaMemcpyAsync(", pair_finalize_launch_pos);
+    const size_t pair_fence_pos =
+        demag_kernels.find("cudaStreamSynchronize(stream)", pair_copy_pos);
     check(
-        matvec_pos < axpy_pos && axpy_pos < residual_norm_pos &&
-            residual_norm_pos < certify_pos && certify_pos != std::string::npos &&
-            norm_wrapper_pos < norm_launch_pos && norm_launch_pos < copy_pos &&
-            copy_pos < fence_pos && fence_pos != std::string::npos &&
+        cert_matvec_pos != std::string::npos &&
+            cert_matvec_pos < cert_axpy_pos &&
+            cert_axpy_pos < cert_norm_pair_pos &&
+            cert_norm_pair_pos < cert_rhs_finite_pos &&
+            cert_rhs_finite_pos < cert_res_finite_pos &&
+            cert_res_finite_pos != std::string::npos &&
+            gpu_cert.find("HYPRE_ClearAllErrors") == std::string::npos &&
+            gpu_cert.find("HYPRE_ClearError") == std::string::npos &&
+            gpu_cert.find("reject_queued_work") != std::string::npos &&
+            hypre_cert_call_pos != std::string::npos &&
+            hypre_cert_call_pos < hypre_cert_flag_pos &&
+            hypre_cert_flag_pos != std::string::npos &&
             gpu_hypre.find("mfem_default_stream_wait_for_hypre_validation(") == std::string::npos,
-        "strict GPU residual certification orders matvec, subtraction, and scalar readback on the borrowed stream");
+        "strict GPU residual certification uses shared sticky-safe certifier and checks RHS finiteness before residual finiteness");
+    check(
+        pair_blocks_def_pos != std::string::npos &&
+            pair_finalize_def_pos != std::string::npos &&
+            pair_blocks_def_pos < pair_finalize_def_pos &&
+            demag_kernels.substr(pair_blocks_def_pos, pair_finalize_def_pos - pair_blocks_def_pos)
+                    .find("break;") == std::string::npos &&
+            pair_wrapper_pos != std::string::npos &&
+            pair_wrapper_pos < pair_blocks_launch_pos &&
+            pair_blocks_launch_pos < pair_finalize_launch_pos &&
+            pair_finalize_launch_pos < pair_copy_pos &&
+            pair_copy_pos < pair_fence_pos &&
+            pair_fence_pos != std::string::npos,
+        "strict GPU pair-norm reduction uses two-pass multi-block CUB kernels without early break and one stream sync");
     const size_t validate_pos =
         gpu_stage.find("validate_demag_poisson_hypre_device_solve(");
     const size_t recover_pos = gpu_stage.find("fullmag_cuda_demag_recovery_csr(");

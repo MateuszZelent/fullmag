@@ -15,12 +15,17 @@
 #include "cpu/mfem/runtime/mpi_init.hpp"
 #include "fem_common.hpp"
 #include "gpu/cuda/demag_fem_bem/fem_bem_kernels.hpp"
+#include "gpu/cuda/demag_poisson/cudss_direct_solver.hpp"
 #include "gpu/cuda/demag_poisson/demag_kernels.hpp"
+#include "gpu/cuda/demag_poisson/hypre_residual_certification.hpp"
+#include "gpu/cuda/demag_poisson/hypre_stream_interop.hpp"
 #include "gpu/cuda/fields/vector_field_kernels.hpp"
 #include "gpu/cuda/reductions/reduction_kernels.hpp"
 #include "gpu/cuda/runtime/execution_receipt.hpp"
 #include "gpu/cuda/runtime/hypre_device_policy.hpp"
+#include "gpu/cuda/runtime/performance_counters.hpp"
 #include "gpu/cuda/state/gpu_state.hpp"
+#include "gpu/cuda/transfer/transfer_audit.hpp"
 #include "frequency_domain/canonical_digest.hpp"
 
 #if FULLMAG_HAS_MFEM_STACK
@@ -28,6 +33,7 @@
 #endif
 
 #if FULLMAG_HAS_MFEM_STACK && defined(MFEM_USE_MPI)
+#include <HYPRE_parcsr_ls.h>
 #include <HYPRE_utilities.h>
 #endif
 
@@ -192,6 +198,8 @@ bool copy_sparse_matrix_to_device_scalar(
 
 void destroy_linear_system(GpuFemBemLinearSystem &system)
 {
+    // Release cuDSS handles before tearing down the borrowed HYPRE stream.
+    system.direct_solver.reset();
 #if defined(MFEM_USE_MPI)
     system.solver.reset();
     system.preconditioner.reset();
@@ -205,11 +213,74 @@ void destroy_linear_system(GpuFemBemLinearSystem &system)
 #endif
 
 #if FULLMAG_HAS_CUDA_RUNTIME && FULLMAG_HAS_MFEM_STACK && defined(MFEM_USE_MPI)
-void configure_amg(mfem::HypreBoomerAMG &amg, const Context &ctx)
+bool read_hypre_fem_bem_amg_coarse_relax_type(
+    HYPRE_Solver amgraw,
+    HYPRE_Int &relax_type,
+    std::string &error)
+{
+    relax_type = -1;
+    const HYPRE_Int prior_status = HYPRE_GetError();
+    if ((prior_status & ~HYPRE_ERROR_CONV) != 0) {
+        error = "HYPRE_BoomerAMGGetCycleRelaxType found pre-existing HYPRE status " +
+            std::to_string(static_cast<int>(prior_status));
+        return false;
+    }
+    HYPRE_Int observed_relax_type = -1;
+    const HYPRE_Int status =
+        HYPRE_BoomerAMGGetCycleRelaxType(amgraw, &observed_relax_type, 3);
+    const HYPRE_Int current_status = HYPRE_GetError();
+    const HYPRE_Int new_status = current_status & ~prior_status;
+    const HYPRE_Int unexpected_status = status & ~(prior_status & HYPRE_ERROR_CONV);
+    if (unexpected_status != 0 || new_status != 0) {
+        error = "HYPRE_BoomerAMGGetCycleRelaxType failed for GPU FEM/BEM demag coarse cycle: status=" +
+            std::to_string(static_cast<int>(status)) +
+            " current=" + std::to_string(static_cast<int>(current_status)) +
+            " new=" + std::to_string(static_cast<int>(new_status));
+        return false;
+    }
+    relax_type = observed_relax_type;
+    return true;
+}
+
+bool validate_fem_bem_amg_coarse_relax_type(
+    HYPRE_Solver amgraw,
+    std::string &error)
+{
+    HYPRE_Int relax_type = -1;
+    if (!read_hypre_fem_bem_amg_coarse_relax_type(amgraw, relax_type, error)) {
+        return false;
+    }
+    if (relax_type != 18) {
+        error =
+            "GPU FEM/BEM demag AMG coarse cycle must use relax type 18; "
+            "HYPRE reports " +
+            std::to_string(static_cast<int>(relax_type));
+        return false;
+    }
+    return true;
+}
+
+bool configure_amg(
+    mfem::HypreBoomerAMG &amg,
+    const Context &ctx,
+    std::string &error)
 {
     const auto &policy = ctx.demag.amg_policy;
     amg.SetPrintLevel(static_cast<int>(ctx.demag.solver.print_level));
     amg.SetRelaxType(policy.relax_type);
+    const HYPRE_Solver amgraw = amg;
+    const HYPRE_Int cycle_relax_status =
+        HYPRE_BoomerAMGSetCycleRelaxType(amgraw, 18, 3);
+    if (cycle_relax_status != 0) {
+        error =
+            "HYPRE_BoomerAMGSetCycleRelaxType failed for GPU FEM/BEM demag "
+            "coarse cycle with status " +
+            std::to_string(static_cast<int>(cycle_relax_status));
+        return false;
+    }
+    if (!validate_fem_bem_amg_coarse_relax_type(amgraw, error)) {
+        return false;
+    }
     amg.SetCoarsening(policy.coarsening);
     amg.SetInterpolation(policy.interpolation);
     amg.SetAggressiveCoarsening(policy.aggressive_coarsening);
@@ -219,6 +290,7 @@ void configure_amg(mfem::HypreBoomerAMG &amg, const Context &ctx)
     if (policy.max_levels_is_set) {
         amg.SetMaxLevels(policy.max_levels);
     }
+    return true;
 }
 
 bool initialize_linear_system(
@@ -226,6 +298,7 @@ bool initialize_linear_system(
     const mfem::SparseMatrix &operator_matrix,
     double *rhs_device,
     double *solution_device,
+    std::shared_ptr<GpuDemagCudssDirectSolver> direct_solver,
     GpuFemBemLinearSystem &system,
     std::string &error)
 {
@@ -264,10 +337,19 @@ bool initialize_linear_system(
         global_rows,
         system.row_starts);
 
+    if (direct_solver != nullptr) {
+        system.direct_solver = std::move(direct_solver);
+        system.solver_setup_count = 1u;
+        system.solver_setup_complete = true;
+        return true;
+    }
+
     switch (ctx.demag.solver.preconditioner) {
     case FULLMAG_FEM_PRECONDITIONER_AMG: {
         auto amg = std::make_unique<mfem::HypreBoomerAMG>(*system.A_par);
-        configure_amg(*amg, ctx);
+        if (!configure_amg(*amg, ctx, error)) {
+            return false;
+        }
         system.preconditioner = std::move(amg);
         break;
     }
@@ -283,10 +365,12 @@ bool initialize_linear_system(
         return false;
     }
 
+    const double solver_tol =
+        certification_solver_tolerance(ctx.demag.solver.relative_tolerance);
     if (ctx.demag.solver.solver == FULLMAG_FEM_LINEAR_SOLVER_GMRES) {
         auto gmres = std::make_unique<mfem::HypreGMRES>(fullmag_serial_comm());
         gmres->iterative_mode = true;
-        gmres->SetTol(ctx.demag.solver.relative_tolerance);
+        gmres->SetTol(solver_tol);
         if (ctx.demag.solver.has_absolute_tolerance &&
             ctx.demag.solver.absolute_tolerance > 0.0) {
             gmres->SetAbsTol(ctx.demag.solver.absolute_tolerance);
@@ -300,7 +384,7 @@ bool initialize_linear_system(
     } else if (ctx.demag.solver.solver == FULLMAG_FEM_LINEAR_SOLVER_CG) {
         auto pcg = std::make_unique<mfem::HyprePCG>(fullmag_serial_comm());
         pcg->iterative_mode = true;
-        pcg->SetTol(ctx.demag.solver.relative_tolerance);
+        pcg->SetTol(solver_tol);
         if (ctx.demag.solver.has_absolute_tolerance &&
             ctx.demag.solver.absolute_tolerance > 0.0) {
             pcg->SetAbsTol(ctx.demag.solver.absolute_tolerance);
@@ -315,6 +399,11 @@ bool initialize_linear_system(
         return false;
     }
     system.solver->Setup(*system.b_par, *system.x_par);
+    if (ctx.demag.solver.preconditioner == FULLMAG_FEM_PRECONDITIONER_AMG &&
+        !validate_fem_bem_amg_coarse_relax_type(
+            static_cast<HYPRE_Solver>(*system.preconditioner), error)) {
+        return false;
+    }
     system.solver_setup_count = 1u;
     system.solver_setup_complete = true;
     return true;
@@ -326,12 +415,25 @@ bool configure_solver_initial_iterate(
     bool reset_initial_solution,
     std::string &error)
 {
+    if (system.direct_solver != nullptr) {
+        return true;
+    }
     if (system.solver == nullptr) {
         error = "strict FEM GPU Fredkin-Koehler scalar solver is not initialized";
         return false;
     }
+    const double solver_tol =
+        certification_solver_tolerance(ctx.demag.solver.relative_tolerance);
+    const double abs_tol =
+        (ctx.demag.solver.has_absolute_tolerance &&
+         ctx.demag.solver.absolute_tolerance > 0.0)
+            ? ctx.demag.solver.absolute_tolerance
+            : 0.0;
     if (ctx.demag.solver.solver == FULLMAG_FEM_LINEAR_SOLVER_GMRES) {
         auto *gmres = static_cast<mfem::HypreGMRES *>(system.solver.get());
+        gmres->SetTol(solver_tol);
+        gmres->SetAbsTol(abs_tol);
+        gmres->SetMaxIter(static_cast<int>(ctx.demag.solver.max_iterations));
         if (reset_initial_solution) {
             gmres->SetZeroInitialIterate();
         } else {
@@ -341,6 +443,9 @@ bool configure_solver_initial_iterate(
     }
     if (ctx.demag.solver.solver == FULLMAG_FEM_LINEAR_SOLVER_CG) {
         auto *pcg = static_cast<mfem::HyprePCG *>(system.solver.get());
+        pcg->SetTol(solver_tol);
+        pcg->SetAbsTol(abs_tol);
+        pcg->SetMaxIter(static_cast<int>(ctx.demag.solver.max_iterations));
         if (reset_initial_solution) {
             pcg->SetZeroInitialIterate();
         } else {
@@ -360,6 +465,11 @@ void read_solver_statistics(
 {
     iterations = 0;
     reported_converged = false;
+    if (system.direct_solver != nullptr) {
+        iterations = 1;
+        reported_converged = true;
+        return;
+    }
     if (ctx.demag.solver.solver == FULLMAG_FEM_LINEAR_SOLVER_GMRES) {
         auto *gmres = static_cast<mfem::HypreGMRES *>(system.solver.get());
         gmres->GetNumIterations(iterations);
@@ -377,23 +487,27 @@ void read_solver_statistics(
 
 bool solve_linear_system(
     Context &ctx,
+    GpuDemagFemBemWorkspace &workspace,
     GpuFemBemLinearSystem &system,
+    const double *rhs_device,
+    double *solution_device,
     bool reset_initial_solution,
     cudaStream_t stream,
     uint64_t &iterations_out,
     double &relative_residual_out,
     std::string &error)
 {
-    if (!system.solver_setup_complete || system.solver == nullptr ||
+    const bool direct = system.direct_solver != nullptr;
+    if (!system.solver_setup_complete ||
+        (!direct && system.solver == nullptr) ||
         system.A_par == nullptr || system.b_par == nullptr ||
-        system.x_par == nullptr || system.residual == nullptr) {
-        error = "strict FEM GPU Fredkin-Koehler solve requires a completed Hypre setup";
-        return false;
-    }
-    if (!cuda_ok(
-            cudaStreamSynchronize(stream),
-            "synchronize Fredkin-Koehler RHS before Hypre",
-            error)) {
+        system.x_par == nullptr || system.residual == nullptr ||
+        rhs_device == nullptr || solution_device == nullptr ||
+        !workspace.stream_interop.ready ||
+        workspace.stream_interop.hypre_stream == nullptr) {
+        error = direct
+            ? "strict FEM GPU Fredkin-Koehler direct solve requires a completed cuDSS setup and HYPRE stream interop"
+            : "strict FEM GPU Fredkin-Koehler solve requires a completed Hypre setup and stream interop";
         return false;
     }
     if (!configure_solver_initial_iterate(
@@ -401,28 +515,86 @@ bool solve_linear_system(
         return false;
     }
     system.b_par->HypreWrite();
-    if (reset_initial_solution) {
+    if (reset_initial_solution || direct) {
         system.x_par->HypreWrite();
     } else {
         system.x_par->HypreReadWrite();
     }
-    system.solver->Mult(*system.b_par, *system.x_par);
-    system.A_par->Mult(*system.x_par, *system.residual);
-    system.residual->Add(-1.0, *system.b_par);
-    const double absolute_residual = system.residual->Norml2();
-    const double rhs_norm = system.b_par->Norml2();
-    const double relative_residual = rhs_norm > 0.0
-        ? absolute_residual / rhs_norm
-        : absolute_residual;
+    if (!hypre_wait_for_fullmag(workspace.stream_interop, stream, error)) {
+        return false;
+    }
+    ctx.poisson_demag.event_wait_count = workspace.stream_interop.event_wait_count;
+    ctx.poisson_demag.event_wait_count_current_step += 1u;
+    if (direct) {
+        // Pin cuDSS onto the borrowed HYPRE stream so certification A_par->Mult
+        // follows in-order without an extra cross-stream event.
+        if (!solve_demag_cudss_direct(
+                *system.direct_solver,
+                workspace.stream_interop.hypre_stream,
+                rhs_device,
+                solution_device,
+                error)) {
+            return false;
+        }
+    } else {
+        system.solver->Mult(*system.b_par, *system.x_par);
+    }
+    if (!fullmag_wait_for_hypre(workspace.stream_interop, stream, error)) {
+        return false;
+    }
+    ctx.poisson_demag.event_wait_count = workspace.stream_interop.event_wait_count;
+    ctx.poisson_demag.event_wait_count_current_step += 1u;
+    ctx.poisson_demag.global_sync_count = workspace.stream_interop.global_sync_count;
+
     int iterations = 0;
     bool reported_converged = false;
     read_solver_statistics(ctx, system, iterations, reported_converged);
+
+    GpuDemagResidualCertInput cert_input{};
+    cert_input.label = "GPU FEM/BEM demag";
+    cert_input.A_par = system.A_par.get();
+    cert_input.b_par = system.b_par.get();
+    cert_input.x_par = system.x_par.get();
+    cert_input.residual = system.residual.get();
+    cert_input.scratch = &workspace.validation_scratch;
+    cert_input.compute_independent_residual = true;
+    cert_input.rows = static_cast<int>(system.rows);
+    cert_input.stream = workspace.stream_interop.hypre_stream;
+
+    GpuDemagResidualCertOutput cert_output{};
+    const bool certified =
+        certify_gpu_hypre_demag_residual(cert_input, cert_output, error);
+    if (cert_output.control_fence_count > 0u) {
+        record_device_control_scalar_to_host(
+            ctx.transfer_audit.audit, cert_output.control_d2h_bytes);
+        GpuPerformanceCounterDelta readback_delta{};
+        readback_delta.control_fences = cert_output.control_fence_count;
+        readback_delta.control_d2h_bytes = cert_output.control_d2h_bytes;
+        gpu_performance_note(ctx.gpu_state.performance_counters, readback_delta);
+        if (std::isfinite(cert_output.rhs_norm)) {
+            GpuPerformanceCounterDelta rhs_delta{};
+            rhs_delta.demag_rhs_norm_evaluations = 1;
+            rhs_delta.demag_rhs_norm_sum = cert_output.rhs_norm;
+            gpu_performance_note(ctx.gpu_state.performance_counters, rhs_delta);
+        }
+    }
+    if (!certified) {
+        return false;
+    }
+    const double rhs_norm = cert_output.rhs_norm;
+    const double absolute_residual = cert_output.absolute_residual;
+    const double relative_residual = rhs_norm > 0.0
+        ? absolute_residual / rhs_norm
+        : absolute_residual;
+
     DemagLinearSolveResult result;
-    result.solver_kind = ctx.demag.solver.solver == FULLMAG_FEM_LINEAR_SOLVER_GMRES
-        ? "gpu_fem_bem/gmres"
-        : "gpu_fem_bem/cg";
+    result.solver_kind = direct
+        ? "gpu_fem_bem_cudss/direct"
+        : (ctx.demag.solver.solver == FULLMAG_FEM_LINEAR_SOLVER_GMRES
+               ? "gpu_fem_bem/gmres"
+               : "gpu_fem_bem/cg");
     result.solver_reported_converged = reported_converged;
-    result.residual_independently_certified = std::isfinite(absolute_residual);
+    result.residual_independently_certified = cert_output.computed_independent_residual;
     result.iterations = iterations;
     result.relative_residual = relative_residual;
     result.has_absolute_residual = true;
@@ -434,19 +606,13 @@ bool solve_linear_system(
     if (!validate_demag_linear_solve_result(result, error)) {
         return false;
     }
-    if (!cuda_ok(
-            cudaStreamSynchronize(stream),
-            "synchronize Fredkin-Koehler potential after Hypre",
-            error)) {
-        return false;
-    }
     iterations_out = static_cast<uint64_t>(std::max(0, iterations));
     relative_residual_out = relative_residual;
     if (gpu_execution_receipt_attempt_active(ctx.gpu_state.execution_receipt)) {
         gpu_execution_receipt_note_device(
             ctx.gpu_state.execution_receipt,
             FEM_GPU_OPERATOR_DEMAG_SOLVE |
-                FEM_GPU_OPERATOR_PRECONDITIONER);
+                (direct ? FEM_GPU_OPERATOR_DIRECT_SOLVE : FEM_GPU_OPERATOR_PRECONDITIONER));
     }
     return true;
 }
@@ -501,7 +667,13 @@ bool build_source_operators(
 
 void destroy_gpu_workspace(GpuDemagFemBemWorkspace &workspace)
 {
+#if FULLMAG_HAS_MFEM_STACK
+    destroy_linear_system(workspace.u1_system);
+    destroy_linear_system(workspace.u2_system);
+#endif
 #if FULLMAG_HAS_CUDA_RUNTIME
+    fullmag_cuda_demag_validation_scratch_destroy(workspace.validation_scratch);
+    destroy_hypre_stream_interop(workspace.stream_interop);
     free_array(workspace.d_boundary_nodes);
     free_array(workspace.d_boundary_global_to_row);
     free_array(workspace.d_boundary_tdofs);
@@ -515,10 +687,6 @@ void destroy_gpu_workspace(GpuDemagFemBemWorkspace &workspace)
     free_array(workspace.d_far_u);
     free_array(workspace.d_far_v);
     destroy_scalar_operator(workspace.dirichlet_matrix);
-#endif
-#if FULLMAG_HAS_MFEM_STACK
-    destroy_linear_system(workspace.u1_system);
-    destroy_linear_system(workspace.u2_system);
 #endif
     destroy_demag_poisson_operators(workspace.source_operators);
     workspace = {};
@@ -704,11 +872,52 @@ bool gpu_demag_fem_bem_initialize(Context &ctx, std::string &error)
             destroy_gpu_workspace(*workspace);
             return false;
         }
+        if (!initialize_hypre_stream_interop(workspace->stream_interop, error) ||
+            !cuda_ok(
+                fullmag_cuda_demag_validation_scratch_init(
+                    workspace->validation_scratch),
+                "allocate Fredkin-Koehler validation norm scratch",
+                error)) {
+            destroy_gpu_workspace(*workspace);
+            return false;
+        }
+        std::shared_ptr<GpuDemagCudssDirectSolver> u1_direct_solver;
+        std::shared_ptr<GpuDemagCudssDirectSolver> u2_direct_solver;
+        GpuDemagCudssDirectStats u1_direct_stats{};
+        GpuDemagCudssDirectStats u2_direct_stats{};
+        GpuDemagCudssResolution cudss_resolution{};
+        const bool cudss_pair_ok = try_initialize_fem_bem_cudss_pair(
+            ctx.poisson_demag.gpu_solver_strategy,
+            *cpu_workspace->neumann_op,
+            *cpu_workspace->dirichlet_op,
+            u1_direct_solver,
+            u2_direct_solver,
+            u1_direct_stats,
+            u2_direct_stats,
+            cudss_resolution,
+            error);
+        workspace->cudss_resolution = cudss_resolution;
+        ctx.poisson_demag.gpu_cudss_resolution = cudss_resolution;
+        if (!cudss_pair_ok) {
+            destroy_gpu_workspace(*workspace);
+            return false;
+        }
+        if ((u1_direct_solver != nullptr) != (u2_direct_solver != nullptr)) {
+            u1_direct_solver.reset();
+            u2_direct_solver.reset();
+            destroy_gpu_workspace(*workspace);
+            error = "strict FEM GPU Fredkin-Koehler cuDSS pair resolver returned mismatched solver handles";
+            return false;
+        }
+        if (u1_direct_solver != nullptr && u2_direct_solver != nullptr) {
+            device_bytes += u1_direct_stats.device_bytes + u2_direct_stats.device_bytes;
+        }
         if (!initialize_linear_system(
                 ctx,
                 *cpu_workspace->neumann_op,
                 gpu.demag_poisson.poisson_rhs,
                 workspace->d_u1_solution,
+                std::move(u1_direct_solver),
                 workspace->u1_system,
                 error) ||
             !initialize_linear_system(
@@ -716,6 +925,7 @@ bool gpu_demag_fem_bem_initialize(Context &ctx, std::string &error)
                 *cpu_workspace->dirichlet_op,
                 gpu.demag_poisson.poisson_rhs,
                 gpu.demag_poisson.poisson_solution,
+                std::move(u2_direct_solver),
                 workspace->u2_system,
                 error)) {
             destroy_gpu_workspace(*workspace);
@@ -826,6 +1036,122 @@ const char *gpu_demag_fem_bem_operator_mode(const Context &ctx)
     return gpu_demag_fem_bem_ready(ctx) ? "device_hypre_fem_bem" : "unsupported";
 }
 
+bool gpu_demag_fem_bem_amg_coarse_relax_type(
+    const Context &ctx,
+    std::int32_t &relax_type,
+    std::string &error)
+{
+    relax_type = -1;
+#if FULLMAG_HAS_CUDA_RUNTIME && FULLMAG_HAS_MFEM_STACK && defined(MFEM_USE_MPI)
+    if (!ctx.gpu_state.device.lifecycle.allocated ||
+        ctx.poisson_demag.gpu_demag_mode != FULLMAG_FEM_GPU_DEMAG_DEVICE_HYPRE_FEM_BEM ||
+        ctx.demag.solver.preconditioner != FULLMAG_FEM_PRECONDITIONER_AMG) {
+        return true;
+    }
+    const auto *cpu_workspace = demag_fem_bem_workspace(const_cast<Context &>(ctx));
+    if (cpu_workspace == nullptr || !cpu_workspace->gpu_workspace_ready) {
+        return true;
+    }
+    const auto *workspace = static_cast<const GpuDemagFemBemWorkspace *>(
+        cpu_workspace->gpu_workspace);
+    if (workspace == nullptr || !workspace->ready) {
+        return true;
+    }
+    if (workspace->u1_system.direct_solver != nullptr ||
+        workspace->u2_system.direct_solver != nullptr) {
+        return true; // No AMG under cuDSS direct solve: report no observation.
+    }
+    if (workspace->u1_system.preconditioner == nullptr ||
+        workspace->u2_system.preconditioner == nullptr) {
+        error = "GPU FEM/BEM demag AMG context is marked initialized but has no "
+            "ready Hypre preconditioner";
+        return false;
+    }
+    const auto *u1_amg = dynamic_cast<const mfem::HypreBoomerAMG *>(
+        workspace->u1_system.preconditioner.get());
+    const auto *u2_amg = dynamic_cast<const mfem::HypreBoomerAMG *>(
+        workspace->u2_system.preconditioner.get());
+    if (u1_amg == nullptr || u2_amg == nullptr) {
+        error = "GPU FEM/BEM demag AMG context is marked ready with a non-AMG "
+            "Hypre preconditioner";
+        return false;
+    }
+    HYPRE_Int u1_relax_type = -1;
+    HYPRE_Int u2_relax_type = -1;
+    if (!read_hypre_fem_bem_amg_coarse_relax_type(
+            static_cast<HYPRE_Solver>(*u1_amg), u1_relax_type, error) ||
+        !read_hypre_fem_bem_amg_coarse_relax_type(
+            static_cast<HYPRE_Solver>(*u2_amg), u2_relax_type, error)) {
+        return false;
+    }
+    if (u1_relax_type != u2_relax_type) {
+        error = "GPU FEM/BEM demag AMG coarse cycle mismatch between u1 (" +
+            std::to_string(static_cast<int>(u1_relax_type)) + ") and u2 (" +
+            std::to_string(static_cast<int>(u2_relax_type)) + ")";
+        return false;
+    }
+    relax_type = static_cast<std::int32_t>(u1_relax_type);
+#else
+    (void)ctx;
+    (void)error;
+#endif
+    return true;
+}
+
+GpuDemagPoissonLinearSolver gpu_demag_fem_bem_linear_solver(
+    const Context &ctx)
+{
+#if FULLMAG_HAS_MFEM_STACK
+    if (!ctx.demag.enabled ||
+        ctx.poisson_demag.gpu_demag_mode != FULLMAG_FEM_GPU_DEMAG_DEVICE_HYPRE_FEM_BEM) {
+        return GpuDemagPoissonLinearSolver::Unavailable;
+    }
+    const auto *cpu_workspace = demag_fem_bem_workspace(const_cast<Context &>(ctx));
+    if (cpu_workspace == nullptr || !cpu_workspace->gpu_workspace_ready) {
+        return GpuDemagPoissonLinearSolver::Unavailable;
+    }
+    const auto *workspace = static_cast<const GpuDemagFemBemWorkspace *>(
+        cpu_workspace->gpu_workspace);
+    if (workspace == nullptr || !workspace->ready) {
+        return GpuDemagPoissonLinearSolver::Unavailable;
+    }
+    return (workspace->u1_system.direct_solver != nullptr &&
+            workspace->u2_system.direct_solver != nullptr)
+        ? GpuDemagPoissonLinearSolver::CudssDirect
+        : GpuDemagPoissonLinearSolver::HypreKrylov;
+#else
+    (void)ctx;
+    return GpuDemagPoissonLinearSolver::Unavailable;
+#endif
+}
+
+bool gpu_demag_fem_bem_cudss_resolution(
+    const Context &ctx,
+    GpuDemagCudssResolution &resolution)
+{
+    resolution = GpuDemagCudssResolution{};
+#if FULLMAG_HAS_MFEM_STACK
+    if (!ctx.demag.enabled ||
+        ctx.poisson_demag.gpu_demag_mode != FULLMAG_FEM_GPU_DEMAG_DEVICE_HYPRE_FEM_BEM) {
+        return false;
+    }
+    const auto *cpu_workspace = demag_fem_bem_workspace(const_cast<Context &>(ctx));
+    if (cpu_workspace == nullptr || !cpu_workspace->gpu_workspace_ready) {
+        return false;
+    }
+    const auto *workspace = static_cast<const GpuDemagFemBemWorkspace *>(
+        cpu_workspace->gpu_workspace);
+    if (workspace == nullptr || !workspace->ready) {
+        return false;
+    }
+    resolution = workspace->cudss_resolution;
+    return true;
+#else
+    (void)ctx;
+    return false;
+#endif
+}
+
 bool compute_device_demag_fem_bem_for_device_stage(
     Context &ctx,
     const FemGpuComponentField &m,
@@ -904,7 +1230,10 @@ bool compute_device_demag_fem_bem_for_device_stage(
     }
     if (!solve_linear_system(
             ctx,
+            *workspace,
             workspace->u1_system,
+            gpu.demag_poisson.poisson_rhs,
+            workspace->d_u1_solution,
             reset_initial_solution,
             stream,
             workspace->u1_iterations,
@@ -956,7 +1285,10 @@ bool compute_device_demag_fem_bem_for_device_stage(
     }
     if (!solve_linear_system(
             ctx,
+            *workspace,
             workspace->u2_system,
+            gpu.demag_poisson.poisson_rhs,
+            gpu.demag_poisson.poisson_solution,
             reset_initial_solution,
             stream,
             workspace->u2_iterations,
@@ -1042,6 +1374,10 @@ bool compute_device_demag_fem_bem_for_device_stage(
     ctx.poisson_demag.solves_current_step += 2u;
     note_successful_demag_linear_iterations(ctx.poisson_demag, workspace->u1_iterations);
     note_successful_demag_linear_iterations(ctx.poisson_demag, workspace->u2_iterations);
+    GpuPerformanceCounterDelta solve_work{};
+    solve_work.demag_solves = 2u;
+    solve_work.demag_iterations = workspace->u1_iterations + workspace->u2_iterations;
+    gpu_performance_note(ctx.gpu_state.performance_counters, solve_work);
     gpu.demag_poisson.last_evaluation_mode =
         field_and_recovered_energy ? 1u : 0u;
     gpu.demag_poisson.last_evaluation_purpose = 0u;
@@ -1055,8 +1391,7 @@ bool compute_device_demag_fem_bem_for_device_stage(
             ctx.gpu_state.execution_receipt,
             FEM_GPU_OPERATOR_DEMAG_RHS |
                 FEM_GPU_OPERATOR_DEMAG_SOLVE |
-                FEM_GPU_OPERATOR_DEMAG_RECOVERY |
-                FEM_GPU_OPERATOR_PRECONDITIONER);
+                FEM_GPU_OPERATOR_DEMAG_RECOVERY);
     }
     return true;
 #else

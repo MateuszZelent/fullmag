@@ -5,12 +5,12 @@ Status opracowania `runtime diagnostic / production unvalidated`. Baseline jest 
 (problem-statement)=
 ## Zakres
 
-Nota opisuje numeryczną realizację preconditionera AMG w właścicielu Poissona FEM GPU `device_hypre_poisson`; pierwsza próba dotyczy dynamiki SP4. Model pola demagnetyzującego, warunki brzegowe i dyskretyzacja należą do [kanonicznego opisu Poissona](fem_demag_poisson.md). Publiczna polityka solvera należy do [noty 0532](0532-fem-demag-solver-policy-and-runtime-threading.md).
+Nota opisuje numeryczną realizację preconditionera AMG w właścicielu Poissona FEM GPU `device_hypre_poisson` oraz jej rozszerzenie na realizację otwartej granicy GPU FEM/BEM `device_hypre_fem_bem`; pierwsza próba runtime dotyczy dynamiki SP4 (Poisson). Model pola demagnetyzującego, warunki brzegowe i dyskretyzacja należą do [kanonicznego opisu Poissona](fem_demag_poisson.md) oraz [opisu Fredkina–Koehlera FEM/BEM](fem_demag_fem_bem.md). Publiczna polityka solvera należy do [noty 0532](0532-fem-demag-solver-policy-and-runtime-threading.md).
 
 | Realizacja | Zakres tej noty | Dowód |
 |---|---|---|
 | FEM CPU | Dotychczasowy preconditioner HYPRE z coarse type 9 | Widoczny kod konfiguracji CPU i przypięty kod HYPRE |
-| FEM GPU | Kontrolowane porównanie coarse type 9 z type 18 | Baseline i wariant type18 wykonane przy 50 fs; pełny SP4 pozostaje niezakwalifikowany |
+| FEM GPU | Kontrolowane porównanie coarse type 9 z type 18 (Poisson) oraz przeniesienie coarse type 18 i wspólnej certyfikacji `ScaledNormPair` do GPU FEM/BEM | Baseline i wariant type18 Poissona wykonane przy 50 fs; kod i kontrakty GPU FEM/BEM wdrożone w źródle, pełny SP4 i kwalifikacja runtime GPU FEM/BEM pozostają otwarte do fazy uruchomieniowej |
 | FDM CPU | Nie dotyczy | Ta realizacja nie używa preconditionera Poissona HYPRE |
 | FDM GPU | Nie dotyczy | Ta realizacja nie używa preconditionera Poissona HYPRE |
 
@@ -56,7 +56,7 @@ $D_c$ oznacza skalowanie faktycznie obliczane przez przypiętą realizację HYPR
 (assumptions-and-validity)=
 ## Warunki stosowania
 
-Zakres obejmuje rzeczywistą, podwójną precyzję i aktywny preconditioner AMG w ścieżce Poissona FEM GPU. Wybór coarse type 18 podlega propagacji błędu settera i odczytowi rzeczywiście ustawionego typu. Współdzielony właściciel GPU może obsługiwać więcej niż jeden workflow. Ta próba kwalifikuje wyłącznie opisany SP4; FEM-BEM, eigensolve i pozostałe rodziny wymagają osobnego dowodu. Zbieżność każdego rozwiązania oraz końcowe pola i obserwable stanowią warunek przyjęcia wariantu.
+Zakres obejmuje rzeczywistą, podwójną precyzję i aktywny preconditioner AMG w ścieżce Poissona FEM GPU (`device_hypre_poisson`) oraz w ścieżce Fredkina–Koehlera FEM/BEM GPU (`device_hypre_fem_bem` dla obu układów skalarnych $u_1$ i $u_2$). Wybór coarse type 18 podlega propagacji błędu settera (`HYPRE_BoomerAMGSetCycleRelaxType(..., 18, 3)`) i odczytowi rzeczywiście ustawionego typu (`HYPRE_BoomerAMGGetCycleRelaxType(..., 3)`). Gdy aktywny jest bezpośredni solver `cuDSS` albo preconditioner inny niż AMG, getter raportuje brak obserwacji (`-1`). Współdzielony właściciel GPU może obsługiwać więcej niż jeden workflow. Próba 50 fs kwalifikuje wyłącznie opisany Poisson SP4; pełny SP4, runtime GPU FEM/BEM, eigensolve i pozostałe rodziny wymagają osobnego dowodu wykonawczego. Zbieżność każdego rozwiązania (certyfikowana wspólną wieloblokową redukcją pary norm `ScaledNormPair`) oraz końcowe pola i obserwable stanowią warunek przyjęcia wariantu.
 
 (python-api)=
 ## Publiczny przykład i polityka
@@ -112,15 +112,20 @@ Requested intent zachowuje jawne FEM/GPU/strict/double i CG/AMG; resolved execut
 
 Przypięty HYPRE `hypre_BoomerAMGSetRelaxType` ustawia cycle 0–2 na żądany typ, a cycle 3 na 9. `hypre_GaussElimSetup` dla typu 9 ustawia pamięć GE na host. `hypre_GaussElimSolve` kopiuje RHS na host do `MPI_Allgatherv`, wywołuje hostowe `hypre_gselim` i kopiuje wynik na GPU.
 
-Wariant jawnie ustawia `HYPRE_BoomerAMGSetCycleRelaxType(..., 18, 3)`. GPU i CPU mają odrębne konfiguracje natywne, więc wybór GPU należy zastosować u właściciela GPU. Ustawienie coarse type 99 lub 199 samo w sobie zachowuje hostowy staging MPI w tej przypiętej wersji HYPRE.
+Wariant jawnie ustawia `HYPRE_BoomerAMGSetCycleRelaxType(..., 18, 3)` zarówno w właścicielu Poissona GPU (`hypre_device_solver.cpp::configure_demag_amg`), jak i w właścicielu GPU FEM/BEM (`fem_bem.cpp::configure_amg`, dla układów Neumanna $u_1$ oraz Dirichleta $u_2$). GPU i CPU mają odrębne konfiguracje natywne, więc wybór GPU należy zastosować u właścicieli GPU. Ustawienie coarse type 99 lub 199 samo w sobie zachowuje hostowy staging MPI w tej przypiętej wersji HYPRE.
+
+Po przeniesieniu `relax_type=18`, synchronizacji strumieniowej `HypreStreamInterop` oraz marginesu certyfikacyjnego `0.1 * rtol` (`certification_solver_tolerance`) do GPU FEM/BEM usunięto również tymczasowe obejście domyślnego `"JACOBI"` dla ścieżki nie-Poissonowej w `crates/fullmag-runner/src/native_fem/plan.rs`, przywracając domyślny preconditioner `"AMG"` dla realizacji Krylowa GPU FEM/BEM. Obie ścieżki GPU (Poisson i FEM/BEM) współdzielą jeden wieloblokowy moduł certyfikacji rezyduum (`hypre_residual_certification.cpp::certify_gpu_hypre_demag_residual` + 256-blokowy kernel CUB `demag_kernels.cu::fullmag_cuda_demag_validation_norm_pair`), który wyznacza $\|b\|_2$ i $\|Ax-b\|_2$ bez przepełnienia/niedomiaru przy jednej synchronizacji strumienia i jednym 16-bajtowym transferze kontrolnym D2H na rozwiązanie.
 
 (implementation-mapping)=
 ## Mapa implementacji
 
-- `backends/fem/gpu/cuda/demag_poisson/hypre_device_solver.cpp::configure_demag_amg` konfiguruje preconditioner ścieżki GPU.
+- `backends/fem/gpu/cuda/demag_poisson/hypre_device_solver.cpp::configure_demag_amg` konfiguruje preconditioner ścieżki Poisson GPU.
+- `backends/fem/gpu/cuda/demag_fem_bem/fem_bem.cpp::configure_amg` konfiguruje preconditioner AMG z `HYPRE_BoomerAMGSetCycleRelaxType(amgraw, 18, 3)` i weryfikacją odczytu dla obu układów ($u_1$, $u_2$) GPU FEM/BEM.
+- `backends/fem/gpu/cuda/demag_fem_bem/fem_bem.cpp::gpu_demag_fem_bem_amg_coarse_relax_type` odczytuje i porównuje skuteczny coarse type obu układów GPU FEM/BEM (zwracając `18` pod AMG lub `-1` pod `cuDSS` / non-AMG).
+- `backends/fem/gpu/cuda/demag_poisson/hypre_residual_certification.cpp::certify_gpu_hypre_demag_residual` oraz `backends/fem/gpu/cuda/demag_poisson/demag_kernels.cu::fullmag_cuda_demag_validation_norm_pair` realizują współdzieloną, wieloblokową certyfikację rezyduum (1× `cudaStreamSynchronize`, 16 B D2H, zachowanie sticky błędów HYPRE i kolejność walidacji `RHS` przed `residual`).
 - `backends/fem/core/demag_solver_policy.cpp::resolve_demag_amg_policy_from_environment` jest właścicielem istniejących parametrów profilu AMG.
 - `crates/fullmag-runner/src/artifacts.rs::demag_amg_profile_metadata` publikuje skuteczną politykę numeryczną.
-- Addytywny getter C ABI odczytuje skuteczną wartość z HYPRE; mapowanie zapisuje ją jako opcjonalne pole metadanych. Istniejący rozmiar `fullmag_fem_step_stats` stanowi granicę zgodności.
+- Addytywny getter C ABI odczytuje skuteczną wartość z HYPRE (delegując zarówno do Poissona, jak i FEM/BEM); mapowanie zapisuje ją jako opcjonalne pole metadanych. Istniejący rozmiar `fullmag_fem_step_stats` stanowi granicę zgodności.
 
 (validation)=
 ## Kwalifikacja
@@ -230,5 +235,10 @@ W pojedynczych przebiegach bez CUPTI czas kopiowania pól spadł z 0,441745444 d
 | `crates/fullmag-runner/src/fem/relax/preview.rs` | `capture_native_fem_observables` | Zachowuje filtr żądań, kolejność i publikację dopiero kompletnego capture do `StepUpdate`. | FEM native capture; źródło z commita 70d35 | [source](https://github.com/MateuszZelent/fullmag/blob/70d35b84dae4e840e8cc881c35ef45014c604284/crates/fullmag-runner/src/fem/relax/preview.rs#L1771) |
 | `crates/fullmag-runner/src/native_fem.rs` | `batch_matches_individual_nodal_and_dg0_outputs_and_reads_exchange_external_once` | Bitowa zgodność pól/energii dla nodal i DG0 oraz jeden odczyt `H_ex`/`H_ext` na batch. | Regresja źródła z commita 70d35; nie test runtime | [source](https://github.com/MateuszZelent/fullmag/blob/70d35b84dae4e840e8cc881c35ef45014c604284/crates/fullmag-runner/src/native_fem.rs#L2696) |
 | `crates/fullmag-runner/src/native_fem.rs` | `each_capture_re_reads_at_the_same_step_and_provider_failure_aborts_the_batch` | Następny capture odczytuje ponownie; błąd dostawcy przerywa batch. | Regresja źródła z commita 70d35; nie test runtime | [source](https://github.com/MateuszZelent/fullmag/blob/70d35b84dae4e840e8cc881c35ef45014c604284/crates/fullmag-runner/src/native_fem.rs#L2759) |
+| `backends/fem/gpu/cuda/demag_fem_bem/fem_bem.cpp` | `configure_amg` | Ustawienie i weryfikacja `HYPRE_BoomerAMGSetCycleRelaxType(amgraw, 18, 3)` dla układów $u_1$ i $u_2$ GPU FEM/BEM. | FEM GPU FEM/BEM; implementacja źródłowa Track A, kwalifikacja runtime GPU w Fazie 2 | [worktree](../../backends/fem/gpu/cuda/demag_fem_bem/fem_bem.cpp) |
+| `backends/fem/gpu/cuda/demag_fem_bem/fem_bem.cpp` | `gpu_demag_fem_bem_amg_coarse_relax_type` | Odczyt i kontrola zgodności coarse type 18 między $u_1$ i $u_2$ (lub `-1` pod `cuDSS`/non-AMG). | FEM GPU FEM/BEM; implementacja źródłowa Track A, kwalifikacja runtime GPU w Fazie 2 | [worktree](../../backends/fem/gpu/cuda/demag_fem_bem/fem_bem.cpp) |
+| `backends/fem/gpu/cuda/demag_poisson/hypre_residual_certification.cpp` | `certify_gpu_hypre_demag_residual` | Wspólna certyfikacja rezyduum $Ax-b$ na `hypre_stream` z zachowaniem sticky błędów HYPRE i `reject_queued_work`. | FEM GPU (Poisson i FEM/BEM); implementacja źródłowa Track A, kwalifikacja runtime GPU w Fazie 2 | [worktree](../../backends/fem/gpu/cuda/demag_poisson/hypre_residual_certification.cpp) |
+| `backends/fem/gpu/cuda/demag_poisson/demag_kernels.cu` | `fullmag_cuda_demag_validation_norm_pair` | Wieloblokowa redukcja pary norm `ScaledNormPair` (256 bloków CUB, 1× `cudaStreamSynchronize`, 16 B D2H, fallback stronicowalny). | FEM GPU (Poisson i FEM/BEM); implementacja źródłowa Track A, kwalifikacja runtime GPU w Fazie 2 | [worktree](../../backends/fem/gpu/cuda/demag_poisson/demag_kernels.cu) |
+| `backends/fem/tests/demag_fem_bem_gpu_contract.cpp` | `main` | Kontrakt źródłowy i bramka przygotowania runtime GPU FEM/BEM dla `relax_type=18`, interop, certyfikacji i bitów recepty. | Kontrakt źródłowy Track A; wykonanie GPU w Fazie 2 | [worktree](../../backends/fem/tests/demag_fem_bem_gpu_contract.cpp) |
 
 Baseline pełnego Zarr ma run `run-live-57903f099c8ab012d5d2d49b6086904a8c80204059f72b12c7df354cca9c5949`, dwie próbki tabeli, osiem klatek pól i zamknięcie energii 0 J. Oryginalny wrapper zakończył się po udanym Solve błędem nazwy helpera torque; odczytowe odzyskanie postprocessingu nie powtarzało Solve. Receipt `postprocess-recovery-d6fe4d9e7c67487b.json` ma SHA-256 `d6fe4d9e7c67487b5b15609f93501c1d916f1fe0f42f0947cf4039bd6fae118c`. To dowód bazowej wersji type9, nie pomiar przyspieszenia type18.

@@ -11,6 +11,8 @@
 
 #include "cpu/mfem/interactions/demag_fem_bem_operator.hpp"
 #include "gpu/cuda/demag_poisson/cudss_direct_solver.hpp"
+#include "gpu/cuda/demag_poisson/demag_kernels.hpp"
+#include "gpu/cuda/demag_poisson/hypre_stream_interop.hpp"
 #include "gpu/cuda/demag_poisson/operators.hpp"
 #include "gpu/cuda/demag_poisson/poisson.hpp"
 #include "gpu/cuda/state/component_field.hpp"
@@ -47,6 +49,7 @@ struct GpuFemBemLinearSystem {
     std::unique_ptr<mfem::HypreParVector> x_par;
     std::unique_ptr<mfem::HypreParVector> residual;
 #endif
+    std::shared_ptr<GpuDemagCudssDirectSolver> direct_solver;
     uint64_t rows = 0;
     uint64_t solver_setup_count = 0;
     bool solver_setup_complete = false;
@@ -96,8 +99,11 @@ struct GpuDemagFemBemWorkspace {
     HierarchicalDemagBemFarBlock *d_far_blocks = nullptr;
     double *d_far_u = nullptr;
     double *d_far_v = nullptr;
+    HypreStreamInterop stream_interop{};
 #endif
 
+    GpuValidationNormScratch validation_scratch{};
+    GpuDemagCudssResolution cudss_resolution{};
     GpuFemBemLinearSystem u1_system;
     GpuFemBemLinearSystem u2_system;
     uint64_t u1_iterations = 0;

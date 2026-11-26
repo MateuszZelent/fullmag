@@ -12,7 +12,7 @@
       "solver": "FEM",
       "device": "GPU",
       "status": "NOT VERIFIED",
-      "reason": "Brak ścisłego device-resident operatora FK GPU; lane pozostaje NOT VERIFIED."
+      "reason": "Zaimplementowany operator device-resident FK GPU (CUDA + HYPRE AMG relax_type=18 / cuDSS + HypreStreamInterop + certyfikacja ScaledNormPair); walidacja fizyczna filmu 500x500x10 nm i świeży managed receipt pozostają NOT VERIFIED."
     },
     {
       "solver": "FDM",
@@ -47,6 +47,21 @@
       "id": "eq-poisson-robin-truncation",
       "symbols": ["u", "M", "Omega_m"],
       "sources": ["planner-accuracy"]
+    },
+    {
+      "id": "eq-fem-bem-spd-operators",
+      "symbols": ["K_fk", "C"],
+      "sources": ["workspace", "gpu-fem-bem-cudss-pair"]
+    },
+    {
+      "id": "eq-fem-bem-cudss-pair-budget",
+      "symbols": ["M_peak_fk", "M_stable_1", "B_vram"],
+      "sources": ["gpu-fem-bem-init", "gpu-fem-bem-cudss-pair"]
+    },
+    {
+      "id": "eq-fem-bem-residual-cert",
+      "symbols": ["K_fk", "u1", "u2", "eps_tol"],
+      "sources": ["gpu-fem-bem-solve", "gpu-fem-bem-cert", "gpu-fem-bem-norm-pair"]
     }
   ],
   "symbols": [
@@ -109,6 +124,42 @@
       "latex": "E_\\mathrm d",
       "meaning": "energia demagnetyzacji",
       "si_unit": "\\mathrm J"
+    },
+    {
+      "id": "K_fk",
+      "latex": "K_{\\mathrm{neumann}}, K_{\\mathrm{dirichlet}}",
+      "meaning": "dyskretne macierze sztywności SPD dla $u_1$ i $u_2$ po eliminacji gauge / brzegu",
+      "si_unit": "\\mathrm{m}"
+    },
+    {
+      "id": "C",
+      "latex": "C",
+      "meaning": "liczba spójnych składowych aktywnej domeny magnetycznej $\\Omega_m$",
+      "si_unit": "1"
+    },
+    {
+      "id": "M_peak_fk",
+      "latex": "\\hat{M}_{\\mathrm{peak},1}, \\hat{M}_{\\mathrm{peak},2}",
+      "meaning": "szczytowe oszacowanie VRAM analizy `cuDSS` dla układów $u_1$ i $u_2$",
+      "si_unit": "\\mathrm{B}"
+    },
+    {
+      "id": "M_stable_1",
+      "latex": "\\hat{M}_{\\mathrm{stable},1}",
+      "meaning": "stały koszt VRAM czynnika `cuDSS` układu $u_1$ po faktoryzacji",
+      "si_unit": "\\mathrm{B}"
+    },
+    {
+      "id": "B_vram",
+      "latex": "B",
+      "meaning": "efektywny budżet VRAM dostępny dla pary czynników `cuDSS`",
+      "si_unit": "\\mathrm{B}"
+    },
+    {
+      "id": "eps_tol",
+      "latex": "\\varepsilon_{\\mathrm{rtol}}, \\varepsilon_{\\mathrm{solver}}",
+      "meaning": "żądana tolerancja certyfikacji rezyduum oraz wewnętrzny próg solvera Krylowa ($0.1\\,\\varepsilon_{\\mathrm{rtol}}$)",
+      "si_unit": "1"
     }
   ],
   "sources": [
@@ -167,10 +218,58 @@
       "responsibility": "Energia demagnetyzacji w jednostkach SI."
     },
     {
+      "id": "gpu-fem-bem-init",
+      "path": "backends/fem/gpu/cuda/demag_fem_bem/fem_bem.cpp",
+      "symbol": "gpu_demag_fem_bem_initialize",
+      "responsibility": "Inicjalizacja device-resident FK, HypreStreamInterop, validation_scratch oraz atomowy preflight pary cuDSS (u1, u2)."
+    },
+    {
+      "id": "gpu-fem-bem-amg",
+      "path": "backends/fem/gpu/cuda/demag_fem_bem/fem_bem.cpp",
+      "symbol": "configure_amg",
+      "responsibility": "Ustawienie i weryfikacja HYPRE_BoomerAMGSetCycleRelaxType(amgraw, 18, 3) dla obu układów GPU FK."
+    },
+    {
+      "id": "gpu-fem-bem-solve",
+      "path": "backends/fem/gpu/cuda/demag_fem_bem/fem_bem.cpp",
+      "symbol": "solve_linear_system",
+      "responsibility": "Synchronizacja HypreStreamInterop, solve_demag_cudss_direct na hypre_stream, wspólna certyfikacja rezyduum oraz warunkowe bity recepty DIRECT_SOLVE/PRECONDITIONER."
+    },
+    {
+      "id": "gpu-fem-bem-stage",
+      "path": "backends/fem/gpu/cuda/demag_fem_bem/fem_bem.cpp",
+      "symbol": "compute_device_demag_fem_bem_for_device_stage",
+      "responsibility": "Orkiestracja kroku GPU FK bez nadmiarowego ustawiania FEM_GPU_OPERATOR_PRECONDITIONER."
+    },
+    {
+      "id": "gpu-fem-bem-cudss-pair",
+      "path": "backends/fem/gpu/cuda/demag_poisson/cudss_direct_solver.hpp",
+      "symbol": "try_initialize_fem_bem_cudss_pair",
+      "responsibility": "Atomowy dwuczynnikowy rezolwer cuDSS ze wspólnym preflightem VRAM dla pary macierzy SPD (u1, u2)."
+    },
+    {
+      "id": "gpu-fem-bem-cert",
+      "path": "backends/fem/gpu/cuda/demag_poisson/hypre_residual_certification.cpp",
+      "symbol": "certify_gpu_hypre_demag_residual",
+      "responsibility": "Wspólna certyfikacja rezyduum Ax-b na hypre_stream z zachowaniem sticky błędów HYPRE i kolejnością walidacji RHS przed residual."
+    },
+    {
+      "id": "gpu-fem-bem-norm-pair",
+      "path": "backends/fem/gpu/cuda/demag_poisson/demag_kernels.cu",
+      "symbol": "fullmag_cuda_demag_validation_norm_pair",
+      "responsibility": "Wieloblokowa redukcja pary norm ScaledNormPair (256 bloków CUB, 1x sync, 16 B D2H, fallback stronicowalny)."
+    },
+    {
       "id": "contract-test",
       "path": "backends/fem/tests/demag_fem_bem_contract.cpp",
       "symbol": "main",
       "responsibility": "Wykonywalny kontrakt topologii, geometrii, operatora i modułów."
+    },
+    {
+      "id": "gpu-fem-bem-contract",
+      "path": "backends/fem/tests/demag_fem_bem_gpu_contract.cpp",
+      "symbol": "main",
+      "responsibility": "Kontrakt źródłowy i bramka runtime GPU FK (AMG relax_type=18, 2 fences / 32 B, cuDSS i atomowy fallback pary)."
     }
   ],
   "public_api": {

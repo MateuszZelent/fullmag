@@ -305,6 +305,41 @@
       "responsibility": "Assert the next capture re-reads changed source values at the same step and that a provider error aborts the batch.",
       "evidence_status": "Source regression at 70d35b84dae4e840e8cc881c35ef45014c604284; not a runtime or performance qualification.",
       "permalink": "https://github.com/MateuszZelent/fullmag/blob/70d35b84dae4e840e8cc881c35ef45014c604284/crates/fullmag-runner/src/native_fem.rs#L2759"
+    },
+    {
+      "id": "gpu-fem-bem-amg",
+      "path": "backends/fem/gpu/cuda/demag_fem_bem/fem_bem.cpp",
+      "symbol": "configure_amg",
+      "responsibility": "Set and verify HYPRE_BoomerAMGSetCycleRelaxType(amgraw, 18, 3) on both GPU FEM/BEM scalar systems (u1, u2).",
+      "evidence_status": "Source implemented in Track A; GPU runtime qualification executes in Phase 2 Docker DEV."
+    },
+    {
+      "id": "gpu-fem-bem-getter",
+      "path": "backends/fem/gpu/cuda/demag_fem_bem/fem_bem.cpp",
+      "symbol": "gpu_demag_fem_bem_amg_coarse_relax_type",
+      "responsibility": "Read and cross-check AMG coarse relax_type across u1 and u2 (returning 18 under AMG, or -1 under cuDSS/non-AMG).",
+      "evidence_status": "Source implemented in Track A; GPU runtime qualification executes in Phase 2 Docker DEV."
+    },
+    {
+      "id": "gpu-paired-cert",
+      "path": "backends/fem/gpu/cuda/demag_poisson/hypre_residual_certification.cpp",
+      "symbol": "certify_gpu_hypre_demag_residual",
+      "responsibility": "Shared sticky-safe HYPRE residual certification on hypre_stream with reject_queued_work and RHS-before-residual finiteness ordering.",
+      "evidence_status": "Source implemented in Track A; GPU runtime qualification executes in Phase 2 Docker DEV."
+    },
+    {
+      "id": "gpu-norm-pair-kernel",
+      "path": "backends/fem/gpu/cuda/demag_poisson/demag_kernels.cu",
+      "symbol": "fullmag_cuda_demag_validation_norm_pair",
+      "responsibility": "Two-pass 256-block CUB ScaledNormPair reduction with overflow/underflow scaling, channel independence (no early break), pageable fallback, and 1x cudaStreamSynchronize.",
+      "evidence_status": "Source implemented in Track A; GPU runtime qualification executes in Phase 2 Docker DEV."
+    },
+    {
+      "id": "gpu-fem-bem-contract",
+      "path": "backends/fem/tests/demag_fem_bem_gpu_contract.cpp",
+      "symbol": "main",
+      "responsibility": "Contract verification for GPU FEM/BEM AMG coarse relax_type=18, HypreStreamInterop, 0.1*rtol margin, shared certification, cuDSS pinning, and receipt bit separation.",
+      "evidence_status": "Source contract added in Track A; GPU runtime execution runs in Phase 2 Docker DEV."
     }
   ],
   "public_api": {
