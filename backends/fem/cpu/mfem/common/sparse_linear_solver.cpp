@@ -512,6 +512,17 @@ bool cudss_check(cudssStatus_t status, const char *what, std::string &error)
             " failed with status " + std::to_string(static_cast<int>(status));
     return false;
 }
+
+bool cudss_solve_check(cudssStatus_t status, const char *what, std::string &error)
+{
+    // CUDSS_STATUS_IR_FAILED indicates cuDSS's internal IR did not hit ir_tol
+    // within ir_n_steps, but cuDSS still writes the refined solution to d_sol;
+    // our host long-double residual gate strictly enforces the caller tolerance.
+    if (status == CUDSS_STATUS_SUCCESS || status == CUDSS_STATUS_IR_FAILED) {
+        return true;
+    }
+    return cudss_check(status, what, error);
+}
 #endif
 
 } // namespace
@@ -1154,7 +1165,7 @@ struct SparseLinearSolver::Impl {
             // FP64 precision under cuDSS 0.8 static pivoting.
             const auto pivot_eps_alg = CUDSS_PIVOT_EPSILON_ALG_SCALED;
             const int ir_n_steps = 5;
-            const double ir_tol = 1.0e-15;
+            const double ir_tol = std::max(1.0e-13, 0.1 * config.relative_tolerance);
             if (!cudss_check(
                     cudssConfigSet(
                         cudss_config, CUDSS_CONFIG_PIVOT_EPSILON_ALG,
@@ -1315,9 +1326,10 @@ struct SparseLinearSolver::Impl {
                                  "probe rhs binding", err) ||
                     !cudss_check(cudssMatrixSetValues(cudss_sol, d_sol),
                                  "probe solution binding", err) ||
-                    !cudss_check(cudssExecute(cudss_handle, CUDSS_PHASE_SOLVE, cudss_config,
-                                              cudss_data, cudss_matrix, cudss_sol, cudss_rhs),
-                                 "probe solve", err) ||
+                    !cudss_solve_check(
+                        cudssExecute(cudss_handle, CUDSS_PHASE_SOLVE, cudss_config,
+                                     cudss_data, cudss_matrix, cudss_sol, cudss_rhs),
+                        "probe solve", err) ||
                     !cuda_check(cudaDeviceSynchronize(), "probe solve synchronize", err) ||
                     !cuda_check(cudaMemcpy(probe_sol.HostWrite(), d_sol,
                                            static_cast<std::size_t>(n) * sizeof(double),
@@ -1865,9 +1877,10 @@ struct SparseLinearSolver::Impl {
                              "rhs binding", err) ||
                 !cudss_check(cudssMatrixSetValues(cudss_sol, d_sol),
                              "solution binding", err) ||
-                !cudss_check(cudssExecute(cudss_handle, CUDSS_PHASE_SOLVE, cudss_config,
-                                          cudss_data, cudss_matrix, cudss_sol, cudss_rhs),
-                             "solve", err) ||
+                !cudss_solve_check(
+                    cudssExecute(cudss_handle, CUDSS_PHASE_SOLVE, cudss_config,
+                                 cudss_data, cudss_matrix, cudss_sol, cudss_rhs),
+                    "solve", err) ||
                 !cuda_check(cudaDeviceSynchronize(), "solve synchronize", err) ||
                 !cuda_check(cudaMemcpy(sol_host, d_sol,
                                        static_cast<std::size_t>(n) * sizeof(double),
