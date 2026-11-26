@@ -526,6 +526,7 @@ describe("FDM cuboid realized membership", () => {
     });
 
     expect(result.model?.count).toBe(4096);
+    expect(result.model?.pickingGrid).toEqual({ origin: [0, 0, 0], spacing: [1, 1, 1] });
     expect(result.model?.centers).toHaveLength(4096 * 3);
     expect(result.model?.matrices).toHaveLength(4096 * 16);
     expect(result.model?.matrices.slice(0, 16)).toEqual(Float32Array.from([
@@ -915,6 +916,29 @@ describe("FDM cuboid realized membership", () => {
     expect(model?.cellIndices).toEqual(new Uint32Array([1, 3]));
     expect(model?.regionIds).toEqual(new Uint32Array([2, 1]));
     expect(model?.count).toBe(2);
+    expect(model?.pickingGrid).toEqual({ origin: [0, 0, 0], spacing: [1, 1, 1] });
+  });
+
+  it("omits regular-grid picking when topography displaces displayed cells", () => {
+    const model = buildFdmCuboidInstanceModel({
+      bounds: null,
+      displayCellBudget: 2,
+      displayCellCount: 2,
+      kind: "fdm-grid",
+      origin: [0, 0, 0],
+      shape: [2, 1, 1],
+      spacing: [1, 1, 1],
+      stride: 1,
+      totalCells: 2,
+    }, {
+      cellSelection: "active",
+      fieldVector: fieldVector([0, 0, 0, 0, 0, 1], "full_domain"),
+      realizedRegionIds: allActiveMembership(2),
+      voxelTopography: { amplitudeCells: 2, component: "z", enabled: true },
+    });
+
+    expect(model?.centers[5]).toBe(2.5);
+    expect(model?.pickingGrid).toBeUndefined();
   });
 
   it("keeps a deterministic sample for a small realized target region", () => {

@@ -65,6 +65,7 @@ import {
 } from "./regionOverlayModel";
 import type { RegionOverlaySelection } from "./RegionOverlayLayer";
 import { buildFdmPointPositions, type FdmCuboidBuildRequest, type FdmCuboidInstanceModel } from "./fdmCuboidBuildModel";
+import { createFdmCuboidGridPicker } from "./fdmCuboidGridPicking";
 import { buildViewport3DFdmCuboidOffMainThread } from "./fdmCuboidBuildScheduler";
 import { createFdmCuboidBuildStateController, EMPTY_FDM_CUBOID_BUILD_SNAPSHOT, resolveFdmCuboidBuildState, type FdmCuboidBuildState } from "./fdmCuboidBuildState";
 import { resolveFdmCuboidPassPlan } from "./fdmCuboidPasses";
@@ -942,6 +943,12 @@ export const FdmCuboidLayer = memo(function FdmCuboidLayer({
   const stationaryInspectHoverEnabled =
     inspectEnabled &&
     shouldUseStationaryFdmCuboidInspectHover(preparedInstances?.count ?? 0);
+  const pickInspectGrid = useMemo(
+    () => stationaryInspectHoverEnabled && model?.pickingGrid && preparedInstances
+      ? createFdmCuboidGridPicker(model.pickingGrid, model.gridShape, preparedInstances.cellIndices)
+      : null,
+    [model, preparedInstances, stationaryInspectHoverEnabled],
+  );
   const nativeInspectHoverEnabled = shouldAttachFdmCuboidNativeInspectHover({
     inspectEnabled,
     instanceCount: preparedInstances?.count ?? 0,
@@ -977,9 +984,11 @@ export const FdmCuboidLayer = memo(function FdmCuboidLayer({
       ]);
       const pointerX = event.clientX - rect.left;
       const pointerY = event.clientY - rect.top;
-      const hit = inspectRaycastState.raycaster
-        .intersectObjects(targets, false)
-        .find((intersection) => typeof intersection.instanceId === "number");
+      const hit = pickInspectGrid
+        ? pickInspectGrid(inspectRaycastState.raycaster, targets)
+        : inspectRaycastState.raycaster
+            .intersectObjects(targets, false)
+            .find((intersection) => typeof intersection.instanceId === "number");
 
       const fallbackHit = hit
         ? null
