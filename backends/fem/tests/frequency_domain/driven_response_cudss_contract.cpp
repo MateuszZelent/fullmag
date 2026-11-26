@@ -1350,7 +1350,7 @@ bool test_asymmetric_1e25_open_airbox_block_prescaling()
         make_frame(0.8, 0.0, 0.6),
     };
     const double h_ext[3] = {5.0e4, 1.0e4, 0.0};
-    const std::vector<MfemExchangeEdgeTerm> edges = {
+    const std::vector<TangentOperatorEdgeBlock> edges = {
         {FrequencyDomainOperatorTermKind::exchange, 0, 1, 2.2e6},
         {FrequencyDomainOperatorTermKind::exchange, 1, 2, 2.0e6},
     };
