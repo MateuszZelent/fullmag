@@ -952,13 +952,24 @@ bool upload_demag_poisson_operators(
         return false;
     }
 #if FULLMAG_HAS_CUDA_RUNTIME
+    // Fused XYZ kernels read the x pattern with three value arrays, so in that
+    // mode the y/z row offsets and column indices would be unused device copies.
+    const auto upload_component = [&](DeviceCsrScalar &op, bool fused, const char *label) {
+        return fused
+            ? upload_device_array(op.d_values, op.values, device_bytes, label, error)
+            : upload_scalar(op, device_bytes, label, error);
+    };
+    const bool fused_recovery =
+        workspace.recovery_mode == GpuDemagRecoveryMode::SharedPatternFusedXyz;
+    const bool fused_visual =
+        workspace.visual_recovery_mode == GpuDemagRecoveryMode::SharedPatternFusedXyz;
     if (!upload_triple(workspace.rhs, device_bytes, error) ||
         !upload_scalar(workspace.recovery_x, device_bytes, "cudaMalloc/upload demag recovery x CSR", error) ||
-        !upload_scalar(workspace.recovery_y, device_bytes, "cudaMalloc/upload demag recovery y CSR", error) ||
-        !upload_scalar(workspace.recovery_z, device_bytes, "cudaMalloc/upload demag recovery z CSR", error) ||
+        !upload_component(workspace.recovery_y, fused_recovery, "cudaMalloc/upload demag recovery y CSR") ||
+        !upload_component(workspace.recovery_z, fused_recovery, "cudaMalloc/upload demag recovery z CSR") ||
         !upload_scalar(workspace.visual_recovery_x, device_bytes, "cudaMalloc/upload demag visual recovery x CSR", error) ||
-        !upload_scalar(workspace.visual_recovery_y, device_bytes, "cudaMalloc/upload demag visual recovery y CSR", error) ||
-        !upload_scalar(workspace.visual_recovery_z, device_bytes, "cudaMalloc/upload demag visual recovery z CSR", error) ||
+        !upload_component(workspace.visual_recovery_y, fused_visual, "cudaMalloc/upload demag visual recovery y CSR") ||
+        !upload_component(workspace.visual_recovery_z, fused_visual, "cudaMalloc/upload demag visual recovery z CSR") ||
         !upload_scalar(workspace.robin_boundary_mass, device_bytes, "cudaMalloc/upload demag Robin boundary mass CSR", error) ||
         !upload_device_array(
             workspace.d_ess_tdofs,
