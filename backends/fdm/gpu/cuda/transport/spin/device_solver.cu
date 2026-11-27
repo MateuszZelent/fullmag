@@ -917,9 +917,13 @@ __global__ void assemble_sparse_cells_kernel(SolveInput in, uint8_t *active,
     }
 }
 
+// The two launch sites below use a whole number of 32-thread CUDA warps.
+inline constexpr uint32_t kResultHashThreads = 256;
+
 __global__ void hash_fp64_result_kernel(const double *values, uint64_t count,
                                         uint64_t domain,
                                         unsigned long long *digest) {
+    unsigned long long sums[4]{};
     for (uint64_t index = uint64_t(blockIdx.x) * blockDim.x + threadIdx.x;
          index < count; index += uint64_t(blockDim.x) * gridDim.x) {
         const double value = values[index];
@@ -936,8 +940,18 @@ __global__ void hash_fp64_result_kernel(const double *values, uint64_t count,
         mixed *= UINT64_C(0x94d049bb133111eb);
         mixed ^= mixed >> 31;
         for (uint32_t lane = 0; lane < 4; ++lane)
-            atomicAdd(digest + lane, mixed ^
-                (UINT64_C(0x517cc1b727220a95) * (lane + 1)));
+            sums[lane] += mixed ^ (UINT64_C(0x517cc1b727220a95) * (lane + 1));
+    }
+
+    // The digest adds unsigned words modulo 2^64. Grouping the additions
+    // changes neither the digest bytes nor the independent nonfinite flag.
+    constexpr uint32_t full_warp = 0xffffffffu;
+    const bool leader = threadIdx.x % 32 == 0;
+    for (uint32_t lane = 0; lane < 4; ++lane) {
+        unsigned long long sum = sums[lane];
+        for (uint32_t offset = 16; offset != 0; offset >>= 1)
+            sum += __shfl_down_sync(full_warp, sum, offset);
+        if (leader) atomicAdd(digest + lane, sum);
     }
 }
 
@@ -2038,7 +2052,7 @@ uint32_t materialize_full_fields_impl(
         const uint64_t count = digest_counts[domain];
         const uint32_t field_blocks = static_cast<uint32_t>(
             (count + 255) / 256 > 65535 ? 65535 : (count + 255) / 256);
-        hash_fp64_result_kernel<<<field_blocks == 0 ? 1 : field_blocks, 256, 0,
+        hash_fp64_result_kernel<<<field_blocks == 0 ? 1 : field_blocks, kResultHashThreads, 0,
                                   input.stream>>>(
             digest_fields[domain], count, domain, scratch->digest);
     }
@@ -2087,9 +2101,10 @@ uint32_t materialize_full_fields_impl(
 } // namespace
 
 uint32_t solve_device(const SolveInput &input, SolveOutput *output) noexcept {
+    const bool trace_enabled = std::getenv("FULLMAG_FDM_GPU_TRACE_SPIN_SOLVE") != nullptr;
     const auto trace_begin = std::chrono::steady_clock::now();
     auto trace_phase = [&](const char *phase) {
-        if (std::getenv("FULLMAG_FDM_GPU_TRACE_SPIN_SOLVE") == nullptr) return;
+        if (!trace_enabled) return;
         std::fprintf(stderr, "spin_solve_phase phase=%s elapsed=%.6f\n", phase,
                      std::chrono::duration<double>(
                          std::chrono::steady_clock::now() - trace_begin).count());
@@ -2183,7 +2198,9 @@ uint32_t solve_device(const SolveInput &input, SolveOutput *output) noexcept {
         return FULLMAG_FDM_GPU_TRANSPORT_ERROR_OUT_OF_RESOURCES;
     const uint64_t resolved_device_budget_bytes =
         output->memory_plan.effective_limit_bytes;
-    if(state.storage.cells!=cells || state.storage.interface_count!=interface_count) {
+    const bool rebuild_storage =
+        state.storage.cells != cells || state.storage.interface_count != interface_count;
+    if (rebuild_storage) {
         release(state);
         auto &s=state.storage; s.cells=cells; s.interface_count=interface_count;
         s.interface_nonzeros=interface_entries;
@@ -2281,8 +2298,13 @@ uint32_t solve_device(const SolveInput &input, SolveOutput *output) noexcept {
         : input.output_mode == SolveOutputMode::RetainEndpoint
             ? retained_endpoint_bytes : 0;
     auto &s=state.storage;
-    if(cudaMemsetAsync(s.digest_accumulator,0,5*sizeof(unsigned long long),input.stream)!=cudaSuccess ||
-       cudaMemsetAsync(s.solution_soa,0,unknowns*sizeof(double),input.stream)!=cudaSuccess) {
+    const bool reuse_trial_solution = input.reuse_trial_solution && !rebuild_storage;
+    const auto clear_solution = [&]() {
+        return cudaMemsetAsync(s.solution_soa, 0, unknowns * sizeof(double), input.stream);
+    };
+    if (cudaMemsetAsync(s.digest_accumulator, 0,
+                        5 * sizeof(unsigned long long), input.stream) != cudaSuccess ||
+        (!reuse_trial_solution && clear_solution() != cudaSuccess)) {
         return FULLMAG_FDM_GPU_TRANSPORT_ERROR_CUDA_RUNTIME_ERROR;
     }
     const uint32_t blocks=uint32_t((cells+255)/256>65535?65535:(cells+255)/256);
@@ -2341,9 +2363,52 @@ uint32_t solve_device(const SolveInput &input, SolveOutput *output) noexcept {
         output->memory_plan = exact_warm_plan;
     }
     if(was_cached) ++state.hierarchy_cache_hit_count; else ++state.hierarchy_build_count;
+    const auto solve = [&](sparse::SolveMetrics &metrics) {
+        return sparse::solve(op, input.stream, state.hierarchy, state.workspace,
+                             input.relative_tolerance, input.max_iterations, &metrics);
+    };
     sparse::SolveMetrics metrics{};
-    status=sparse::solve(op,input.stream,state.hierarchy,state.workspace,input.relative_tolerance,input.max_iterations,&metrics);
+    status = solve(metrics);
+    const bool retry_cold = reuse_trial_solution && status != 0 &&
+        metrics.forbidden_transfer_bytes == 0 &&
+        (metrics.reason == sparse::ConvergenceReason::maximum_iterations ||
+         metrics.reason == sparse::ConvergenceReason::non_finite);
+    const bool cold_reset_failed = retry_cold && clear_solution() != cudaSuccess;
+    if (retry_cold && !cold_reset_failed) {
+        const auto warm = metrics;
+        metrics = {};
+        status = solve(metrics);
+        output->failed_warm_iterations = warm.iterations;
+        metrics.amg_applications += warm.amg_applications;
+        metrics.control_transfer_count += warm.control_transfer_count;
+        metrics.control_transfer_bytes += warm.control_transfer_bytes;
+        metrics.control_host_sync_count += warm.control_host_sync_count;
+        metrics.solve_milliseconds += warm.solve_milliseconds;
+        metrics.peak_device_bytes = std::max(metrics.peak_device_bytes, warm.peak_device_bytes);
+    }
     trace_phase("sparse_solve");
+    if (trace_enabled) {
+        std::fprintf(stderr,
+                     "spin_gmres seed=%s cold_retry=%u iterations=%llu "
+                     "failed_warm_iterations=%llu residual=%.17g device_ms=%.6f\n",
+                     reuse_trial_solution ? "trial" : "zero",
+                     retry_cold && !cold_reset_failed ? 1u : 0u,
+                     static_cast<unsigned long long>(metrics.iterations),
+                     static_cast<unsigned long long>(output->failed_warm_iterations),
+                     metrics.relative_residual, metrics.solve_milliseconds);
+    }
+    const uint64_t solve_control_transfers =
+        build.control_transfer_count + metrics.control_transfer_count + 1;
+    const uint64_t solve_control_bytes =
+        build.control_transfer_bytes + metrics.control_transfer_bytes + sizeof(digest_words);
+    const uint64_t solve_control_syncs =
+        build.control_host_sync_count + metrics.control_host_sync_count + 1;
+    output->control_d2h_count = solve_control_transfers;
+    output->control_d2h_bytes = solve_control_bytes;
+    output->control_host_sync_count = solve_control_syncs;
+    output->transfer_count = solve_control_transfers;
+    output->transfer_bytes = solve_control_bytes;
+    output->peak_bytes = metrics.peak_device_bytes;
     if (metrics.forbidden_transfer_bytes != 0) {
         output->forbidden_transfer_bytes = metrics.forbidden_transfer_bytes;
         return FULLMAG_FDM_GPU_TRANSPORT_ERROR_STRICT_GPU_RESIDENCY_VIOLATION;
@@ -2351,7 +2416,8 @@ uint32_t solve_device(const SolveInput &input, SolveOutput *output) noexcept {
     if(status!=0 || metrics.reason!=sparse::ConvergenceReason::converged) {
         output->iterations=metrics.iterations; output->reason=FULLMAG_FDM_GPU_TRANSPORT_CONVERGENCE_MAX_ITERATIONS;
         output->algebraic_residual=metrics.relative_residual;
-        return FULLMAG_FDM_GPU_TRANSPORT_ERROR_NONCONVERGED;
+        return cold_reset_failed ? FULLMAG_FDM_GPU_TRANSPORT_ERROR_CUDA_RUNTIME_ERROR
+                                 : FULLMAG_FDM_GPU_TRANSPORT_ERROR_NONCONVERGED;
     }
     const uint64_t solve_peak_bytes = metrics.peak_device_bytes;
     sparse::release(&state.workspace);
@@ -2439,7 +2505,7 @@ uint32_t solve_device(const SolveInput &input, SolveOutput *output) noexcept {
             const uint32_t field_blocks = static_cast<uint32_t>(
                 (digest_counts[domain] + 255) / 256 > 65535
                     ? 65535 : (digest_counts[domain] + 255) / 256);
-            hash_fp64_result_kernel<<<field_blocks, 256, 0, input.stream>>>(
+            hash_fp64_result_kernel<<<field_blocks, kResultHashThreads, 0, input.stream>>>(
                 digest_fields[domain], digest_counts[domain], domain,
                 s.digest_accumulator);
         }
@@ -2493,15 +2559,13 @@ uint32_t solve_device(const SolveInput &input, SolveOutput *output) noexcept {
             output->torque_balance = closure_ratio(
                 diagnostics.torque_error_bits, diagnostics.torque_scale_bits);
         }
-        output->control_d2h_count = build.control_transfer_count +
-            metrics.control_transfer_count + 2 + retain_endpoint;
-        output->control_d2h_bytes = build.control_transfer_bytes +
-            metrics.control_transfer_bytes + sizeof(digest_words) +
+        output->control_d2h_count = solve_control_transfers + 1 + retain_endpoint;
+        output->control_d2h_bytes = solve_control_bytes +
             sizeof(result_words) + (retain_endpoint ? sizeof(diagnostics) : 0);
         output->transfer_count = output->control_d2h_count;
         output->transfer_bytes = output->control_d2h_bytes;
-        output->control_host_sync_count = build.control_host_sync_count +
-            metrics.control_host_sync_count + 2 + retain_endpoint + retain_endpoint;
+        output->control_host_sync_count =
+            solve_control_syncs + 1 + retain_endpoint + retain_endpoint;
         output->peak_bytes = solve_peak_bytes > materialization_peak_bytes
             ? solve_peak_bytes : materialization_peak_bytes;
         record_state_metrics();
@@ -2528,14 +2592,11 @@ uint32_t solve_device(const SolveInput &input, SolveOutput *output) noexcept {
     output->algebraic_residual = metrics.relative_residual;
     output->local_balance = metrics.relative_residual;
     output->global_balance = metrics.relative_residual;
-    output->control_d2h_count += build.control_transfer_count +
-        metrics.control_transfer_count + 1;
-    output->control_d2h_bytes += build.control_transfer_bytes +
-        metrics.control_transfer_bytes + sizeof(digest_words);
+    output->control_d2h_count += solve_control_transfers;
+    output->control_d2h_bytes += solve_control_bytes;
     output->transfer_count = output->control_d2h_count;
     output->transfer_bytes = output->control_d2h_bytes;
-    output->control_host_sync_count += build.control_host_sync_count +
-        metrics.control_host_sync_count + 1;
+    output->control_host_sync_count += solve_control_syncs;
     const uint64_t full_peak = materialization_peak_bytes;
     output->peak_bytes = solve_peak_bytes > full_peak ? solve_peak_bytes : full_peak;
     record_state_metrics();

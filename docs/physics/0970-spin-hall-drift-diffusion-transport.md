@@ -1803,6 +1803,45 @@ engine identity; it cannot claim the production AMG engine. Likewise, a local
 $3\times3$ reaction inverse may be a named prototype preconditioner but cannot
 silently replace the frozen component AMG/block-Jacobi policy.
 
+##### Initial iterate within a bound CUDA LLG attempt
+
+For an LLG stage with spin potential `x = mu_s` in volts, the solver still
+assembles the current `A(m_stage)` and `b(m_stage)`. The first solve of each
+outer attempt starts from zero. Subsequent solves, including the endpoint
+candidate, may start with the previous converged device-local iterate of
+that attempt. The stopping quantity is the dimensionless true residual
+$\lVert b-Ax\rVert_2/\lVert b\rVert_2$, with the same tolerance and GMRES
+iteration limit per linear solve. For zero right-hand side, the solution
+is exactly zero. A numerical nonconvergence from the reused guess allows
+one cold solve with the configured limit. Scalar-reduction telemetry counts
+iterations across both solves and accounts for both control transfers. The
+result and synchronization record retain the iteration count of the last
+linear solve. The norm rescales finite entries when direct squaring
+underflows or overflows, so a small nonzero drive follows the nonzero-RHS path.
+
+The guess lives in existing transport storage and is reset when the
+descriptor storage is rebuilt or the outer step is retried. Its identity
+comes from the current attempt, independent of observation, export and
+restore. This optimization uses the existing Python/IR, ABI, operator,
+boundary conditions, preconditioner and retained endpoint format.
+The numerical criterion is FP64 tolerance equivalence with the cold policy.
+Warm and cold iterates can have different roundoff and compute digests.
+Standalone full-field solves start from zero.
+
+`backends/fdm/gpu/cuda/transport/context.cu::solve_steady_spin_impl`
+selects the guess within the transaction.
+`backends/fdm/gpu/cuda/transport/spin/device_solver.cu::solve_device`
+holds the guess and emits opt-in iteration and residual observations.
+`backends/fdm/gpu/cuda/transport/spin/sparse_solver.cu::persistent_gmres_kernel`
+checks the true residual and returns the exact solution for a zero RHS.
+`backends/fdm/gpu/cuda/transport/spin/device_solver.cu::hash_fp64_result_kernel`
+sums the existing digest words modulo $2^{64}$ using warp partial sums.
+
+The native sparse performance contract covers the manufactured exact guess,
+zero RHS and a finite nonzero RHS whose direct sum of squares would underflow.
+The full-grid beta-W/CoFeB qualification compares trajectory, torque and
+spin flux against a cold run using the same inputs.
+
 Production GPU memory resolution uses `memory_policy=auto`. After static state
 has been materialized on the selected CUDA context, the runtime reads
 `cudaMemGetInfo`, freezes a safety reserve, and computes `usable_bytes` from the

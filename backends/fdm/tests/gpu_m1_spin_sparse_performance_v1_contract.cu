@@ -454,6 +454,45 @@ bool run_sinh_preflight(cudaStream_t stream) {
         print_trace("jacobi", jacobi);
         print_trace("amg", solve);
     }
+    if (passed) {
+        // The previous iterate is nonzero. A zero RHS must clear it even
+        // with a single permitted GMRES iteration.
+        sparse::SolveMetrics homogeneous{};
+        const size_t bytes = observed.size() * sizeof(double);
+        passed = cuda_ok(cudaMemsetAsync(rhs, 0, bytes, stream), "clear homogeneous rhs") &&
+            sparse::solve(input, stream, hierarchy, workspace, 1.0e-12, 1,
+                          &homogeneous) == 0 &&
+            homogeneous.iterations == 0 && homogeneous.relative_residual == 0.0 &&
+            cuda_ok(cudaMemcpyAsync(observed.data(), solution, bytes,
+                                   cudaMemcpyDeviceToHost, stream), "homogeneous solution") &&
+            cuda_ok(cudaStreamSynchronize(stream), "homogeneous solution sync") &&
+            std::all_of(observed.begin(), observed.end(), [](double value) { return value == 0.0; });
+        if (!passed)
+            std::fprintf(stderr, "zero spin RHS did not clear the seeded iterate\n");
+    }
+    if (passed) {
+        // All components are finite, but their direct squares underflow.
+        constexpr double scale = 1.0e-200;
+        for (double &value : host_rhs) value *= scale;
+        sparse::SolveMetrics tiny_rhs{};
+        const size_t bytes = observed.size() * sizeof(double);
+        passed = cuda_ok(cudaMemcpyAsync(rhs, host_rhs.data(), bytes,
+                                       cudaMemcpyHostToDevice, stream), "tiny rhs") &&
+            sparse::solve(input, stream, hierarchy, workspace, 1.0e-12, 500,
+                          &tiny_rhs) == 0 &&
+            tiny_rhs.iterations > 0 && tiny_rhs.relative_residual <= 1.0e-12 &&
+            cuda_ok(cudaMemcpyAsync(observed.data(), solution, bytes,
+                                   cudaMemcpyDeviceToHost, stream), "tiny rhs solution") &&
+            cuda_ok(cudaStreamSynchronize(stream), "tiny rhs solution sync");
+        if (passed) {
+            double maximum_error = 0.0;
+            for (uint64_t i = 0; i < observed.size(); ++i)
+                maximum_error = std::max(maximum_error, std::abs(observed[i] / scale - expected[i]));
+            passed = maximum_error <= 1.0e-7 * maximum_expected;
+        }
+        if (!passed)
+            std::fprintf(stderr, "nonzero tiny spin RHS did not retain its scale\n");
+    }
     sparse::release(&workspace);
     sparse::release(&hierarchy);
     cleanup();

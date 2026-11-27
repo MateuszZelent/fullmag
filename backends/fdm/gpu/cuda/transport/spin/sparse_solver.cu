@@ -491,19 +491,19 @@ __device__ void apply_coarse(const Level &level, const double *input,
     grid_group.sync();
 }
 
-__device__ double deterministic_dot(const double *left, const double *right,
-                                    uint64_t count, double *partials,
-                                    double *result,
-                                    cg::grid_group grid_group) {
+template <bool Maximum = false>
+__device__ double deterministic_reduce(double local, double *partials,
+                                       double *result,
+                                       cg::grid_group grid_group) {
     extern __shared__ double shared[];
-    double local = 0.0;
-    for (uint64_t index = grid_group.thread_rank(); index < count;
-         index += grid_group.size())
-        local += left[index] * right[index];
     shared[threadIdx.x] = local;
     __syncthreads();
     for (uint32_t stride = blockDim.x / 2; stride != 0; stride >>= 1) {
-        if (threadIdx.x < stride) shared[threadIdx.x] += shared[threadIdx.x + stride];
+        if (threadIdx.x < stride) {
+            const double right = shared[threadIdx.x + stride];
+            shared[threadIdx.x] = Maximum ? fmax(shared[threadIdx.x], right)
+                                          : shared[threadIdx.x] + right;
+        }
         __syncthreads();
     }
     if (threadIdx.x == 0) partials[blockIdx.x] = shared[0];
@@ -511,11 +511,46 @@ __device__ double deterministic_dot(const double *left, const double *right,
     if (grid_group.thread_rank() == 0) {
         double total = 0.0;
         for (uint32_t block = 0; block < gridDim.x; ++block)
-            total += partials[block];
+            total = Maximum ? fmax(total, partials[block]) : total + partials[block];
         *result = total;
     }
     grid_group.sync();
     return *result;
+}
+
+__device__ double deterministic_dot(const double *left, const double *right,
+                                    uint64_t count, double *partials,
+                                    double *result,
+                                    cg::grid_group grid_group) {
+    double local = 0.0;
+    for (uint64_t index = grid_group.thread_rank(); index < count;
+         index += grid_group.size())
+        local += left[index] * right[index];
+    return deterministic_reduce(local, partials, result, grid_group);
+}
+
+__device__ double deterministic_norm(const double *values, uint64_t count,
+                                     double *partials, double *result,
+                                     cg::grid_group grid_group) {
+    const double squares = deterministic_dot(values, values, count, partials,
+                                            result, grid_group);
+    if ((squares >= DBL_MIN && isfinite(squares)) || isnan(squares))
+        return sqrt(squares);
+
+    // Only rescale when squaring FP64 entries underflows or overflows.
+    // In particular, a zero sum of squares does not prove an exact zero RHS.
+    double local_scale = 0.0;
+    for (uint64_t i = grid_group.thread_rank(); i < count; i += grid_group.size())
+        local_scale = fmax(local_scale, fabs(values[i]));
+    const double scale = deterministic_reduce<true>(
+        local_scale, partials, result, grid_group);
+    if (scale == 0.0 || !isfinite(scale)) return scale;
+    double local_squares = 0.0;
+    for (uint64_t i = grid_group.thread_rank(); i < count; i += grid_group.size()) {
+        const double scaled = values[i] / scale;
+        local_squares += scaled * scaled;
+    }
+    return scale * sqrt(deterministic_reduce(local_squares, partials, result, grid_group));
 }
 
 __device__ void vector_copy_scale(const double *source, double *destination,
@@ -1083,19 +1118,30 @@ __global__ void persistent_gmres_kernel(Operator op, HierarchyCache hierarchy,
     double *partials = workspace.reduction_partials;
     double *scalar = small + kScalarOffset;
 
+    const double rhs_norm = deterministic_norm(op.rhs_soa, unknowns, partials,
+                                              scalar, grid_group);
+    if (rhs_norm == 0.0) {
+        for (uint64_t i = grid_group.thread_rank(); i < unknowns; i += grid_group.size())
+            op.solution_soa[i] = 0.0;
+        if (grid_group.thread_rank() == 0) {
+            result->iterations = 0;
+            result->amg_applications = 0;
+            result->reason = uint32_t(ConvergenceReason::converged);
+            result->relative_residual = 0.0;
+            result->restart_count = 0;
+            result->restart_residuals[0] = 0.0;
+        }
+        return;
+    }
     apply_fine(op, op.solution_soa, work, grid_group);
     for (uint64_t i = grid_group.thread_rank(); i < unknowns; i += grid_group.size())
         residual[i] = op.rhs_soa[i] - work[i];
     grid_group.sync();
-    const double rhs_norm = sqrt(deterministic_dot(op.rhs_soa, op.rhs_soa,
-                                                   unknowns, partials, scalar,
-                                                   grid_group));
-    const double normalization = rhs_norm > 0.0 ? rhs_norm : 1.0;
+    const double normalization = rhs_norm;
     uint64_t iterations = 0;
     uint64_t applications = 0;
-    double relative = sqrt(deterministic_dot(residual, residual, unknowns,
-                                             partials, scalar, grid_group)) /
-                      normalization;
+    double relative = deterministic_norm(residual, unknowns, partials, scalar,
+                                         grid_group) / normalization;
     uint32_t reason = uint32_t(ConvergenceReason::maximum_iterations);
     uint32_t restart_count = 0;
     if (grid_group.thread_rank() == 0)
@@ -1104,8 +1150,15 @@ __global__ void persistent_gmres_kernel(Operator op, HierarchyCache hierarchy,
 
     while (iterations < max_iterations && relative > relative_tolerance) {
         const double beta = relative * normalization;
-        vector_copy_scale(residual, workspace.basis, unknowns, 1.0 / beta,
-                          grid_group);
+        const double inverse_beta = 1.0 / beta;
+        if (isfinite(inverse_beta)) {
+            vector_copy_scale(residual, workspace.basis, unknowns, inverse_beta,
+                              grid_group);
+        } else {
+            for (uint64_t i = grid_group.thread_rank(); i < unknowns; i += grid_group.size())
+                workspace.basis[i] = residual[i] / beta;
+            grid_group.sync();
+        }
         if (grid_group.thread_rank() == 0) {
             for (uint32_t i = 0; i < kRestart + 1; ++i)
                 small[kGOffset + i] = i == 0 ? beta : 0.0;
@@ -1213,9 +1266,8 @@ __global__ void persistent_gmres_kernel(Operator op, HierarchyCache hierarchy,
              i += grid_group.size())
             residual[i] = op.rhs_soa[i] - work[i];
         grid_group.sync();
-        relative = sqrt(deterministic_dot(residual, residual, unknowns,
-                                          partials, scalar, grid_group)) /
-                   normalization;
+        relative = deterministic_norm(residual, unknowns, partials, scalar,
+                                      grid_group) / normalization;
         ++restart_count;
         if (grid_group.thread_rank() == 0 && restart_count < 32)
             result->restart_residuals[restart_count] = relative;
