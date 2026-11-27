@@ -16,12 +16,14 @@
 #include "cpu/mfem/interactions/demag_poisson_rhs.hpp"
 #include "cpu/mfem/runtime/mfem_device.hpp"
 #include "fem_common.hpp"
+#include "fem_memory_trace.hpp"
 #include "gpu/cuda/demag_poisson/poisson.hpp"
 
 #if FULLMAG_HAS_MFEM_STACK
 #include <mfem.hpp>
 #endif
 
+#include <cstdint>
 #include <cstdio>
 #include <stdexcept>
 #include <string>
@@ -34,6 +36,7 @@ namespace {
 
 void debug_checkpoint(const char *stage)
 {
+    fem_memory_trace_phase(stage);
     static const bool enabled = debug_startup_env_enabled();
     if (!enabled) {
         return;
@@ -59,6 +62,31 @@ private:
     Context &ctx_;
     bool committed_ = false;
 };
+
+// A0 has one reader: initialize_demag_poisson_boundary_operator, which copies
+// it into poisson_bc_op. Everything after that (the periodic reduction, the
+// GPU operator fingerprint, Hypre, and cuDSS) reads poisson_bc_op or the
+// periodic matrix built from it, so on the device-Hypre GPU lane A0 goes here,
+// before the GPU operator build and the solver setup, and stays out of their
+// memory peaks. Other lanes keep A0.
+void release_stiffness_on_device_hypre_lane(Context &ctx)
+{
+    auto &poisson = ctx.poisson_demag;
+    if (poisson.gpu_demag_mode != FULLMAG_FEM_GPU_DEMAG_DEVICE_HYPRE_POISSON ||
+        poisson.poisson_bc_op == nullptr ||
+        poisson.poisson_bilinear == nullptr) {
+        return;
+    }
+    auto *stiffness_form = static_cast<mfem::BilinearForm *>(poisson.poisson_bilinear);
+    const mfem::SparseMatrix &stiffness = stiffness_form->SpMat();
+    const uint64_t released_bytes =
+        (static_cast<uint64_t>(stiffness.Height()) + 1u) * sizeof(int) +
+        static_cast<uint64_t>(stiffness.NumNonZeroElems()) * (sizeof(int) + sizeof(double));
+    delete stiffness_form;
+    poisson.poisson_bilinear = nullptr;
+    fem_memory_trace_phase("poisson:stiffness_matrix_released");
+    fem_memory_trace_stat("poisson:stiffness_matrix_released", "released_bytes", released_bytes);
+}
 
 bool poisson_resources_present(const Context &ctx)
 {
@@ -138,6 +166,19 @@ bool context_initialize_poisson(Context &ctx, std::string &error)
         poisson_bilinear->AddDomainIntegrator(new mfem::DiffusionIntegrator());
         poisson_bilinear->Assemble();
         poisson_bilinear->Finalize();
+        fem_memory_trace_phase("poisson:potential_matrix_assembled");
+        fem_memory_trace_stat(
+            "poisson:potential_matrix_assembled",
+            "potential_order",
+            static_cast<uint64_t>(potential_order));
+        fem_memory_trace_stat(
+            "poisson:potential_matrix_assembled",
+            "potential_rows",
+            static_cast<uint64_t>(potential_fes->GetTrueVSize()));
+        fem_memory_trace_stat(
+            "poisson:potential_matrix_assembled",
+            "potential_matrix_nnz",
+            static_cast<uint64_t>(poisson_bilinear->SpMat().NumNonZeroElems()));
 
         const bool use_device = mfem::Device::IsEnabled();
         auto *gf_potential = new mfem::GridFunction(potential_fes);
@@ -161,6 +202,8 @@ bool context_initialize_poisson(Context &ctx, std::string &error)
             rollback_setup();
             return false;
         }
+        fem_memory_trace_phase("poisson:boundary_operator_ready");
+        release_stiffness_on_device_hypre_lane(ctx);
 
         if (!initialize_demag_periodic_poisson_reduction(ctx, error)) {
             rollback_setup();
