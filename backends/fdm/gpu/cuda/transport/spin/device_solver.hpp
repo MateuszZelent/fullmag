@@ -96,6 +96,8 @@ struct SolveInput {
     const double *accepted_interface_charge_current_density = nullptr;
     uint64_t accepted_interface_count = 0;
     SolveOutputMode output_mode = SolveOutputMode::FullFields;
+    // The binding owns a converged iterate from this same LLG attempt.
+    bool reuse_trial_solution = false;
     uint8_t accepted_snapshot_digest[32]{};
     const double *m_stage = nullptr;
     double *torque_destination = nullptr;
@@ -120,6 +122,7 @@ struct SolveInput {
 struct SolveOutput {
     Buffers buffers{};
     uint64_t iterations = 0;
+    uint64_t failed_warm_iterations = 0;
     uint32_t reason = FULLMAG_FDM_GPU_TRANSPORT_CONVERGENCE_UNSET;
     double algebraic_residual = 0.0;
     double local_balance = 0.0;

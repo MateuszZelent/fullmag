@@ -2482,6 +2482,9 @@ static uint32_t solve_steady_spin_impl(
     input.max_iterations = request->max_iterations;
     input.sparse_state = &parent.spin_sparse_state;
     input.output_mode = output_mode;
+    input.reuse_trial_solution = transactional &&
+        parent.spin_trial_convergence_reason ==
+            FULLMAG_FDM_GPU_TRANSPORT_CONVERGENCE_CONVERGED;
     input.test_failure_boundary = parent.test_failure_boundary;
     parent.test_failure_boundary = 0;
     input.old_accepted_bytes = transactional
@@ -2548,6 +2551,33 @@ static uint32_t solve_steady_spin_impl(
             output.setup_h2d_bytes, output.setup_h2d_count, 0, 0, 0,
             snapshot.candidate_digest.data());
     }
+    const uint64_t executed_iterations = output.failed_warm_iterations >
+        UINT64_MAX - output.iterations
+        ? UINT64_MAX : output.iterations + output.failed_warm_iterations;
+    const uint32_t stage_transfer_flags =
+        FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_EVENT_TRANSFER |
+        FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_EVENT_PROVISIONAL;
+    const uint32_t stage_sync_flags =
+        FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_EVENT_SYNCHRONIZATION |
+        FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_EVENT_PROVISIONAL;
+    if (output.control_d2h_count != 0) {
+        append_charge_telemetry(
+            parent, FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_DIRECTION_D2H,
+            FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_REASON_SCALAR_REDUCTION_D2H,
+            FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_STATUS_SUCCESS,
+            stage_transfer_flags, output.control_d2h_bytes,
+            output.control_d2h_count, request->attempt_id, request->stage_id,
+            executed_iterations, snapshot.candidate_digest.data());
+    }
+    if (output.control_host_sync_count != 0) {
+        append_charge_telemetry(
+            parent, FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_DIRECTION_DEVICE_INTERNAL,
+            FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_REASON_STREAM_SYNCHRONIZE,
+            FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_STATUS_SUCCESS,
+            stage_sync_flags, 0, output.control_host_sync_count,
+            request->attempt_id, request->stage_id, output.iterations,
+            snapshot.candidate_digest.data());
+    }
     if (status != FULLMAG_FDM_GPU_TRANSPORT_ERROR_OK) {
         if (!transactional) ++parent.spin_failed_rollback_count;
         append_charge_telemetry(
@@ -2555,31 +2585,10 @@ static uint32_t solve_steady_spin_impl(
             FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_REASON_REJECTED_ATTEMPT,
             FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_STATUS_FAILED,
             FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_EVENT_FAILED,
-            0, 0, request->attempt_id, request->stage_id, output.iterations,
+            0, 0, request->attempt_id, request->stage_id, executed_iterations,
             snapshot.candidate_digest.data());
         return status;
     }
-
-    const uint32_t stage_transfer_flags =
-        FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_EVENT_TRANSFER |
-        FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_EVENT_PROVISIONAL;
-    const uint32_t stage_sync_flags =
-        FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_EVENT_SYNCHRONIZATION |
-        FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_EVENT_PROVISIONAL;
-    append_charge_telemetry(
-        parent, FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_DIRECTION_D2H,
-        FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_REASON_SCALAR_REDUCTION_D2H,
-        FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_STATUS_SUCCESS,
-        stage_transfer_flags, output.control_d2h_bytes,
-        output.control_d2h_count, request->attempt_id, request->stage_id,
-        output.iterations, snapshot.candidate_digest.data());
-    append_charge_telemetry(
-        parent, FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_DIRECTION_DEVICE_INTERNAL,
-        FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_REASON_STREAM_SYNCHRONIZE,
-        FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_STATUS_SUCCESS,
-        stage_sync_flags, 0, output.control_host_sync_count,
-        request->attempt_id, request->stage_id, output.iterations,
-        snapshot.candidate_digest.data());
     // The bound path staged three magnetization components on the transport
     // stream before solve_device. Include endpoint retention in the same audit.
     const uint64_t staged_count = output_mode == spin::SolveOutputMode::FullFields ? 0 : 3;
