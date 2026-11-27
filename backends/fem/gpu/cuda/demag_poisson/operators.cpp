@@ -29,6 +29,7 @@
 #include <limits>
 #include <sstream>
 #include <string>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -823,6 +824,7 @@ bool build_mixed_demag_operators_with_path(
     if (!assembled) {
         return false;
     }
+    workspace.host_arrays_released = false;
     fem_memory_trace_phase("gpu_demag:csr_filled");
 
     workspace.recovery_mode = shared_xyz_csr_pattern(
@@ -944,6 +946,11 @@ bool upload_demag_poisson_operators(
     uint64_t &device_bytes,
     std::string &error)
 {
+    if (workspace.host_arrays_released) {
+        error = "GPU Poisson demag operators cannot be uploaded again after their host "
+            "copies were released; rebuild the operator workspace";
+        return false;
+    }
 #if FULLMAG_HAS_CUDA_RUNTIME
     if (!upload_triple(workspace.rhs, device_bytes, error) ||
         !upload_scalar(workspace.recovery_x, device_bytes, "cudaMalloc/upload demag recovery x CSR", error) ||
@@ -970,6 +977,35 @@ bool upload_demag_poisson_operators(
     error = "strict FEM GPU demag operator upload requires CUDA runtime support";
     return false;
 #endif
+}
+
+uint64_t release_demag_poisson_operator_host_arrays(GpuDemagPoissonWorkspace &workspace)
+{
+    uint64_t released_bytes = 0;
+    const auto release = [&released_bytes](auto &values) {
+        using Values = std::decay_t<decltype(values)>;
+        released_bytes += static_cast<uint64_t>(values.capacity()) *
+            sizeof(typename Values::value_type);
+        Values().swap(values);
+    };
+    release(workspace.rhs.row_offsets);
+    release(workspace.rhs.col_indices);
+    release(workspace.rhs.values_x);
+    release(workspace.rhs.values_y);
+    release(workspace.rhs.values_z);
+    for (DeviceCsrScalar *op : {&workspace.recovery_x,
+                                &workspace.recovery_y,
+                                &workspace.recovery_z,
+                                &workspace.visual_recovery_x,
+                                &workspace.visual_recovery_y,
+                                &workspace.visual_recovery_z,
+                                &workspace.robin_boundary_mass}) {
+        release(op->row_offsets);
+        release(op->col_indices);
+        release(op->values);
+    }
+    workspace.host_arrays_released = true;
+    return released_bytes;
 }
 
 void destroy_demag_poisson_operators(GpuDemagPoissonWorkspace &workspace)

@@ -115,6 +115,9 @@ struct GpuDemagPoissonWorkspace {
     uint64_t warm_start_count = 0;
     bool solver_setup_complete = false;
     bool ready = false;
+    // Set once the host CSR copies were freed after a completed GPU setup;
+    // such a workspace cannot be uploaded again and must be rebuilt.
+    bool host_arrays_released = false;
 };
 
 // Debug A/B switch for the element-loop assembly of the mixed operators.
@@ -159,6 +162,13 @@ bool upload_demag_poisson_operators(
     GpuDemagPoissonWorkspace &workspace,
     uint64_t &device_bytes,
     std::string &error);
+
+// Frees the host copies of the uploaded CSR operators (RHS, recovery, visual
+// recovery, Robin boundary mass) and returns the freed capacity in bytes.
+// Keeps rows, nnz, device pointers, essential DOFs, and the fingerprint, which
+// are all the GPU lane reads after setup. Call only after a completed GPU
+// Poisson setup.
+uint64_t release_demag_poisson_operator_host_arrays(GpuDemagPoissonWorkspace &workspace);
 
 void destroy_demag_poisson_operators(GpuDemagPoissonWorkspace &workspace);
 
