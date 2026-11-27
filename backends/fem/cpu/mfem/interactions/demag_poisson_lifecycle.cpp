@@ -264,6 +264,29 @@ void context_destroy_poisson(Context &ctx)
     ctx.poisson_demag.cpu_transfer_test_finalized_matrices = 0;
     ctx.poisson_demag.cpu_transfer_test_peak_live_matrices = 0;
 }
+
+uint64_t context_release_poisson_stiffness_after_device_setup(Context &ctx)
+{
+    auto &poisson = ctx.poisson_demag;
+    if (poisson.gpu_demag_mode != FULLMAG_FEM_GPU_DEMAG_DEVICE_HYPRE_POISSON ||
+        !poisson.ready ||
+        !poisson.gpu_workspace_ready ||
+        poisson.gpu_workspace == nullptr ||
+        poisson.poisson_bc_op == nullptr ||
+        poisson.poisson_bilinear == nullptr) {
+        return 0;
+    }
+    auto *stiffness_form = static_cast<mfem::BilinearForm *>(poisson.poisson_bilinear);
+    const mfem::SparseMatrix &stiffness = stiffness_form->SpMat();
+    const uint64_t released_bytes =
+        (static_cast<uint64_t>(stiffness.Height()) + 1u) * sizeof(int) +
+        static_cast<uint64_t>(stiffness.NumNonZeroElems()) * (sizeof(int) + sizeof(double));
+    delete stiffness_form;
+    poisson.poisson_bilinear = nullptr;
+    fem_memory_trace_phase("poisson:stiffness_matrix_released");
+    fem_memory_trace_stat("poisson:stiffness_matrix_released", "released_bytes", released_bytes);
+    return released_bytes;
+}
 #endif
 
 } // namespace fullmag::fem

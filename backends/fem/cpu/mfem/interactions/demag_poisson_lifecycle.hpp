@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdint>
 #include <string>
 
 namespace fullmag::fem {
@@ -28,5 +29,16 @@ bool context_initialize_poisson(Context &ctx, std::string &error);
  * not ready.
  */
 void context_destroy_poisson(Context &ctx);
+
+/*
+ * Free the unconstrained Poisson stiffness form (A0) on the device-Hypre GPU
+ * lane once the device Poisson setup has completed, and return its matrix
+ * bytes. A0 only feeds the boundary-conditioned operator and the CPU solve;
+ * the GPU lane then reads only poisson_bc_op (aliased by Hypre) and the
+ * device operators. Every other lane and any incomplete setup keeps A0. A
+ * later setup builds a new state with its own A0, and a failed rebuild
+ * restores this state, whose GPU workspace still serves the run.
+ */
+uint64_t context_release_poisson_stiffness_after_device_setup(Context &ctx);
 
 } // namespace fullmag::fem

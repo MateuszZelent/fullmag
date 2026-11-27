@@ -10,6 +10,7 @@
 #include "gpu/cuda/demag_poisson/poisson.hpp"
 
 #include "context.hpp"
+#include "cpu/mfem/interactions/demag_poisson_lifecycle.hpp"
 #include "fem_memory_trace.hpp"
 #include "gpu/cuda/demag_fem_bem/fem_bem.hpp"
 #include "gpu/cuda/demag_poisson/demag_kernels.hpp"
@@ -98,8 +99,9 @@ bool keep_demag_host_copies_requested()
 }
 
 // Runs only after a completed device Poisson setup. From then on the GPU lane
-// reads the device operators, rows, nnz, essential DOFs, and the fingerprint;
-// the host CSR copies of the uploaded operators are dead weight.
+// reads the device operators, rows, nnz, essential DOFs, and the fingerprint,
+// plus poisson_bc_op through Hypre. The host CSR copies of the uploaded
+// operators and the unconstrained P2 stiffness (A0) are dead weight.
 void release_host_copies_after_device_setup(Context &ctx)
 {
     if (keep_demag_host_copies_requested()) {
@@ -114,6 +116,7 @@ void release_host_copies_after_device_setup(Context &ctx)
     fem_memory_trace_phase("gpu_demag:host_operator_arrays_released");
     fem_memory_trace_stat(
         "gpu_demag:host_operator_arrays_released", "released_bytes", released_bytes);
+    context_release_poisson_stiffness_after_device_setup(ctx);
 }
 #endif
 
