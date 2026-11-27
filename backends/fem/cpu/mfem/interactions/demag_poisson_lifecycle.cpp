@@ -23,6 +23,7 @@
 #include <mfem.hpp>
 #endif
 
+#include <cstdint>
 #include <cstdio>
 #include <stdexcept>
 #include <string>
@@ -61,6 +62,31 @@ private:
     Context &ctx_;
     bool committed_ = false;
 };
+
+// A0 has one reader: initialize_demag_poisson_boundary_operator, which copies
+// it into poisson_bc_op. Everything after that (the periodic reduction, the
+// GPU operator fingerprint, Hypre, and cuDSS) reads poisson_bc_op or the
+// periodic matrix built from it, so on the device-Hypre GPU lane A0 goes here,
+// before the GPU operator build and the solver setup, and stays out of their
+// memory peaks. Other lanes keep A0.
+void release_stiffness_on_device_hypre_lane(Context &ctx)
+{
+    auto &poisson = ctx.poisson_demag;
+    if (poisson.gpu_demag_mode != FULLMAG_FEM_GPU_DEMAG_DEVICE_HYPRE_POISSON ||
+        poisson.poisson_bc_op == nullptr ||
+        poisson.poisson_bilinear == nullptr) {
+        return;
+    }
+    auto *stiffness_form = static_cast<mfem::BilinearForm *>(poisson.poisson_bilinear);
+    const mfem::SparseMatrix &stiffness = stiffness_form->SpMat();
+    const uint64_t released_bytes =
+        (static_cast<uint64_t>(stiffness.Height()) + 1u) * sizeof(int) +
+        static_cast<uint64_t>(stiffness.NumNonZeroElems()) * (sizeof(int) + sizeof(double));
+    delete stiffness_form;
+    poisson.poisson_bilinear = nullptr;
+    fem_memory_trace_phase("poisson:stiffness_matrix_released");
+    fem_memory_trace_stat("poisson:stiffness_matrix_released", "released_bytes", released_bytes);
+}
 
 bool poisson_resources_present(const Context &ctx)
 {
@@ -177,6 +203,7 @@ bool context_initialize_poisson(Context &ctx, std::string &error)
             return false;
         }
         fem_memory_trace_phase("poisson:boundary_operator_ready");
+        release_stiffness_on_device_hypre_lane(ctx);
 
         if (!initialize_demag_periodic_poisson_reduction(ctx, error)) {
             rollback_setup();
@@ -263,29 +290,6 @@ void context_destroy_poisson(Context &ctx)
     ctx.poisson_demag.cpu_transfer_test_fail_after_finalized_matrices = 0;
     ctx.poisson_demag.cpu_transfer_test_finalized_matrices = 0;
     ctx.poisson_demag.cpu_transfer_test_peak_live_matrices = 0;
-}
-
-uint64_t context_release_poisson_stiffness_after_device_setup(Context &ctx)
-{
-    auto &poisson = ctx.poisson_demag;
-    if (poisson.gpu_demag_mode != FULLMAG_FEM_GPU_DEMAG_DEVICE_HYPRE_POISSON ||
-        !poisson.ready ||
-        !poisson.gpu_workspace_ready ||
-        poisson.gpu_workspace == nullptr ||
-        poisson.poisson_bc_op == nullptr ||
-        poisson.poisson_bilinear == nullptr) {
-        return 0;
-    }
-    auto *stiffness_form = static_cast<mfem::BilinearForm *>(poisson.poisson_bilinear);
-    const mfem::SparseMatrix &stiffness = stiffness_form->SpMat();
-    const uint64_t released_bytes =
-        (static_cast<uint64_t>(stiffness.Height()) + 1u) * sizeof(int) +
-        static_cast<uint64_t>(stiffness.NumNonZeroElems()) * (sizeof(int) + sizeof(double));
-    delete stiffness_form;
-    poisson.poisson_bilinear = nullptr;
-    fem_memory_trace_phase("poisson:stiffness_matrix_released");
-    fem_memory_trace_stat("poisson:stiffness_matrix_released", "released_bytes", released_bytes);
-    return released_bytes;
 }
 #endif
 
