@@ -41,6 +41,7 @@
 #include "fem_memory_trace.hpp"
 
 #include <cmath>
+#include <cstdlib>
 #include <memory>
 #include <new>
 
@@ -53,6 +54,11 @@ bool build_context_from_plan(
     const uint32_t *canonical_boundary_marker)
 {
     fem_memory_trace_phase("builder:enter");
+    bool release_free_heap_after_setup = true;
+    if (!resolve_fem_malloc_trim_enabled(
+            std::getenv(kFemMallocTrimEnv), release_free_heap_after_setup, error)) {
+        return false;
+    }
     if (!initialize_base_plan_fields(ctx, plan, error)) {
         return false;
     }
@@ -217,7 +223,10 @@ bool build_context_from_plan(
         return false;
     }
     fem_memory_trace_phase("builder:done");
-    fem_malloc_trim_checkpoint("setup", FemMallocTrimPolicy::setup);
+    if (release_free_heap_after_setup) {
+        // Freed setup temporaries stay resident in glibc arenas until trimmed.
+        fem_release_free_heap("setup");
+    }
     return true;
 }
 

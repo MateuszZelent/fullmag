@@ -1,12 +1,14 @@
 #pragma once
 
 /*
- * FEM host-memory trace source contract (diagnostic, off by default).
+ * FEM host-memory trace and heap-release source contract.
  *
  * This header owns the environment-gated host-memory trace that attributes
- * native FEM backend RSS to named setup phases. It does not own solver state,
- * numerical policy, solver-profiler phases, or allocation behavior. With every
- * variable below unset, each call costs one cached environment check.
+ * native FEM backend RSS to named setup phases (diagnostic, off by default),
+ * and the release of freed heap pages at the end of backend creation (on by
+ * default). It does not own solver state, numerical policy, solver-profiler
+ * phases, or allocation behavior. With the trace off, each trace call costs
+ * one cached environment check.
  *
  * FULLMAG_FEM_MEMORY_TRACE=1    one stderr line per phase: wall-clock and
  *                               monotonic time, VmRSS, VmHWM, RssAnon, RssFile.
@@ -16,10 +18,13 @@
  *                               arenas hold from the system, and mmapped chunk
  *                               bytes. malloc_info() walks every free chunk, so
  *                               level 2 slows setup when many chunks are free.
- * FULLMAG_FEM_MALLOC_TRIM=setup      malloc_trim(0) once at the end of backend
- *                                     creation, traced before and after.
- * FULLMAG_FEM_MALLOC_TRIM=operators  also right after the GPU Poisson operators
- *                                     are uploaded, before linear-solver setup.
+ *
+ * Setup temporaries freed by glibc stay resident in the thread arena of the
+ * setup thread. malloc_trim(0) at the end of backend creation returns those
+ * pages; nothing reads them. It runs on glibc builds by default.
+ * FULLMAG_FEM_MALLOC_TRIM=off   skips it, for diagnosis. Unset, empty, or "on"
+ *                               keeps the default; any other value fails
+ *                               backend creation.
  */
 
 #include <chrono>
@@ -53,28 +58,26 @@ inline int fem_memory_trace_level()
     return level;
 }
 
-enum class FemMallocTrimPolicy : int {
-    off = 0,
-    setup = 1,
-    operators = 2,
-};
+inline constexpr const char *kFemMallocTrimEnv = "FULLMAG_FEM_MALLOC_TRIM";
 
-inline FemMallocTrimPolicy fem_malloc_trim_policy()
+// Unset, empty, or "on" keeps the default heap release; "off" disables it.
+// Any other value is an error, so a typo cannot silently change behavior.
+inline bool resolve_fem_malloc_trim_enabled(
+    const char *raw,
+    bool &enabled,
+    std::string &error)
 {
-    static const FemMallocTrimPolicy policy = [] {
-        const char *raw = std::getenv("FULLMAG_FEM_MALLOC_TRIM");
-        if (raw == nullptr) {
-            return FemMallocTrimPolicy::off;
-        }
-        if (std::strcmp(raw, "setup") == 0 || std::strcmp(raw, "1") == 0) {
-            return FemMallocTrimPolicy::setup;
-        }
-        if (std::strcmp(raw, "operators") == 0 || std::strcmp(raw, "2") == 0) {
-            return FemMallocTrimPolicy::operators;
-        }
-        return FemMallocTrimPolicy::off;
-    }();
-    return policy;
+    enabled = true;
+    if (raw == nullptr || *raw == '\0' || std::strcmp(raw, "on") == 0) {
+        return true;
+    }
+    if (std::strcmp(raw, "off") == 0) {
+        enabled = false;
+        return true;
+    }
+    error = std::string(kFemMallocTrimEnv) + " must be unset, 'on', or 'off', got '" +
+        raw + "'";
+    return false;
 }
 
 struct FemProcessMemorySample {
@@ -248,39 +251,40 @@ inline void fem_memory_trace_values(
     std::fflush(stderr);
 }
 
-// Diagnostic experiment only: returns free heap pages to the kernel so the
-// orchestrator can measure how much of the RSS is freed-but-retained memory.
-inline void fem_malloc_trim_checkpoint(const char *where, FemMallocTrimPolicy minimum)
+// Returns the free heap pages that setup temporaries left behind (glibc keeps
+// them otherwise, and nothing reads them). Silent unless the memory trace is
+// on; then it adds one line with the released bytes. No-op without glibc.
+inline void fem_release_free_heap(const char *where)
 {
-    const FemMallocTrimPolicy policy = fem_malloc_trim_policy();
-    if (policy == FemMallocTrimPolicy::off ||
-        static_cast<int>(policy) < static_cast<int>(minimum)) {
+#if defined(__GLIBC__)
+    const bool traced = fem_memory_trace_level() > 0;
+    unsigned long long rss_before_kib = 0;
+    if (traced) {
+        fem_memory_trace_phase((std::string("malloc_trim:") + where + ":before").c_str());
+        rss_before_kib = fem_process_memory_sample().rss_kib;
+    }
+    const auto started = std::chrono::steady_clock::now();
+    malloc_trim(0);
+    if (!traced) {
         return;
     }
-#if defined(__GLIBC__)
-    const std::string before = std::string("malloc_trim:") + where + ":before";
-    fem_memory_trace_emit(before.c_str(), true);
-    const auto started = std::chrono::steady_clock::now();
-    const int released = malloc_trim(0);
     const double elapsed_ms =
         static_cast<double>(std::chrono::duration_cast<std::chrono::microseconds>(
                                 std::chrono::steady_clock::now() - started)
                                 .count()) /
         1000.0;
+    const unsigned long long rss_after_kib = fem_process_memory_sample().rss_kib;
+    const unsigned long long released_bytes =
+        rss_before_kib > rss_after_kib ? (rss_before_kib - rss_after_kib) * 1024ull : 0ull;
     std::fprintf(
         stderr,
-        "[fullmag_fem][mem] malloc_trim where=%s released=%d elapsed_ms=%.1f\n",
+        "[fullmag_fem][mem] malloc_trim where=%s released_bytes=%llu elapsed_ms=%.1f\n",
         where,
-        released,
+        released_bytes,
         elapsed_ms);
-    const std::string after = std::string("malloc_trim:") + where + ":after";
-    fem_memory_trace_emit(after.c_str(), true);
+    fem_memory_trace_phase((std::string("malloc_trim:") + where + ":after").c_str());
 #else
-    std::fprintf(
-        stderr,
-        "[fullmag_fem][mem] malloc_trim where=%s unavailable=non_glibc\n",
-        where);
-    std::fflush(stderr);
+    (void)where;
 #endif
 }
 

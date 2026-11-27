@@ -165,7 +165,6 @@ bool gpu_demag_poisson_initialize(Context &ctx, std::string &error)
         return false;
     }
     fem_memory_trace_phase("gpu_demag:operators_uploaded");
-    fem_malloc_trim_checkpoint("operators", FemMallocTrimPolicy::operators);
 
     if (!initialize_demag_poisson_hypre_device_solver(ctx, *workspace, error)) {
         destroy_demag_poisson_operators(*workspace);
