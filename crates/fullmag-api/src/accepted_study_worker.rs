@@ -70,7 +70,8 @@ const WORKER_EXECUTION_COMPLETED_RECEIPT: &str = "worker_execution_completed.v1.
 // Live observation channel (accepted worker -> current-live projector).
 //
 // The accepted worker is a separate process. It publishes a bounded,
-// overwritten observation sidecar in its private attempt directory; the API
+// overwritten observation sidecar in its private attempt directory. A second
+// header retains the latest payload with derived fields through M-only updates; the API
 // projector reads that sidecar for a `Running` task and turns it into the
 // ordinary current-live resource revisions. The sidecar is not a durable
 // output: it is not CAS-pinned and never replaces the final accepted state.
@@ -83,6 +84,7 @@ const WORKER_EXECUTION_COMPLETED_RECEIPT: &str = "worker_execution_completed.v1.
 // it receives and at most one scalar-only header per
 // `ACCEPTED_LIVE_SCALAR_MIN_INTERVAL`.
 pub(crate) const ACCEPTED_LIVE_OBSERVATION_FILE: &str = "live_observation.v1.json";
+pub(crate) const ACCEPTED_LIVE_FIELDS_FILE: &str = "live_fields.v1.json";
 pub(crate) const ACCEPTED_LIVE_OBSERVATION_SCHEMA: &str = "fullmag.accepted_live_observation.v1";
 const ACCEPTED_LIVE_MAGNETIZATION_PREFIX: &str = "live_observation_m.";
 const ACCEPTED_LIVE_MAGNETIZATION_SUFFIX: &str = ".f64le";
@@ -257,6 +259,7 @@ pub(crate) struct AcceptedLiveObservationWriter {
     magnetization_sequence: u64,
     last_scalar_write: Option<Instant>,
     current_magnetization: Option<AcceptedLiveMagnetizationRef>,
+    retained_field_payload: Option<String>,
     recent_clock: std::collections::VecDeque<(u64, f64, f64)>,
     reported_failure: bool,
     terminal_spool: Option<crate::accepted_observation_spool::TerminalObservationSpool>,
@@ -300,8 +303,8 @@ impl AcceptedLiveObservationWriter {
             ownership_epoch: accepted_step.claim.ownership_epoch.value(),
             realization,
             magnetization_domain,
-            // Two live payloads may coexist during replacement; keep both well
-            // inside the attempt storage budget reserved for real outputs.
+            // Keep the current M, the retained field payload and a staged
+            // replacement well inside the attempt budget for durable outputs.
             max_magnetization_bytes: (accepted_step.claim.lease.budget.storage_bytes / 8)
                 .min(accepted_step.claim.lease.budget.memory_bytes / 8)
                 .min(ACCEPTED_LIVE_MAX_FIELD_BYTES),
@@ -309,6 +312,7 @@ impl AcceptedLiveObservationWriter {
             magnetization_sequence: 0,
             last_scalar_write: None,
             current_magnetization: None,
+            retained_field_payload: None,
             recent_clock: std::collections::VecDeque::new(),
             reported_failure: false,
             terminal_spool: None,
@@ -407,9 +411,7 @@ impl AcceptedLiveObservationWriter {
             match self.write_header(&header_stats) {
                 Ok(()) => {
                     if let Some(previous) = previous {
-                        let _ = fs::remove_file(
-                            self.attempt_output_dir.join(previous.file_name),
-                        );
+                        self.remove_unreferenced_payload(&previous.file_name);
                     }
                     self.last_scalar_write = Some(now);
                     self.report_failure(&error);
@@ -440,9 +442,7 @@ impl AcceptedLiveObservationWriter {
             match self.write_header(&header_stats) {
                 Ok(()) => {
                     if let Some(previous) = rollback_magnetization {
-                        let _ = fs::remove_file(
-                            self.attempt_output_dir.join(previous.file_name),
-                        );
+                        self.remove_unreferenced_payload(&previous.file_name);
                     }
                     self.last_scalar_write = Some(now);
                     self.report_failure(&error);
@@ -458,8 +458,15 @@ impl AcceptedLiveObservationWriter {
         }
         self.last_scalar_write = Some(now);
         if let Some(previous) = previous_magnetization {
-            // Best effort: the header no longer references this payload.
-            let _ = fs::remove_file(self.attempt_output_dir.join(previous.file_name));
+            self.remove_unreferenced_payload(&previous.file_name);
+        }
+    }
+
+    fn remove_unreferenced_payload(&self, file_name: &str) {
+        if self.retained_field_payload.as_deref() != Some(file_name)
+            && self.current_magnetization.as_ref().is_none_or(|reference| reference.file_name != file_name)
+        {
+            let _ = fs::remove_file(self.attempt_output_dir.join(file_name));
         }
     }
 
@@ -481,8 +488,12 @@ impl AcceptedLiveObservationWriter {
         if !kept {
             let _ = fs::remove_file(self.attempt_output_dir.join(ACCEPTED_LIVE_OBSERVATION_FILE));
         }
+        let _ = fs::remove_file(self.attempt_output_dir.join(ACCEPTED_LIVE_FIELDS_FILE));
+        if let Some(retained) = self.retained_field_payload.take() {
+            self.remove_unreferenced_payload(&retained);
+        }
         if let Some(reference) = payload {
-            let _ = fs::remove_file(self.attempt_output_dir.join(reference.file_name));
+            self.remove_unreferenced_payload(&reference.file_name);
         }
         self.live_demand.finish();
     }
@@ -656,6 +667,21 @@ impl AcceptedLiveObservationWriter {
         }
         write_live_file_atomically(&self.attempt_output_dir, ACCEPTED_LIVE_OBSERVATION_FILE, &bytes)?;
         self.sequence = sequence;
+        if let Some(reference) = header.magnetization.as_ref().filter(|reference| {
+            !reference.fields.is_empty()
+                && self.retained_field_payload.as_deref() != Some(reference.file_name.as_str())
+        }) {
+            // The two headers reference the same binary. Only the latest
+            // field-bearing payload remains pinned after a newer M-only frame.
+            match write_live_file_atomically(&self.attempt_output_dir, ACCEPTED_LIVE_FIELDS_FILE, &bytes) {
+                Ok(()) => {
+                    if let Some(previous) = self.retained_field_payload.replace(reference.file_name.clone()) {
+                        self.remove_unreferenced_payload(&previous);
+                    }
+                }
+                Err(error) => self.report_failure(&error),
+            }
+        }
         Ok(())
     }
 
@@ -884,6 +910,39 @@ pub(crate) fn read_accepted_live_observation(
     ownership_epoch: u64,
     known_magnetization_sequence: Option<u64>,
 ) -> Result<Option<AcceptedLiveObservation>> {
+    read_live_observation_file(
+        store_root, run_id, task_id, step_id, attempt_id, ownership_epoch,
+        known_magnetization_sequence, ACCEPTED_LIVE_OBSERVATION_FILE,
+    )
+}
+
+pub(crate) fn read_retained_accepted_live_fields(
+    store_root: &Path,
+    run_id: &str,
+    task_id: &str,
+    step_id: &str,
+    attempt_id: &str,
+    ownership_epoch: u64,
+    known_field_sequence: Option<u64>,
+) -> Result<Option<AcceptedLiveObservation>> {
+    let observation = read_live_observation_file(
+        store_root, run_id, task_id, step_id, attempt_id, ownership_epoch,
+        known_field_sequence, ACCEPTED_LIVE_FIELDS_FILE,
+    )?;
+    Ok(observation.filter(|observation| !observation.fields.is_empty()))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn read_live_observation_file(
+    store_root: &Path,
+    run_id: &str,
+    task_id: &str,
+    step_id: &str,
+    attempt_id: &str,
+    ownership_epoch: u64,
+    known_magnetization_sequence: Option<u64>,
+    header_file_name: &str,
+) -> Result<Option<AcceptedLiveObservation>> {
     for value in [run_id, task_id, attempt_id] {
         fullmag_session::repository_path::validate_store_id(value)
             .context("accepted live observation identity is invalid")?;
@@ -895,14 +954,14 @@ pub(crate) fn read_accepted_live_observation(
         .join(task_id)
         .join(attempt_id)
         .join(format!("epoch-{ownership_epoch}"));
-    match fs::symlink_metadata(attempt_dir.join(ACCEPTED_LIVE_OBSERVATION_FILE)) {
+    match fs::symlink_metadata(attempt_dir.join(header_file_name)) {
         Ok(_) => {}
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(error) => return Err(error).context("inspect accepted live observation"),
     }
     let header_bytes = match read_explicit_runner_artifact(
         &attempt_dir,
-        ACCEPTED_LIVE_OBSERVATION_FILE,
+        header_file_name,
         ACCEPTED_LIVE_HEADER_MAX_BYTES,
     ) {
         Ok(bytes) => bytes,
@@ -921,6 +980,14 @@ pub(crate) fn read_accepted_live_observation(
         bail!("accepted live observation identity differs from its task attempt");
     }
     accepted_antenna_progress::validate_header_payload(&header)?;
+    if header_file_name == ACCEPTED_LIVE_FIELDS_FILE
+        && header.magnetization.as_ref().is_none_or(|reference| {
+            reference.fields.is_empty()
+                || known_magnetization_sequence.is_some_and(|known| reference.sequence <= known)
+        })
+    {
+        return Ok(None);
+    }
     if let Some(reference) = header.magnetization.as_mut() {
         accepted_live_layout_mask::hydrate_reference_layout(&attempt_dir, reference)?;
     }

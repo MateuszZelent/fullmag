@@ -114,6 +114,7 @@ impl LiveFixture {
             magnetization_sequence: 1,
             last_scalar_write: None,
             current_magnetization: Some(reference),
+            retained_field_payload: None,
             recent_clock: VecDeque::new(),
             reported_failure: false,
             terminal_spool: None,
@@ -392,6 +393,74 @@ fn small_fem_and_legacy_fdm_inline_layouts_remain_unchanged() {
     assert_eq!(fdm_reference.layout, fdm_layout);
     assert_eq!(fdm_reference.space_fingerprint, fdm_fingerprint);
     assert_eq!(fdm_read.magnetization_values, Some(fdm.magnetization));
+}
+
+#[test]
+fn magnetization_only_updates_keep_the_last_field_payload_until_finish() {
+    let grid = [2, 2, 1];
+    let count = 4;
+    let layout = json!({"backend": "fdm", "grid_cells": grid});
+    let fingerprint = fullmag_application::study_state_layout_sha256(&layout).unwrap();
+    let mut fixture = LiveFixture::with_layout(layout.clone(), fingerprint.clone(), count, "fdm_gpu", None);
+    fixture.writer.magnetization_domain = Some(super::AcceptedLiveMagnetizationDomain {
+        layout: layout.clone(), space_fingerprint: fingerprint, sample_count: count,
+        full_generation_bytes: (count * 3 * 8 * 3) as u64,
+    });
+
+    let mut payload = encode_magnetization(&fixture.magnetization);
+    let reference = fixture.writer.current_magnetization.as_mut().unwrap();
+    for (quantity_id, value) in [("H_demag", 1.25_f64), ("H_ex", -2.5)] {
+        reference.fields.push(super::AcceptedLiveFieldRef {
+            quantity_id: quantity_id.into(), n_comp: 3,
+            value_offset: (payload.len() / 8) as u64, value_count: (count * 3) as u64,
+            spatial_kind: None,
+        });
+        for _ in 0..count * 3 {
+            payload.extend_from_slice(&value.to_le_bytes());
+        }
+    }
+    reference.content_sha256 = fullmag_application::study_artifact_content_sha256(&payload);
+    let field_payload = fixture.attempt_dir.join(&reference.file_name);
+    write_live_file_atomically(&fixture.attempt_dir, &reference.file_name, &payload).unwrap();
+    fixture.writer.write_header(&fixture.stats).unwrap();
+
+    for step in [43, 44] {
+        let mut update = observation_step(StepStats {
+            step, time: step as f64 * 1.0e-13, ..fixture.stats.clone()
+        });
+        update.grid = grid;
+        update.magnetization = Some(fixture.magnetization.iter().flatten().copied().collect());
+        update.magnetization_carrier = Some(fullmag_runner::LiveMagnetizationCarrier {
+            layout: layout.clone(),
+            source_clock: fullmag_quantities::ObservationClock {
+                accepted_step: step, time_seconds: update.stats.time, dt_seconds: Some(update.stats.dt),
+            },
+            fem_local_node_map: None,
+        });
+        fixture.writer.observe(&update);
+    }
+
+    let latest = fixture.read(None).unwrap();
+    let latest_reference = latest.header.magnetization.unwrap();
+    assert_eq!(latest_reference.source_step, 44);
+    assert!(latest.fields.is_empty());
+    assert!(!fixture.attempt_dir.join("live_observation_m.2.f64le").exists());
+    let retained = super::read_retained_accepted_live_fields(
+        fixture.root.path(), RUN_ID, TASK_ID, STEP_ID, ATTEMPT_ID, 1, None,
+    ).unwrap().unwrap();
+    assert_eq!(retained.header.magnetization.unwrap().source_step, 42);
+    assert_eq!(retained.fields.iter().map(|field| field.quantity_id.as_str()).collect::<Vec<_>>(),
+        ["H_demag", "H_ex"]);
+    assert_eq!(retained.fields[0].values[0], 1.25);
+    assert!(field_payload.exists());
+    assert!(super::read_retained_accepted_live_fields(
+        fixture.root.path(), RUN_ID, TASK_ID, STEP_ID, ATTEMPT_ID, 1, Some(1),
+    ).unwrap().is_none());
+
+    fixture.writer.finish();
+    assert!(!field_payload.exists());
+    assert!(!fixture.attempt_dir.join(latest_reference.file_name).exists());
+    assert!(!fixture.attempt_dir.join(super::ACCEPTED_LIVE_FIELDS_FILE).exists());
 }
 
 #[test]
