@@ -2871,6 +2871,185 @@ void mixed_p1_gpu_rhs_and_magnetic_recovery_match_cpu_mfem() {
     fullmag::fem::context_destroy_poisson(ctx);
 }
 
+template <typename T>
+bool same_bytes(const std::vector<T> &left, const std::vector<T> &right) {
+    return left.size() == right.size() &&
+        (left.empty() ||
+         std::memcmp(left.data(), right.data(), left.size() * sizeof(T)) == 0);
+}
+
+bool same_scalar_csr_bytes(
+    const fullmag::fem::DeviceCsrScalar &left,
+    const fullmag::fem::DeviceCsrScalar &right) {
+    return left.rows == right.rows && left.nnz == right.nnz &&
+        same_bytes(left.row_offsets, right.row_offsets) &&
+        same_bytes(left.col_indices, right.col_indices) &&
+        same_bytes(left.values, right.values);
+}
+
+bool same_operator_build_bytes(
+    const fullmag::fem::GpuDemagPoissonWorkspace &left,
+    const fullmag::fem::GpuDemagPoissonWorkspace &right) {
+    return left.rhs.rows == right.rhs.rows && left.rhs.nnz == right.rhs.nnz &&
+        same_bytes(left.rhs.row_offsets, right.rhs.row_offsets) &&
+        same_bytes(left.rhs.col_indices, right.rhs.col_indices) &&
+        same_bytes(left.rhs.values_x, right.rhs.values_x) &&
+        same_bytes(left.rhs.values_y, right.rhs.values_y) &&
+        same_bytes(left.rhs.values_z, right.rhs.values_z) &&
+        same_scalar_csr_bytes(left.recovery_x, right.recovery_x) &&
+        same_scalar_csr_bytes(left.recovery_y, right.recovery_y) &&
+        same_scalar_csr_bytes(left.recovery_z, right.recovery_z) &&
+        same_scalar_csr_bytes(left.visual_recovery_x, right.visual_recovery_x) &&
+        same_scalar_csr_bytes(left.visual_recovery_y, right.visual_recovery_y) &&
+        same_scalar_csr_bytes(left.visual_recovery_z, right.visual_recovery_z) &&
+        same_scalar_csr_bytes(left.robin_boundary_mass, right.robin_boundary_mass) &&
+        same_bytes(left.ess_tdofs, right.ess_tdofs) &&
+        left.recovery_mode == right.recovery_mode &&
+        left.visual_recovery_mode == right.visual_recovery_mode &&
+        left.recovery_xyz_pattern_digest == right.recovery_xyz_pattern_digest &&
+        left.visual_recovery_xyz_pattern_digest == right.visual_recovery_xyz_pattern_digest &&
+        left.operator_fingerprint == right.operator_fingerprint &&
+        left.operator_build_count == right.operator_build_count;
+}
+
+// Builds the mixed operators through the row-map and the CSR assembly and
+// requires the same outcome: the same error, or byte-identical host arrays,
+// recovery modes, pattern digests, and fingerprint.
+void check_operator_assembly_paths_match(
+    fullmag::fem::Context &ctx,
+    bool require_success,
+    const char *label) {
+    std::string row_map_error;
+    fullmag::fem::GpuDemagPoissonWorkspace row_maps;
+    const bool row_maps_built = fullmag::fem::build_mixed_demag_operators_with_path(
+        ctx, row_maps, fullmag::fem::GpuDemagOperatorBuildPath::RowMaps, row_map_error);
+    std::string csr_error;
+    fullmag::fem::GpuDemagPoissonWorkspace csr;
+    const bool csr_built = fullmag::fem::build_mixed_demag_operators_with_path(
+        ctx, csr, fullmag::fem::GpuDemagOperatorBuildPath::Csr, csr_error);
+    if (require_success) {
+        check_result(row_maps_built, row_map_error, label);
+        check_result(csr_built, csr_error, label);
+    }
+    check(row_maps_built == csr_built && row_map_error == csr_error,
+          "CSR and row-map operator assembly must report the same outcome");
+    if (!row_maps_built) {
+        return;
+    }
+    check(!require_success ||
+              (row_maps.rhs.nnz > 0u && row_maps.recovery_x.nnz > 0u &&
+               row_maps.visual_recovery_x.nnz > row_maps.recovery_x.nnz),
+          "operator assembly A/B fixture must cover magnetic and air elements");
+    check(same_operator_build_bytes(csr, row_maps),
+          "CSR operator assembly must reproduce the row-map arrays byte for byte");
+}
+
+mfem::Mesh refined_all_tet_airbox_operator_mesh() {
+    mfem::Mesh mesh = mfem::Mesh::MakeCartesian3D(
+        4, 3, 2, mfem::Element::TETRAHEDRON, 1.0, 0.75, 0.5);
+    for (int element = 0; element < mesh.GetNE(); ++element) {
+        mfem::Array<int> vertices;
+        mesh.GetElementVertices(element, vertices);
+        double centroid[3] = {0.0, 0.0, 0.0};
+        for (int vertex : vertices) {
+            const double *x = mesh.GetVertex(vertex);
+            for (int axis = 0; axis < 3; ++axis) {
+                centroid[axis] += x[axis];
+            }
+        }
+        for (double &coordinate : centroid) {
+            coordinate /= static_cast<double>(vertices.Size());
+        }
+        const bool magnetic = centroid[0] > 0.25 && centroid[0] < 0.75 &&
+            centroid[1] > 0.2 && centroid[1] < 0.55;
+        mesh.GetElement(element)->SetAttribute(magnetic ? 7 : 1);
+    }
+    for (int boundary = 0; boundary < mesh.GetNBE(); ++boundary) {
+        mesh.GetBdrElement(boundary)->SetAttribute(9);
+    }
+    mesh.SetAttributes();
+    return mesh;
+}
+
+void mixed_operator_csr_assembly_matches_row_maps_bytewise() {
+    {
+        mfem::Mesh mesh = mixed_prism_pyramid_tet_poisson_mesh();
+        mfem::H1_FECollection state_fec(1, 3);
+        mfem::FiniteElementSpace state_fes(&mesh, &state_fec);
+        fullmag::fem::Context ctx;
+        mixed_poisson_context(ctx, mesh, state_fes, {1u, 0u, 0u});
+        std::string error;
+        check_result(fullmag::fem::context_initialize_poisson(ctx, error), error,
+                     "mixed P1 operator A/B Poisson initialization");
+        check(ctx.poisson_demag.potential_order == 1,
+              "mixed operator A/B fixture must resolve the P1 potential space");
+        check_operator_assembly_paths_match(ctx, true, "mixed P1 operator A/B build");
+        fullmag::fem::context_destroy_poisson(ctx);
+    }
+    {
+        mfem::Mesh mesh = refined_all_tet_airbox_operator_mesh();
+        mfem::H1_FECollection state_fec(1, 3);
+        mfem::FiniteElementSpace state_fes(&mesh, &state_fec);
+        fullmag::fem::Context ctx;
+        mixed_poisson_context(ctx, mesh, state_fes, element_mask_for_attribute(mesh, 7));
+        std::string error;
+        check_result(fullmag::fem::context_initialize_poisson(ctx, error), error,
+                     "all-tet P2 operator A/B Poisson initialization");
+        check(ctx.poisson_demag.potential_order == 2,
+              "all-tet operator A/B fixture must resolve the P2 potential space");
+        check_operator_assembly_paths_match(ctx, true, "all-tet P2 operator A/B build");
+        ctx.material_fields.Ms_field.resize(static_cast<size_t>(state_fes.GetNDofs()));
+        for (int node = 0; node < state_fes.GetNDofs(); ++node) {
+            const double *x = mesh.GetVertex(node);
+            ctx.material_fields.Ms_field[static_cast<size_t>(node)] =
+                0.8 + 0.3 * x[0] - 0.2 * x[1] + 0.1 * x[2];
+        }
+        check_operator_assembly_paths_match(ctx, true, "nodal-Ms all-tet P2 operator A/B build");
+        ctx.material_fields.Ms_field.clear();
+        ctx.material_fields.material.saturation_magnetisation = std::copysign(0.0, -1.0);
+        check_operator_assembly_paths_match(ctx, true, "signed-zero-Ms all-tet P2 operator A/B build");
+        ctx.material_fields.material.saturation_magnetisation =
+            std::numeric_limits<double>::quiet_NaN();
+        check_operator_assembly_paths_match(ctx, false, "non-finite-Ms all-tet P2 operator A/B build");
+        ctx.material_fields.material.saturation_magnetisation = 1.0;
+        fullmag::fem::context_destroy_poisson(ctx);
+    }
+    {
+        // Periodic node classes always take the row-map assembly.
+        mfem::Mesh mesh = mixed_prism_pyramid_tet_poisson_mesh(true);
+        mfem::H1_FECollection state_fec(1, 3);
+        mfem::FiniteElementSpace state_fes(&mesh, &state_fec);
+        fullmag::fem::Context ctx;
+        mixed_poisson_context(ctx, mesh, state_fes, {1u, 0u, 0u});
+        ctx.mesh.periodic_node_pairs = {0u, 7u};
+        ctx.mesh.periodic_reduced_node = {0u, 1u, 2u, 3u, 4u, 5u, 6u, 0u};
+        ctx.mesh.periodic_representative_nodes = {0u, 1u, 2u, 3u, 4u, 5u, 6u};
+        ctx.mesh.periodic_reduced_node_count = 7u;
+        std::string error;
+        check_result(fullmag::fem::context_initialize_poisson(ctx, error), error,
+                     "periodic operator A/B Poisson initialization");
+        check_operator_assembly_paths_match(ctx, false, "periodic operator A/B build");
+        fullmag::fem::context_destroy_poisson(ctx);
+    }
+
+    fullmag::fem::GpuDemagOperatorBuildPath path =
+        fullmag::fem::GpuDemagOperatorBuildPath::RowMaps;
+    std::string error;
+    check(fullmag::fem::resolve_gpu_demag_operator_build_path(nullptr, path, error) &&
+              path == fullmag::fem::GpuDemagOperatorBuildPath::Csr &&
+              fullmag::fem::resolve_gpu_demag_operator_build_path("", path, error) &&
+              path == fullmag::fem::GpuDemagOperatorBuildPath::Csr &&
+              fullmag::fem::resolve_gpu_demag_operator_build_path("csr", path, error) &&
+              path == fullmag::fem::GpuDemagOperatorBuildPath::Csr,
+          "unset, empty, and csr operator build selectors must choose the CSR assembly");
+    check(fullmag::fem::resolve_gpu_demag_operator_build_path("maps", path, error) &&
+              path == fullmag::fem::GpuDemagOperatorBuildPath::RowMaps,
+          "the maps operator build selector must choose the row-map assembly");
+    check(!fullmag::fem::resolve_gpu_demag_operator_build_path("map", path, error) &&
+              error.find(fullmag::fem::kDemagOperatorBuildEnv) != std::string::npos,
+          "a malformed operator build selector must fail closed and name the variable");
+}
+
 #if FULLMAG_HAS_CUDA_RUNTIME && defined(MFEM_USE_MPI)
 std::vector<double> smooth_magnetization(mfem::Mesh &mesh, double direction_scale);
 
@@ -4951,6 +5130,7 @@ int main(int argc, char **argv) {
     run_contract_case("airbox_dirichlet_and_robin_match_manufactured_slab_oracle", airbox_dirichlet_and_robin_match_manufactured_slab_oracle);
     run_contract_case("mixed_poisson_rhs_is_magnetic_only_with_air_present", mixed_poisson_rhs_is_magnetic_only_with_air_present);
     run_contract_case("mixed_p1_gpu_rhs_and_magnetic_recovery_match_cpu_mfem", mixed_p1_gpu_rhs_and_magnetic_recovery_match_cpu_mfem);
+    run_contract_case("mixed_operator_csr_assembly_matches_row_maps_bytewise", mixed_operator_csr_assembly_matches_row_maps_bytewise);
     run_contract_case("mixed_poisson_uses_continuous_weak_flux_not_continuous_physical_hn", mixed_poisson_uses_continuous_weak_flux_not_continuous_physical_hn);
     run_contract_case("mixed_poisson_robin_mass_uses_outer_tri_and_quad_only", mixed_poisson_robin_mass_uses_outer_tri_and_quad_only);
     run_contract_case("mixed_poisson_energy_sign_and_directional_derivative", mixed_poisson_energy_sign_and_directional_derivative);

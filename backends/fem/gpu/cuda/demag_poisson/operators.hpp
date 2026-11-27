@@ -117,11 +117,36 @@ struct GpuDemagPoissonWorkspace {
     bool ready = false;
 };
 
+// Debug A/B switch for the element-loop assembly of the mixed operators.
+// Unset, empty, or "csr" selects the default two-pass CSR assembly; "maps"
+// selects the legacy std::map row assembly; any other value fails closed.
+// Both produce byte-identical arrays. Periodic node-class reduction always
+// uses the row-map assembly.
+inline constexpr const char *kDemagOperatorBuildEnv = "FULLMAG_FEM_DEMAG_OPERATOR_BUILD";
+
+enum class GpuDemagOperatorBuildPath : uint32_t {
+    Csr = 0,
+    RowMaps = 1,
+};
+
+bool resolve_gpu_demag_operator_build_path(
+    const char *env_value,
+    GpuDemagOperatorBuildPath &path,
+    std::string &error);
+
 // Builds P1-state/resolved-order-potential operators for nonperiodic Poisson
 // demag and retains the node-class-reduced P1/P1 operator for the periodic path.
+// Reads FULLMAG_FEM_DEMAG_OPERATOR_BUILD on every call.
 bool build_mixed_demag_operators(
     Context &ctx,
     GpuDemagPoissonWorkspace &workspace,
+    std::string &error);
+
+// Same build with an explicit assembly path, for A/B checks and tests.
+bool build_mixed_demag_operators_with_path(
+    Context &ctx,
+    GpuDemagPoissonWorkspace &workspace,
+    GpuDemagOperatorBuildPath requested_path,
     std::string &error);
 
 // Compatibility entrypoint used by existing GPU lifecycle callers.
