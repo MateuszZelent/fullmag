@@ -53,7 +53,7 @@ uint64_t host_csr_bytes(const DeviceCsrScalar &op)
         host_vector_bytes(op.values);
 }
 
-// Memory-trace diagnostic: host copies that stay in the workspace after upload.
+// Memory-trace diagnostic: sizes of the host CSR copies before the upload.
 void trace_demag_operator_sizes(const GpuDemagPoissonWorkspace &workspace)
 {
     if (fem_memory_trace_level() == 0) {
@@ -84,16 +84,14 @@ void trace_demag_operator_sizes(const GpuDemagPoissonWorkspace &workspace)
         phase, "host_robin_boundary_mass_csr_bytes", host_csr_bytes(workspace.robin_boundary_mass));
 }
 
-// Runs only after a completed device Poisson setup. From then on the GPU lane
-// reads the device operators, rows, nnz, essential DOFs, and the fingerprint;
-// the host CSR copies of the uploaded operators are dead weight.
-void release_host_copies_after_device_setup(Context &ctx)
+// Runs right after a successful upload. From then on nothing reads the host
+// CSR copies: the solver setup below reads poisson_bc_op (or the periodic
+// matrix); the stage compute and the provenance read the device operators,
+// rows, nnz, the essential DOFs, and the fingerprint, which the release keeps.
+// Freeing the copies here keeps them out of the Hypre/cuDSS setup peak.
+void release_host_copies_after_upload(GpuDemagPoissonWorkspace &workspace)
 {
-    GpuDemagPoissonWorkspace *workspace = workspace_ptr(ctx);
-    if (workspace == nullptr || !workspace->ready) {
-        return;
-    }
-    const uint64_t released_bytes = release_demag_poisson_operator_host_arrays(*workspace);
+    const uint64_t released_bytes = release_demag_poisson_operator_host_arrays(workspace);
     fem_memory_trace_phase("gpu_demag:host_operator_arrays_released");
     fem_memory_trace_stat(
         "gpu_demag:host_operator_arrays_released", "released_bytes", released_bytes);
@@ -162,6 +160,7 @@ bool gpu_demag_poisson_initialize(Context &ctx, std::string &error)
         return false;
     }
     fem_memory_trace_phase("gpu_demag:operators_uploaded");
+    release_host_copies_after_upload(*workspace);
 
     if (!initialize_demag_poisson_hypre_device_solver(ctx, *workspace, error)) {
         destroy_demag_poisson_operators(*workspace);
@@ -187,7 +186,6 @@ bool gpu_demag_poisson_initialize(Context &ctx, std::string &error)
     ctx.poisson_demag.gpu_workspace_ready = true;
     ctx.poisson_demag.gpu_workspace_device_bytes = workspace_device_bytes;
     ctx.gpu_state.device.lifecycle.device_bytes += workspace_device_bytes;
-    release_host_copies_after_device_setup(ctx);
     return true;
 #else
     (void)ctx;
