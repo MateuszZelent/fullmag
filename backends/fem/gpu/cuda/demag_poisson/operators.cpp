@@ -13,6 +13,7 @@
 #include "context.hpp"
 #include "core/fem_material_runtime.hpp"
 #include "fem_common.hpp"
+#include "fem_memory_trace.hpp"
 
 #include <algorithm>
 #include <array>
@@ -941,6 +942,7 @@ bool build_mixed_demag_operators(
             }
         }
     }
+    fem_memory_trace_phase("gpu_demag:row_maps_filled");
 
     if (periodic_node_class_reduction) {
         // The reduced-node map was validated against the P1 state rows above.
@@ -1129,6 +1131,7 @@ bool build_mixed_demag_operators(
         !fill_recovery(visual_z, workspace.visual_recovery_z, "demag visual recovery z")) {
         return false;
     }
+    fem_memory_trace_phase("gpu_demag:csr_filled");
 
     workspace.recovery_mode = shared_xyz_csr_pattern(
         workspace.recovery_x,

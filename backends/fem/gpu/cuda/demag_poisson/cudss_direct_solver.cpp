@@ -1,5 +1,7 @@
 #include "gpu/cuda/demag_poisson/cudss_direct_solver.hpp"
 
+#include "fem_memory_trace.hpp"
+
 #include <algorithm>
 #include <cctype>
 #include <cerrno>
@@ -412,6 +414,7 @@ AnalyzeStatus analyze_demag_cudss_system(
     if (!lower_triangle_csr(matrix, csr, error)) {
         return AnalyzeStatus::HardError;
     }
+    fem_memory_trace_phase("cudss:lower_csr_ready");
     const int64_t n = static_cast<int64_t>(csr.offsets.size()) - 1;
     const int64_t nnz = static_cast<int64_t>(csr.columns.size());
     out.stats.rows = n;
@@ -493,6 +496,10 @@ AnalyzeStatus analyze_demag_cudss_system(
         error += "; the factorization was not started";
         return AnalyzeStatus::MemoryEstimateUnavailable;
     }
+    fem_memory_trace_phase("cudss:analysis_done");
+    fem_memory_trace_values(
+        "cudss:analysis_done", "memory_estimates", memory_estimates,
+        sizeof(memory_estimates) / sizeof(memory_estimates[0]));
     out.stats.estimated_device_stable_bytes = memory_estimates[0];
     out.stats.estimated_device_peak_bytes = memory_estimates[1];
     if (out.stats.estimated_device_peak_bytes <= 0) {
@@ -546,6 +553,7 @@ bool factorize_analyzed_cudss_system(
         return false;
     }
     analyzed.stats.factorization_ms = milliseconds_since(phase_start);
+    fem_memory_trace_phase("cudss:factorization_done");
 
     size_t written = 0;
     int info = -1;

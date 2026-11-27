@@ -16,6 +16,7 @@
 #include "cpu/mfem/interactions/demag_poisson_rhs.hpp"
 #include "cpu/mfem/runtime/mfem_device.hpp"
 #include "fem_common.hpp"
+#include "fem_memory_trace.hpp"
 #include "gpu/cuda/demag_poisson/poisson.hpp"
 
 #if FULLMAG_HAS_MFEM_STACK
@@ -34,6 +35,7 @@ namespace {
 
 void debug_checkpoint(const char *stage)
 {
+    fem_memory_trace_phase(stage);
     static const bool enabled = debug_startup_env_enabled();
     if (!enabled) {
         return;
@@ -138,6 +140,19 @@ bool context_initialize_poisson(Context &ctx, std::string &error)
         poisson_bilinear->AddDomainIntegrator(new mfem::DiffusionIntegrator());
         poisson_bilinear->Assemble();
         poisson_bilinear->Finalize();
+        fem_memory_trace_phase("poisson:potential_matrix_assembled");
+        fem_memory_trace_stat(
+            "poisson:potential_matrix_assembled",
+            "potential_order",
+            static_cast<uint64_t>(potential_order));
+        fem_memory_trace_stat(
+            "poisson:potential_matrix_assembled",
+            "potential_rows",
+            static_cast<uint64_t>(potential_fes->GetTrueVSize()));
+        fem_memory_trace_stat(
+            "poisson:potential_matrix_assembled",
+            "potential_matrix_nnz",
+            static_cast<uint64_t>(poisson_bilinear->SpMat().NumNonZeroElems()));
 
         const bool use_device = mfem::Device::IsEnabled();
         auto *gf_potential = new mfem::GridFunction(potential_fes);
@@ -161,6 +176,7 @@ bool context_initialize_poisson(Context &ctx, std::string &error)
             rollback_setup();
             return false;
         }
+        fem_memory_trace_phase("poisson:boundary_operator_ready");
 
         if (!initialize_demag_periodic_poisson_reduction(ctx, error)) {
             rollback_setup();

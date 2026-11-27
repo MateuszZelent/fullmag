@@ -24,6 +24,7 @@
 #include "cpu/mfem/runtime/mfem_host_access.hpp"
 #include "cpu/mfem/runtime/mfem_mesh_builder.hpp"
 #include "fem_common.hpp"
+#include "fem_memory_trace.hpp"
 #include "gpu/cuda/demag_fem_bem/fem_bem_dispatch.hpp"
 #include "gpu/cuda/transfer/snapshot_pool.hpp"
 
@@ -66,6 +67,7 @@ std::optional<int> selected_cuda_device_from_env()
 
 void debug_checkpoint(const char *stage)
 {
+    fem_memory_trace_phase(stage);
     static const bool enabled = debug_startup_env_enabled();
     if (!enabled) {
         return;

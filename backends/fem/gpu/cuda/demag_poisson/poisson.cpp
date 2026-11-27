@@ -10,6 +10,7 @@
 #include "gpu/cuda/demag_poisson/poisson.hpp"
 
 #include "context.hpp"
+#include "fem_memory_trace.hpp"
 #include "gpu/cuda/demag_fem_bem/fem_bem.hpp"
 #include "gpu/cuda/demag_poisson/demag_kernels.hpp"
 #include "gpu/cuda/demag_poisson/hypre_device_solver.hpp"
@@ -39,6 +40,51 @@ bool cuda_ok(cudaError_t rc, const char *operation, std::string &error)
 }
 #endif
 
+#if FULLMAG_HAS_CUDA_RUNTIME && FULLMAG_HAS_MFEM_STACK && defined(MFEM_USE_MPI)
+template <typename T>
+uint64_t host_vector_bytes(const std::vector<T> &values)
+{
+    return static_cast<uint64_t>(values.capacity()) * sizeof(T);
+}
+
+uint64_t host_csr_bytes(const DeviceCsrScalar &op)
+{
+    return host_vector_bytes(op.row_offsets) + host_vector_bytes(op.col_indices) +
+        host_vector_bytes(op.values);
+}
+
+// Memory-trace diagnostic: host copies that stay in the workspace after upload.
+void trace_demag_operator_sizes(const GpuDemagPoissonWorkspace &workspace)
+{
+    if (fem_memory_trace_level() == 0) {
+        return;
+    }
+    const char *phase = "gpu_demag:operators_built";
+    fem_memory_trace_stat(phase, "rhs_rows", workspace.rhs.rows);
+    fem_memory_trace_stat(phase, "rhs_nnz", workspace.rhs.nnz);
+    fem_memory_trace_stat(phase, "recovery_rows", workspace.recovery_x.rows);
+    fem_memory_trace_stat(phase, "recovery_nnz_per_component", workspace.recovery_x.nnz);
+    fem_memory_trace_stat(
+        phase, "visual_recovery_nnz_per_component", workspace.visual_recovery_x.nnz);
+    fem_memory_trace_stat(phase, "robin_boundary_mass_nnz", workspace.robin_boundary_mass.nnz);
+    const uint64_t rhs_bytes = host_vector_bytes(workspace.rhs.row_offsets) +
+        host_vector_bytes(workspace.rhs.col_indices) +
+        host_vector_bytes(workspace.rhs.values_x) +
+        host_vector_bytes(workspace.rhs.values_y) +
+        host_vector_bytes(workspace.rhs.values_z);
+    const uint64_t recovery_bytes = host_csr_bytes(workspace.recovery_x) +
+        host_csr_bytes(workspace.recovery_y) + host_csr_bytes(workspace.recovery_z);
+    const uint64_t visual_bytes = host_csr_bytes(workspace.visual_recovery_x) +
+        host_csr_bytes(workspace.visual_recovery_y) +
+        host_csr_bytes(workspace.visual_recovery_z);
+    fem_memory_trace_stat(phase, "host_rhs_csr_bytes", rhs_bytes);
+    fem_memory_trace_stat(phase, "host_recovery_csr_bytes", recovery_bytes);
+    fem_memory_trace_stat(phase, "host_visual_recovery_csr_bytes", visual_bytes);
+    fem_memory_trace_stat(
+        phase, "host_robin_boundary_mass_csr_bytes", host_csr_bytes(workspace.robin_boundary_mass));
+}
+#endif
+
 } // namespace
 
 bool gpu_demag_poisson_initialize(Context &ctx, std::string &error)
@@ -64,10 +110,13 @@ bool gpu_demag_poisson_initialize(Context &ctx, std::string &error)
         return false;
     }
 
+    fem_memory_trace_phase("gpu_demag:enter");
     auto workspace = std::make_unique<GpuDemagPoissonWorkspace>();
     if (!build_p1_demag_operators(ctx, *workspace, error)) {
         return false;
     }
+    fem_memory_trace_phase("gpu_demag:operators_built");
+    trace_demag_operator_sizes(*workspace);
     auto *potential_fes = static_cast<mfem::FiniteElementSpace *>(
         ctx.poisson_demag.potential_fes);
     if (potential_fes == nullptr ||
@@ -97,11 +146,14 @@ bool gpu_demag_poisson_initialize(Context &ctx, std::string &error)
         destroy_demag_poisson_operators(*workspace);
         return false;
     }
+    fem_memory_trace_phase("gpu_demag:operators_uploaded");
+    fem_malloc_trim_checkpoint("operators", FemMallocTrimPolicy::operators);
 
     if (!initialize_demag_poisson_hypre_device_solver(ctx, *workspace, error)) {
         destroy_demag_poisson_operators(*workspace);
         return false;
     }
+    fem_memory_trace_phase("gpu_demag:linear_solver_ready");
     if (!initialize_hypre_stream_interop(workspace->stream_interop, error)) {
         destroy_demag_poisson_operators(*workspace);
         return false;
