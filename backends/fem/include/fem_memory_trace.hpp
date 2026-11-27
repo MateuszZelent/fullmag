@@ -5,7 +5,7 @@
  *
  * This header owns the environment-gated host-memory trace that attributes
  * native FEM backend RSS to named setup phases (diagnostic, off by default),
- * and the release of freed heap pages at the end of backend creation (on by
+ * and the release of freed heap pages during backend creation (on by
  * default). It does not own solver state, numerical policy, solver-profiler
  * phases, or allocation behavior. With the trace off, each trace call costs
  * one cached environment check.
@@ -20,10 +20,12 @@
  *                               level 2 slows setup when many chunks are free.
  *
  * Setup temporaries freed by glibc stay resident in the thread arena of the
- * setup thread. malloc_trim(0) at the end of backend creation returns those
- * pages; nothing reads them. It runs on glibc builds by default.
- * FULLMAG_FEM_MALLOC_TRIM=off   skips it, for diagnosis. Unset, empty, or "on"
- *                               keeps the default; any other value fails
+ * setup thread. malloc_trim(0) returns those pages; nothing reads them. On
+ * glibc builds it runs by default at two points: on the device-Hypre GPU lane
+ * right after the demag operator upload, before the linear-solver setup that
+ * sets the setup memory peak, and at the end of backend creation.
+ * FULLMAG_FEM_MALLOC_TRIM=off   skips both, for diagnosis. Unset, empty, or
+ *                               "on" keeps the default; any other value fails
  *                               backend creation.
  */
 
@@ -286,6 +288,21 @@ inline void fem_release_free_heap(const char *where)
 #else
     (void)where;
 #endif
+}
+
+// fem_release_free_heap under the FULLMAG_FEM_MALLOC_TRIM policy, for setup
+// steps below the builder. The builder rejects an invalid value before setup
+// starts, so the error branch only matters for direct callers such as tests.
+inline bool fem_release_free_heap_if_enabled(const char *where, std::string &error)
+{
+    bool enabled = true;
+    if (!resolve_fem_malloc_trim_enabled(std::getenv(kFemMallocTrimEnv), enabled, error)) {
+        return false;
+    }
+    if (enabled) {
+        fem_release_free_heap(where);
+    }
+    return true;
 }
 
 } // namespace fullmag::fem

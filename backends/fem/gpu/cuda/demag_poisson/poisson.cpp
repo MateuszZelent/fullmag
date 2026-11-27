@@ -161,6 +161,12 @@ bool gpu_demag_poisson_initialize(Context &ctx, std::string &error)
     }
     fem_memory_trace_phase("gpu_demag:operators_uploaded");
     release_host_copies_after_upload(*workspace);
+    // Arrays below glibc's mmap threshold (all of them at 30k nodes) stay
+    // resident after free; return them before the solver setup peak.
+    if (!fem_release_free_heap_if_enabled("gpu_demag_upload", error)) {
+        destroy_demag_poisson_operators(*workspace);
+        return false;
+    }
 
     if (!initialize_demag_poisson_hypre_device_solver(ctx, *workspace, error)) {
         destroy_demag_poisson_operators(*workspace);
