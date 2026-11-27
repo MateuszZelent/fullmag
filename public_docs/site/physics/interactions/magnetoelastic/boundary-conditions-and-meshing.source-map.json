@@ -1,0 +1,181 @@
+{
+  "document": {
+    "reviewed_revision": "9dee602ba086f95b1ae7477f1b0ea69e2d9cef50",
+    "reviewed_at": "2026-11-26",
+    "path": "public_docs/site/physics/interactions/magnetoelastic/boundary-conditions-and-meshing.md",
+    "title": "Magnetoelastic boundary conditions and spatial meshing",
+    "interaction": "magnetoelastic"
+  },
+  "backend_matrix": [
+    {
+      "solver": "FDM",
+      "device": "CPU",
+      "status": "partial",
+      "reason": "Mechanical boundary conditions are represented in ProblemIR; Virieux/Lebedev supergrids, Schur+BDF2 viscous free surfaces, ABL, and ADE CFS-PML are specified in FullMag v2."
+    },
+    {
+      "solver": "FDM",
+      "device": "GPU",
+      "status": "partial",
+      "reason": "GPU-resident staggered/Lebedev halo, BC, and PML kernels are specified in FullMag v2 and not yet executed on master."
+    },
+    {
+      "solver": "FEM",
+      "device": "CPU",
+      "status": "partial",
+      "reason": "Prescribed-strain shared-domain mesh evaluation runs on FEM CPU; SubMesh extraction, FaceKey tagging, Tet10 B-bar, and Prism6 MITC6+EAS-1 are specified in FullMag v2."
+    },
+    {
+      "solver": "FEM",
+      "device": "GPU",
+      "status": "partial",
+      "reason": "Prescribed-strain CUDA strain upload runs on FEM GPU; GPU-assembled SubMesh boundary conditions and PML operators are specified in FullMag v2."
+    }
+  ],
+  "sources": [
+    {
+      "id": "py-mech-bc",
+      "path": "packages/fullmag-py/src/fullmag/model/mechanics.py",
+      "symbol": "class MechanicalBoundaryCondition",
+      "responsibility": "Own Python authoring and validation of mechanical boundary conditions."
+    },
+    {
+      "id": "ir-mech-bc",
+      "path": "crates/fullmag-ir/src/mechanics.rs",
+      "symbol": "MechanicalBoundaryConditionIR",
+      "responsibility": "Serialize canonical mechanical boundary conditions in ProblemIR."
+    },
+    {
+      "id": "ir-elastic-body",
+      "path": "crates/fullmag-ir/src/mechanics.rs",
+      "symbol": "ElasticBodyIR",
+      "responsibility": "Bind elastic domain geometries to elastic materials in ProblemIR."
+    },
+    {
+      "id": "plan-fem-mel",
+      "path": "crates/fullmag-plan/src/fem.rs",
+      "symbol": "resolve_fem_magnetoelastic_plan",
+      "responsibility": "Enforce fail-closed mechanics capability boundaries at planning time."
+    },
+    {
+      "id": "v2-bc-catalog",
+      "path": "public_docs/site/physics/interactions/magnetoelastic/boundary-conditions-and-meshing.md",
+      "symbol": "DOC-ANCHOR:magnetoelastic-v2-bc-catalog-contract",
+      "evidence_status": "planned_contract",
+      "responsibility": "Specify all 8 mechanical boundary conditions and natural total-traction semantics."
+    },
+    {
+      "id": "v2-absorbing-bc",
+      "path": "public_docs/site/physics/interactions/magnetoelastic/boundary-conditions-and-meshing.md",
+      "symbol": "DOC-ANCHOR:magnetoelastic-v2-absorbing-boundaries-contract",
+      "evidence_status": "planned_contract",
+      "responsibility": "Specify Rayleigh sponge ABL and ADE CFS-PML with anisotropic slowness stability guard."
+    },
+    {
+      "id": "v2-interfaces",
+      "path": "public_docs/site/physics/interactions/magnetoelastic/boundary-conditions-and-meshing.md",
+      "symbol": "DOC-ANCHOR:magnetoelastic-v2-interfaces-contract",
+      "evidence_status": "planned_contract",
+      "responsibility": "Specify multilayer FM/NM traction jump, acoustic impedance, and conditional FDM stabilizer."
+    },
+    {
+      "id": "v2-fredholm-rbm",
+      "path": "public_docs/site/physics/interactions/magnetoelastic/boundary-conditions-and-meshing.md",
+      "symbol": "DOC-ANCHOR:magnetoelastic-v2-fredholm-rbm-contract",
+      "evidence_status": "planned_contract",
+      "responsibility": "Specify multi-component Fredholm compatibility and rigid-body-mode projection."
+    },
+    {
+      "id": "v2-fdm-meshing",
+      "path": "public_docs/site/physics/interactions/magnetoelastic/boundary-conditions-and-meshing.md",
+      "symbol": "DOC-ANCHOR:magnetoelastic-v2-fdm-meshing-contract",
+      "evidence_status": "planned_contract",
+      "responsibility": "Specify Virieux staggered grid, 4-grid Lebedev scheme, and 2D plane-stress Schur condensation."
+    },
+    {
+      "id": "v2-fem-meshing",
+      "path": "public_docs/site/physics/interactions/magnetoelastic/boundary-conditions-and-meshing.md",
+      "symbol": "DOC-ANCHOR:magnetoelastic-v2-fem-meshing-contract",
+      "evidence_status": "planned_contract",
+      "responsibility": "Specify FEM SubMesh airbox stripping, FaceKey BC tags, Tet10 B-bar, and Prism6 MITC6+EAS-1."
+    }
+  ],
+  "symbols": [
+    { "id": "n_hat", "latex": "$\\hat{\\mathbf{n}}$", "meaning": "unit outward boundary or interface normal vector", "si_unit": "$1$" },
+    { "id": "u_bar", "latex": "$\\bar{\\mathbf{u}}$", "meaning": "prescribed Dirichlet boundary displacement", "si_unit": "$\\mathrm{m}$" },
+    { "id": "t_bar", "latex": "$\\bar{\\mathbf{t}}$", "meaning": "prescribed Neumann boundary traction vector", "si_unit": "$\\mathrm{Pa}$" },
+    { "id": "k_bloch", "latex": "$\\mathbf{k}_B$", "meaning": "Floquet–Bloch wave vector across periodic cell", "si_unit": "$\\mathrm{rad\\,m^{-1}}$" },
+    { "id": "L_abs", "latex": "$L_{\\mathrm{ABL}}, L_{\\mathrm{PML}}$", "meaning": "absorbing sponge or PML collar thickness", "si_unit": "$\\mathrm{m}$" },
+    { "id": "R0", "latex": "$R_0$", "meaning": "target normal-incidence absorbing-boundary reflection coefficient", "si_unit": "$1$" },
+    { "id": "s_pml", "latex": "$s_j(\\omega)$", "meaning": "complex-frequency-shifted PML coordinate stretch factor", "si_unit": "$1$" },
+    { "id": "pml_profiles", "latex": "$d_j, \\kappa_j, \\alpha_{\\mathrm{PML},j}$", "meaning": "CFS-PML damping, real stretch, and frequency-shift profiles", "si_unit": "$\\mathrm{s^{-1}}, 1, \\mathrm{s^{-1}}$" },
+    { "id": "Z_a", "latex": "$Z_a$", "meaning": "characteristic acoustic impedance ($\\rho c_a$)", "si_unit": "$\\mathrm{Pa\\,s\\,m^{-1}}$" },
+    { "id": "fresnel", "latex": "$R_u, T_{u,v}, T_\\sigma, T_P$", "meaning": "Fresnel acoustic displacement, stress, and power coefficients", "si_unit": "$1$" },
+    { "id": "theta_c", "latex": "$\\theta_c$", "meaning": "conditional FDM heterogeneous-interface anisotropy stabilizer", "si_unit": "$1$" },
+    { "id": "N_free", "latex": "$N_{\\mathrm{free\\_comp}}$", "meaning": "number of unconstrained disconnected elastic components", "si_unit": "$1$" },
+    { "id": "C_2D", "latex": "$\\mathbf{C}_V^{\\mathrm{2D}}$", "meaning": "plane-stress Schur-condensed $3\\times 3$ stiffness matrix", "si_unit": "$\\mathrm{Pa}$" },
+    { "id": "nu_eff", "latex": "$\\nu_{\\mathrm{eff}}$", "meaning": "Voigt–Reuss–Hill effective isotropic Poisson ratio", "si_unit": "$1$" },
+    { "id": "l_ex", "latex": "$\\ell_{\\mathrm{ex}}$", "meaning": "micromagnetic exchange length", "si_unit": "$\\mathrm{m}$" },
+    { "id": "lambda_min", "latex": "$\\lambda_{\\min}$", "meaning": "shortest resolved acoustic wavelength", "si_unit": "$\\mathrm{m}$" }
+  ],
+  "equations": [
+    { "id": "eq-mel-bc-traction-free-mag", "symbols": ["n_hat"], "sources": ["v2-bc-catalog"] },
+    { "id": "eq-mel-bc-floquet-bloch", "symbols": ["k_bloch", "n_hat"], "sources": ["v2-bc-catalog"] },
+    { "id": "eq-mel-bc-abl-ramp", "symbols": ["L_abs", "R0"], "sources": ["v2-absorbing-bc"] },
+    { "id": "eq-mel-bc-cfs-pml-stretch", "symbols": ["s_pml", "pml_profiles", "L_abs"], "sources": ["v2-absorbing-bc"] },
+    { "id": "eq-mel-bc-cfs-pml-alpha-dmax", "symbols": ["pml_profiles", "L_abs", "R0"], "sources": ["v2-absorbing-bc"] },
+    { "id": "eq-mel-bc-cfs-pml-ade", "symbols": ["pml_profiles"], "sources": ["v2-absorbing-bc"] },
+    { "id": "eq-mel-interface-jump", "symbols": ["n_hat"], "sources": ["v2-interfaces"] },
+    { "id": "eq-mel-acoustic-impedance-fresnel", "symbols": ["Z_a", "fresnel"], "sources": ["v2-interfaces"] },
+    { "id": "eq-mel-fdm-conditional-stabilizer", "symbols": ["theta_c"], "sources": ["v2-interfaces"] },
+    { "id": "eq-mel-fredholm-compatibility", "symbols": ["t_bar"], "sources": ["v2-fredholm-rbm"] },
+    { "id": "eq-mel-fdm-checkerboard-vs-staggered", "symbols": ["k_bloch"], "sources": ["v2-fdm-meshing"] },
+    { "id": "eq-mel-fdm-plane-stress-schur", "symbols": ["C_2D"], "sources": ["v2-fdm-meshing"] },
+    { "id": "eq-mel-fem-nu-eff", "symbols": ["nu_eff"], "sources": ["v2-fem-meshing"] },
+    { "id": "eq-mel-fem-prism6-eas1", "symbols": ["nu_eff"], "sources": ["v2-fem-meshing"] }
+  ],
+  "public_api": {
+    "parameters": [
+      {
+        "python": "`MechanicalBoundaryCondition.kind`",
+        "type": "`str`",
+        "default": "required",
+        "si_unit": "`1`",
+        "validation": "`\"traction_free\"`, `\"clamped\"`, `\"prescribed_displacement\"`, or `\"prescribed_traction\"` (8 variants in v2)",
+        "meaning": "mechanical boundary condition family on `surface`",
+        "backend_support": "IR authoring on `master`; assembled in v2 FDM/FEM",
+        "problem_ir": "`mechanics.boundary_conditions[].kind`"
+      },
+      {
+        "python": "`MechanicalBoundaryCondition.surface`",
+        "type": "`str`",
+        "default": "required",
+        "si_unit": "`1`",
+        "validation": "non-empty surface selector name",
+        "meaning": "named boundary patch mapped via `FaceKey` (FEM) or grid face (FDM)",
+        "backend_support": "IR authoring on `master`; assembled in v2 FDM/FEM",
+        "problem_ir": "`mechanics.boundary_conditions[].surface`"
+      },
+      {
+        "python": "`MechanicalBoundaryCondition.u`",
+        "type": "`Sequence[float] | None`",
+        "default": "`None`",
+        "si_unit": "`m`",
+        "validation": "required 3-vector for `\"prescribed_displacement\"`",
+        "meaning": "prescribed Dirichlet boundary displacement $\\bar{\\mathbf{u}}$",
+        "backend_support": "IR authoring on `master`; essential BC in v2",
+        "problem_ir": "`mechanics.boundary_conditions[].u`"
+      },
+      {
+        "python": "`MechanicalBoundaryCondition.t`",
+        "type": "`Sequence[float] | None`",
+        "default": "`None`",
+        "si_unit": "`Pa`",
+        "validation": "required 3-vector for `\"prescribed_traction\"`",
+        "meaning": "prescribed Neumann boundary traction $\\bar{\\mathbf{t}}$",
+        "backend_support": "IR authoring on `master`; natural BC in v2",
+        "problem_ir": "`mechanics.boundary_conditions[].t`"
+      }
+    ]
+  }
+}

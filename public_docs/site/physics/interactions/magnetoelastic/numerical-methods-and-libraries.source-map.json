@@ -1,0 +1,202 @@
+{
+  "document": {
+    "reviewed_revision": "9dee602ba086f95b1ae7477f1b0ea69e2d9cef50",
+    "reviewed_at": "2026-11-26",
+    "path": "public_docs/site/physics/interactions/magnetoelastic/numerical-methods-and-libraries.md",
+    "title": "Magnetoelastic numerical methods, HPC optimization, and solver libraries",
+    "interaction": "magnetoelastic"
+  },
+  "backend_matrix": [
+    {
+      "solver": "FDM",
+      "device": "CPU",
+      "status": "partial",
+      "reason": "Local cubic magnetoelastic reference routines exist below the public planner; Virieux/Lebedev, HEVI IMEX-z PC2, AVX-512, SpectralZThomasPCG, oneMKL PARDISO, and OpenMPI 2D pencil solvers are specified in FullMag v2."
+    },
+    {
+      "solver": "FDM",
+      "device": "GPU",
+      "status": "partial",
+      "reason": "FP64 magnetoelastic energy reduction kernel exists; 3.5D ping-pong SMEM CUDA streaming, cuDSS, GMG, and 1D-z Floquet-Bloch solvers are specified in FullMag v2."
+    },
+    {
+      "solver": "FEM",
+      "device": "CPU",
+      "status": "partial",
+      "reason": "Prescribed-strain FEM CPU kernel and PETSc/SLEPc modal runtime are implemented; Generalized-alpha, Central Difference, oneMKL PARDISO, MUMPS inertia, and coupled SLEPc EPS_GNHEP pencils are specified in FullMag v2."
+    },
+    {
+      "solver": "FEM",
+      "device": "GPU",
+      "status": "partial",
+      "reason": "Prescribed-strain FEM GPU kernels and cuDSS modal/driven response solvers are implemented; GpuElasticCudssSolver Frozen-Factor PCG and libCEED PA + Hypre 3.1.0 GPU BoomerAMG elastodynamics are specified in FullMag v2."
+    }
+  ],
+  "sources": [
+    {
+      "id": "plan-fem-mel",
+      "path": "crates/fullmag-plan/src/fem.rs",
+      "symbol": "resolve_fem_magnetoelastic_plan",
+      "responsibility": "Gate FEM magnetoelastic capabilities and fail closed on unimplemented v2 mechanics modes."
+    },
+    {
+      "id": "fem-cpu-mel",
+      "path": "backends/fem/cpu/mfem/interactions/magnetoelastic_prescribed_strain.cpp",
+      "symbol": "compute_magnetoelastic_field",
+      "responsibility": "Compute FEM CPU prescribed-strain magnetoelastic field and lumped-mass energy."
+    },
+    {
+      "id": "fem-gpu-kernel",
+      "path": "backends/fem/gpu/cuda/interactions/magnetoelastic/magnetoelastic_kernels.cu",
+      "symbol": "fullmag_cuda_magnetoelastic_field_energy_blocks",
+      "responsibility": "Execute FEM GPU CUDA prescribed-strain field and block-reduction energy kernel with ComputeEnergy gating and non-contracted FP64 parity."
+    },
+    {
+      "id": "fem-gpu-fused-heff",
+      "path": "backends/fem/gpu/cuda/fields/vector_field_kernels.cu",
+      "symbol": "fullmag_cuda_accumulate_heff_fused_xyz",
+      "responsibility": "Combine active FEM GPU effective fields including H_mel in a single launch."
+    },
+    {
+      "id": "fdm-gpu-reduce",
+      "path": "backends/fdm/gpu/cuda/runtime/reductions_fp64.cu",
+      "symbol": "reduce_magnetoelastic_energy_fp64",
+      "responsibility": "Perform FP64 FDM GPU magnetoelastic energy reduction."
+    },
+    {
+      "id": "gpu-cudss-modal",
+      "path": "backends/fem/gpu/frequency_domain/modal_cudss_shift.hpp",
+      "symbol": "class CudssModalShift",
+      "responsibility": "Execute GPU cuDSS shift-and-invert factorization with CUDA Graph replay and exact negative inertia."
+    },
+    {
+      "id": "gpu-cudss-driven",
+      "path": "backends/fem/gpu/frequency_domain/driven_response_cudss.hpp",
+      "symbol": "solve_driven_response_gpu_cudss",
+      "responsibility": "Solve frequency-domain driven harmonic responses on GPU using cuDSS."
+    },
+    {
+      "id": "petsc-slepc-rt",
+      "path": "backends/fem/core/petsc_slepc_runtime.hpp",
+      "symbol": "petsc_slepc_process_mutex",
+      "responsibility": "Synchronize thread-safe PETSc and SLEPc process initialization and finalization."
+    },
+    {
+      "id": "v2-cabi",
+      "path": "public_docs/site/physics/interactions/magnetoelastic/numerical-methods-and-libraries.md",
+      "symbol": "DOC-ANCHOR:magnetoelastic-v2-cabi-contract",
+      "evidence_status": "planned_contract",
+      "responsibility": "Specify C ABI v1 contracts and 23 FDM / 17 FEM capability bitmasks."
+    },
+    {
+      "id": "v2-fdm-integrators",
+      "path": "public_docs/site/physics/interactions/magnetoelastic/numerical-methods-and-libraries.md",
+      "symbol": "DOC-ANCHOR:magnetoelastic-v2-fdm-integrators-contract",
+      "evidence_status": "planned_contract",
+      "responsibility": "Specify Kelvin-Mandel CFL, Velocity-Verlet + Hermite multirate, HEVI IMEX-z PC2, and FDM quasistatics."
+    },
+    {
+      "id": "v2-fem-integrators",
+      "path": "public_docs/site/physics/interactions/magnetoelastic/numerical-methods-and-libraries.md",
+      "symbol": "DOC-ANCHOR:magnetoelastic-v2-fem-integrators-contract",
+      "evidence_status": "planned_contract",
+      "responsibility": "Specify FEM variational adjoint, Chung-Hulbert Generalized-alpha, and Frozen-Factor PCG."
+    },
+    {
+      "id": "v2-eigen-congruence",
+      "path": "public_docs/site/physics/interactions/magnetoelastic/numerical-methods-and-libraries.md",
+      "symbol": "DOC-ANCHOR:magnetoelastic-v2-eigen-congruence-contract",
+      "evidence_status": "planned_contract",
+      "responsibility": "Specify coupled (k,omega) pencil, diagonal congruence scaling, SLEPc EPS_GNHEP, MUMPS inertia, and 1D-z Floquet-Bloch."
+    },
+    {
+      "id": "v2-hpc-stack",
+      "path": "public_docs/site/physics/interactions/magnetoelastic/numerical-methods-and-libraries.md",
+      "symbol": "DOC-ANCHOR:magnetoelastic-v2-hpc-stack-contract",
+      "evidence_status": "planned_contract",
+      "responsibility": "Specify CUDA 3.5D ping-pong, AVX-512, MPI decompositions, and pinned solver library threading hygiene."
+    }
+  ],
+  "symbols": [
+    { "id": "dt_limits", "latex": "$\\Delta t_{\\mathrm{CFL}}, \\Delta t_{\\mathrm{visc}}$", "meaning": "explicit acoustic CFL and Kelvin–Voigt viscous time-step limits", "si_unit": "$\\mathrm{s}$" },
+    { "id": "S_cfl", "latex": "$S_{\\mathrm{CFL}}$", "meaning": "dimensionless explicit CFL safety factor", "si_unit": "$1$" },
+    { "id": "N_sub", "latex": "$N_{\\mathrm{sub}}$", "meaning": "mechanical sub-steps per magnetic LLG macro-step", "si_unit": "$1$" },
+    { "id": "alpha_kv_z", "latex": "$\\alpha_{\\mathrm{KV},z,c}$", "meaning": "adaptive HEVI IMEX-$z$ vertical Kelvin–Voigt stabilization factor", "si_unit": "$1$" },
+    { "id": "MDK", "latex": "$\\mathbf{M}, \\mathbf{D}, \\mathbf{K}$", "meaning": "FEM mass, mechanical damping, and elastic stiffness matrices", "si_unit": "$\\mathrm{kg}, \\mathrm{N\\,s\\,m^{-1}}, \\mathrm{N\\,m^{-1}}$" },
+    { "id": "K_eff", "latex": "$\\mathbf{K}_{\\mathrm{eff}}$", "meaning": "Generalized-$\\alpha$ effective dynamic stiffness matrix", "si_unit": "$\\mathrm{N\\,m^{-1}}$" },
+    { "id": "rho_inf", "latex": "$\\rho_\\infty$", "meaning": "Chung–Hulbert Generalized-$\\alpha$ high-frequency spectral radius", "si_unit": "$1$" },
+    { "id": "gen_alpha_p", "latex": "$\\alpha_m, \\alpha_f, \\gamma, \\beta$", "meaning": "Chung–Hulbert Generalized-$\\alpha$ integration parameters", "si_unit": "$1$" },
+    { "id": "f_mel", "latex": "$\\mathbf{f}_{\\mathrm{mel}}$", "meaning": "discrete nodal magnetostrictive force vector", "si_unit": "$\\mathrm{N}$" },
+    { "id": "r_k", "latex": "$\\mathbf{r}_k$", "meaning": "unpreconditioned Euclidean PCG residual vector", "si_unit": "$\\mathrm{N}$" },
+    { "id": "eps_rel", "latex": "$\\epsilon_{\\mathrm{rel}}$", "meaning": "relative Euclidean residual convergence tolerance", "si_unit": "$1$" },
+    { "id": "S_cong", "latex": "$\\mathbf{S}$", "meaning": "diagonal congruence scaling matrix for coupled $(k,\\omega)$ pencil", "si_unit": "$\\text{mixed}$" },
+    { "id": "lambda_eig", "latex": "$\\lambda$", "meaning": "complex eigenfrequency eigenvalue ($i\\omega - \\Gamma$)", "si_unit": "$\\mathrm{rad\\,s^{-1}}$" },
+    { "id": "df_split", "latex": "$\\Delta f_{\\mathrm{1D}}, \\Delta f_{\\mathrm{3D}}$", "meaning": "single-TA vs. full-3D doublet magnon–polaron anticrossing gap", "si_unit": "$\\mathrm{Hz}$" }
+  ],
+  "equations": [
+    { "id": "eq-mel-num-fdm-cfl", "symbols": ["dt_limits", "S_cfl"], "sources": ["v2-fdm-integrators"] },
+    { "id": "eq-mel-num-fdm-verlet", "symbols": ["N_sub"], "sources": ["v2-fdm-integrators"] },
+    { "id": "eq-mel-num-hermite-multirate", "symbols": ["N_sub"], "sources": ["v2-fdm-integrators"] },
+    { "id": "eq-mel-num-hevi-alpha-kv", "symbols": ["alpha_kv_z"], "sources": ["v2-fdm-integrators"] },
+    { "id": "eq-mel-num-fem-adjoint", "symbols": ["f_mel"], "sources": ["v2-fem-integrators", "fem-cpu-mel", "fem-gpu-kernel"] },
+    { "id": "eq-mel-num-gen-alpha-params", "symbols": ["rho_inf", "gen_alpha_p"], "sources": ["v2-fem-integrators"] },
+    { "id": "eq-mel-num-gen-alpha-keff", "symbols": ["K_eff", "MDK", "gen_alpha_p"], "sources": ["v2-fem-integrators"] },
+    { "id": "eq-mel-num-frozen-factor-pcg", "symbols": ["r_k", "K_eff", "eps_rel"], "sources": ["v2-fem-integrators"] },
+    { "id": "eq-mel-num-coupled-pencil", "symbols": ["MDK", "lambda_eig"], "sources": ["v2-eigen-congruence", "gpu-cudss-modal", "petsc-slepc-rt"] },
+    { "id": "eq-mel-num-congruence-scaling", "symbols": ["S_cong"], "sources": ["v2-eigen-congruence"] }
+  ],
+  "public_api": {
+    "parameters": [
+      {
+        "python": "`study.engine(name)`",
+        "type": "`str`",
+        "default": "`\"fdm\"`",
+        "si_unit": "`1`",
+        "validation": "`\"fdm\"` or `\"fem\"`",
+        "meaning": "selects FDM supergrid or FEM `SubMesh` numerical lane",
+        "backend_support": "`\"fem\"` prescribed-strain on `master`; both lanes in v2",
+        "problem_ir": "`runtime.engine`"
+      },
+      {
+        "python": "`study.device(kind, precision)`",
+        "type": "`str, str`",
+        "default": "`\"cpu\", \"double\"`",
+        "si_unit": "`1`",
+        "validation": "`\"cpu\"`/`\"gpu\"` and `\"double\"`/`\"float\"`",
+        "meaning": "selects execution device and FP64/FP32 arithmetic contract",
+        "backend_support": "FEM CPU/GPU FP64 on `master`; all 4 lanes in v2",
+        "problem_ir": "`runtime.device`"
+      },
+      {
+        "python": "`study.mode(policy)`",
+        "type": "`str`",
+        "default": "`\"strict\"`",
+        "si_unit": "`1`",
+        "validation": "`\"strict\"` or `\"permissive\"`",
+        "meaning": "enforces fail-closed capability and stability validation",
+        "backend_support": "all lanes",
+        "problem_ir": "`runtime.mode`"
+      },
+      {
+        "python": "`ElasticMaterial.rho`",
+        "type": "`float`",
+        "default": "required",
+        "si_unit": "`kg/m^3`",
+        "validation": "strictly positive (`> 0`)",
+        "meaning": "mass density entering $\\mathbf{M}$, $c_{\\max}$, and $\\Delta t_{\\mathrm{CFL}}$",
+        "backend_support": "IR on `master`; active in v2 elastodynamics",
+        "problem_ir": "`mechanics.materials[].density`"
+      },
+      {
+        "python": "`MechanicalLoad.kind`",
+        "type": "`str`",
+        "default": "required",
+        "si_unit": "`1`",
+        "validation": "`\"prescribed_strain\"`, `\"prescribed_stress\"`, or `\"body_force\"`",
+        "meaning": "selects static/dynamic mechanical loading operator",
+        "backend_support": "`\"prescribed_strain\"` on FEM `master`; all in v2",
+        "problem_ir": "`mechanics.loads[].kind`"
+      }
+    ]
+  }
+}

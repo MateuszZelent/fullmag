@@ -26,6 +26,11 @@ realization, topology, airbox construction, and quality governance form an indep
 | {doc}`interpolation-and-state-transfer/index` | Cross-backend FEM $\leftrightarrow$ FDM state interpolation and continuation contracts |
 | {ref}`numerical-methods-performance` | Computational optimizations, GPU acceleration, direct solvers, kernel fusion, and RTX A/B benchmarks across FDM, FEM, and multiphysics |
 
+For coupled bidirectional magnon–phonon numerical methods, elastodynamic time integrators,
+HPC/CUDA/AVX-512/MPI optimizations, and FullMag's pinned sparse/multigrid library stack
+(`cuDSS`, `oneMKL PARDISO`, `MFEM`, `libCEED`, `Hypre`, `PETSc`, `SLEPc`, `MUMPS`, `ParMETIS`),
+see {doc}`/physics/interactions/magnetoelastic/numerical-methods-and-libraries`.
+
 ```{toctree}
 :maxdepth: 2
 
