@@ -5,11 +5,10 @@
  * Poisson demag P1-state/resolved-potential-order RHS CSR, P1-state recovery
  * CSR, and essential potential true DOF lists. Periodic reduction remains
  * P1/P1. It validates inputs and dispatches the element-loop assembly to
- * mixed_operator_assembly_csr.cpp (default, nonperiodic) or
- * mixed_operator_assembly_maps.cpp (periodic, or the
- * FULLMAG_FEM_DEMAG_OPERATOR_BUILD=maps A/B reference). It does not own Hypre
- * solver policy, lifecycle publication, RK-stage orchestration, local
- * interaction kernels, or C ABI entrypoints.
+ * mixed_operator_assembly_csr.cpp (nonperiodic meshes) or
+ * mixed_operator_assembly_maps.cpp (periodic node-class reduction). It does
+ * not own Hypre solver policy, lifecycle publication, RK-stage orchestration,
+ * local interaction kernels, or C ABI entrypoints.
  */
 
 #include "gpu/cuda/demag_poisson/operators.hpp"
@@ -23,7 +22,6 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
-#include <cstdlib>
 #include <cstring>
 #include <iomanip>
 #include <limits>
@@ -619,71 +617,21 @@ bool build_mixed_demag_operator_fingerprint(
     return true;
 }
 
-// A/B diagnostic only. Unlike the provenance fingerprint, which maps -0.0 to
-// +0.0, this digest covers the raw bytes, so equal digests mean
-// byte-identical host arrays.
-template <typename T>
-void raw_digest_vector(uint64_t &hash, const std::vector<T> &values)
-{
-    fnv1a_u64(hash, values.size());
-    const auto *bytes = reinterpret_cast<const unsigned char *>(values.data());
-    for (size_t index = 0; index < values.size() * sizeof(T); ++index) {
-        fnv1a_byte(hash, bytes[index]);
-    }
-}
-
-void raw_digest_scalar_csr(uint64_t &hash, const DeviceCsrScalar &op)
-{
-    fnv1a_u64(hash, op.rows);
-    fnv1a_u64(hash, op.nnz);
-    raw_digest_vector(hash, op.row_offsets);
-    raw_digest_vector(hash, op.col_indices);
-    raw_digest_vector(hash, op.values);
-}
-
-uint64_t raw_operator_digest(const GpuDemagPoissonWorkspace &workspace)
-{
-    uint64_t hash = 14695981039346656037ull;
-    fnv1a_u64(hash, workspace.rhs.rows);
-    fnv1a_u64(hash, workspace.rhs.nnz);
-    raw_digest_vector(hash, workspace.rhs.row_offsets);
-    raw_digest_vector(hash, workspace.rhs.col_indices);
-    raw_digest_vector(hash, workspace.rhs.values_x);
-    raw_digest_vector(hash, workspace.rhs.values_y);
-    raw_digest_vector(hash, workspace.rhs.values_z);
-    raw_digest_scalar_csr(hash, workspace.recovery_x);
-    raw_digest_scalar_csr(hash, workspace.recovery_y);
-    raw_digest_scalar_csr(hash, workspace.recovery_z);
-    raw_digest_scalar_csr(hash, workspace.visual_recovery_x);
-    raw_digest_scalar_csr(hash, workspace.visual_recovery_y);
-    raw_digest_scalar_csr(hash, workspace.visual_recovery_z);
-    raw_digest_scalar_csr(hash, workspace.robin_boundary_mass);
-    raw_digest_vector(hash, workspace.ess_tdofs);
-    fnv1a_u64(hash, static_cast<uint64_t>(workspace.recovery_mode));
-    fnv1a_u64(hash, static_cast<uint64_t>(workspace.visual_recovery_mode));
-    fnv1a_u64(hash, workspace.recovery_xyz_pattern_digest);
-    fnv1a_u64(hash, workspace.visual_recovery_xyz_pattern_digest);
-    return hash;
-}
-
-// Printed only when FULLMAG_FEM_DEMAG_OPERATOR_BUILD is set or the memory
-// trace is on, so default runs stay silent.
-void report_operator_build_if_requested(
+// Memory-trace diagnostic: which assembly ran, operator sizes, and the
+// fingerprint, so runs on the same mesh can be compared across builds.
+void trace_operator_build(
     const GpuDemagPoissonWorkspace &workspace,
-    GpuDemagOperatorBuildPath requested_path,
     bool use_row_maps,
     bool periodic_node_class_reduction)
 {
-    const char *raw = std::getenv(kDemagOperatorBuildEnv);
-    if ((raw == nullptr || *raw == '\0') && fem_memory_trace_level() == 0) {
+    if (fem_memory_trace_level() == 0) {
         return;
     }
     std::fprintf(
         stderr,
-        "[fullmag_fem] demag operator build: requested=%s path=%s periodic=%d "
+        "[fullmag_fem] demag operator build: path=%s periodic=%d "
         "rhs_rows=%llu rhs_nnz=%llu recovery_nnz=%llu visual_nnz=%llu robin_nnz=%llu "
-        "recovery_mode=%u visual_mode=%u fingerprint=%s raw_fnv1a64=%016llx\n",
-        requested_path == GpuDemagOperatorBuildPath::RowMaps ? "maps" : "csr",
+        "recovery_mode=%u visual_mode=%u fingerprint=%s\n",
         use_row_maps ? "maps" : "csr",
         periodic_node_class_reduction ? 1 : 0,
         static_cast<unsigned long long>(workspace.rhs.rows),
@@ -693,37 +641,18 @@ void report_operator_build_if_requested(
         static_cast<unsigned long long>(workspace.robin_boundary_mass.nnz),
         static_cast<unsigned>(workspace.recovery_mode),
         static_cast<unsigned>(workspace.visual_recovery_mode),
-        workspace.operator_fingerprint.c_str(),
-        static_cast<unsigned long long>(raw_operator_digest(workspace)));
+        workspace.operator_fingerprint.c_str());
     std::fflush(stderr);
 }
-#endif
 
-} // namespace
-
-bool resolve_gpu_demag_operator_build_path(
-    const char *env_value,
-    GpuDemagOperatorBuildPath &path,
-    std::string &error)
-{
-    path = GpuDemagOperatorBuildPath::Csr;
-    if (env_value == nullptr || *env_value == '\0' || std::strcmp(env_value, "csr") == 0) {
-        return true;
-    }
-    if (std::strcmp(env_value, "maps") == 0) {
-        path = GpuDemagOperatorBuildPath::RowMaps;
-        return true;
-    }
-    error = std::string(kDemagOperatorBuildEnv) + " must be 'csr' or 'maps', got '" +
-        env_value + "'";
-    return false;
-}
-
-#if FULLMAG_HAS_MFEM_STACK
-bool build_mixed_demag_operators_with_path(
+// Production builds pass row_map_reference=false: the CSR assembly serves
+// nonperiodic meshes and the row-map assembly periodic node-class reduction.
+// The contract test passes true to get the row-map result as a byte-exact
+// reference for nonperiodic meshes too.
+bool build_mixed_demag_operators_impl(
     Context &ctx,
     GpuDemagPoissonWorkspace &workspace,
-    GpuDemagOperatorBuildPath requested_path,
+    bool row_map_reference,
     std::string &error)
 {
     auto *potential_fes =
@@ -802,8 +731,7 @@ bool build_mixed_demag_operators_with_path(
     }
 
     // Periodic node-class merging stays on the row-map assembly (P1/P1).
-    const bool use_row_maps = periodic_node_class_reduction ||
-        requested_path == GpuDemagOperatorBuildPath::RowMaps;
+    const bool use_row_maps = periodic_node_class_reduction || row_map_reference;
     fem_memory_trace_stat(
         "gpu_demag:operator_assembly", "row_maps", use_row_maps ? 1u : 0u);
     demag_operator_assembly::MixedDemagAssemblyInput assembly_input;
@@ -893,37 +821,34 @@ bool build_mixed_demag_operators_with_path(
         return false;
     }
     workspace.operator_build_count += 1u;
-    report_operator_build_if_requested(
-        workspace, requested_path, use_row_maps, periodic_node_class_reduction);
+    trace_operator_build(workspace, use_row_maps, periodic_node_class_reduction);
     return true;
 }
+#endif
 
+} // namespace
+
+#if FULLMAG_HAS_MFEM_STACK
 bool build_mixed_demag_operators(
     Context &ctx,
     GpuDemagPoissonWorkspace &workspace,
     std::string &error)
 {
-    GpuDemagOperatorBuildPath requested_path = GpuDemagOperatorBuildPath::Csr;
-    if (!resolve_gpu_demag_operator_build_path(
-            std::getenv(kDemagOperatorBuildEnv), requested_path, error)) {
-        return false;
-    }
-    return build_mixed_demag_operators_with_path(ctx, workspace, requested_path, error);
-}
-#else
-bool build_mixed_demag_operators_with_path(
-    Context &ctx,
-    GpuDemagPoissonWorkspace &workspace,
-    GpuDemagOperatorBuildPath requested_path,
-    std::string &error)
-{
-    (void)ctx;
-    (void)workspace;
-    (void)requested_path;
-    error = "strict FEM GPU demag requires MFEM stack support";
-    return false;
+    return build_mixed_demag_operators_impl(ctx, workspace, false, error);
 }
 
+namespace demag_operator_assembly {
+
+bool build_mixed_demag_operators_with_row_map_reference(
+    Context &ctx,
+    GpuDemagPoissonWorkspace &workspace,
+    std::string &error)
+{
+    return build_mixed_demag_operators_impl(ctx, workspace, true, error);
+}
+
+} // namespace demag_operator_assembly
+#else
 bool build_mixed_demag_operators(
     Context &ctx,
     GpuDemagPoissonWorkspace &workspace,

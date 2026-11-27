@@ -1,14 +1,14 @@
 /*
  * GPU CUDA Poisson demag row-map operator assembly source contract.
  *
- * This source owns the legacy std::map row assembly of the strict GPU Poisson
- * demag RHS, magnetic-recovery, and visual-recovery CSR operators, including
- * the periodic node-class merge. The two-pass CSR assembly is the default for
- * the nonperiodic path; this path still serves periodic node-class reduction
- * and the FULLMAG_FEM_DEMAG_OPERATOR_BUILD=maps A/B reference. The element
- * loop, normalization, and CSR fill are moved here unchanged from
- * operators.cpp. It does not own validation, the Robin boundary mass,
- * essential DOFs, recovery modes, fingerprints, upload, or destruction.
+ * This source owns the std::map row assembly of the strict GPU Poisson demag
+ * RHS, magnetic-recovery, and visual-recovery CSR operators, including the
+ * periodic node-class merge. Nonperiodic meshes use the two-pass CSR assembly;
+ * this path serves periodic node-class reduction and is the byte-exact
+ * reference for the CSR assembly in the contract test. The element loop,
+ * normalization, and CSR fill are unchanged from the original operators.cpp.
+ * It does not own validation, the Robin boundary mass, essential DOFs,
+ * recovery modes, fingerprints, upload, or destruction.
  */
 
 #include "gpu/cuda/demag_poisson/mixed_operator_assembly.hpp"

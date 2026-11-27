@@ -23,8 +23,6 @@
 #endif
 
 #include <cstdint>
-#include <cstdlib>
-#include <cstring>
 #include <memory>
 #include <string>
 
@@ -87,27 +85,12 @@ void trace_demag_operator_sizes(const GpuDemagPoissonWorkspace &workspace)
         phase, "host_robin_boundary_mass_csr_bytes", host_csr_bytes(workspace.robin_boundary_mass));
 }
 
-// Debug switch: FULLMAG_FEM_KEEP_DEMAG_HOST_COPIES=1 keeps the host copies
-// that a completed device setup no longer needs (the earlier behavior), so
-// RSS and results can be compared within one build.
-bool keep_demag_host_copies_requested()
-{
-    const char *raw = std::getenv("FULLMAG_FEM_KEEP_DEMAG_HOST_COPIES");
-    return raw != nullptr &&
-        (std::strcmp(raw, "1") == 0 || std::strcmp(raw, "true") == 0 ||
-         std::strcmp(raw, "on") == 0 || std::strcmp(raw, "yes") == 0);
-}
-
 // Runs only after a completed device Poisson setup. From then on the GPU lane
 // reads the device operators, rows, nnz, essential DOFs, and the fingerprint,
 // plus poisson_bc_op through Hypre. The host CSR copies of the uploaded
 // operators and the unconstrained P2 stiffness (A0) are dead weight.
 void release_host_copies_after_device_setup(Context &ctx)
 {
-    if (keep_demag_host_copies_requested()) {
-        fem_memory_trace_stat("gpu_demag:host_copies_kept", "keep_host_copies", 1u);
-        return;
-    }
     GpuDemagPoissonWorkspace *workspace = workspace_ptr(ctx);
     if (workspace == nullptr || !workspace->ready) {
         return;

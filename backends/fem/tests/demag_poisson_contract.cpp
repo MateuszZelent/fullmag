@@ -24,6 +24,7 @@
 #include "cpu/mfem/interactions/demag_poisson_periodic.hpp"
 #include "cpu/mfem/interactions/demag_poisson_transfer.hpp"
 #include "gpu/cuda/demag_poisson/operators.hpp"
+#include "gpu/cuda/demag_poisson/mixed_operator_assembly.hpp"
 #include "gpu/cuda/demag_poisson/hypre_device_solver.hpp"
 #include "gpu/cuda/demag_poisson/poisson.hpp"
 #include "gpu/cuda/demag_poisson/stage_compute.hpp"
@@ -2912,21 +2913,22 @@ bool same_operator_build_bytes(
         left.operator_build_count == right.operator_build_count;
 }
 
-// Builds the mixed operators through the row-map and the CSR assembly and
-// requires the same outcome: the same error, or byte-identical host arrays,
-// recovery modes, pattern digests, and fingerprint.
+// Builds the mixed operators through production build_mixed_demag_operators()
+// (CSR assembly for nonperiodic meshes) and through the internal row-map
+// reference, and requires the same outcome: the same error, or byte-identical
+// host arrays, recovery modes, pattern digests, and fingerprint.
 void check_operator_assembly_paths_match(
     fullmag::fem::Context &ctx,
     bool require_success,
     const char *label) {
     std::string row_map_error;
     fullmag::fem::GpuDemagPoissonWorkspace row_maps;
-    const bool row_maps_built = fullmag::fem::build_mixed_demag_operators_with_path(
-        ctx, row_maps, fullmag::fem::GpuDemagOperatorBuildPath::RowMaps, row_map_error);
+    const bool row_maps_built =
+        fullmag::fem::demag_operator_assembly::build_mixed_demag_operators_with_row_map_reference(
+            ctx, row_maps, row_map_error);
     std::string csr_error;
     fullmag::fem::GpuDemagPoissonWorkspace csr;
-    const bool csr_built = fullmag::fem::build_mixed_demag_operators_with_path(
-        ctx, csr, fullmag::fem::GpuDemagOperatorBuildPath::Csr, csr_error);
+    const bool csr_built = fullmag::fem::build_mixed_demag_operators(ctx, csr, csr_error);
     if (require_success) {
         check_result(row_maps_built, row_map_error, label);
         check_result(csr_built, csr_error, label);
@@ -3031,23 +3033,6 @@ void mixed_operator_csr_assembly_matches_row_maps_bytewise() {
         check_operator_assembly_paths_match(ctx, false, "periodic operator A/B build");
         fullmag::fem::context_destroy_poisson(ctx);
     }
-
-    fullmag::fem::GpuDemagOperatorBuildPath path =
-        fullmag::fem::GpuDemagOperatorBuildPath::RowMaps;
-    std::string error;
-    check(fullmag::fem::resolve_gpu_demag_operator_build_path(nullptr, path, error) &&
-              path == fullmag::fem::GpuDemagOperatorBuildPath::Csr &&
-              fullmag::fem::resolve_gpu_demag_operator_build_path("", path, error) &&
-              path == fullmag::fem::GpuDemagOperatorBuildPath::Csr &&
-              fullmag::fem::resolve_gpu_demag_operator_build_path("csr", path, error) &&
-              path == fullmag::fem::GpuDemagOperatorBuildPath::Csr,
-          "unset, empty, and csr operator build selectors must choose the CSR assembly");
-    check(fullmag::fem::resolve_gpu_demag_operator_build_path("maps", path, error) &&
-              path == fullmag::fem::GpuDemagOperatorBuildPath::RowMaps,
-          "the maps operator build selector must choose the row-map assembly");
-    check(!fullmag::fem::resolve_gpu_demag_operator_build_path("map", path, error) &&
-              error.find(fullmag::fem::kDemagOperatorBuildEnv) != std::string::npos,
-          "a malformed operator build selector must fail closed and name the variable");
 }
 
 #if FULLMAG_HAS_CUDA_RUNTIME && defined(MFEM_USE_MPI)

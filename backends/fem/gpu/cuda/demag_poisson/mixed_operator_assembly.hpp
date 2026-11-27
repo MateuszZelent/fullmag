@@ -7,14 +7,13 @@
  * magnetic-recovery, and visual-recovery CSR operators that operators.cpp
  * dispatches to, plus the small DOF and periodic-class helpers both sides
  * share. Two realizations exist:
- * - the default two-pass CSR assembly (mixed_operator_assembly_csr.cpp) for
- *   the nonperiodic path;
- * - the legacy std::map row assembly (mixed_operator_assembly_maps.cpp),
- *   which also owns the periodic node-class merge and serves the
- *   FULLMAG_FEM_DEMAG_OPERATOR_BUILD=maps A/B check.
- * For the nonperiodic path both produce byte-identical arrays. Validation,
- * the Robin boundary mass, essential DOFs, recovery modes, fingerprints,
- * upload, and destruction stay in operators.cpp.
+ * - the two-pass CSR assembly (mixed_operator_assembly_csr.cpp) for
+ *   nonperiodic meshes;
+ * - the std::map row assembly (mixed_operator_assembly_maps.cpp), which owns
+ *   periodic node-class reduction and is the byte-exact reference for the CSR
+ *   assembly in the contract test.
+ * Validation, the Robin boundary mass, essential DOFs, recovery modes,
+ * fingerprints, upload, and destruction stay in operators.cpp.
  */
 
 #include "context.hpp"
@@ -61,7 +60,7 @@ inline uint32_t periodic_scalar_column(const Context &ctx, uint32_t node)
 }
 
 #if FULLMAG_HAS_MFEM_STACK
-// Validated inputs from build_mixed_demag_operators_with_path().
+// Validated inputs from build_mixed_demag_operators() in operators.cpp.
 struct MixedDemagAssemblyInput {
     const Context *ctx = nullptr;
     mfem::Mesh *mesh = nullptr;
@@ -74,18 +73,27 @@ struct MixedDemagAssemblyInput {
     uint64_t rhs_rows = 0;
 };
 
-// Legacy assembly: one std::map per CSR row. Required for periodic node-class
-// reduction; selectable for the nonperiodic path only as an A/B reference.
+// Row-map assembly: one std::map per CSR row. Required for periodic
+// node-class reduction; on nonperiodic input it serves only as the test
+// reference.
 bool assemble_mixed_demag_operators_with_row_maps(
     const MixedDemagAssemblyInput &input,
     GpuDemagPoissonWorkspace &workspace,
     std::string &error);
 
-// Default nonperiodic assembly: symbolic CSR patterns from element DOF
-// incidence, then numeric accumulation into precomputed CSR positions in the
-// row-map order (element, quadrature point, i, k). Rejects periodic input.
+// Nonperiodic assembly: symbolic CSR patterns from element DOF incidence, then
+// numeric accumulation into precomputed CSR positions in the row-map order
+// (element, quadrature point, i, k). Rejects periodic input.
 bool assemble_mixed_demag_operators_with_csr(
     const MixedDemagAssemblyInput &input,
+    GpuDemagPoissonWorkspace &workspace,
+    std::string &error);
+
+// Contract-test reference: the full build_mixed_demag_operators() (validation,
+// Robin mass, essential DOFs, recovery modes, fingerprint) with the row-map
+// assembly also for nonperiodic meshes. Production code never calls it.
+bool build_mixed_demag_operators_with_row_map_reference(
+    Context &ctx,
     GpuDemagPoissonWorkspace &workspace,
     std::string &error);
 #endif
