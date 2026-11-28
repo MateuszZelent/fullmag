@@ -2388,7 +2388,7 @@ static uint32_t materialize_accepted_spin(Slot &parent, Slot &snapshot) {
 static uint32_t solve_steady_spin_impl(
     const fullmag_fdm_gpu_steady_spin_solve_request_v1 *request,
     fullmag_fdm_gpu_steady_spin_solve_result_v1 *result,
-    spin::SolveOutputMode output_mode) {
+    spin::SolveOutputMode output_mode, bool has_accepted_llg_step = false) {
     if (request == nullptr || result == nullptr)
         return FULLMAG_FDM_GPU_TRANSPORT_ERROR_INVALID_DESCRIPTOR;
     uint32_t status = validate_prefix(
@@ -2485,6 +2485,22 @@ static uint32_t solve_steady_spin_impl(
     input.reuse_trial_solution = transactional &&
         parent.spin_trial_convergence_reason ==
             FULLMAG_FDM_GPU_TRANSPORT_CONVERGENCE_CONVERGED;
+    const SpinBuffers &committed = snapshot.spin_accepted;
+    if (transactional && has_accepted_llg_step && !input.reuse_trial_solution &&
+        committed.cells == cells &&
+        snapshot.spin_convergence_reason == FULLMAG_FDM_GPU_TRANSPORT_CONVERGENCE_CONVERGED) {
+        if (committed.retained_endpoint != nullptr) {
+            const double *solution = committed.retained_endpoint + 2 * vector_values;
+            for (uint32_t component = 0; component < 3; ++component)
+                input.accepted_seed[component] = solution + component * cells;
+        } else {
+            // Observations and exact checkpoint import can materialize the
+            // same committed solution into three separate FP64 arrays.
+            input.accepted_seed[0] = committed.mu_x;
+            input.accepted_seed[1] = committed.mu_y;
+            input.accepted_seed[2] = committed.mu_z;
+        }
+    }
     input.test_failure_boundary = parent.test_failure_boundary;
     parent.test_failure_boundary = 0;
     input.old_accepted_bytes = transactional
@@ -2496,7 +2512,7 @@ static uint32_t solve_steady_spin_impl(
         return FULLMAG_FDM_GPU_TRANSPORT_ERROR_CUDA_RUNTIME_ERROR;
     if (parent.spin_solve_active || parent.spin_solve_token == UINT64_MAX)
         return FULLMAG_FDM_GPU_TRANSPORT_ERROR_INVALID_STATE;
-    if (!reserve_telemetry_sequences(parent, 4))
+    if (!reserve_telemetry_sequences(parent, 5))
         return FULLMAG_FDM_GPU_TRANSPORT_ERROR_OUT_OF_RESOURCES;
     const uint64_t solve_token = ++parent.spin_solve_token;
     const uint64_t context_generation = parent.generation;
@@ -2578,6 +2594,21 @@ static uint32_t solve_steady_spin_impl(
             request->attempt_id, request->stage_id, output.iterations,
             snapshot.candidate_digest.data());
     }
+    // The bound path staged three magnetization components on the transport
+    // stream before solve_device. Include the seed and endpoint copies in the same audit.
+    const uint64_t staged_count = output_mode == spin::SolveOutputMode::FullFields ? 0 : 3;
+    if (output.state_d2d_count != 0 ||
+        (staged_count != 0 && status == FULLMAG_FDM_GPU_TRANSPORT_ERROR_OK)) {
+        append_charge_telemetry(
+            parent, FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_DIRECTION_D2D,
+            FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_REASON_SOLVE_STATE_D2D,
+            FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_STATUS_SUCCESS, stage_transfer_flags,
+            (staged_count == 0 ? 0 : vector_values * sizeof(double)) + output.state_d2d_bytes,
+            staged_count + output.state_d2d_count,
+            request->attempt_id, request->stage_id, output.iterations,
+            snapshot.candidate_digest.data());
+    }
+
     if (status != FULLMAG_FDM_GPU_TRANSPORT_ERROR_OK) {
         if (!transactional) ++parent.spin_failed_rollback_count;
         append_charge_telemetry(
@@ -2588,19 +2619,6 @@ static uint32_t solve_steady_spin_impl(
             0, 0, request->attempt_id, request->stage_id, executed_iterations,
             snapshot.candidate_digest.data());
         return status;
-    }
-    // The bound path staged three magnetization components on the transport
-    // stream before solve_device. Include endpoint retention in the same audit.
-    const uint64_t staged_count = output_mode == spin::SolveOutputMode::FullFields ? 0 : 3;
-    if (staged_count != 0 || output.state_d2d_count != 0) {
-        append_charge_telemetry(
-            parent, FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_DIRECTION_D2D,
-            FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_REASON_SOLVE_STATE_D2D,
-            FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_STATUS_SUCCESS, stage_transfer_flags,
-            (staged_count == 0 ? 0 : vector_values * sizeof(double)) + output.state_d2d_bytes,
-            staged_count + output.state_d2d_count,
-            request->attempt_id, request->stage_id, output.iterations,
-            snapshot.candidate_digest.data());
     }
 
     if (transactional) {
@@ -4683,7 +4701,8 @@ bool evaluate_bound_gpu_transport_rhs(
     result.required_features = binding.required_features;
     const auto output_mode = role == GpuTransportStageRole::EndpointCandidate
         ? spin::SolveOutputMode::RetainEndpoint : spin::SolveOutputMode::TorqueOnly;
-    const uint32_t status = solve_steady_spin_impl(&request, &result, output_mode);
+    const uint32_t status = solve_steady_spin_impl(
+        &request, &result, output_mode, ctx.step_count != 0);
     if (status != FULLMAG_FDM_GPU_TRANSPORT_ERROR_OK) {
         cudaStream_t transport_stream = nullptr;
         int device = -1;

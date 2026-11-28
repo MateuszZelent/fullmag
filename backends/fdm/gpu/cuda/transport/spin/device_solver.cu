@@ -811,12 +811,30 @@ __device__ void build_rhs(const SolveInput &in, double *rhs, uint64_t unknowns) 
     }
 }
 
+// Both digest kernels are launched with complete 32-thread warps.
+inline constexpr uint32_t kDigestThreads = 256;
+
+__device__ void add_warp_digest_words(const unsigned long long (&sums)[4],
+                                      unsigned long long *digest) {
+    // The digest adds unsigned words modulo 2^64. Grouping the additions
+    // changes neither the digest bytes nor the independent nonfinite flag.
+    constexpr uint32_t full_warp = 0xffffffffu;
+    const bool leader = threadIdx.x % 32 == 0;
+    for (uint32_t lane = 0; lane < 4; ++lane) {
+        unsigned long long sum = sums[lane];
+        for (uint32_t offset = 16; offset != 0; offset >>= 1)
+            sum += __shfl_down_sync(full_warp, sum, offset);
+        if (leader) atomicAdd(digest + lane, sum);
+    }
+}
+
 __global__ void assemble_sparse_cells_kernel(SolveInput in, uint8_t *active,
                                              double *conductivity,
                                              double *local, double *rhs,
                                              unsigned long long *digest) {
     const uint64_t cells = in.grid[0] * in.grid[1] * in.grid[2];
     const double volume = in.cell_size[0] * in.cell_size[1] * in.cell_size[2];
+    unsigned long long sums[4]{};
     for (uint64_t cell = uint64_t(blockIdx.x) * blockDim.x + threadIdx.x;
          cell < cells; cell += uint64_t(blockDim.x) * gridDim.x) {
         const auto *cell_record = spin_cell(in, cell);
@@ -833,9 +851,12 @@ __global__ void assemble_sparse_cells_kernel(SolveInput in, uint8_t *active,
 
         const double m[3]{in.m_stage[cell], in.m_stage[cells + cell],
                           in.m_stage[2 * cells + cell]};
+        if (!isfinite(m[0]) || !isfinite(m[1]) || !isfinite(m[2])) {
+            atomicExch(digest + 4, 1ULL);
+            continue;
+        }
         for (uint32_t component = 0; component < 3; ++component) {
             const double value = m[component];
-            if (!isfinite(value)) { atomicExch(digest + 4, 1ULL); return; }
             unsigned long long mixed = __double_as_longlong(value) ^
                 (UINT64_C(0x9e3779b97f4a7c15) * (component + 1)) ^
                 (UINT64_C(0xd6e8feb86659fd93) * (cell + 1));
@@ -848,7 +869,7 @@ __global__ void assemble_sparse_cells_kernel(SolveInput in, uint8_t *active,
                 unsigned long long lane_value = mixed ^
                     (UINT64_C(0x517cc1b727220a95) * (lane + 1));
                 lane_value ^= lane_value >> (13 + lane);
-                atomicAdd(digest + lane, lane_value);
+                sums[lane] += lane_value;
             }
         }
         const double sf = material->spin_flip_length > 0.0
@@ -915,10 +936,8 @@ __global__ void assemble_sparse_cells_kernel(SolveInput in, uint8_t *active,
                 rhs[uint64_t(c)*cells+cell] -= sign*area[axis]*source[c]/volume;
         }
     }
+    add_warp_digest_words(sums, digest);
 }
-
-// The two launch sites below use a whole number of 32-thread CUDA warps.
-inline constexpr uint32_t kResultHashThreads = 256;
 
 __global__ void hash_fp64_result_kernel(const double *values, uint64_t count,
                                         uint64_t domain,
@@ -943,16 +962,7 @@ __global__ void hash_fp64_result_kernel(const double *values, uint64_t count,
             sums[lane] += mixed ^ (UINT64_C(0x517cc1b727220a95) * (lane + 1));
     }
 
-    // The digest adds unsigned words modulo 2^64. Grouping the additions
-    // changes neither the digest bytes nor the independent nonfinite flag.
-    constexpr uint32_t full_warp = 0xffffffffu;
-    const bool leader = threadIdx.x % 32 == 0;
-    for (uint32_t lane = 0; lane < 4; ++lane) {
-        unsigned long long sum = sums[lane];
-        for (uint32_t offset = 16; offset != 0; offset >>= 1)
-            sum += __shfl_down_sync(full_warp, sum, offset);
-        if (leader) atomicAdd(digest + lane, sum);
-    }
+    add_warp_digest_words(sums, digest);
 }
 
 __global__ void assemble_sparse_interfaces_kernel(
@@ -2052,7 +2062,7 @@ uint32_t materialize_full_fields_impl(
         const uint64_t count = digest_counts[domain];
         const uint32_t field_blocks = static_cast<uint32_t>(
             (count + 255) / 256 > 65535 ? 65535 : (count + 255) / 256);
-        hash_fp64_result_kernel<<<field_blocks == 0 ? 1 : field_blocks, kResultHashThreads, 0,
+        hash_fp64_result_kernel<<<field_blocks == 0 ? 1 : field_blocks, kDigestThreads, 0,
                                   input.stream>>>(
             digest_fields[domain], count, domain, scratch->digest);
     }
@@ -2299,16 +2309,30 @@ uint32_t solve_device(const SolveInput &input, SolveOutput *output) noexcept {
             ? retained_endpoint_bytes : 0;
     auto &s=state.storage;
     const bool reuse_trial_solution = input.reuse_trial_solution && !rebuild_storage;
+    const bool use_accepted_seed = !reuse_trial_solution &&
+        input.accepted_seed[0] != nullptr && input.accepted_seed[1] != nullptr &&
+        input.accepted_seed[2] != nullptr;
     const auto clear_solution = [&]() {
         return cudaMemsetAsync(s.solution_soa, 0, unknowns * sizeof(double), input.stream);
     };
     if (cudaMemsetAsync(s.digest_accumulator, 0,
                         5 * sizeof(unsigned long long), input.stream) != cudaSuccess ||
-        (!reuse_trial_solution && clear_solution() != cudaSuccess)) {
+        (!reuse_trial_solution && !use_accepted_seed && clear_solution() != cudaSuccess)) {
         return FULLMAG_FDM_GPU_TRANSPORT_ERROR_CUDA_RUNTIME_ERROR;
     }
-    const uint32_t blocks=uint32_t((cells+255)/256>65535?65535:(cells+255)/256);
-    assemble_sparse_cells_kernel<<<blocks,256,0,input.stream>>>(input,s.active,
+    if (use_accepted_seed) {
+        const uint64_t component_bytes = cells * sizeof(double);
+        for (uint32_t component = 0; component < 3; ++component) {
+            if (cudaMemcpyAsync(s.solution_soa + component * cells, input.accepted_seed[component],
+                                component_bytes, cudaMemcpyDeviceToDevice, input.stream) != cudaSuccess)
+                return FULLMAG_FDM_GPU_TRANSPORT_ERROR_CUDA_RUNTIME_ERROR;
+            ++output->state_d2d_count;
+            output->state_d2d_bytes += component_bytes;
+        }
+    }
+    const uint32_t blocks = static_cast<uint32_t>(
+        std::min<uint64_t>(65535, (cells + kDigestThreads - 1) / kDigestThreads));
+    assemble_sparse_cells_kernel<<<blocks,kDigestThreads,0,input.stream>>>(input,s.active,
         s.spin_conductivity,s.local_block_soa,s.rhs_soa,s.digest_accumulator);
     if(interface_entries) assemble_sparse_interfaces_kernel<<<uint32_t((interface_entries+255)/256),256,0,input.stream>>>(
         input,s.interface_record_indices,s.interface_roles,interface_entries,s.interface_blocks_soa);
@@ -2329,6 +2353,8 @@ uint32_t solve_device(const SolveInput &input, SolveOutput *output) noexcept {
     op.interface_columns=interface_entries?s.interface_columns:nullptr;
     op.interface_blocks_soa=interface_entries?s.interface_blocks_soa:nullptr;
     op.interface_nonzeros=interface_entries; op.operator_revision=input.operator_revision;
+    // Static spin cell/material views are immutable for this owning context.
+    op.geometry_token = input.payloads[0];
     op.resident_external_bytes=input.resident_external_bytes+s.owned_bytes;
     op.resolved_device_budget_bytes = resolved_device_budget_bytes;
     for(uint32_t i=0;i<32;++i) op.operator_digest[i]=uint8_t(
@@ -2338,7 +2364,8 @@ uint32_t solve_device(const SolveInput &input, SolveOutput *output) noexcept {
     const bool was_cached=state.hierarchy.valid && state.hierarchy.operator_revision==op.operator_revision &&
         std::memcmp(state.hierarchy.operator_digest,op.operator_digest,32)==0;
     uint32_t status=sparse::prepare(op,input.stream,&state.hierarchy,&state.workspace,&build);
-    trace_phase(was_cached ? "sparse_prepare_cache_hit" : "sparse_prepare_build");
+    trace_phase(was_cached ? "sparse_prepare_cache_hit" :
+                build.refreshed_fixed_geometry ? "sparse_prepare_refresh" : "sparse_prepare_build");
     if(status!=0)return status==2?FULLMAG_FDM_GPU_TRANSPORT_ERROR_OUT_OF_MEMORY:FULLMAG_FDM_GPU_TRANSPORT_ERROR_OUT_OF_RESOURCES;
     if (was_cached) {
         uint64_t retained_coarse_cells = 0;
@@ -2369,7 +2396,7 @@ uint32_t solve_device(const SolveInput &input, SolveOutput *output) noexcept {
     };
     sparse::SolveMetrics metrics{};
     status = solve(metrics);
-    const bool retry_cold = reuse_trial_solution && status != 0 &&
+    const bool retry_cold = (reuse_trial_solution || use_accepted_seed) && status != 0 &&
         metrics.forbidden_transfer_bytes == 0 &&
         (metrics.reason == sparse::ConvergenceReason::maximum_iterations ||
          metrics.reason == sparse::ConvergenceReason::non_finite);
@@ -2391,7 +2418,7 @@ uint32_t solve_device(const SolveInput &input, SolveOutput *output) noexcept {
         std::fprintf(stderr,
                      "spin_gmres seed=%s cold_retry=%u iterations=%llu "
                      "failed_warm_iterations=%llu residual=%.17g device_ms=%.6f\n",
-                     reuse_trial_solution ? "trial" : "zero",
+                     reuse_trial_solution ? "trial" : use_accepted_seed ? "accepted" : "zero",
                      retry_cold && !cold_reset_failed ? 1u : 0u,
                      static_cast<unsigned long long>(metrics.iterations),
                      static_cast<unsigned long long>(output->failed_warm_iterations),
@@ -2505,7 +2532,7 @@ uint32_t solve_device(const SolveInput &input, SolveOutput *output) noexcept {
             const uint32_t field_blocks = static_cast<uint32_t>(
                 (digest_counts[domain] + 255) / 256 > 65535
                     ? 65535 : (digest_counts[domain] + 255) / 256);
-            hash_fp64_result_kernel<<<field_blocks, kResultHashThreads, 0, input.stream>>>(
+            hash_fp64_result_kernel<<<field_blocks, kDigestThreads, 0, input.stream>>>(
                 digest_fields[domain], digest_counts[domain], domain,
                 s.digest_accumulator);
         }
@@ -2542,8 +2569,8 @@ uint32_t solve_device(const SolveInput &input, SolveOutput *output) noexcept {
                 release(candidate);
                 return FULLMAG_FDM_GPU_TRANSPORT_ERROR_CUDA_RUNTIME_ERROR;
             }
-            output->state_d2d_count = 3;
-            output->state_d2d_bytes = retained_endpoint_bytes;
+            output->state_d2d_count += 3;
+            output->state_d2d_bytes += retained_endpoint_bytes;
         }
 
         output->buffers = candidate;

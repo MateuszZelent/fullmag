@@ -455,8 +455,9 @@ __device__ void apply_fine(const Operator &op, const double *input,
     grid_group.sync();
 }
 
+template <typename Group>
 __device__ void apply_coarse(const Level &level, const double *input,
-                             double *output, cg::grid_group grid_group) {
+                             double *output, Group grid_group) {
     const uint64_t unknowns = 3 * level.cells;
     for (uint64_t unknown = grid_group.thread_rank(); unknown < unknowns;
          unknown += grid_group.size()) {
@@ -715,12 +716,13 @@ __device__ void fine_block_jacobi_sweep(const Operator &op,
     vector_axpy(x, temporary, values, kJacobiWeight, grid_group);
 }
 
+template <typename Group>
 __device__ void coarse_chebyshev_solve(const Level &level, const double *rhs,
                                        double *x, double *temporary,
                                        double *direction,
                                        double *scaled_residual,
                                        double *coefficients,
-                                       cg::grid_group grid_group) {
+                                       Group grid_group) {
     // Gershgorin bounds for D^-1 A depend only on the cached operator. They
     // therefore preserve a fixed linear preconditioner, unlike RHS-dependent
     // CG coefficients or convergence exits. The component coarse operators
@@ -891,9 +893,21 @@ __device__ void amg_precondition(const Operator &op,
                                    coarse_offset(hierarchy, level + 1),
                                hierarchy.levels[level + 1], grid_group);
         } else {
-            coarse_chebyshev_solve(
-                current, rhs, x, temporary, direction, operator_direction,
-                workspace.small + kScalarOffset + 4, grid_group);
+            // Every coarsest unknown fits in the first block for the usual
+            // hierarchy. Keep the 128-sweep recurrence and its arithmetic, but
+            // put only one grid-wide barrier around that entire block solve.
+            if (current.cells <= kThreads / 3) {
+                if (blockIdx.x == 0) {
+                    coarse_chebyshev_solve(
+                        current, rhs, x, temporary, direction, operator_direction,
+                        workspace.small + kScalarOffset + 4, cg::this_thread_block());
+                }
+                grid_group.sync();
+            } else {
+                coarse_chebyshev_solve(
+                    current, rhs, x, temporary, direction, operator_direction,
+                    workspace.small + kScalarOffset + 4, grid_group);
+            }
             if (down_phase_residuals != nullptr) {
                 apply_coarse(current, x, temporary, grid_group);
                 for (uint64_t i = grid_group.thread_rank();
@@ -1342,7 +1356,6 @@ uint32_t allocate_workspace(const Operator &input,
     if (workspace->vector_unknowns == unknowns && workspace->basis != nullptr)
         return ok;
     release(workspace);
-    uint64_t workspace_bytes = 0;
     workspace->vector_unknowns = unknowns;
     uint64_t coarse_cells_sum = 0;
     for (uint32_t level = 1; level < hierarchy.level_count; ++level)
@@ -1357,23 +1370,40 @@ uint32_t allocate_workspace(const Operator &input,
     }
     workspace->reduction_blocks = std::min<uint64_t>(
         uint64_t(properties.multiProcessorCount) * 2, 1024);
-    if (!allocate_values(&workspace->basis, uint64_t(kRestart + 1) * unknowns,
-                         &workspace_bytes) ||
-        !allocate_values(&workspace->vector_a, unknowns, &workspace_bytes) ||
-        !allocate_values(&workspace->vector_b, unknowns, &workspace_bytes) ||
-        !allocate_values(&workspace->vector_c, unknowns, &workspace_bytes) ||
-        !allocate_values(&workspace->coarse_vectors,
-                         workspace->coarse_vector_values, &workspace_bytes) ||
-        !allocate_values(&workspace->reduction_partials,
-                         workspace->reduction_blocks, &workspace_bytes) ||
-        !allocate_values(&workspace->small, kSmallValues, &workspace_bytes) ||
-        !allocate_values(&workspace->device_status,
-                         (kDeviceStatusBytes + sizeof(uint32_t) - 1) /
-                             sizeof(uint32_t),
-                         &workspace_bytes)) {
-        release(workspace);
+    uint64_t basis_values = 0;
+    uint64_t vector_values = 0;
+    uint64_t scratch_values = 0;
+    uint64_t double_values = 0;
+    uint64_t workspace_bytes = 0;
+    if (!checked_mul(kRestart + 1, unknowns, &basis_values) ||
+        !checked_mul(3, unknowns, &vector_values) ||
+        !checked_add(workspace->coarse_vector_values, workspace->reduction_blocks,
+                     &scratch_values) ||
+        !checked_add(scratch_values, kSmallValues, &scratch_values) ||
+        !checked_add(basis_values, vector_values, &double_values) ||
+        !checked_add(double_values, scratch_values, &double_values) ||
+        !checked_mul(double_values, sizeof(double), &workspace_bytes) ||
+        !checked_add(workspace_bytes, kDeviceStatusBytes, &workspace_bytes)) {
+        *workspace = {};
+        return resource_limit;
+    }
+
+    // All slices have the same lifetime and are released before field output.
+    // The result records need no stricter alignment than the double slices.
+    static_assert(alignof(DeviceResult) <= alignof(double));
+    static_assert(alignof(DevicePreconditionerAudit) <= alignof(double));
+    if (!allocate(reinterpret_cast<void **>(&workspace->basis), workspace_bytes)) {
+        *workspace = {};
         return out_of_memory;
     }
+    workspace->vector_a = workspace->basis + basis_values;
+    workspace->vector_b = workspace->vector_a + unknowns;
+    workspace->vector_c = workspace->vector_b + unknowns;
+    double *scratch = workspace->vector_c + unknowns;
+    workspace->coarse_vectors = workspace->coarse_vector_values == 0 ? nullptr : scratch;
+    workspace->reduction_partials = scratch + workspace->coarse_vector_values;
+    workspace->small = workspace->reduction_partials + workspace->reduction_blocks;
+    workspace->device_status = reinterpret_cast<uint32_t *>(workspace->small + kSmallValues);
     workspace->owned_bytes = workspace_bytes;
     return ok;
 }
@@ -1382,13 +1412,7 @@ uint32_t allocate_workspace(const Operator &input,
 
 void release(Workspace *workspace) noexcept {
     if (workspace == nullptr) return;
-    void *pointers[] = {workspace->basis, workspace->vector_a,
-                        workspace->vector_b, workspace->vector_c,
-                        workspace->coarse_vectors,
-                        workspace->reduction_partials, workspace->small,
-                        workspace->device_status};
-    for (void *pointer : pointers)
-        if (pointer != nullptr) (void)cudaFree(pointer);
+    if (workspace->basis != nullptr) (void)cudaFree(workspace->basis);
     *workspace = {};
 }
 
@@ -1406,9 +1430,15 @@ uint32_t prepare(const Operator &input, cudaStream_t stream,
         return invalid_argument;
     const uint64_t cells = cells_of(input.grid);
     const uint64_t unknowns = 3 * cells;
-    if (hierarchy->valid && hierarchy->operator_revision == input.operator_revision &&
-        same_digest(hierarchy->operator_digest, input.operator_digest) &&
-        same_grid(hierarchy->fine_grid, input.grid)) {
+    const bool same_owner_and_shape = hierarchy->valid &&
+        hierarchy->operator_revision == input.operator_revision &&
+        hierarchy->geometry_token == input.geometry_token &&
+        same_grid(hierarchy->fine_grid, input.grid) &&
+        hierarchy->cell_size[0] == input.cell_size[0] &&
+        hierarchy->cell_size[1] == input.cell_size[1] &&
+        hierarchy->cell_size[2] == input.cell_size[2];
+    if (same_owner_and_shape &&
+        same_digest(hierarchy->operator_digest, input.operator_digest)) {
         const uint32_t workspace_status =
             allocate_workspace(input, *hierarchy, workspace);
         if (workspace_status != ok) return workspace_status;
@@ -1423,135 +1453,161 @@ uint32_t prepare(const Operator &input, cudaStream_t stream,
             ? ok : resource_limit;
     }
     release(workspace);
-    release(hierarchy);
+    const bool refresh_geometry = same_owner_and_shape && input.geometry_token != nullptr;
+    if (!refresh_geometry) release(hierarchy);
+    hierarchy->valid = false;
 
     cudaEvent_t begin = nullptr;
     cudaEvent_t end = nullptr;
-    if (cudaEventCreate(&begin) != cudaSuccess || cudaEventCreate(&end) != cudaSuccess)
+    if (cudaEventCreate(&begin) != cudaSuccess || cudaEventCreate(&end) != cudaSuccess) {
+        if (begin != nullptr) (void)cudaEventDestroy(begin);
+        release(hierarchy);
         return cuda_failure;
+    }
     (void)cudaEventRecord(begin, stream);
 
-    hierarchy->levels[0].grid = input.grid;
-    hierarchy->levels[0].cells = cells;
-    hierarchy->level_count = 1;
-    unsigned long long *device_strength = nullptr;
-    if (cudaMalloc(&device_strength, 3 * sizeof(unsigned long long)) != cudaSuccess) {
-        (void)cudaEventDestroy(begin);
-        (void)cudaEventDestroy(end);
-        return out_of_memory;
-    }
-    while (hierarchy->level_count < kMaximumLevels &&
-           hierarchy->levels[hierarchy->level_count - 1].cells > 32) {
-        const uint32_t level_index = hierarchy->level_count;
-        const Level &previous = hierarchy->levels[level_index - 1];
-        Level &coarse = hierarchy->levels[level_index];
-        unsigned long long host_strength[3]{};
-        if (cudaMemsetAsync(device_strength, 0,
-                            3 * sizeof(unsigned long long), stream) != cudaSuccess) {
-            (void)cudaFree(device_strength);
-            (void)cudaEventDestroy(begin);
-            (void)cudaEventDestroy(end);
-            release(hierarchy);
-            return cuda_failure;
+    if (refresh_geometry) {
+        // Face weights and coarsening depend on the immutable spin mask,
+        // conductivities and cell sizes. Re-evaluate the diagonal from the
+        // current reaction blocks with the original summation order.
+        for (uint32_t level = 1; level < hierarchy->level_count; ++level) {
+            const Level &previous = hierarchy->levels[level - 1];
+            const Level &current = hierarchy->levels[level];
+            const uint32_t blocks = uint32_t(std::min<uint64_t>(
+                4096, (current.cells + kThreads - 1) / kThreads));
+            build_level_cells_kernel<<<blocks, kThreads, 0, stream>>>(
+                input, previous, level - 1, current);
+            finalize_level_kernel<<<blocks, kThreads, 0, stream>>>(current);
         }
-        const uint32_t strength_blocks = uint32_t(std::min<uint64_t>(
-            4096, (previous.cells + kThreads - 1) / kThreads));
-        measure_direction_strength_kernel<<<strength_blocks, kThreads, 0, stream>>>(
-            input, previous, level_index - 1, device_strength);
-        if (cudaMemcpyAsync(host_strength, device_strength,
-                            sizeof(host_strength), cudaMemcpyDeviceToHost,
-                            stream) != cudaSuccess ||
-            cudaStreamSynchronize(stream) != cudaSuccess) {
-            (void)cudaFree(device_strength);
-            (void)cudaEventDestroy(begin);
-            (void)cudaEventDestroy(end);
-            release(hierarchy);
-            return cuda_failure;
-        }
-        ++metrics->control_transfer_count;
-        metrics->control_transfer_bytes += sizeof(host_strength);
-        ++metrics->control_host_sync_count;
-        double maximum_strength = 0.0;
-        double strengths[3]{};
-        for (uint32_t axis = 0; axis < 3; ++axis) {
-            std::memcpy(&strengths[axis], &host_strength[axis], sizeof(double));
-            maximum_strength = std::max(maximum_strength, strengths[axis]);
-        }
-        uint32_t strongest_axis = 0;
-        for (uint32_t axis = 1; axis < 3; ++axis)
-            if (strengths[axis] > strengths[strongest_axis]) strongest_axis = axis;
-        coarse.strong_direction_mask = 0;
-        for (uint32_t axis = 0; axis < 3; ++axis) {
-            const bool strong = previous.grid[axis] > 1 &&
-                ((maximum_strength > 0.0 &&
-                  strengths[axis] >= kStrongThreshold * maximum_strength) ||
-                 (maximum_strength == 0.0 && axis == strongest_axis));
-            coarse.coarsen_from_parent[axis] = strong ? 2 : 1;
-            if (strong) coarse.strong_direction_mask |= 1u << axis;
-        }
-        if (coarse.strong_direction_mask == 0) {
-            for (uint32_t axis = 0; axis < 3; ++axis) {
-                if (previous.grid[axis] > 1) {
-                    coarse.coarsen_from_parent[axis] = 2;
-                    coarse.strong_direction_mask = 1u << axis;
-                    break;
-                }
-            }
-        }
-        coarse.grid = {{
-            (previous.grid[0] + coarse.coarsen_from_parent[0] - 1) /
-                coarse.coarsen_from_parent[0],
-            (previous.grid[1] + coarse.coarsen_from_parent[1] - 1) /
-                coarse.coarsen_from_parent[1],
-            (previous.grid[2] + coarse.coarsen_from_parent[2] - 1) /
-                coarse.coarsen_from_parent[2]}};
-        coarse.cells = cells_of(coarse.grid);
-        uint64_t level_bytes = 0;
-        const uint64_t fx = face_count(coarse.grid, 0);
-        const uint64_t fy = face_count(coarse.grid, 1);
-        const uint64_t fz = face_count(coarse.grid, 2);
-        if (coarse.cells == 0 || fx == 0 || fy == 0 || fz == 0 ||
-            !allocate_values(&coarse.active, coarse.cells, &level_bytes) ||
-            !allocate_values(&coarse.gx, fx, &level_bytes) ||
-            !allocate_values(&coarse.gy, fy, &level_bytes) ||
-            !allocate_values(&coarse.gz, fz, &level_bytes) ||
-            !allocate_values(&coarse.diagonal, 3 * coarse.cells, &level_bytes) ||
-            !allocate_values(&coarse.strong_edges, coarse.cells, &level_bytes)) {
-            (void)cudaEventDestroy(begin);
-            (void)cudaEventDestroy(end);
-            (void)cudaFree(device_strength);
-            release(hierarchy);
-            return out_of_memory;
-        }
-        coarse.bytes = level_bytes;
-        hierarchy->owned_bytes += level_bytes;
-        const uint32_t blocks = uint32_t(std::min<uint64_t>(
-            4096, (coarse.cells + kThreads - 1) / kThreads));
-        build_level_cells_kernel<<<blocks, kThreads, 0, stream>>>(
-            input, previous, level_index - 1, coarse);
-        build_level_faces_kernel<<<uint32_t(std::min<uint64_t>(4096, (fx+kThreads-1)/kThreads)),
-                                   kThreads, 0, stream>>>(input, previous,
-                                                         level_index - 1,
-                                                         coarse, 0, fx);
-        build_level_faces_kernel<<<uint32_t(std::min<uint64_t>(4096, (fy+kThreads-1)/kThreads)),
-                                   kThreads, 0, stream>>>(input, previous,
-                                                         level_index - 1,
-                                                         coarse, 1, fy);
-        build_level_faces_kernel<<<uint32_t(std::min<uint64_t>(4096, (fz+kThreads-1)/kThreads)),
-                                   kThreads, 0, stream>>>(input, previous,
-                                                         level_index - 1,
-                                                         coarse, 2, fz);
-        finalize_level_kernel<<<blocks, kThreads, 0, stream>>>(coarse);
         if (cudaPeekAtLastError() != cudaSuccess) {
             (void)cudaEventDestroy(begin);
             (void)cudaEventDestroy(end);
-            (void)cudaFree(device_strength);
             release(hierarchy);
             return cuda_failure;
         }
-        ++hierarchy->level_count;
+    } else {
+        hierarchy->levels[0].grid = input.grid;
+        hierarchy->levels[0].cells = cells;
+        hierarchy->level_count = 1;
+        unsigned long long *device_strength = nullptr;
+        if (cudaMalloc(&device_strength, 3 * sizeof(unsigned long long)) != cudaSuccess) {
+            (void)cudaEventDestroy(begin);
+            (void)cudaEventDestroy(end);
+            return out_of_memory;
+        }
+        while (hierarchy->level_count < kMaximumLevels &&
+               hierarchy->levels[hierarchy->level_count - 1].cells > 32) {
+            const uint32_t level_index = hierarchy->level_count;
+            const Level &previous = hierarchy->levels[level_index - 1];
+            Level &coarse = hierarchy->levels[level_index];
+            unsigned long long host_strength[3]{};
+            if (cudaMemsetAsync(device_strength, 0,
+                                3 * sizeof(unsigned long long), stream) != cudaSuccess) {
+                (void)cudaFree(device_strength);
+                (void)cudaEventDestroy(begin);
+                (void)cudaEventDestroy(end);
+                release(hierarchy);
+                return cuda_failure;
+            }
+            const uint32_t strength_blocks = uint32_t(std::min<uint64_t>(
+                4096, (previous.cells + kThreads - 1) / kThreads));
+            measure_direction_strength_kernel<<<strength_blocks, kThreads, 0, stream>>>(
+                input, previous, level_index - 1, device_strength);
+            if (cudaMemcpyAsync(host_strength, device_strength,
+                                sizeof(host_strength), cudaMemcpyDeviceToHost,
+                                stream) != cudaSuccess ||
+                cudaStreamSynchronize(stream) != cudaSuccess) {
+                (void)cudaFree(device_strength);
+                (void)cudaEventDestroy(begin);
+                (void)cudaEventDestroy(end);
+                release(hierarchy);
+                return cuda_failure;
+            }
+            ++metrics->control_transfer_count;
+            metrics->control_transfer_bytes += sizeof(host_strength);
+            ++metrics->control_host_sync_count;
+            double maximum_strength = 0.0;
+            double strengths[3]{};
+            for (uint32_t axis = 0; axis < 3; ++axis) {
+                std::memcpy(&strengths[axis], &host_strength[axis], sizeof(double));
+                maximum_strength = std::max(maximum_strength, strengths[axis]);
+            }
+            uint32_t strongest_axis = 0;
+            for (uint32_t axis = 1; axis < 3; ++axis)
+                if (strengths[axis] > strengths[strongest_axis]) strongest_axis = axis;
+            coarse.strong_direction_mask = 0;
+            for (uint32_t axis = 0; axis < 3; ++axis) {
+                const bool strong = previous.grid[axis] > 1 &&
+                    ((maximum_strength > 0.0 &&
+                      strengths[axis] >= kStrongThreshold * maximum_strength) ||
+                     (maximum_strength == 0.0 && axis == strongest_axis));
+                coarse.coarsen_from_parent[axis] = strong ? 2 : 1;
+                if (strong) coarse.strong_direction_mask |= 1u << axis;
+            }
+            if (coarse.strong_direction_mask == 0) {
+                for (uint32_t axis = 0; axis < 3; ++axis) {
+                    if (previous.grid[axis] > 1) {
+                        coarse.coarsen_from_parent[axis] = 2;
+                        coarse.strong_direction_mask = 1u << axis;
+                        break;
+                    }
+                }
+            }
+            coarse.grid = {{
+                (previous.grid[0] + coarse.coarsen_from_parent[0] - 1) /
+                    coarse.coarsen_from_parent[0],
+                (previous.grid[1] + coarse.coarsen_from_parent[1] - 1) /
+                    coarse.coarsen_from_parent[1],
+                (previous.grid[2] + coarse.coarsen_from_parent[2] - 1) /
+                    coarse.coarsen_from_parent[2]}};
+            coarse.cells = cells_of(coarse.grid);
+            uint64_t level_bytes = 0;
+            const uint64_t fx = face_count(coarse.grid, 0);
+            const uint64_t fy = face_count(coarse.grid, 1);
+            const uint64_t fz = face_count(coarse.grid, 2);
+            if (coarse.cells == 0 || fx == 0 || fy == 0 || fz == 0 ||
+                !allocate_values(&coarse.active, coarse.cells, &level_bytes) ||
+                !allocate_values(&coarse.gx, fx, &level_bytes) ||
+                !allocate_values(&coarse.gy, fy, &level_bytes) ||
+                !allocate_values(&coarse.gz, fz, &level_bytes) ||
+                !allocate_values(&coarse.diagonal, 3 * coarse.cells, &level_bytes) ||
+                !allocate_values(&coarse.strong_edges, coarse.cells, &level_bytes)) {
+                (void)cudaEventDestroy(begin);
+                (void)cudaEventDestroy(end);
+                (void)cudaFree(device_strength);
+                release(hierarchy);
+                return out_of_memory;
+            }
+            coarse.bytes = level_bytes;
+            hierarchy->owned_bytes += level_bytes;
+            const uint32_t blocks = uint32_t(std::min<uint64_t>(
+                4096, (coarse.cells + kThreads - 1) / kThreads));
+            build_level_cells_kernel<<<blocks, kThreads, 0, stream>>>(
+                input, previous, level_index - 1, coarse);
+            build_level_faces_kernel<<<uint32_t(std::min<uint64_t>(4096, (fx+kThreads-1)/kThreads)),
+                                       kThreads, 0, stream>>>(input, previous,
+                                                             level_index - 1,
+                                                             coarse, 0, fx);
+            build_level_faces_kernel<<<uint32_t(std::min<uint64_t>(4096, (fy+kThreads-1)/kThreads)),
+                                       kThreads, 0, stream>>>(input, previous,
+                                                             level_index - 1,
+                                                             coarse, 1, fy);
+            build_level_faces_kernel<<<uint32_t(std::min<uint64_t>(4096, (fz+kThreads-1)/kThreads)),
+                                       kThreads, 0, stream>>>(input, previous,
+                                                             level_index - 1,
+                                                             coarse, 2, fz);
+            finalize_level_kernel<<<blocks, kThreads, 0, stream>>>(coarse);
+            if (cudaPeekAtLastError() != cudaSuccess) {
+                (void)cudaEventDestroy(begin);
+                (void)cudaEventDestroy(end);
+                (void)cudaFree(device_strength);
+                release(hierarchy);
+                return cuda_failure;
+            }
+            ++hierarchy->level_count;
+        }
+        (void)cudaFree(device_strength);
     }
-    (void)cudaFree(device_strength);
 
     const uint32_t workspace_status =
         allocate_workspace(input, *hierarchy, workspace);
@@ -1564,6 +1620,8 @@ uint32_t prepare(const Operator &input, cudaStream_t stream,
     hierarchy->operator_revision = input.operator_revision;
     std::memcpy(hierarchy->operator_digest, input.operator_digest, 32);
     hierarchy->fine_grid = input.grid;
+    hierarchy->cell_size = input.cell_size;
+    hierarchy->geometry_token = input.geometry_token;
     hierarchy->valid = true;
 
     (void)cudaEventRecord(end, stream);
@@ -1583,6 +1641,7 @@ uint32_t prepare(const Operator &input, cudaStream_t stream,
         hierarchy->levels[hierarchy->level_count - 1].cells * 3;
     metrics->level_count = hierarchy->level_count;
     metrics->setup_milliseconds = milliseconds;
+    metrics->refreshed_fixed_geometry = refresh_geometry;
     metrics->bytes = ledger_for(input, *hierarchy, *workspace);
     metrics->peak_device_bytes = metrics->bytes.total_high_water;
     if (metrics->peak_device_bytes > input.resolved_device_budget_bytes) {
@@ -1601,6 +1660,10 @@ uint32_t solve(const Operator &input, cudaStream_t stream,
         !hierarchy.valid || hierarchy.operator_revision != input.operator_revision ||
         !same_digest(hierarchy.operator_digest, input.operator_digest) ||
         !same_grid(hierarchy.fine_grid, input.grid) ||
+        hierarchy.geometry_token != input.geometry_token ||
+        hierarchy.cell_size[0] != input.cell_size[0] ||
+        hierarchy.cell_size[1] != input.cell_size[1] ||
+        hierarchy.cell_size[2] != input.cell_size[2] ||
         workspace.vector_unknowns != 3 * cells_of(input.grid) ||
         !std::isfinite(relative_tolerance) || relative_tolerance <= 0.0 ||
         relative_tolerance >= 1.0 || max_iterations == 0)
@@ -1683,6 +1746,10 @@ uint32_t audit_preconditioner(const Operator &input, cudaStream_t stream,
         !hierarchy.valid || hierarchy.operator_revision != input.operator_revision ||
         !same_digest(hierarchy.operator_digest, input.operator_digest) ||
         !same_grid(hierarchy.fine_grid, input.grid) ||
+        hierarchy.geometry_token != input.geometry_token ||
+        hierarchy.cell_size[0] != input.cell_size[0] ||
+        hierarchy.cell_size[1] != input.cell_size[1] ||
+        hierarchy.cell_size[2] != input.cell_size[2] ||
         workspace.vector_unknowns != 3 * cells_of(input.grid))
         return invalid_argument;
 

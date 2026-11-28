@@ -78,14 +78,14 @@ void require(bool condition, const std::string &message) {
     if (!condition) fail(message);
 }
 
-fullmag_fdm_execution_receipt_v1 query_execution_receipt(
+fullmag_fdm_execution_receipt_v2 query_execution_receipt(
     fullmag_fdm_backend *backend,
     const std::string &scenario)
 {
-    fullmag_fdm_execution_receipt_v1 receipt{};
-    receipt.abi_version = FULLMAG_FDM_EXECUTION_RECEIPT_ABI_V1;
+    fullmag_fdm_execution_receipt_v2 receipt{};
+    receipt.abi_version = FULLMAG_FDM_EXECUTION_RECEIPT_ABI_V2;
     receipt.struct_size = sizeof(receipt);
-    require(fullmag_fdm_backend_execution_receipt_v1(backend, &receipt) ==
+    require(fullmag_fdm_backend_execution_receipt_v2(backend, &receipt) ==
                 FULLMAG_FDM_OK,
             scenario + ": execution receipt query failed");
     return receipt;
@@ -116,11 +116,19 @@ void require_llg_stage_transfer_audit(
                 context, cursor, records.data(), records.size(), &count) ==
                 FULLMAG_FDM_GPU_TRANSPORT_ERROR_OK,
             scenario + ": LLG stage telemetry query failed");
-    require(count == 4 * expected_stages,
-            scenario + ": LLG stage transfer audit has the wrong record count");
+    uint64_t static_upload_count = 0;
     std::array<uint64_t, 4> reason_counts{};
     for (uint64_t index = 0; index < count; ++index) {
         const auto &record = records[index];
+        if (record.reason == FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_REASON_STATIC_UPLOAD_H2D) {
+            ++static_upload_count;
+            require(record.status == FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_STATUS_SUCCESS &&
+                    record.direction == FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_DIRECTION_H2D &&
+                    record.attempt_id == 0 && record.stage_id == 0 &&
+                    record.bytes >= (cell_count + 1) * sizeof(uint64_t) && record.count > 0,
+                    scenario + ": invalid sparse setup upload");
+            continue;
+        }
         require(record.status ==
                     FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_STATUS_SUCCESS &&
                     record.attempt_id == 1 && record.stage_id >= 1 &&
@@ -169,6 +177,8 @@ void require_llg_stage_transfer_audit(
                  ": forbidden field, artifact, or checkpoint transfer entered the LLG hot loop");
         }
     }
+    require(static_upload_count <= 1 && count == 4 * expected_stages + static_upload_count,
+            scenario + ": LLG stage transfer audit has the wrong record count");
     for (uint64_t reason_count : reason_counts) {
         require(reason_count == expected_stages,
                 scenario + ": LLG stage audit is missing a required transfer class");
@@ -676,7 +686,12 @@ void require_observations_equal(
     }
 }
 
-void require_bound_spin_checkpoint(
+struct BoundSpinCheckpoint {
+    std::vector<uint8_t> payload;
+    fullmag_fdm_gpu_transport_checkpoint_export_result_v1 metadata;
+};
+
+BoundSpinCheckpoint require_bound_spin_checkpoint(
     fullmag_fdm_gpu_transport_context_handle_v1 context,
     const fullmag_fdm_gpu_charge_snapshot_info_v1 &snapshot,
     const uint8_t *static_digest)
@@ -752,6 +767,7 @@ void require_bound_spin_checkpoint(
     require(std::memcmp(first.spin_digest, second.spin_digest, 32) == 0 &&
                 std::memcmp(first.warm_start_digest, second.warm_start_digest, 32) == 0,
             "repeat checkpoint export changed the accepted scientific state");
+    return {std::move(payload), second};
 }
 
 std::vector<double> readback(
@@ -780,6 +796,170 @@ std::vector<double> readback(
     require(status == FULLMAG_FDM_GPU_TRANSPORT_ERROR_OK,
             "public GPU artifact readback failed");
     return values;
+}
+
+void set_checkpoint_identity(
+    fullmag_fdm_backend *backend,
+    fullmag_fdm_integrator integrator)
+{
+    fullmag_fdm_execution_receipt_v2 receipt{};
+    receipt.abi_version = FULLMAG_FDM_EXECUTION_RECEIPT_ABI_V2;
+    receipt.struct_size = sizeof(receipt);
+    require(fullmag_fdm_backend_execution_receipt_v2(backend, &receipt) ==
+              FULLMAG_FDM_OK,
+          "checkpoint device receipt query failed");
+    require(receipt.device_ordinal >= 0,
+          "checkpoint device receipt has no CUDA ordinal");
+    fullmag_fdm_checkpoint_execution_identity_v3 identity{};
+    identity.abi_version = FULLMAG_FDM_CHECKPOINT_EXECUTION_IDENTITY_ABI_V3;
+    identity.struct_size = sizeof(identity);
+    identity.requested_backend = FULLMAG_FDM_CHECKPOINT_BACKEND_FDM;
+    identity.resolved_backend = FULLMAG_FDM_CHECKPOINT_BACKEND_FDM;
+    identity.executed_backend = FULLMAG_FDM_CHECKPOINT_BACKEND_FDM;
+    identity.requested_policy = FULLMAG_FDM_CHECKPOINT_POLICY_STRICT;
+    identity.resolved_policy = FULLMAG_FDM_CHECKPOINT_POLICY_STRICT;
+    identity.executed_policy = FULLMAG_FDM_CHECKPOINT_POLICY_STRICT;
+    identity.requested_realization = FULLMAG_FDM_CHECKPOINT_REALIZATION_CUDA_FDM;
+    identity.resolved_realization = FULLMAG_FDM_CHECKPOINT_REALIZATION_CUDA_FDM;
+    identity.executed_realization = FULLMAG_FDM_CHECKPOINT_REALIZATION_CUDA_FDM;
+    identity.requested_device = FULLMAG_FDM_CHECKPOINT_DEVICE_GPU;
+    identity.resolved_device = FULLMAG_FDM_CHECKPOINT_DEVICE_GPU;
+    identity.executed_device = FULLMAG_FDM_CHECKPOINT_DEVICE_GPU;
+    identity.requested_precision = FULLMAG_FDM_PRECISION_DOUBLE;
+    identity.resolved_precision = FULLMAG_FDM_PRECISION_DOUBLE;
+    identity.executed_precision = FULLMAG_FDM_PRECISION_DOUBLE;
+    identity.requested_integrator = integrator;
+    identity.resolved_integrator = integrator;
+    identity.executed_integrator = integrator;
+    identity.device_ordinal = receipt.device_ordinal;
+    require(fullmag_fdm_backend_set_checkpoint_execution_identity_v3(
+              backend, &identity) == FULLMAG_FDM_OK,
+          "checkpoint execution identity setup failed");
+}
+
+void require_warm_first_rk_stage(
+    fullmag_fdm_gpu_transport_context_handle_v1 context, uint64_t cursor,
+    uint64_t cell_count)
+{
+    std::array<fullmag_fdm_gpu_transport_telemetry_v1, 32> records{};
+    uint64_t count = 0;
+    require(fullmag_fdm_gpu_transport_query_telemetry_v1(
+                context, cursor, records.data(), records.size(), &count) ==
+                FULLMAG_FDM_GPU_TRANSPORT_ERROR_OK,
+            "warm RK4 stage telemetry query failed");
+    bool copied_seed = false;
+    bool converged_from_seed = false;
+    for (uint64_t i = 0; i < count; ++i) {
+        const auto &record = records[i];
+        if (record.stage_id != 1) continue;
+        if (record.reason == FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_REASON_SOLVE_STATE_D2D)
+            copied_seed = record.count == 6 && record.bytes == 6 * cell_count * sizeof(double);
+        if (record.reason == FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_REASON_SOLVED_TRANSPORT_RHS)
+            converged_from_seed = record.iteration == 0;
+    }
+    require(copied_seed && converged_from_seed, "RK4 did not reuse the accepted spin solution");
+}
+
+void verify_bound_rk4_checkpoint_continuation(
+    fullmag_fdm_backend *continuous, const fullmag_fdm_plan_desc &plan,
+    const fullmag_fdm_gpu_transport_context_create_request_v1 &create,
+    const fullmag_fdm_gpu_transport_static_descriptor_v1 &descriptor,
+    const fullmag_fdm_gpu_transport_llg_binding_v1 &binding,
+    const fullmag_fdm_gpu_charge_snapshot_info_v1 &snapshot, uint64_t cell_count)
+{
+    constexpr double dt = 1.0e-18;
+    set_checkpoint_identity(continuous, plan.integrator);
+    uint64_t size = 0;
+    require(fullmag_fdm_backend_llg_checkpoint_query_size_v4(continuous, &size) ==
+                FULLMAG_FDM_OK && size > 0, "bound LLG checkpoint size failed");
+    std::vector<uint8_t> llg_checkpoint(size);
+    fullmag_fdm_llg_checkpoint_info_v4 llg_metadata{};
+    require(fullmag_fdm_backend_llg_checkpoint_export_v4(
+                continuous, llg_checkpoint.data(), size, &llg_metadata) ==
+                FULLMAG_FDM_OK, "bound LLG checkpoint export failed");
+    const auto spin_checkpoint = require_bound_spin_checkpoint(
+        binding.transport_context, snapshot, descriptor.descriptor_digest);
+    const auto source = host_view(spin_checkpoint.payload.data(),
+                                  spin_checkpoint.payload.size(), 1);
+
+    fullmag_fdm_gpu_transport_context_create_result_v1 restored_context{};
+    init_record(restored_context, create.required_features);
+    require(fullmag_fdm_gpu_transport_context_create_v1(&create, &restored_context) ==
+                FULLMAG_FDM_GPU_TRANSPORT_ERROR_OK &&
+            fullmag_fdm_gpu_transport_static_descriptor_upload_v1(
+                restored_context.context_handle, &descriptor) ==
+                FULLMAG_FDM_GPU_TRANSPORT_ERROR_OK,
+            "bound spin restore context setup failed");
+    fullmag_fdm_gpu_transport_checkpoint_import_request_v1 import_request{};
+    init_record(import_request, kChargeSpin | kCheckpoint);
+    import_request.context_handle = restored_context.context_handle;
+    import_request.source_view_ptr = reinterpret_cast<uint64_t>(&source);
+    std::memcpy(import_request.expected_payload_sha256,
+                spin_checkpoint.metadata.payload_sha256, 32);
+    std::memcpy(import_request.device_uuid, restored_context.device_uuid, 16);
+    std::memcpy(import_request.build_digest, restored_context.build_digest, 32);
+    std::memcpy(import_request.static_descriptor_digest, descriptor.descriptor_digest, 32);
+    std::memcpy(import_request.audit_parent_digest,
+                spin_checkpoint.metadata.operation_audit_digest, 32);
+    import_request.restore_policy =
+        FULLMAG_FDM_GPU_TRANSPORT_CHECKPOINT_RESTORE_POLICY_EXACT_SAME_DEVICE_BUILD;
+    import_request.expected_bytes = spin_checkpoint.payload.size();
+    fullmag_fdm_gpu_transport_checkpoint_restore_result_v1 imported{};
+    init_record(imported, kChargeSpin | kCheckpoint);
+    require(fullmag_fdm_gpu_transport_checkpoint_import_v1(&import_request, &imported) ==
+                FULLMAG_FDM_GPU_TRANSPORT_ERROR_OK,
+            "bound spin restore failed");
+
+    auto restored_binding = binding;
+    restored_binding.transport_context = restored_context.context_handle;
+    restored_binding.charge_snapshot = imported.snapshot_handle;
+    restored_binding.accepted_sequence = imported.accepted_sequence;
+    fullmag_fdm_backend *restored = fullmag_fdm_backend_create(&plan);
+    require(restored != nullptr, "bound LLG restore context creation failed");
+    set_checkpoint_identity(restored, plan.integrator);
+    const auto require_restore_ok = [&](int status, const std::string &operation) {
+        if (status == FULLMAG_FDM_OK) return;
+        const char *diagnostic = fullmag_fdm_backend_last_error(restored);
+        fail(operation + ": " + (diagnostic == nullptr ? "no diagnostic" : diagnostic));
+    };
+    require_restore_ok(fullmag_fdm_backend_llg_checkpoint_import_v4(
+                           restored, llg_checkpoint.data(), size, &llg_metadata),
+                       "bound LLG checkpoint import failed");
+    require_restore_ok(fullmag_fdm_context_bind_gpu_transport_v1(restored, &restored_binding),
+                       "restored transport binding failed");
+
+    auto restored_snapshot = snapshot;
+    restored_snapshot.snapshot_handle = imported.snapshot_handle;
+    restored_snapshot.accepted_sequence = imported.accepted_sequence;
+    for (int step = 0; step < 2; ++step) {
+        const uint64_t continuous_cursor = latest_telemetry_cursor(binding.transport_context);
+        const uint64_t restored_cursor = latest_telemetry_cursor(restored_binding.transport_context);
+        fullmag_fdm_step_stats expected{}, actual{};
+        require(fullmag_fdm_backend_step(continuous, dt, &expected) == FULLMAG_FDM_OK &&
+                fullmag_fdm_backend_step(restored, dt, &actual) == FULLMAG_FDM_OK &&
+                expected.time_seconds == actual.time_seconds && expected.step == actual.step,
+                "restored bound RK4 step failed");
+        require_warm_first_rk_stage(binding.transport_context, continuous_cursor, cell_count);
+        require_warm_first_rk_stage(restored_binding.transport_context, restored_cursor, cell_count);
+        const auto left = read_llg_m(continuous, cell_count);
+        const auto right = read_llg_m(restored, cell_count);
+        require(left.size() == right.size() &&
+                std::memcmp(left.data(), right.data(), left.size() * sizeof(double)) == 0,
+                "bound RK4 restart changed magnetization bits");
+    }
+    const auto left = require_bound_spin_checkpoint(
+        binding.transport_context, snapshot, descriptor.descriptor_digest);
+    const auto right = require_bound_spin_checkpoint(
+        restored_binding.transport_context, restored_snapshot, descriptor.descriptor_digest);
+    require(std::memcmp(left.metadata.spin_digest, right.metadata.spin_digest, 32) == 0 &&
+            std::memcmp(left.metadata.warm_start_digest,
+                        right.metadata.warm_start_digest, 32) == 0,
+            "bound RK4 restart changed the committed spin state");
+    fullmag_fdm_backend_destroy(restored);
+    require(fullmag_fdm_gpu_charge_snapshot_destroy_v1(imported.snapshot_handle) ==
+                FULLMAG_FDM_GPU_TRANSPORT_ERROR_OK &&
+            fullmag_fdm_gpu_transport_context_destroy_v1(restored_context.context_handle) ==
+                FULLMAG_FDM_GPU_TRANSPORT_ERROR_OK, "bound spin restore cleanup failed");
 }
 
 std::vector<fullmag_fdm_gpu_transport_spin_observation_record_v1>
@@ -916,32 +1096,36 @@ GpuResult solve_gpu(const Scenario &scenario) {
     descriptor.charge_faces_view_ptr = reinterpret_cast<uint64_t>(&views[3]);
     descriptor.spin_faces_view_ptr = reinterpret_cast<uint64_t>(&views[4]);
     descriptor.formula_ids_view_ptr = reinterpret_cast<uint64_t>(&views[5]);
-    require(fullmag_fdm_gpu_transport_static_descriptor_upload_v1(
-                created.context_handle, &descriptor) == FULLMAG_FDM_GPU_TRANSPORT_ERROR_OK,
-            scenario.name + ": GPU descriptor upload failed");
-    fullmag_fdm_gpu_charge_solve_request_v1 charge_request{};
-    init_record(charge_request, kCharge);
-    charge_request.context_handle = created.context_handle;
-    charge_request.solver_policy = FULLMAG_FDM_GPU_TRANSPORT_CHARGE_SOLVER_POLICY_CG_DEVICE_AMG_V1;
-    charge_request.gauge_policy =
-        FULLMAG_FDM_GPU_TRANSPORT_GAUGE_POLICY_BOUNDARY_REFERENCE_PER_COMPONENT;
-    charge_request.attempt_id = 43;
-    charge_request.stage_id = 47;
-    charge_request.source_revision = descriptor.source_revision;
-    charge_request.static_revision = descriptor.descriptor_revision;
-    charge_request.relative_tolerance = 1.0e-12;
-    charge_request.max_iterations = 1000;
-    fullmag_fdm_gpu_charge_solve_result_v1 charge_result{};
-    init_record(charge_result, kCharge);
-    require(fullmag_fdm_gpu_transport_solve_charge_v1(&charge_request, &charge_result) ==
-                FULLMAG_FDM_GPU_TRANSPORT_ERROR_OK,
-            scenario.name + ": GPU charge solve failed");
-    fullmag_fdm_gpu_charge_snapshot_info_v1 snapshot{};
-    init_record(snapshot, kCharge);
-    require(fullmag_fdm_gpu_transport_accept_charge_snapshot_v1(
-                created.context_handle, charge_result.provisional_generation, &snapshot) ==
-                FULLMAG_FDM_GPU_TRANSPORT_ERROR_OK,
-            scenario.name + ": GPU charge snapshot accept failed");
+    const auto prepare_charge_snapshot = [&](fullmag_fdm_gpu_transport_context_handle_v1 context) {
+        require(fullmag_fdm_gpu_transport_static_descriptor_upload_v1(
+                    context, &descriptor) == FULLMAG_FDM_GPU_TRANSPORT_ERROR_OK,
+                scenario.name + ": GPU descriptor upload failed");
+        fullmag_fdm_gpu_charge_solve_request_v1 charge_request{};
+        init_record(charge_request, kCharge);
+        charge_request.context_handle = context;
+        charge_request.solver_policy = FULLMAG_FDM_GPU_TRANSPORT_CHARGE_SOLVER_POLICY_CG_DEVICE_AMG_V1;
+        charge_request.gauge_policy =
+            FULLMAG_FDM_GPU_TRANSPORT_GAUGE_POLICY_BOUNDARY_REFERENCE_PER_COMPONENT;
+        charge_request.attempt_id = 43;
+        charge_request.stage_id = 47;
+        charge_request.source_revision = descriptor.source_revision;
+        charge_request.static_revision = descriptor.descriptor_revision;
+        charge_request.relative_tolerance = 1.0e-12;
+        charge_request.max_iterations = 1000;
+        fullmag_fdm_gpu_charge_solve_result_v1 charge_result{};
+        init_record(charge_result, kCharge);
+        require(fullmag_fdm_gpu_transport_solve_charge_v1(&charge_request, &charge_result) ==
+                    FULLMAG_FDM_GPU_TRANSPORT_ERROR_OK,
+                scenario.name + ": GPU charge solve failed");
+        fullmag_fdm_gpu_charge_snapshot_info_v1 snapshot{};
+        init_record(snapshot, kCharge);
+        require(fullmag_fdm_gpu_transport_accept_charge_snapshot_v1(
+                    context, charge_result.provisional_generation, &snapshot) ==
+                    FULLMAG_FDM_GPU_TRANSPORT_ERROR_OK,
+                scenario.name + ": GPU charge snapshot accept failed");
+        return snapshot;
+    };
+    auto snapshot = prepare_charge_snapshot(created.context_handle);
 
     std::vector<double> magnetization(3 * cells(scenario));
     for (uint64_t cell = 0; cell < cells(scenario); ++cell)
@@ -1097,7 +1281,7 @@ GpuResult solve_gpu(const Scenario &scenario) {
                         FULLMAG_FDM_ERR_CUDA,
                     scenario.name + ": " + label + " failure was accepted");
             const auto failed_receipt = query_execution_receipt(llg, scenario.name);
-            require((failed_receipt.device_operator_mask &
+            require((failed_receipt.executed_device_operator_mask &
                          FULLMAG_FDM_OPERATOR_GPU_TRANSPORT) == 0,
                     scenario.name + ": " + label +
                         " failure published executed GPU transport");
@@ -1193,9 +1377,12 @@ GpuResult solve_gpu(const Scenario &scenario) {
                 scenario.name + ": in-flight hold release failed");
         held_step.join();
         require(held_step_status == FULLMAG_FDM_OK,
-                scenario.name + ": held transport step did not finish after release");
+                scenario.name + ": held transport step did not finish after release: " +
+                    (fullmag_fdm_backend_last_error(llg) == nullptr
+                        ? std::string("no diagnostic")
+                        : std::string(fullmag_fdm_backend_last_error(llg))));
         const auto successful_receipt = query_execution_receipt(llg, scenario.name);
-        require((successful_receipt.device_operator_mask &
+        require((successful_receipt.executed_device_operator_mask &
                      FULLMAG_FDM_OPERATOR_GPU_TRANSPORT) != 0,
                 scenario.name + ": successful transport step did not commit execution");
         require(fullmag_fdm_context_unbind_gpu_transport_v1(llg) ==
@@ -1367,10 +1554,35 @@ GpuResult solve_gpu(const Scenario &scenario) {
 
         llg_plan.integrator = FULLMAG_FDM_INTEGRATOR_RK23;
         llg_plan.adaptive_max_error = 1.0e-8;
+        llg_plan.adaptive_dt_min = 1.0e-22;
         fullmag_fdm_backend *rk23_llg = fullmag_fdm_backend_create(&llg_plan);
         require(rk23_llg != nullptr &&
                     fullmag_fdm_backend_last_error(rk23_llg) == nullptr,
                 scenario.name + ": bound RK23 LLG context create failed");
+        struct BindFromInterruptPoll {
+            fullmag_fdm_backend *backend;
+            const fullmag_fdm_gpu_transport_llg_binding_v1 *binding;
+            int status = FULLMAG_FDM_OK;
+        } attempted_bind{rk23_llg, &binding};
+        const auto poll_and_bind = [](void *data) {
+            auto &attempt = *static_cast<BindFromInterruptPoll *>(data);
+            attempt.status = fullmag_fdm_context_bind_gpu_transport_v1(
+                attempt.backend, attempt.binding);
+            return 1;
+        };
+        require(fullmag_fdm_backend_set_interrupt_poll(rk23_llg, poll_and_bind,
+                                                      &attempted_bind) == FULLMAG_FDM_OK,
+                scenario.name + ": adaptive preflight interrupt setup failed");
+        fullmag_fdm_adaptive_batch_step_v1 interrupted_step{};
+        uint32_t interrupted_count = 0;
+        require(fullmag_fdm_backend_step_adaptive_batch_v1(
+                    rk23_llg, 1.0e-18, 2.0e-18, 1, &interrupted_step, 1,
+                    &interrupted_count) == FULLMAG_FDM_ERR_INTERRUPTED &&
+                    interrupted_count == 0 && attempted_bind.status == FULLMAG_FDM_ERR_INVALID,
+                scenario.name + ": adaptive preflight allowed reentrant transport binding");
+        require(fullmag_fdm_backend_set_interrupt_poll(rk23_llg, nullptr, nullptr) ==
+                    FULLMAG_FDM_OK,
+                scenario.name + ": adaptive preflight interrupt cleanup failed");
         require(fullmag_fdm_context_bind_gpu_transport_v1(rk23_llg, &binding) ==
                     FULLMAG_FDM_OK,
                 scenario.name + ": public RK23 transport binding failed");
@@ -1408,8 +1620,28 @@ GpuResult solve_gpu(const Scenario &scenario) {
                 scenario.name + ": RK23 owner could not release claim");
         fullmag_fdm_backend_destroy(rk23_llg);
 
+        // Independent LLG owners need complete telemetry from their transport
+        // context. Start each scenario before its ring buffer can wrap.
+        const auto reset_transport = [&] {
+            require(fullmag_fdm_gpu_charge_snapshot_destroy_v1(snapshot.snapshot_handle) ==
+                        FULLMAG_FDM_GPU_TRANSPORT_ERROR_OK &&
+                    fullmag_fdm_gpu_transport_context_destroy_v1(created.context_handle) ==
+                        FULLMAG_FDM_GPU_TRANSPORT_ERROR_OK,
+                    scenario.name + ": retiring the test transport context failed");
+            created = {};
+            init_record(created, create_features);
+            require(fullmag_fdm_gpu_transport_context_create_v1(&create, &created) ==
+                        FULLMAG_FDM_GPU_TRANSPORT_ERROR_OK,
+                    scenario.name + ": creating a fresh test transport context failed");
+            snapshot = prepare_charge_snapshot(created.context_handle);
+            binding.transport_context = created.context_handle;
+            binding.charge_snapshot = snapshot.snapshot_handle;
+            binding.accepted_sequence = snapshot.accepted_sequence;
+        };
+        reset_transport();
         llg_plan.integrator = FULLMAG_FDM_INTEGRATOR_RK4;
         llg_plan.adaptive_max_error = 0.0;
+        llg_plan.adaptive_dt_min = 0.0;
         fullmag_fdm_backend *rk4_llg = fullmag_fdm_backend_create(&llg_plan);
         require(rk4_llg != nullptr &&
                     fullmag_fdm_backend_last_error(rk4_llg) == nullptr,
@@ -1543,6 +1775,18 @@ GpuResult solve_gpu(const Scenario &scenario) {
                     FULLMAG_FDM_ERR_INVALID,
                 scenario.name + ": public unbind accepted a missing/zero claim");
         fullmag_fdm_backend_destroy(second_llg);
+
+        reset_transport();
+        rk4_llg = fullmag_fdm_backend_create(&llg_plan);
+        require(rk4_llg != nullptr &&
+                    fullmag_fdm_context_bind_gpu_transport_v1(rk4_llg, &binding) ==
+                        FULLMAG_FDM_OK &&
+                    fullmag_fdm_backend_step(rk4_llg, 1.0e-18, &llg_stats) ==
+                        FULLMAG_FDM_OK,
+                scenario.name + ": checkpoint prefix step failed");
+        verify_bound_rk4_checkpoint_continuation(
+            rk4_llg, llg_plan, create, descriptor, binding, snapshot, cells(scenario));
+        fullmag_fdm_backend_destroy(rk4_llg);
     }
     (void)cudaFree(m_device);
     (void)cudaFree(torque_device);

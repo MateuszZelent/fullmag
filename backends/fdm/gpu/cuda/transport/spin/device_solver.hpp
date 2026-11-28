@@ -98,6 +98,8 @@ struct SolveInput {
     SolveOutputMode output_mode = SolveOutputMode::FullFields;
     // The binding owns a converged iterate from this same LLG attempt.
     bool reuse_trial_solution = false;
+    // Read-only components of the previous committed spin iterate.
+    const double *accepted_seed[3]{};
     uint8_t accepted_snapshot_digest[32]{};
     const double *m_stage = nullptr;
     double *torque_destination = nullptr;

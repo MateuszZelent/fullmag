@@ -171,6 +171,26 @@ bool reject_step_transaction_mutation(Context &ctx, const char *operation)
     return true;
 }
 
+class GpuStepTransportAccess {
+public:
+    explicit GpuStepTransportAccess(Context &ctx)
+        : busy_(ctx.gpu_step_transport_busy),
+          acquired_(!busy_.test_and_set(std::memory_order_acquire)) {}
+
+    ~GpuStepTransportAccess() {
+        if (acquired_) busy_.clear(std::memory_order_release);
+    }
+
+    GpuStepTransportAccess(const GpuStepTransportAccess &) = delete;
+    GpuStepTransportAccess &operator=(const GpuStepTransportAccess &) = delete;
+
+    bool acquired() const { return acquired_; }
+
+private:
+    std::atomic_flag &busy_;
+    bool acquired_;
+};
+
 class ReceiptSolverPhaseGuard {
 public:
     explicit ReceiptSolverPhaseGuard(Context &context)
@@ -2638,6 +2658,8 @@ int fullmag_fdm_backend_step(
 #if FULLMAG_HAS_CUDA
     if (!handle || !out_stats) return FULLMAG_FDM_ERR_INVALID;
     auto *ctx = reinterpret_cast<Context *>(handle);
+    const GpuStepTransportAccess step_access(*ctx);
+    if (!step_access.acquired()) return FULLMAG_FDM_ERR_INVALID;
     if (dt_seconds <= 0.0) {
         ctx->last_error = "FDM step requires dt_seconds > 0";
         return FULLMAG_FDM_ERR_INVALID;
@@ -2704,6 +2726,8 @@ int fullmag_fdm_backend_step_adaptive_batch_v1(
         return FULLMAG_FDM_ERR_INVALID;
     }
     auto *ctx = reinterpret_cast<Context *>(handle);
+    const GpuStepTransportAccess step_access(*ctx);
+    if (!step_access.acquired()) return FULLMAG_FDM_ERR_INVALID;
     if (ctx->has_multilayer_plan_v2 || !ctx->adaptive_enabled ||
         ctx->stats_mode == FULLMAG_FDM_STATS_FULL ||
         (ctx->integrator != FULLMAG_FDM_INTEGRATOR_RK23 &&
@@ -2834,9 +2858,8 @@ int fullmag_fdm_context_bind_gpu_transport_v1(
 #if FULLMAG_HAS_CUDA
     if (handle == nullptr || binding == nullptr) return FULLMAG_FDM_ERR_INVALID;
     auto *ctx = reinterpret_cast<Context *>(handle);
-    if (reject_step_transaction_mutation(*ctx, "gpu_transport_bind")) {
-        return FULLMAG_FDM_ERR_INVALID;
-    }
+    const GpuStepTransportAccess step_access(*ctx);
+    if (!step_access.acquired()) return FULLMAG_FDM_ERR_INVALID;
     if (ctx->has_multilayer_plan_v2) {
         ctx->last_error =
             "spin transport is unsupported for v2 multilayer handles";
@@ -2914,9 +2937,8 @@ int fullmag_fdm_context_unbind_gpu_transport_v1(fullmag_fdm_backend *handle) {
 #if FULLMAG_HAS_CUDA
     if (handle == nullptr) return FULLMAG_FDM_ERR_INVALID;
     auto *ctx = reinterpret_cast<Context *>(handle);
-    if (reject_step_transaction_mutation(*ctx, "gpu_transport_unbind")) {
-        return FULLMAG_FDM_ERR_INVALID;
-    }
+    const GpuStepTransportAccess step_access(*ctx);
+    if (!step_access.acquired()) return FULLMAG_FDM_ERR_INVALID;
     if (!ctx->gpu_transport_rhs.active) return FULLMAG_FDM_ERR_INVALID;
     const bool telemetry_imported = context_unbind_gpu_transport_rhs(*ctx);
     if (ctx->gpu_transport_rhs.active) return FULLMAG_FDM_ERR_INVALID;
