@@ -14,6 +14,9 @@ struct Context;
  * This allocates the scalar potential FE collection/space, Poisson bilinear
  * form, potential grid function, boundary-conditioned operator, periodic
  * reduction, RHS workspace, solution vector, and recovery workspace.
+ * On the device-Hypre GPU lane it frees the Poisson bilinear form (A0) as soon
+ * as the boundary-conditioned operator is built, because nothing else on that
+ * lane reads A0; every other lane keeps it.
  * It does not assemble per-step RHS, solve Poisson, recover fields, compute energy, or publish telemetry.
  */
 bool context_initialize_poisson(Context &ctx, std::string &error);

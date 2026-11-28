@@ -38,8 +38,10 @@
 #include "cpu/mfem/runtime/mfem_context.hpp"
 #include "cpu/mfem/runtime/mfem_device.hpp"
 #include "cpu/mfem/runtime/stage_completion.hpp"
+#include "fem_memory_trace.hpp"
 
 #include <cmath>
+#include <cstdlib>
 #include <memory>
 #include <new>
 
@@ -51,6 +53,12 @@ bool build_context_from_plan(
     std::string &error,
     const uint32_t *canonical_boundary_marker)
 {
+    fem_memory_trace_phase("builder:enter");
+    bool release_free_heap_after_setup = true;
+    if (!resolve_fem_malloc_trim_enabled(
+            std::getenv(kFemMallocTrimEnv), release_free_heap_after_setup, error)) {
+        return false;
+    }
     if (!initialize_base_plan_fields(ctx, plan, error)) {
         return false;
     }
@@ -77,6 +85,9 @@ bool build_context_from_plan(
     if (!initialize_mesh_plan_fields(ctx, plan.mesh, error)) {
         return false;
     }
+    fem_memory_trace_phase("builder:mesh_imported");
+    fem_memory_trace_stat("builder:mesh_imported", "nodes", ctx.mesh.n_nodes);
+    fem_memory_trace_stat("builder:mesh_imported", "elements", ctx.mesh.n_elements);
     if (!validate_supported_physics_topology(ctx, plan, error)) {
         return false;
     }
@@ -159,10 +170,12 @@ bool build_context_from_plan(
         return false;
     }
 
+    fem_memory_trace_phase("builder:plan_fields_ready");
 #if FULLMAG_HAS_MFEM_STACK
     if (!context_initialize_mfem(ctx, error)) {
         return false;
     }
+    fem_memory_trace_phase("builder:mfem_ready");
     // Mixed P1 uses MFEM's assembled magnetic mass row sums as the canonical
     // nodal integration weights. Project the drive only after that publication
     // so the basis is both topology-safe and normalized on the same weights.
@@ -172,6 +185,7 @@ bool build_context_from_plan(
     if (!initialize_demag_runtime(ctx, error)) {
         return false;
     }
+    fem_memory_trace_phase("builder:demag_runtime_ready");
     if (!refresh_initial_effective_field_from_plan(ctx, plan, error)) {
         return false;
     }
@@ -184,6 +198,7 @@ bool build_context_from_plan(
     if (!initialize_context_gpu_state(ctx, error)) {
         return false;
     }
+    fem_memory_trace_phase("builder:gpu_state_ready");
     rk_step_transaction_reset_workspace(ctx.stepper.workspace);
     ctx.stepper.workspace.attempt_checkpoint.reset();
     if (ctx.adaptive_dt.enabled &&
@@ -206,6 +221,11 @@ bool build_context_from_plan(
     } catch (const std::bad_alloc &) {
         error = "RK step transaction journal allocation failed during setup";
         return false;
+    }
+    fem_memory_trace_phase("builder:done");
+    if (release_free_heap_after_setup) {
+        // Freed setup temporaries stay resident in glibc arenas until trimmed.
+        fem_release_free_heap("setup");
     }
     return true;
 }

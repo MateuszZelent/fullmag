@@ -217,6 +217,8 @@ set(FEM_SOURCES
     gpu/cuda/demag_poisson/hypre_validation_policy.cpp
     gpu/cuda/runtime/hypre_device_policy.cpp
     gpu/cuda/demag_poisson/operators.cpp
+    gpu/cuda/demag_poisson/mixed_operator_assembly_csr.cpp
+    gpu/cuda/demag_poisson/mixed_operator_assembly_maps.cpp
     gpu/cuda/demag_poisson/poisson.cpp
     gpu/cuda/demag_poisson/stage_compute.cpp
     gpu/cuda/demag_fem_bem/fem_bem.cpp

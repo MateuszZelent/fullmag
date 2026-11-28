@@ -13,6 +13,7 @@
 #include "../gpu/cuda/integrators/fsal_policy.hpp"
 #include "../gpu/cuda/runtime/step_transaction_controller.hpp"
 
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <new>
@@ -291,6 +292,54 @@ bool select_cuda_device_if_requested(Context &ctx) {
         set_cuda_error(ctx, "cudaSetDevice", err);
         return false;
     }
+    return true;
+}
+
+// How host threads wait for this process's CUDA work (docs/performance/cuda-wait-mode.md).
+// FULLMAG_CUDA_WAIT_MODE: unset or "default" keeps CUDA's default (cudaDeviceScheduleAuto, which
+// spins while the process has fewer active contexts than logical CPUs); "spin", "yield" or
+// "blocking" (cudaDeviceScheduleBlockingSync: the waiting thread sleeps until the GPU signals).
+// An unknown value or a CUDA refusal fails backend creation instead of keeping the default.
+bool apply_cuda_wait_mode_if_requested(Context &ctx) {
+    const char *raw = std::getenv("FULLMAG_CUDA_WAIT_MODE");
+    if (raw == nullptr || *raw == '\0' || std::strcmp(raw, "default") == 0) {
+        return true;
+    }
+    unsigned int schedule = 0;
+    if (std::strcmp(raw, "spin") == 0) {
+        schedule = cudaDeviceScheduleSpin;
+    } else if (std::strcmp(raw, "yield") == 0) {
+        schedule = cudaDeviceScheduleYield;
+    } else if (std::strcmp(raw, "blocking") == 0) {
+        schedule = cudaDeviceScheduleBlockingSync;
+    } else {
+        ctx.last_error = std::string("FULLMAG_CUDA_WAIT_MODE must be default, spin, yield or blocking; got '") +
+                         raw + "'";
+        return false;
+    }
+    unsigned int flags = 0;
+    cudaError_t err = cudaGetDeviceFlags(&flags);
+    if (err != cudaSuccess) {
+        set_cuda_error(ctx, "cudaGetDeviceFlags", err);
+        return false;
+    }
+    err = cudaSetDeviceFlags((flags & (cudaDeviceMapHost | cudaDeviceLmemResizeToMax)) | schedule);
+    if (err != cudaSuccess) {
+        set_cuda_error(ctx, "cudaSetDeviceFlags", err);
+        return false;
+    }
+    unsigned int applied = 0;
+    err = cudaGetDeviceFlags(&applied);
+    if (err != cudaSuccess) {
+        set_cuda_error(ctx, "cudaGetDeviceFlags", err);
+        return false;
+    }
+    if ((applied & cudaDeviceScheduleMask) != schedule) {
+        ctx.last_error = std::string("FULLMAG_CUDA_WAIT_MODE=") + raw + " was not applied by CUDA";
+        return false;
+    }
+    std::fprintf(stderr, "[fullmag] FDM CUDA wait mode: %s (schedule flags 0x%x)\n", raw,
+                 applied & cudaDeviceScheduleMask);
     return true;
 }
 
@@ -1243,7 +1292,7 @@ static fullmag_fdm_backend *fullmag_fdm_backend_create_impl(
             "FDM CUDA demag requires validated Newell tensor spectra; automatic native spectrum construction is unavailable";
         return reinterpret_cast<fullmag_fdm_backend *>(ctx);
     }
-    if (!select_cuda_device_if_requested(*ctx)) {
+    if (!select_cuda_device_if_requested(*ctx) || !apply_cuda_wait_mode_if_requested(*ctx)) {
         return reinterpret_cast<fullmag_fdm_backend *>(ctx);
     }
     int device_ordinal = -1;
@@ -2136,7 +2185,7 @@ fullmag_fdm_backend *fullmag_fdm_backend_create_v2(
 
     auto *ctx = new (std::nothrow) Context();
     if (!ctx) return nullptr;
-    if (!select_cuda_device_if_requested(*ctx)) {
+    if (!select_cuda_device_if_requested(*ctx) || !apply_cuda_wait_mode_if_requested(*ctx)) {
         return reinterpret_cast<fullmag_fdm_backend *>(ctx);
     }
     int device_ordinal = -1;

@@ -24,6 +24,7 @@
 #include "cpu/mfem/runtime/mfem_host_access.hpp"
 #include "cpu/mfem/runtime/mfem_mesh_builder.hpp"
 #include "fem_common.hpp"
+#include "fem_memory_trace.hpp"
 #include "gpu/cuda/demag_fem_bem/fem_bem_dispatch.hpp"
 #include "gpu/cuda/transfer/snapshot_pool.hpp"
 
@@ -64,8 +65,56 @@ std::optional<int> selected_cuda_device_from_env()
     return static_cast<int>(parsed);
 }
 
+#if FULLMAG_HAS_CUDA_RUNTIME
+// How host threads wait for this process's CUDA work (docs/performance/cuda-wait-mode.md).
+// FULLMAG_CUDA_WAIT_MODE: unset or "default" keeps CUDA's default (cudaDeviceScheduleAuto, which
+// spins while the process has fewer active contexts than logical CPUs); "spin", "yield" or
+// "blocking" (cudaDeviceScheduleBlockingSync: the waiting thread sleeps until the GPU signals).
+// An unknown value or a CUDA refusal fails backend creation instead of keeping the default.
+bool apply_cuda_wait_mode_if_requested(std::string &error)
+{
+    const char *raw = std::getenv("FULLMAG_CUDA_WAIT_MODE");
+    const std::string mode = raw != nullptr ? raw : "";
+    if (mode.empty() || mode == "default") {
+        return true;
+    }
+    unsigned int schedule = 0;
+    if (mode == "spin") {
+        schedule = cudaDeviceScheduleSpin;
+    } else if (mode == "yield") {
+        schedule = cudaDeviceScheduleYield;
+    } else if (mode == "blocking") {
+        schedule = cudaDeviceScheduleBlockingSync;
+    } else {
+        error = "FULLMAG_CUDA_WAIT_MODE must be default, spin, yield or blocking; got '" + mode + "'";
+        return false;
+    }
+    unsigned int flags = 0;
+    cudaError_t cuda_err = cudaGetDeviceFlags(&flags);
+    if (cuda_err == cudaSuccess) {
+        cuda_err = cudaSetDeviceFlags((flags & (cudaDeviceMapHost | cudaDeviceLmemResizeToMax)) | schedule);
+    }
+    unsigned int applied = 0;
+    if (cuda_err == cudaSuccess) {
+        cuda_err = cudaGetDeviceFlags(&applied);
+    }
+    if (cuda_err != cudaSuccess) {
+        error = "FULLMAG_CUDA_WAIT_MODE=" + mode + " could not be applied: " + cudaGetErrorString(cuda_err);
+        return false;
+    }
+    if ((applied & cudaDeviceScheduleMask) != schedule) {
+        error = "FULLMAG_CUDA_WAIT_MODE=" + mode + " was not applied by CUDA";
+        return false;
+    }
+    std::fprintf(stderr, "[fullmag] FEM CUDA wait mode: %s (schedule flags 0x%x)\n", mode.c_str(),
+                 applied & cudaDeviceScheduleMask);
+    return true;
+}
+#endif
+
 void debug_checkpoint(const char *stage)
 {
+    fem_memory_trace_phase(stage);
     static const bool enabled = debug_startup_env_enabled();
     if (!enabled) {
         return;
@@ -209,6 +258,9 @@ bool context_initialize_mfem(Context &ctx, std::string &error)
             if (cuda_err != cudaSuccess) {
                 error = std::string("cudaSetDevice failed for native FEM backend: ") +
                         cudaGetErrorString(cuda_err);
+                return false;
+            }
+            if (!apply_cuda_wait_mode_if_requested(error)) {
                 return false;
             }
 

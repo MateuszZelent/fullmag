@@ -13,6 +13,7 @@
 #include "context.hpp"
 #include "cpu/mfem/runtime/mfem_context.hpp"
 #include "core/fem_mesh.hpp"
+#include "fem_memory_trace.hpp"
 #include "gpu/cuda/integrators/rk/rk_step_stats.hpp"
 #include "gpu/cuda/runtime/performance_counters.hpp"
 #include "gpu/cuda/state/gpu_state.hpp"
@@ -39,6 +40,7 @@ bool initialize_backend_runtime(
 
 void destroy_backend_runtime(Context &ctx)
 {
+    fem_memory_trace_phase("destroy:enter");
 #if FULLMAG_HAS_CUDA_RUNTIME
     gpu_rk_destroy_phase_timing_events(ctx);
 #endif
@@ -47,6 +49,7 @@ void destroy_backend_runtime(Context &ctx)
 #endif
     gpu_state_destroy(ctx.gpu_state.device);
     gpu_performance_reset(ctx.gpu_state.performance_counters);
+    fem_memory_trace_phase("destroy:exit");
 }
 
 } // namespace fullmag::fem

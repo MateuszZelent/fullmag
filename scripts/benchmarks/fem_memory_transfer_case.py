@@ -17,6 +17,7 @@ FEM_CASE_STEPS       fixed-dt step count                     (default 50)
 FEM_CASE_DT          fixed time step in seconds              (default 2e-14)
 FEM_CASE_INTEGRATOR  heun | rk4 | rk23 | rk45                (default heun)
 FEM_CASE_PRECONDITIONER  AMG | JACOBI | default              (default AMG)
+FEM_CASE_GPU_STRATEGY    auto | cg_amg | cudss               (default auto; GPU demag solver)
 
 The time step must stay below the exchange stability limit of the finest
 element (strict mode rejects larger steps; the limit scales with hmax^2,
@@ -42,6 +43,7 @@ STEPS = int(_env("FEM_CASE_STEPS", "50"))
 INTEGRATOR = _env("FEM_CASE_INTEGRATOR", "heun").lower()
 DT = float(_env("FEM_CASE_DT", "2e-14"))
 PRECONDITIONER = _env("FEM_CASE_PRECONDITIONER", "AMG").upper()
+GPU_STRATEGY = _env("FEM_CASE_GPU_STRATEGY", "auto").lower()
 
 study = fm.study(f"fem_memory_transfer_{DEVICE}_h{HMAX:.1e}")
 study.engine("fem")
@@ -60,7 +62,7 @@ body.mesh(maximum_element_size=HMAX, order=1)
 
 study.demag(realization="poisson_robin")
 if PRECONDITIONER != "DEFAULT":
-    study.fem_demag_solver(solver="CG", preconditioner=PRECONDITIONER)
+    study.fem_demag_solver(solver="CG", preconditioner=PRECONDITIONER, gpu_strategy=GPU_STRATEGY)
 study.b_ext(0.0, 0.0, 10e-3)
 study.build_domain_mesh()
 

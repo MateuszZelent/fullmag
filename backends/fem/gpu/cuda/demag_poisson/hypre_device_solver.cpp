@@ -15,6 +15,7 @@
 #include "cpu/mfem/interactions/demag_poisson_periodic.hpp"
 #include "cpu/mfem/runtime/mpi_init.hpp"
 #include "fem_common.hpp"
+#include "fem_memory_trace.hpp"
 #include "gpu/cuda/runtime/execution_receipt.hpp"
 #include "gpu/cuda/runtime/hypre_device_policy.hpp"
 #include "gpu/cuda/runtime/performance_counters.hpp"
@@ -282,6 +283,7 @@ bool initialize_demag_poisson_hypre_device_solver(
         return false;
     }
     ensure_mpi_initialized();
+    fem_memory_trace_phase("hypre:mpi_ready");
     const HYPRE_BigInt glob_size = static_cast<HYPRE_BigInt>(A_bc->NumRows());
     if (ctx.gpu_state.device.demag_poisson.scalar_dof_count !=
         static_cast<uint64_t>(glob_size)) {
@@ -311,6 +313,7 @@ bool initialize_demag_poisson_hypre_device_solver(
         true);
     workspace.residual = std::make_unique<mfem::HypreParVector>(
         fullmag_serial_comm(), glob_size, workspace.row_starts);
+    fem_memory_trace_phase("hypre:parcsr_ready");
 
     // Three-state GPU demag strategy resolution (auto / cg_amg / cudss),
     // covering both open and PBC-reduced SPD Poisson operators (docs/physics/0997).
@@ -357,6 +360,7 @@ bool initialize_demag_poisson_hypre_device_solver(
     }
     const auto setup_start = FemSteadyClock::now();
     workspace.solver->Setup(*workspace.b_par, *workspace.x_par);
+    fem_memory_trace_phase("hypre:krylov_setup_done");
     if (ctx.demag.solver.preconditioner == FULLMAG_FEM_PRECONDITIONER_AMG &&
         !validate_demag_amg_coarse_relax_type(
             static_cast<HYPRE_Solver>(*workspace.preconditioner), error)) {
