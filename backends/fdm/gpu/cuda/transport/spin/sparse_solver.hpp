@@ -51,6 +51,9 @@ struct Operator {
     uint64_t interface_nonzeros = 0;
     const double *rhs_soa = nullptr;
     double *solution_soa = nullptr;
+    // Non-null only when the owner freezes the fine mask and conductivity
+    // for the whole cache lifetime. Local reaction blocks may still change.
+    const void *geometry_token = nullptr;
     uint64_t operator_revision = 0;
     uint8_t operator_digest[32]{};
     PreconditionerPolicy preconditioner =
@@ -82,6 +85,8 @@ struct HierarchyCache {
     uint64_t operator_revision = 0;
     uint8_t operator_digest[32]{};
     Triple<uint64_t> fine_grid{};
+    Triple<double> cell_size{};
+    const void *geometry_token = nullptr;
     uint64_t owned_bytes = 0;
     uint64_t cache_hits = 0;
     bool valid = false;
@@ -118,6 +123,7 @@ struct BuildMetrics {
     uint32_t level_count = 0;
     uint64_t peak_device_bytes = 0;
     double setup_milliseconds = 0.0;
+    bool refreshed_fixed_geometry = false;
     uint64_t control_transfer_count = 0;
     uint64_t control_transfer_bytes = 0;
     uint64_t control_host_sync_count = 0;

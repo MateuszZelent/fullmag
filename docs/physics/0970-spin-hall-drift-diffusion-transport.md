@@ -1803,13 +1803,15 @@ engine identity; it cannot claim the production AMG engine. Likewise, a local
 $3\times3$ reaction inverse may be a named prototype preconditioner but cannot
 silently replace the frozen component AMG/block-Jacobi policy.
 
-##### Initial iterate within a bound CUDA LLG attempt
+##### Initial iterate in bound CUDA LLG
 
-For an LLG stage with spin potential `x = mu_s` in volts, the solver still
-assembles the current `A(m_stage)` and `b(m_stage)`. The first solve of each
-outer attempt starts from zero. Subsequent solves, including the endpoint
-candidate, may start with the previous converged device-local iterate of
-that attempt. The stopping quantity is the dimensionless true residual
+For an LLG stage with spin potential `x = mu_s` in volts, the solver assembles
+the current `A(m_stage)` and `b(m_stage)`. The first solve of an attempt can
+start from the previous accepted spin potential when the LLG has an accepted
+step and the bound charge snapshot has a converged spin field. Otherwise it
+starts from zero. Subsequent solves can start from the previous converged
+device-local iterate of that attempt. The stopping quantity is the
+dimensionless true residual
 $\lVert b-Ax\rVert_2/\lVert b\rVert_2$, with the same tolerance and GMRES
 iteration limit per linear solve. For zero right-hand side, the solution
 is exactly zero. A numerical nonconvergence from the reused guess allows
@@ -1819,11 +1821,17 @@ result and synchronization record retain the iteration count of the last
 linear solve. The norm rescales finite entries when direct squaring
 underflows or overflows, so a small nonzero drive follows the nonzero-RHS path.
 
-The guess lives in existing transport storage and is reset when the
-descriptor storage is rebuilt or the outer step is retried. Its identity
-comes from the current attempt, independent of observation, export and
-restore. This optimization uses the existing Python/IR, ABI, operator,
-boundary conditions, preconditioner and retained endpoint format.
+Retry discards the provisional iterate and reads the same committed seed.
+The compact endpoint and the fields reconstructed for observation or exact
+checkpoint restore hold the same FP64 spin potential. The verified continuation
+uses the same solver controls. Exact import records its H2D transfer as setup
+before binding a new LLG context. The same operator
+and boundary conditions apply. Within a descriptor, CUDA can retain AMG
+coarsening and face weights across magnetization updates. It recomputes the
+coarse diagonals from the current reaction blocks. The usual small coarsest
+level evaluates its Chebyshev recurrence in one thread block with the same
+coefficients and number of sweeps. The Python/IR, ABI and retained endpoint
+format remain unchanged.
 The numerical criterion is FP64 tolerance equivalence with the cold policy.
 Warm and cold iterates can have different roundoff and compute digests.
 Standalone full-field solves start from zero.
@@ -4144,6 +4152,8 @@ a qualified workload without the validation gates above.
 | FDM GPU M1 runtime ABI contract | docs/specs/spin-transport-runtime-contract-v1.md | DOC-ANCHOR:fdm-gpu-m1-abi-v1 | specify append-only layout, state machine, exact checkpoint grammar and fail-closed errors | normative contract with partial implementation |
 | FDM GPU M1 spin-observation ABI | backends/fdm/include/fullmag/fdm/transport/gpu_abi_v1.h | fullmag_fdm_gpu_transport_solve_steady_spin_v1 | declare the steady-spin entry point and append-only typed immutable observation readback | C11 and Rust layout contracts |
 | FDM GPU M1 spin operator and compact observations | backends/fdm/gpu/cuda/transport/spin/device_solver.cu | solve_device; materialize_observation_range | solve FP64 steady spin, retain per-cell reaction/torque in compact SoA, retain immutable interface identity, and reconstruct complete 288-byte records only during bounded readback | `just verify-fdm-gpu-m1-spin-native-contract`; actual-device PASS, capability remains semantic-only |
+| fdm-gpu-m1-llg-spin-seed | `backends/fdm/gpu/cuda/transport/context.cu` | `solve_steady_spin_impl` | Select the committed or trial FP64 seed for the current LLG transport solve | accepted-state replay and true-residual checks |
+| fdm-gpu-m1-spin-amg-static-geometry | `backends/fdm/gpu/cuda/transport/spin/sparse_solver.cu` | `prepare` | Retain fixed coarsening and face weights while recomputing the coarse diagonals | native spin operator parity and whole-context budget checks |
 | FDM GPU M1 accepted spin observation | backends/fdm/gpu/cuda/transport/context.cu | materialize_accepted_spin | reconstruct complete fields once per observed accepted CUDA endpoint | field parity and native checkpoint export contract |
 | FDM GPU M1 spin-observation parity | backends/fdm/tests/gpu_m1_spin_operator_parity_v1_contract.cpp | main | compare reconstructed typed observations with the CPU owner, including reversed orientation and exact accepted charge traces | managed actual-device CPU--GPU parity PASS |
 | FDM GPU M1 sparse public dispatch | backends/fdm/tests/gpu_m1_spin_sparse_dispatch_v1_contract.cpp | main | prove 1,048,576-cell public dispatch, 512 MiB external envelope, 2 GiB total peak, persistent cache, component-sensitive digest invalidation, NaN rollback and deterministic restore | `just verify-fdm-gpu-m1-spin-native-contract`; actual-device PASS |

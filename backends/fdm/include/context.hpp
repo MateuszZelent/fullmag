@@ -2147,9 +2147,15 @@ inline TransportReceiptCategory fullmag_fdm_classify_transport_telemetry(
                 ? TransportReceiptCategory::ObservationD2H
                 : TransportReceiptCategory::Invalid;
         case FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_REASON_CHECKPOINT_IMPORT_H2D:
-            return transfer && cadence && record.direction ==
-                       FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_DIRECTION_H2D
-                ? TransportReceiptCategory::ObservationH2D
+            if (!transfer || record.direction !=
+                    FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_DIRECTION_H2D) {
+                return TransportReceiptCategory::Invalid;
+            }
+            if (cadence) return TransportReceiptCategory::ObservationH2D;
+            // An exact checkpoint import is recorded before binding the LLG
+            // and has no time-step or sample cadence.
+            return !provisional && record.attempt_id == 0 && record.stage_id == 0
+                ? TransportReceiptCategory::SetupH2D
                 : TransportReceiptCategory::Invalid;
         case FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_REASON_CONTROL_STATE_H2D:
             return transfer && provisional && record.direction ==

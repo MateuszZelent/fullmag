@@ -2914,9 +2914,9 @@ int fullmag_fdm_context_unbind_gpu_transport_v1(fullmag_fdm_backend *handle) {
 #if FULLMAG_HAS_CUDA
     if (handle == nullptr) return FULLMAG_FDM_ERR_INVALID;
     auto *ctx = reinterpret_cast<Context *>(handle);
-    if (reject_step_transaction_mutation(*ctx, "gpu_transport_unbind")) {
-        return FULLMAG_FDM_ERR_INVALID;
-    }
+    // A rejected unbind must not replace the error state of the active
+    // integrator, which still owns the transport binding.
+    if (ctx->gpu_workspace_step_active) return FULLMAG_FDM_ERR_INVALID;
     if (!ctx->gpu_transport_rhs.active) return FULLMAG_FDM_ERR_INVALID;
     const bool telemetry_imported = context_unbind_gpu_transport_rhs(*ctx);
     if (ctx->gpu_transport_rhs.active) return FULLMAG_FDM_ERR_INVALID;
