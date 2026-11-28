@@ -59,6 +59,7 @@ struct SparseOperatorStorage {
     uint8_t *interface_roles = nullptr;
     double *interface_blocks_soa = nullptr;
     unsigned long long *digest_accumulator = nullptr;
+    uint32_t initial_residual_blocks = 0;
     uint64_t cells = 0;
     uint64_t interface_count = 0;
     uint64_t interface_nonzeros = 0;

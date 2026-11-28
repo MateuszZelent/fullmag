@@ -151,7 +151,7 @@ int main() {
         const memory::UpperBound estimate =
             memory::estimate_upper_bound(grid, 2, 0, 0, 0, false);
         ok &= expect(estimate.valid, "cold upper-bound estimate must succeed");
-        ok &= expect(estimate.persistent_storage_bytes == 9464,
+        ok &= expect(estimate.persistent_storage_bytes == 17672,
                      "persistent storage must match device allocation formulas");
         ok &= expect(estimate.candidate_bytes == 19288,
                      "candidate storage must match device materialization formulas");
@@ -169,9 +169,9 @@ int main() {
                      "reduction/scalar estimate must use conservative 1024-block bounds");
         ok &= expect(estimate.workspace_bytes == 118528,
                      "workspace components must sum exactly");
-        ok &= expect(estimate.solve_phase_peak_bytes == 130112,
+        ok &= expect(estimate.solve_phase_peak_bytes == 138320,
                      "solve peak must include persistent, hierarchy and workspace");
-        ok &= expect(estimate.materialization_phase_peak_bytes == 30872,
+        ok &= expect(estimate.materialization_phase_peak_bytes == 39080,
                      "materialization peak must include persistent, hierarchy and candidate");
         ok &= expect(estimate.phase_peak_bytes == estimate.solve_phase_peak_bytes,
                      "phase peak must select the largest live phase");

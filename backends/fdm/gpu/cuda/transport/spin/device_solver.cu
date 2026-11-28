@@ -1910,6 +1910,12 @@ struct MaterializationScratch {
     unsigned long long digest[5]{};
 };
 
+struct AssemblyResult {
+    unsigned long long digest[5]{};
+    double initial_relative_residual = 0.0;
+};
+static_assert(sizeof(AssemblyResult) == 6 * sizeof(unsigned long long));
+
 uint32_t materialize_full_fields_impl(
     const SolveInput &input, const double *rhs, const double *solution,
     const uint8_t *hierarchy_digest, bool copy_torque_destination,
@@ -2214,6 +2220,9 @@ uint32_t solve_device(const SolveInput &input, SolveOutput *output) noexcept {
         release(state);
         auto &s=state.storage; s.cells=cells; s.interface_count=interface_count;
         s.interface_nonzeros=interface_entries;
+        s.initial_residual_blocks = sparse::initial_residual_blocks();
+        const uint64_t extra_digest_words = s.initial_residual_blocks == 0 ? 0 :
+            s.initial_residual_blocks + memory::kInitialResidualExtraWords;
         uint64_t owned=0;
         auto alloc=[&](void **pointer,uint64_t count,uint64_t element)->bool {
             uint64_t bytes=0; if(!checked_mul(count,element,&bytes) ||
@@ -2230,7 +2239,8 @@ uint32_t solve_device(const SolveInput &input, SolveOutput *output) noexcept {
            !alloc(reinterpret_cast<void**>(&s.interface_record_indices),interface_entries,sizeof(uint32_t)) ||
            !alloc(reinterpret_cast<void**>(&s.interface_roles),interface_entries,sizeof(uint8_t)) ||
            !alloc(reinterpret_cast<void**>(&s.interface_blocks_soa),9*interface_entries,sizeof(double)) ||
-           !alloc(reinterpret_cast<void**>(&s.digest_accumulator),5,sizeof(unsigned long long))) {
+           !alloc(reinterpret_cast<void**>(&s.digest_accumulator),
+                  5 + extra_digest_words, sizeof(unsigned long long))) {
             release(state); return FULLMAG_FDM_GPU_TRANSPORT_ERROR_OUT_OF_MEMORY;
         }
         s.owned_bytes=owned;
@@ -2336,14 +2346,8 @@ uint32_t solve_device(const SolveInput &input, SolveOutput *output) noexcept {
         s.spin_conductivity,s.local_block_soa,s.rhs_soa,s.digest_accumulator);
     if(interface_entries) assemble_sparse_interfaces_kernel<<<uint32_t((interface_entries+255)/256),256,0,input.stream>>>(
         input,s.interface_record_indices,s.interface_roles,interface_entries,s.interface_blocks_soa);
-    unsigned long long digest_words[5]{};
-    if(cudaPeekAtLastError()!=cudaSuccess || cudaMemcpyAsync(digest_words,s.digest_accumulator,
-        sizeof(digest_words),cudaMemcpyDeviceToHost,input.stream)!=cudaSuccess ||
-       cudaStreamSynchronize(input.stream)!=cudaSuccess) {
+    if (cudaPeekAtLastError() != cudaSuccess)
         return FULLMAG_FDM_GPU_TRANSPORT_ERROR_CUDA_RUNTIME_ERROR;
-    }
-    if(digest_words[4]!=0) return FULLMAG_FDM_GPU_TRANSPORT_ERROR_INVALID_DESCRIPTOR;
-    trace_phase("assembly_and_digest");
     sparse::Operator op{};
     for(uint32_t a=0;a<3;++a){op.grid[a]=input.grid[a];op.cell_size[a]=input.cell_size[a];}
     op.active=s.active; op.spin_conductivity=s.spin_conductivity;
@@ -2357,61 +2361,115 @@ uint32_t solve_device(const SolveInput &input, SolveOutput *output) noexcept {
     op.geometry_token = input.payloads[0];
     op.resident_external_bytes=input.resident_external_bytes+s.owned_bytes;
     op.resolved_device_budget_bytes = resolved_device_budget_bytes;
-    for(uint32_t i=0;i<32;++i) op.operator_digest[i]=uint8_t(
-        (digest_words[i / 8] >> ((i % 8) * 8)) ^
-        (input.operator_revision >> (i % 8)) ^ (0x5d+i*17));
+    const bool probe_seed = (reuse_trial_solution || use_accepted_seed) &&
+        s.initial_residual_blocks != 0 && input.relative_tolerance < 1.0;
+    if (probe_seed && sparse::enqueue_initial_residual(
+            op, input.stream, s.initial_residual_blocks,
+            reinterpret_cast<double *>(s.digest_accumulator + 5)) != cudaSuccess)
+        return FULLMAG_FDM_GPU_TRANSPORT_ERROR_CUDA_RUNTIME_ERROR;
+
+    // Return the optional probe and the assembly digest in one control read.
+    AssemblyResult assembly{};
+    const size_t assembly_bytes = probe_seed ? sizeof(assembly) : sizeof(assembly.digest);
+    if (cudaMemcpyAsync(&assembly, s.digest_accumulator, assembly_bytes,
+                        cudaMemcpyDeviceToHost, input.stream) != cudaSuccess ||
+        cudaStreamSynchronize(input.stream) != cudaSuccess)
+        return FULLMAG_FDM_GPU_TRANSPORT_ERROR_CUDA_RUNTIME_ERROR;
+    if (assembly.digest[4] != 0)
+        return FULLMAG_FDM_GPU_TRANSPORT_ERROR_INVALID_DESCRIPTOR;
+    trace_phase("assembly_and_digest");
+
+    for (uint32_t i = 0; i < 32; ++i)
+        op.operator_digest[i] = uint8_t(
+            (assembly.digest[i / 8] >> ((i % 8) * 8)) ^
+            (input.operator_revision >> (i % 8)) ^ (0x5d + i * 17));
+    const bool seed_converged = probe_seed &&
+        std::isfinite(assembly.initial_relative_residual) &&
+        assembly.initial_relative_residual <= input.relative_tolerance;
     sparse::BuildMetrics build{};
-    const bool was_cached=state.hierarchy.valid && state.hierarchy.operator_revision==op.operator_revision &&
-        std::memcmp(state.hierarchy.operator_digest,op.operator_digest,32)==0;
-    uint32_t status=sparse::prepare(op,input.stream,&state.hierarchy,&state.workspace,&build);
-    trace_phase(was_cached ? "sparse_prepare_cache_hit" :
-                build.refreshed_fixed_geometry ? "sparse_prepare_refresh" : "sparse_prepare_build");
-    if(status!=0)return status==2?FULLMAG_FDM_GPU_TRANSPORT_ERROR_OUT_OF_MEMORY:FULLMAG_FDM_GPU_TRANSPORT_ERROR_OUT_OF_RESOURCES;
-    if (was_cached) {
-        uint64_t retained_coarse_cells = 0;
-        for (uint32_t level = 1; level < state.hierarchy.level_count; ++level)
-            retained_coarse_cells += state.hierarchy.levels[level].cells;
-        memory::UpperBound warm_memory = memory::estimate_upper_bound(
-            grid_for_memory, interface_count, state.storage.owned_bytes,
-            state.hierarchy.owned_bytes, retained_coarse_cells, true);
-        if (!warm_memory.valid ||
-            !set_candidate_upper_bound(&warm_memory, mode_candidate_bytes))
-            return FULLMAG_FDM_GPU_TRANSPORT_ERROR_OUT_OF_RESOURCES;
-        memory::Input warm_input = memory_input;
-        warm_input.required_new_bytes = std::max(
-            warm_memory.workspace_bytes, warm_memory.candidate_bytes);
-        warm_input.phase_peak_bytes = warm_memory.phase_peak_bytes;
-        warm_input.workspace_bytes = warm_memory.workspace_bytes;
-        warm_input.first_solve = false;
-        warm_input.first_required_is_conservative_upper_bound = false;
-        const memory::Plan exact_warm_plan = memory::plan(warm_input);
-        if (exact_warm_plan.preflight != memory::Preflight::ready)
-            return FULLMAG_FDM_GPU_TRANSPORT_ERROR_OUT_OF_RESOURCES;
-        output->memory_plan = exact_warm_plan;
-    }
-    if(was_cached) ++state.hierarchy_cache_hit_count; else ++state.hierarchy_build_count;
-    const auto solve = [&](sparse::SolveMetrics &metrics) {
-        return sparse::solve(op, input.stream, state.hierarchy, state.workspace,
-                             input.relative_tolerance, input.max_iterations, &metrics);
-    };
     sparse::SolveMetrics metrics{};
-    status = solve(metrics);
-    const bool retry_cold = (reuse_trial_solution || use_accepted_seed) && status != 0 &&
-        metrics.forbidden_transfer_bytes == 0 &&
-        (metrics.reason == sparse::ConvergenceReason::maximum_iterations ||
-         metrics.reason == sparse::ConvergenceReason::non_finite);
-    const bool cold_reset_failed = retry_cold && clear_solution() != cudaSuccess;
-    if (retry_cold && !cold_reset_failed) {
-        const auto warm = metrics;
-        metrics = {};
+    bool was_cached = false;
+    bool retry_cold = false;
+    bool cold_reset_failed = false;
+    uint32_t status = 0;
+    if (seed_converged) {
+        // A failed prior solve can leave Krylov storage in the owning context.
+        // The assembly readback has drained its stream, so release it before
+        // recording the allocation-free solve phase.
+        sparse::release(&state.workspace);
+        build.fine_unknowns = unknowns;
+        metrics.reason = sparse::ConvergenceReason::converged;
+        metrics.relative_residual = assembly.initial_relative_residual;
+        if (!checked_add(op.resident_external_bytes, state.hierarchy.owned_bytes,
+                         &metrics.peak_device_bytes))
+            return FULLMAG_FDM_GPU_TRANSPORT_ERROR_OUT_OF_RESOURCES;
+
+        memory::Input probe_memory = memory_input;
+        probe_memory.workspace_bytes = 0;
+        probe_memory.first_required_is_conservative_upper_bound = false;
+        if (!checked_add(mode_candidate_bytes, rebuild_storage ? s.owned_bytes : 0,
+                         &probe_memory.required_new_bytes) ||
+            !checked_add(s.owned_bytes, state.hierarchy.owned_bytes,
+                         &probe_memory.phase_peak_bytes) ||
+            !checked_add(probe_memory.phase_peak_bytes, mode_candidate_bytes,
+                         &probe_memory.phase_peak_bytes))
+            return FULLMAG_FDM_GPU_TRANSPORT_ERROR_OUT_OF_RESOURCES;
+        output->memory_plan = memory::plan(probe_memory);
+        if (output->memory_plan.preflight != memory::Preflight::ready)
+            return FULLMAG_FDM_GPU_TRANSPORT_ERROR_OUT_OF_RESOURCES;
+        trace_phase("sparse_seed_accepted");
+    } else {
+        was_cached = state.hierarchy.valid && state.hierarchy.operator_revision==op.operator_revision &&
+            std::memcmp(state.hierarchy.operator_digest,op.operator_digest,32)==0;
+        status = sparse::prepare(op,input.stream,&state.hierarchy,&state.workspace,&build);
+        trace_phase(was_cached ? "sparse_prepare_cache_hit" :
+                    build.refreshed_fixed_geometry ? "sparse_prepare_refresh" : "sparse_prepare_build");
+        if(status!=0)return status==2?FULLMAG_FDM_GPU_TRANSPORT_ERROR_OUT_OF_MEMORY:FULLMAG_FDM_GPU_TRANSPORT_ERROR_OUT_OF_RESOURCES;
+        if (was_cached) {
+            uint64_t retained_coarse_cells = 0;
+            for (uint32_t level = 1; level < state.hierarchy.level_count; ++level)
+                retained_coarse_cells += state.hierarchy.levels[level].cells;
+            memory::UpperBound warm_memory = memory::estimate_upper_bound(
+                grid_for_memory, interface_count, state.storage.owned_bytes,
+                state.hierarchy.owned_bytes, retained_coarse_cells, true);
+            if (!warm_memory.valid ||
+                !set_candidate_upper_bound(&warm_memory, mode_candidate_bytes))
+                return FULLMAG_FDM_GPU_TRANSPORT_ERROR_OUT_OF_RESOURCES;
+            memory::Input warm_input = memory_input;
+            warm_input.required_new_bytes = std::max(
+                warm_memory.workspace_bytes, warm_memory.candidate_bytes);
+            warm_input.phase_peak_bytes = warm_memory.phase_peak_bytes;
+            warm_input.workspace_bytes = warm_memory.workspace_bytes;
+            warm_input.first_solve = false;
+            warm_input.first_required_is_conservative_upper_bound = false;
+            const memory::Plan exact_warm_plan = memory::plan(warm_input);
+            if (exact_warm_plan.preflight != memory::Preflight::ready)
+                return FULLMAG_FDM_GPU_TRANSPORT_ERROR_OUT_OF_RESOURCES;
+            output->memory_plan = exact_warm_plan;
+        }
+        if(was_cached) ++state.hierarchy_cache_hit_count; else ++state.hierarchy_build_count;
+        const auto solve = [&](sparse::SolveMetrics &metrics) {
+            return sparse::solve(op, input.stream, state.hierarchy, state.workspace,
+                                 input.relative_tolerance, input.max_iterations, &metrics);
+        };
         status = solve(metrics);
-        output->failed_warm_iterations = warm.iterations;
-        metrics.amg_applications += warm.amg_applications;
-        metrics.control_transfer_count += warm.control_transfer_count;
-        metrics.control_transfer_bytes += warm.control_transfer_bytes;
-        metrics.control_host_sync_count += warm.control_host_sync_count;
-        metrics.solve_milliseconds += warm.solve_milliseconds;
-        metrics.peak_device_bytes = std::max(metrics.peak_device_bytes, warm.peak_device_bytes);
+        retry_cold = (reuse_trial_solution || use_accepted_seed) && status != 0 &&
+            metrics.forbidden_transfer_bytes == 0 &&
+            (metrics.reason == sparse::ConvergenceReason::maximum_iterations ||
+             metrics.reason == sparse::ConvergenceReason::non_finite);
+        cold_reset_failed = retry_cold && clear_solution() != cudaSuccess;
+        if (retry_cold && !cold_reset_failed) {
+            const auto warm = metrics;
+            metrics = {};
+            status = solve(metrics);
+            output->failed_warm_iterations = warm.iterations;
+            metrics.amg_applications += warm.amg_applications;
+            metrics.control_transfer_count += warm.control_transfer_count;
+            metrics.control_transfer_bytes += warm.control_transfer_bytes;
+            metrics.control_host_sync_count += warm.control_host_sync_count;
+            metrics.solve_milliseconds += warm.solve_milliseconds;
+            metrics.peak_device_bytes = std::max(metrics.peak_device_bytes, warm.peak_device_bytes);
+        }
     }
     trace_phase("sparse_solve");
     if (trace_enabled) {
@@ -2427,7 +2485,7 @@ uint32_t solve_device(const SolveInput &input, SolveOutput *output) noexcept {
     const uint64_t solve_control_transfers =
         build.control_transfer_count + metrics.control_transfer_count + 1;
     const uint64_t solve_control_bytes =
-        build.control_transfer_bytes + metrics.control_transfer_bytes + sizeof(digest_words);
+        build.control_transfer_bytes + metrics.control_transfer_bytes + assembly_bytes;
     const uint64_t solve_control_syncs =
         build.control_host_sync_count + metrics.control_host_sync_count + 1;
     output->control_d2h_count = solve_control_transfers;
@@ -2466,14 +2524,16 @@ uint32_t solve_device(const SolveInput &input, SolveOutput *output) noexcept {
         output->fine_unknowns = build.fine_unknowns;
         output->coarse_unknowns = build.coarse_unknowns;
         output->hierarchy_levels = build.level_count;
-        output->hierarchy_build_count = was_cached ? 0 : 1;
+        output->hierarchy_build_count = !seed_converged && !was_cached ? 1 : 0;
         output->cache_hit_count = was_cached ? 1 : 0;
         state.amg_apply_count += metrics.amg_applications;
         state.fine_unknown_count = build.fine_unknowns;
         state.coarse_unknown_count = build.coarse_unknowns;
         state.hierarchy_levels = build.level_count;
-        std::memcpy(state.hierarchy_digest, state.hierarchy.operator_digest, 32);
-        std::memcpy(output->hierarchy_digest, state.hierarchy.operator_digest, 32);
+        // The endpoint identity describes the current operator, even when its
+        // initial iterate converged without preparing a matching hierarchy.
+        std::memcpy(state.hierarchy_digest, op.operator_digest, 32);
+        std::memcpy(output->hierarchy_digest, op.operator_digest, 32);
         output->forbidden_transfer_bytes = metrics.forbidden_transfer_bytes;
     };
 
@@ -2600,7 +2660,7 @@ uint32_t solve_device(const SolveInput &input, SolveOutput *output) noexcept {
         for (uint32_t byte = 0; byte < 32; ++byte) {
             output->deterministic_compute_digest[byte] = uint8_t(
                 (result_words[byte / 8] >> ((byte % 8) * 8)) ^
-                state.hierarchy.operator_digest[byte] ^
+                op.operator_digest[byte] ^
                 input.accepted_snapshot_digest[byte]);
             digest_nonzero = digest_nonzero ||
                 output->deterministic_compute_digest[byte] != 0;
@@ -2611,8 +2671,7 @@ uint32_t solve_device(const SolveInput &input, SolveOutput *output) noexcept {
     }
 
     status = materialize_full_fields_impl(
-        input, s.rhs_soa, s.solution_soa, state.hierarchy.operator_digest,
-        true, output);
+        input, s.rhs_soa, s.solution_soa, op.operator_digest, true, output);
     if (status != FULLMAG_FDM_GPU_TRANSPORT_ERROR_OK) return status;
     output->iterations = metrics.iterations;
     output->reason = FULLMAG_FDM_GPU_TRANSPORT_CONVERGENCE_CONVERGED;

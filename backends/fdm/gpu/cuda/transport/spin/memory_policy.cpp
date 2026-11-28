@@ -193,7 +193,9 @@ UpperBound estimate_upper_bound(const uint64_t grid[3], uint64_t interface_count
             !checked_mul(interface_count, 324, &interface_storage) ||
             !checked_add(cell_storage, interface_storage,
                          &output.persistent_storage_bytes) ||
-            !checked_add(output.persistent_storage_bytes, 48,
+            !checked_add(output.persistent_storage_bytes,
+                         48 + sizeof(double) *
+                             (kReductionBlockLimit + kInitialResidualExtraWords),
                          &output.persistent_storage_bytes))
             return output;
         try {
@@ -222,7 +224,7 @@ UpperBound estimate_upper_bound(const uint64_t grid[3], uint64_t interface_count
         return output;
 
     uint64_t basis_values = 0, work_values = 0, coarse_values = 0;
-    constexpr uint64_t reduction_and_scalar_values = UINT64_C(1024) + 2816;
+    constexpr uint64_t reduction_and_scalar_values = kReductionBlockLimit + 2816;
     constexpr uint64_t conservative_device_status_bytes = 1024;
     if (!checked_mul(unknowns, 51, &basis_values) ||
         !checked_mul(basis_values, sizeof(double), &output.krylov_basis_bytes) ||
