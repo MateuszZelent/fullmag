@@ -1821,6 +1821,18 @@ result and synchronization record retain the iteration count of the last
 linear solve. The norm rescales finite entries when direct squaring
 underflows or overflows, so a small nonzero drive follows the nonzero-RHS path.
 
+For a reused device iterate, a GPU probe evaluates the same fine operator
+and FP64 norm before preparing AMG. Its result shares the assembly digest
+readback. A finite value within the configured tolerance reports zero
+iterations and leaves the seed intact. This path skips both hierarchy
+preparation and Krylov allocation. If the probe cannot use the same reduction
+launch on the device, or reports an undefined or out-of-tolerance residual,
+the existing GMRES path runs. That path owns the exact zero-RHS reset. A CUDA
+launch, readback or synchronization failure aborts the attempt. Endpoint provenance
+still hashes the current operator. The hierarchy counters advance only when
+the solve prepares or uses the cache. The probe requires one scalar result
+and bounded reduction scratch in the device memory budget.
+
 Retry discards the provisional iterate and reads the same committed seed.
 The compact endpoint and the fields reconstructed for observation or exact
 checkpoint restore hold the same FP64 spin potential. The verified continuation
@@ -1840,6 +1852,8 @@ Standalone full-field solves start from zero.
 selects the guess within the transaction.
 `backends/fdm/gpu/cuda/transport/spin/device_solver.cu::solve_device`
 holds the guess and emits opt-in iteration and residual observations.
+`backends/fdm/gpu/cuda/transport/spin/sparse_solver.cu::initial_residual_kernel`
+evaluates the existing stopping quantity before AMG preparation.
 `backends/fdm/gpu/cuda/transport/spin/sparse_solver.cu::persistent_gmres_kernel`
 checks the true residual and returns the exact solution for a zero RHS.
 `backends/fdm/gpu/cuda/transport/spin/device_solver.cu::hash_fp64_result_kernel`
@@ -4103,6 +4117,8 @@ a qualified workload without the validation gates above.
 | Native FDM M1 charge regression | backends/fdm/tests/cpu_charge_transport_contract.cpp | main | oriented traces, conservative current, reversed orientation, and finite-conductance validation | native charge contract |
 | Native FDM M1 spin regression | backends/fdm/tests/cpu_spin_transport_contract.cpp | main | independent mixing/reaction/torque algebra, local residual rejection, and six SHE contractions | native spin contract |
 | Native FDM GPU M1 spin solver | backends/fdm/gpu/cuda/transport/spin/device_solver.cu | solve_device | FP64 steady spin/direct-SHE, dynamic mixing and target-masked transport torque on the context-owned stream | managed GPU CPU-parity contract; partial and unvalidated |
+| FDM GPU M1 initial-residual probe | backends/fdm/gpu/cuda/transport/spin/sparse_solver.cu | initial_residual_kernel | Test FP64 true residual of the reused iterate before allocating GMRES workspace | threshold and zero/tiny RHS device regression |
+| FDM GPU M1 initial-residual regression | backends/fdm/tests/gpu_m1_spin_sparse_performance_v1_contract.cu | main | Compare the initial residual and threshold decisions against the existing GMRES path | GPU sparse performance contract |
 | Native FDM GPU M1 LLG binding ABI | native/include/fullmag_fdm.h | fullmag_fdm_context_bind_gpu_transport_v1 | append-only 144-byte binding record and public bind/unbind entry points | C11/C++/Rust layout and actual-device ownership contract |
 | Native FDM GPU M1 LLG binding | backends/fdm/gpu/cuda/transport/context.cu | context_bind_gpu_transport_rhs; context_begin_gpu_transport_step; context_commit_gpu_transport_step; context_rollback_gpu_transport_step | exclusive one-owner binding, stage trial state and accepted-step promotion/rollback | `just verify-fdm-gpu-m1-transport-llg-lifecycle-contract`; not production qualification |
 | Native FDM GPU M1 torque RHS | backends/fdm/gpu/cuda/integrators/transport_rhs_fp64.cu | launch_add_gpu_transport_torque_fp64 | add Gilbert-form transport torque exactly once and pin transport storage through kernel completion | managed Heun/RK4 stage contract and compute-sanitizer; RK23/DP45 Task 6 integration remains under qualification |

@@ -160,6 +160,16 @@ struct PreconditionerAuditMetrics {
     double up_phase_residuals[kMaximumLevels]{};
 };
 
+// The probe uses the same reduction launch as GMRES. Zero means that
+// the probe cannot reproduce that launch on the current device.
+uint32_t initial_residual_blocks() noexcept;
+
+// result_and_scratch holds blocks + 2 doubles. The first receives the
+// relative residual. A non-finite result defers to the ordinary solve.
+cudaError_t enqueue_initial_residual(const Operator &input, cudaStream_t stream,
+                                     uint32_t blocks,
+                                     double *result_and_scratch) noexcept;
+
 uint32_t prepare(const Operator &input, cudaStream_t stream,
                  HierarchyCache *hierarchy, Workspace *workspace,
                  BuildMetrics *metrics) noexcept;

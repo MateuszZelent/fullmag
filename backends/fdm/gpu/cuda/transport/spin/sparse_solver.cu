@@ -1,4 +1,5 @@
 #include "sparse_solver.hpp"
+#include "memory_policy.hpp"
 
 #include <cooperative_groups.h>
 
@@ -396,62 +397,63 @@ __global__ void finalize_level_kernel(Level level) {
     }
 }
 
+__device__ double apply_fine_row(const Operator &op, const double *input,
+                                 uint64_t cells, uint64_t unknown) {
+    const uint32_t component = uint32_t(unknown / cells);
+    const uint64_t cell = unknown - uint64_t(component) * cells;
+    if (!op.active[cell]) return input[unknown];
+    double value = 0.0;
+    for (uint32_t column = 0; column < 3; ++column)
+        value += op.local_block_soa[(component * 3 + column) * cells + cell] *
+                 input[uint64_t(column) * cells + cell];
+    uint64_t x = 0, y = 0, z = 0;
+    coordinates(op.grid, cell, x, y, z);
+    const uint64_t coord[3]{x, y, z};
+    for (uint32_t axis = 0; axis < 3; ++axis) {
+        if (coord[axis] > 0) {
+            uint64_t neighbor_coord[3]{x, y, z};
+            --neighbor_coord[axis];
+            const uint64_t neighbor = cell_index(op.grid, neighbor_coord[0],
+                                                 neighbor_coord[1],
+                                                 neighbor_coord[2]);
+            const double weight = fine_edge(op, axis, neighbor, cell);
+            value += weight * (input[unknown] -
+                               input[uint64_t(component) * cells + neighbor]);
+        }
+        if (coord[axis] + 1 < op.grid[axis]) {
+            uint64_t neighbor_coord[3]{x, y, z};
+            ++neighbor_coord[axis];
+            const uint64_t neighbor = cell_index(op.grid, neighbor_coord[0],
+                                                 neighbor_coord[1],
+                                                 neighbor_coord[2]);
+            const double weight = fine_edge(op, axis, cell, neighbor);
+            value += weight * (input[unknown] -
+                               input[uint64_t(component) * cells + neighbor]);
+        }
+    }
+    if (op.interface_row_offsets != nullptr) {
+        const uint64_t begin = op.interface_row_offsets[cell];
+        const uint64_t end = op.interface_row_offsets[cell + 1];
+        for (uint64_t entry = begin; entry < end; ++entry) {
+            const uint64_t neighbor = op.interface_columns[entry];
+            for (uint32_t column = 0; column < 3; ++column)
+                value += op.interface_blocks_soa[
+                             (component * 3 + column) *
+                                 op.interface_nonzeros +
+                             entry] *
+                         input[uint64_t(column) * cells + neighbor];
+        }
+    }
+    return value;
+}
+
 __device__ void apply_fine(const Operator &op, const double *input,
                            double *output, cg::grid_group grid_group) {
     const uint64_t cells = op.grid[0] * op.grid[1] * op.grid[2];
     const uint64_t unknowns = 3 * cells;
     for (uint64_t unknown = grid_group.thread_rank(); unknown < unknowns;
-         unknown += grid_group.size()) {
-        const uint32_t component = uint32_t(unknown / cells);
-        const uint64_t cell = unknown - uint64_t(component) * cells;
-        if (!op.active[cell]) {
-            output[unknown] = input[unknown];
-            continue;
-        }
-        double value = 0.0;
-        for (uint32_t column = 0; column < 3; ++column)
-            value += op.local_block_soa[(component * 3 + column) * cells + cell] *
-                     input[uint64_t(column) * cells + cell];
-        uint64_t x = 0, y = 0, z = 0;
-        coordinates(op.grid, cell, x, y, z);
-        const uint64_t coord[3]{x, y, z};
-        for (uint32_t axis = 0; axis < 3; ++axis) {
-            if (coord[axis] > 0) {
-                uint64_t neighbor_coord[3]{x, y, z};
-                --neighbor_coord[axis];
-                const uint64_t neighbor = cell_index(op.grid, neighbor_coord[0],
-                                                     neighbor_coord[1],
-                                                     neighbor_coord[2]);
-                const double weight = fine_edge(op, axis, neighbor, cell);
-                value += weight * (input[unknown] -
-                                   input[uint64_t(component) * cells + neighbor]);
-            }
-            if (coord[axis] + 1 < op.grid[axis]) {
-                uint64_t neighbor_coord[3]{x, y, z};
-                ++neighbor_coord[axis];
-                const uint64_t neighbor = cell_index(op.grid, neighbor_coord[0],
-                                                     neighbor_coord[1],
-                                                     neighbor_coord[2]);
-                const double weight = fine_edge(op, axis, cell, neighbor);
-                value += weight * (input[unknown] -
-                                   input[uint64_t(component) * cells + neighbor]);
-            }
-        }
-        if (op.interface_row_offsets != nullptr) {
-            const uint64_t begin = op.interface_row_offsets[cell];
-            const uint64_t end = op.interface_row_offsets[cell + 1];
-            for (uint64_t entry = begin; entry < end; ++entry) {
-                const uint64_t neighbor = op.interface_columns[entry];
-                for (uint32_t column = 0; column < 3; ++column)
-                    value += op.interface_blocks_soa[
-                                 (component * 3 + column) *
-                                     op.interface_nonzeros +
-                                 entry] *
-                             input[uint64_t(column) * cells + neighbor];
-            }
-        }
-        output[unknown] = value;
-    }
+         unknown += grid_group.size())
+        output[unknown] = apply_fine_row(op, input, cells, unknown);
     grid_group.sync();
 }
 
@@ -530,11 +532,17 @@ __device__ double deterministic_dot(const double *left, const double *right,
     return deterministic_reduce(local, partials, result, grid_group);
 }
 
-__device__ double deterministic_norm(const double *values, uint64_t count,
-                                     double *partials, double *result,
-                                     cg::grid_group grid_group) {
-    const double squares = deterministic_dot(values, values, count, partials,
-                                            result, grid_group);
+template <typename ReadValue>
+__device__ double deterministic_value_norm(ReadValue values, uint64_t count,
+                                            double *partials, double *result,
+                                            cg::grid_group grid_group) {
+    double local_square_sum = 0.0;
+    for (uint64_t i = grid_group.thread_rank(); i < count; i += grid_group.size()) {
+        const double value = values(i);
+        local_square_sum += value * value;
+    }
+    const double squares = deterministic_reduce(local_square_sum, partials,
+                                                result, grid_group);
     if ((squares >= DBL_MIN && isfinite(squares)) || isnan(squares))
         return sqrt(squares);
 
@@ -542,16 +550,54 @@ __device__ double deterministic_norm(const double *values, uint64_t count,
     // In particular, a zero sum of squares does not prove an exact zero RHS.
     double local_scale = 0.0;
     for (uint64_t i = grid_group.thread_rank(); i < count; i += grid_group.size())
-        local_scale = fmax(local_scale, fabs(values[i]));
+        local_scale = fmax(local_scale, fabs(values(i)));
     const double scale = deterministic_reduce<true>(
         local_scale, partials, result, grid_group);
     if (scale == 0.0 || !isfinite(scale)) return scale;
     double local_squares = 0.0;
     for (uint64_t i = grid_group.thread_rank(); i < count; i += grid_group.size()) {
-        const double scaled = values[i] / scale;
+        const double scaled = values(i) / scale;
         local_squares += scaled * scaled;
     }
     return scale * sqrt(deterministic_reduce(local_squares, partials, result, grid_group));
+}
+
+struct VectorEntry {
+    const double *values;
+    __device__ double operator()(uint64_t i) const { return values[i]; }
+};
+
+__device__ double deterministic_norm(const double *values, uint64_t count,
+                                     double *partials, double *result,
+                                     cg::grid_group grid_group) {
+    return deterministic_value_norm(VectorEntry{values}, count, partials, result, grid_group);
+}
+
+struct TrueResidualEntry {
+    const Operator &op;
+    uint64_t cells;
+    __device__ double operator()(uint64_t i) const {
+        // Keep the subtraction rounded separately, as when GMRES reads Ax
+        // back from its work vector.
+        return __dsub_rn(op.rhs_soa[i], apply_fine_row(op, op.solution_soa, cells, i));
+    }
+};
+
+__global__ void initial_residual_kernel(Operator op, double *result_and_scratch) {
+    cg::grid_group grid_group = cg::this_grid();
+    const uint64_t cells = op.grid[0] * op.grid[1] * op.grid[2];
+    const uint64_t unknowns = 3 * cells;
+    double *partials = result_and_scratch + 1;
+    double *scalar = partials + gridDim.x;
+    const double rhs_norm = deterministic_norm(op.rhs_soa, unknowns, partials,
+                                               scalar, grid_group);
+    // The normal solve owns the exact zero-RHS reset and non-finite handling.
+    double relative = INFINITY;
+    if (rhs_norm > 0.0 && isfinite(rhs_norm)) {
+        relative = deterministic_value_norm(TrueResidualEntry{op, cells}, unknowns,
+                                             partials, scalar, grid_group) / rhs_norm;
+    }
+    if (grid_group.thread_rank() == 0) result_and_scratch[0] = relative;
 }
 
 __device__ void vector_copy_scale(const double *source, double *destination,
@@ -1322,6 +1368,24 @@ bool valid_operator(const Operator &input) {
     return true;
 }
 
+uint64_t reduction_block_count(const cudaDeviceProp &properties) {
+    return std::min<uint64_t>(uint64_t(properties.multiProcessorCount) * 2,
+                              memory::kReductionBlockLimit);
+}
+
+uint32_t gmres_launch_blocks(const cudaDeviceProp &properties, uint64_t reduction_blocks) {
+    int active_blocks_per_sm = 0;
+    if (!properties.cooperativeLaunch ||
+        cudaOccupancyMaxActiveBlocksPerMultiprocessor(
+            &active_blocks_per_sm, persistent_gmres_kernel, kThreads,
+            kThreads * sizeof(double)) != cudaSuccess ||
+        active_blocks_per_sm <= 0)
+        return 0;
+    return uint32_t(std::min<uint64_t>(
+        reduction_blocks,
+        uint64_t(active_blocks_per_sm) * properties.multiProcessorCount));
+}
+
 bool same_grid(const Triple<uint64_t> &left, const Triple<uint64_t> &right) {
     return left[0] == right[0] && left[1] == right[1] && left[2] == right[2];
 }
@@ -1368,8 +1432,7 @@ uint32_t allocate_workspace(const Operator &input,
         release(workspace);
         return cuda_failure;
     }
-    workspace->reduction_blocks = std::min<uint64_t>(
-        uint64_t(properties.multiProcessorCount) * 2, 1024);
+    workspace->reduction_blocks = reduction_block_count(properties);
     uint64_t basis_values = 0;
     uint64_t vector_values = 0;
     uint64_t scratch_values = 0;
@@ -1420,6 +1483,36 @@ void release(HierarchyCache *hierarchy) noexcept {
     if (hierarchy == nullptr) return;
     for (Level &level : hierarchy->levels) free_level(level);
     *hierarchy = {};
+}
+
+uint32_t initial_residual_blocks() noexcept {
+    int device = 0;
+    cudaDeviceProp properties{};
+    if (cudaGetDevice(&device) != cudaSuccess ||
+        cudaGetDeviceProperties(&properties, device) != cudaSuccess)
+        return 0;
+    const uint32_t blocks = gmres_launch_blocks(properties, reduction_block_count(properties));
+    int probe_blocks_per_sm = 0;
+    if (blocks == 0 ||
+        cudaOccupancyMaxActiveBlocksPerMultiprocessor(
+            &probe_blocks_per_sm, initial_residual_kernel, kThreads,
+            kThreads * sizeof(double)) != cudaSuccess ||
+        probe_blocks_per_sm <= 0 ||
+        blocks > uint64_t(probe_blocks_per_sm) * properties.multiProcessorCount)
+        return 0;
+    return blocks;
+}
+
+cudaError_t enqueue_initial_residual(const Operator &input, cudaStream_t stream,
+                                     uint32_t blocks,
+                                     double *result_and_scratch) noexcept {
+    if (blocks == 0 || blocks > memory::kReductionBlockLimit ||
+        stream == nullptr || !valid_operator(input) || result_and_scratch == nullptr)
+        return cudaErrorInvalidValue;
+    void *arguments[] = {const_cast<Operator *>(&input), &result_and_scratch};
+    return cudaLaunchCooperativeKernel(
+        reinterpret_cast<void *>(initial_residual_kernel), blocks, kThreads,
+        arguments, kThreads * sizeof(double), stream);
 }
 
 uint32_t prepare(const Operator &input, cudaStream_t stream,
@@ -1675,18 +1768,11 @@ uint32_t solve(const Operator &input, cudaStream_t stream,
 
     int device = 0;
     cudaDeviceProp properties{};
-    int active_blocks_per_sm = 0;
     if (cudaGetDevice(&device) != cudaSuccess ||
-        cudaGetDeviceProperties(&properties, device) != cudaSuccess ||
-        !properties.cooperativeLaunch ||
-        cudaOccupancyMaxActiveBlocksPerMultiprocessor(
-            &active_blocks_per_sm, persistent_gmres_kernel, kThreads,
-            kThreads * sizeof(double)) != cudaSuccess ||
-        active_blocks_per_sm <= 0)
+        cudaGetDeviceProperties(&properties, device) != cudaSuccess)
         return cuda_failure;
-    uint32_t blocks = uint32_t(std::min<uint64_t>(
-        workspace.reduction_blocks,
-        uint64_t(active_blocks_per_sm) * properties.multiProcessorCount));
+    const uint32_t blocks = gmres_launch_blocks(properties, workspace.reduction_blocks);
+    if (blocks == 0) return cuda_failure;
     DeviceResult *device_result =
         reinterpret_cast<DeviceResult *>(workspace.device_status);
     void *arguments[] = {const_cast<Operator *>(&input),

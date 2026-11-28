@@ -308,7 +308,20 @@ bool run_sinh_preflight(cudaStream_t stream) {
     uint32_t solve_status = prepare_status;
     uint32_t audit_status = prepare_status;
     bool rap_passed = false;
-    if (prepare_status == 0) {
+    bool residual_probe_passed = false;
+    const uint32_t probe_blocks = sparse::initial_residual_blocks();
+    double *probe_buffer = nullptr;
+    const auto probe = [&](double &relative) {
+        return cuda_ok(sparse::enqueue_initial_residual(
+                           input, stream, probe_blocks, probe_buffer),
+                       "initial residual probe") &&
+            cuda_ok(cudaMemcpyAsync(&relative, probe_buffer, sizeof(relative),
+                                   cudaMemcpyDeviceToHost, stream), "residual readback") &&
+            cuda_ok(cudaStreamSynchronize(stream), "residual probe sync");
+    };
+    if (prepare_status == 0 && probe_blocks != 0 &&
+        cuda_ok(cudaMalloc(reinterpret_cast<void **>(&probe_buffer),
+                           (probe_blocks + 2) * sizeof(double)), "residual probe scratch")) {
         rap_passed = audit_rap_scaling(stream, hierarchy, diffusion, reaction,
                                        boundary_diagonal, &rap_audit);
         audit_status = sparse::audit_preconditioner(
@@ -316,8 +329,32 @@ bool run_sinh_preflight(cudaStream_t stream) {
         (void)cudaMemcpyAsync(solution, expected.data(),
                               expected.size() * sizeof(double),
                               cudaMemcpyHostToDevice, stream);
+        double exact_seed_relative = 0.0;
+        const bool exact_probe_ok = probe(exact_seed_relative);
         exact_seed_status = sparse::solve(input, stream, hierarchy, workspace,
                                           1.0e-12, 1, &exact_seed);
+
+        std::vector<double> perturbed_seed = expected;
+        for (double &value : perturbed_seed) value *= 1.000001;
+        sparse::SolveMetrics at_threshold{}, below_threshold{};
+        double threshold = 0.0;
+        residual_probe_passed = exact_probe_ok &&
+            exact_seed_relative == exact_seed.relative_residual &&
+            cuda_ok(cudaMemcpyAsync(solution, perturbed_seed.data(),
+                                    perturbed_seed.size() * sizeof(double),
+                                    cudaMemcpyHostToDevice, stream), "perturbed seed") &&
+            probe(threshold) && threshold > 0.0 && threshold < 1.0 &&
+            sparse::solve(input, stream, hierarchy, workspace,
+                          threshold, 1, &at_threshold) == 0 &&
+            at_threshold.iterations == 0 && at_threshold.relative_residual == threshold;
+        if (residual_probe_passed) {
+            (void)sparse::solve(input, stream, hierarchy, workspace,
+                                std::nextafter(threshold, 0.0), 1, &below_threshold);
+            residual_probe_passed = below_threshold.iterations == 1 &&
+                below_threshold.restart_residuals[0] == threshold;
+        }
+        if (!residual_probe_passed)
+            std::fprintf(stderr, "residual probe and GMRES disagree at the threshold\n");
 
         (void)cudaMemsetAsync(solution, 0, observed.size() * sizeof(double), stream);
         input.preconditioner = sparse::PreconditionerPolicy::identity_diagnostic;
@@ -338,7 +375,7 @@ bool run_sinh_preflight(cudaStream_t stream) {
         solve_status = sparse::solve(input, stream, hierarchy, workspace,
                                      1.0e-15, 500, &solve);
     }
-    bool passed = rap_passed && audit_status == 0 &&
+    bool passed = rap_passed && residual_probe_passed && audit_status == 0 &&
                   preconditioner_audit.additive_relative_error <= 2.0e-12 &&
                   preconditioner_audit.homogeneity_relative_error <= 2.0e-12 &&
                   preconditioner_audit.repeat_relative_error == 0.0 &&
@@ -459,7 +496,9 @@ bool run_sinh_preflight(cudaStream_t stream) {
         // with a single permitted GMRES iteration.
         sparse::SolveMetrics homogeneous{};
         const size_t bytes = observed.size() * sizeof(double);
+        double homogeneous_probe = 0.0;
         passed = cuda_ok(cudaMemsetAsync(rhs, 0, bytes, stream), "clear homogeneous rhs") &&
+            probe(homogeneous_probe) && !std::isfinite(homogeneous_probe) &&
             sparse::solve(input, stream, hierarchy, workspace, 1.0e-12, 1,
                           &homogeneous) == 0 &&
             homogeneous.iterations == 0 && homogeneous.relative_residual == 0.0 &&
@@ -475,9 +514,11 @@ bool run_sinh_preflight(cudaStream_t stream) {
         constexpr double scale = 1.0e-200;
         for (double &value : host_rhs) value *= scale;
         sparse::SolveMetrics tiny_rhs{};
+        double tiny_probe = 0.0;
         const size_t bytes = observed.size() * sizeof(double);
         passed = cuda_ok(cudaMemcpyAsync(rhs, host_rhs.data(), bytes,
                                        cudaMemcpyHostToDevice, stream), "tiny rhs") &&
+            probe(tiny_probe) && tiny_probe == 1.0 &&
             sparse::solve(input, stream, hierarchy, workspace, 1.0e-12, 500,
                           &tiny_rhs) == 0 &&
             tiny_rhs.iterations > 0 && tiny_rhs.relative_residual <= 1.0e-12 &&
@@ -493,6 +534,7 @@ bool run_sinh_preflight(cudaStream_t stream) {
         if (!passed)
             std::fprintf(stderr, "nonzero tiny spin RHS did not retain its scale\n");
     }
+    if (probe_buffer != nullptr) (void)cudaFree(probe_buffer);
     sparse::release(&workspace);
     sparse::release(&hierarchy);
     cleanup();

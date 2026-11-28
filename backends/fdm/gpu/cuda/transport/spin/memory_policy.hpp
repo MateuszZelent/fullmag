@@ -4,6 +4,9 @@
 
 namespace fullmag::fdm::gpu::transport::spin::memory {
 
+inline constexpr uint32_t kReductionBlockLimit = 1024;
+inline constexpr uint32_t kInitialResidualExtraWords = 2;
+
 enum class Policy : uint8_t {
     automatic = 0,
     fixed = 1,

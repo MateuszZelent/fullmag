@@ -865,7 +865,8 @@ void verify_bound_rk4_checkpoint_continuation(
     const fullmag_fdm_gpu_transport_context_create_request_v1 &create,
     const fullmag_fdm_gpu_transport_static_descriptor_v1 &descriptor,
     const fullmag_fdm_gpu_transport_llg_binding_v1 &binding,
-    const fullmag_fdm_gpu_charge_snapshot_info_v1 &snapshot, uint64_t cell_count)
+    const fullmag_fdm_gpu_charge_snapshot_info_v1 &snapshot, uint64_t cell_count,
+    bool nonzero_seed)
 {
     constexpr double dt = 1.0e-18;
     set_checkpoint_identity(continuous, plan.integrator);
@@ -934,6 +935,7 @@ void verify_bound_rk4_checkpoint_continuation(
     for (int step = 0; step < 2; ++step) {
         const uint64_t continuous_cursor = latest_telemetry_cursor(binding.transport_context);
         const uint64_t restored_cursor = latest_telemetry_cursor(restored_binding.transport_context);
+        const SpinAudit before_step = spin_audit(binding.transport_context);
         fullmag_fdm_step_stats expected{}, actual{};
         require(fullmag_fdm_backend_step(continuous, dt, &expected) == FULLMAG_FDM_OK &&
                 fullmag_fdm_backend_step(restored, dt, &actual) == FULLMAG_FDM_OK &&
@@ -941,6 +943,14 @@ void verify_bound_rk4_checkpoint_continuation(
                 "restored bound RK4 step failed");
         require_warm_first_rk_stage(binding.transport_context, continuous_cursor, cell_count);
         require_warm_first_rk_stage(restored_binding.transport_context, restored_cursor, cell_count);
+        if (nonzero_seed) {
+            // The unchanged accepted endpoint already meets the tolerance at k1.
+            const SpinAudit after_step = spin_audit(binding.transport_context);
+            const uint64_t preparations =
+                (after_step.hierarchy_builds - before_step.hierarchy_builds) +
+                (after_step.hierarchy_hits - before_step.hierarchy_hits);
+            require(preparations < 5, "converged RK4 seed prepared AMG");
+        }
         const auto left = read_llg_m(continuous, cell_count);
         const auto right = read_llg_m(restored, cell_count);
         require(left.size() == right.size() &&
@@ -1784,8 +1794,12 @@ GpuResult solve_gpu(const Scenario &scenario) {
                     fullmag_fdm_backend_step(rk4_llg, 1.0e-18, &llg_stats) ==
                         FULLMAG_FDM_OK,
                 scenario.name + ": checkpoint prefix step failed");
+        const bool nonzero_seed = std::any_of(
+            rk4_fresh_mu.begin(), rk4_fresh_mu.end(),
+            [](double component) { return component != 0.0; });
         verify_bound_rk4_checkpoint_continuation(
-            rk4_llg, llg_plan, create, descriptor, binding, snapshot, cells(scenario));
+            rk4_llg, llg_plan, create, descriptor, binding, snapshot, cells(scenario),
+            nonzero_seed);
         fullmag_fdm_backend_destroy(rk4_llg);
     }
     (void)cudaFree(m_device);
