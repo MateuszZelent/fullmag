@@ -556,6 +556,9 @@ struct Context {
     bool gpu_workspace_setup_complete = false;
     bool gpu_workspace_step_active = false;
 
+    // Keep transport binding changes outside the entire public step.
+    std::atomic_flag gpu_step_transport_busy = ATOMIC_FLAG_INIT;
+
     // Measured host-boundary and operator realization receipt. Accounting is
     // allocation-free and never invokes CUDA APIs or synchronization.
     std::shared_ptr<ExecutionReceiptState> execution_receipt =

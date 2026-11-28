@@ -1559,6 +1559,30 @@ GpuResult solve_gpu(const Scenario &scenario) {
         require(rk23_llg != nullptr &&
                     fullmag_fdm_backend_last_error(rk23_llg) == nullptr,
                 scenario.name + ": bound RK23 LLG context create failed");
+        struct BindFromInterruptPoll {
+            fullmag_fdm_backend *backend;
+            const fullmag_fdm_gpu_transport_llg_binding_v1 *binding;
+            int status = FULLMAG_FDM_OK;
+        } attempted_bind{rk23_llg, &binding};
+        const auto poll_and_bind = [](void *data) {
+            auto &attempt = *static_cast<BindFromInterruptPoll *>(data);
+            attempt.status = fullmag_fdm_context_bind_gpu_transport_v1(
+                attempt.backend, attempt.binding);
+            return 1;
+        };
+        require(fullmag_fdm_backend_set_interrupt_poll(rk23_llg, poll_and_bind,
+                                                      &attempted_bind) == FULLMAG_FDM_OK,
+                scenario.name + ": adaptive preflight interrupt setup failed");
+        fullmag_fdm_adaptive_batch_step_v1 interrupted_step{};
+        uint32_t interrupted_count = 0;
+        require(fullmag_fdm_backend_step_adaptive_batch_v1(
+                    rk23_llg, 1.0e-18, 2.0e-18, 1, &interrupted_step, 1,
+                    &interrupted_count) == FULLMAG_FDM_ERR_INTERRUPTED &&
+                    interrupted_count == 0 && attempted_bind.status == FULLMAG_FDM_ERR_INVALID,
+                scenario.name + ": adaptive preflight allowed reentrant transport binding");
+        require(fullmag_fdm_backend_set_interrupt_poll(rk23_llg, nullptr, nullptr) ==
+                    FULLMAG_FDM_OK,
+                scenario.name + ": adaptive preflight interrupt cleanup failed");
         require(fullmag_fdm_context_bind_gpu_transport_v1(rk23_llg, &binding) ==
                     FULLMAG_FDM_OK,
                 scenario.name + ": public RK23 transport binding failed");
