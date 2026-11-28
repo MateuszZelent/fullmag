@@ -75,6 +75,9 @@ class DocumentationChangelogTabsContractTests(unittest.TestCase):
             ":(exclude)scripts/test_public_docs_information_architecture.py",
             ":(exclude)scripts/check_public_doc_examples.py",
             ":(exclude)scripts/test_documentation_changelog_tabs.py",
+            ":(exclude)scripts/physics_diagrams",
+            ":(exclude)scripts/generate_physics_diagrams.py",
+            ":(exclude)scripts/test_public_docs_physics_diagrams.py",
         )
         self.assertTrue(documentation_sha)
         self.assertTrue(code_sha)

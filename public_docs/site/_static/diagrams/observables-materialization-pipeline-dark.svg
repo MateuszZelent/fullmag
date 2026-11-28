@@ -1,0 +1,183 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 980 435" width="100%" role="img" aria-labelledby="title desc">
+  <title id="title">Observables legality, accepted-step sampling, support-scoped volume reductions, and provenance</title>
+  <desc id="desc">Four-stage observables pipeline: (a) accepted-step sampling discarding rejected adaptive RK trials; (b) fail-closed planner legality gate validate_executable_outputs rejecting missing prerequisites or unsupported lanes without silent zeros; (c) native FDM/FEM field support and volume-weighted scalar reductions Q_scalar = sum_{i in Omega_m} w_i q_i excluding FEM airbox elements; (d) provenance-complete Zarr, HDF5, and CSV artifacts.</desc>
+  <defs>
+    <style>
+      .fm-panel-letter { font: 700 15px 'Inter', 'Helvetica Neue', 'Liberation Sans', Arial, sans-serif; fill: #e6ecff; }
+      .fm-panel-title { font: 600 12.5px 'Inter', 'Helvetica Neue', 'Liberation Sans', Arial, sans-serif; fill: #e6ecff; }
+      .fm-label { font: 500 11.8px 'Inter', 'Helvetica Neue', 'Liberation Sans', Arial, sans-serif; fill: #e6ecff; }
+      .fm-label-bold { font: 600 11.8px 'Inter', 'Helvetica Neue', 'Liberation Sans', Arial, sans-serif; fill: #e6ecff; }
+      .fm-sub { font: 400 11px 'Inter', 'Helvetica Neue', 'Liberation Sans', Arial, sans-serif; fill: #c3cbe6; }
+      .fm-note { font: 400 10.4px 'Inter', 'Helvetica Neue', 'Liberation Sans', Arial, sans-serif; fill: #9ca6c7; }
+      .fm-tick { font: 400 10.4px 'Inter', 'Helvetica Neue', 'Liberation Sans', Arial, sans-serif; fill: #9ca6c7; }
+      .fm-math { font: italic 12.5px 'STIX Two Math', 'Cambria Math', 'Times New Roman', Georgia, serif; fill: #e6ecff; }
+      .fm-math-sm { font: italic 11.2px 'STIX Two Math', 'Cambria Math', 'Times New Roman', Georgia, serif; fill: #c3cbe6; }
+      .fm-math-bold { font: italic 700 13px 'STIX Two Math', 'Cambria Math', 'Times New Roman', Georgia, serif; fill: #e6ecff; }
+      .fm-code { font: 500 10.6px 'JetBrains Mono', 'Fira Code', 'Liberation Mono', 'DejaVu Sans Mono', monospace; fill: #c3cbe6; }
+    </style>
+    <marker id="arr-ink" viewBox="0 0 10 10" refX="8.2" refY="5" markerWidth="6.6" markerHeight="6.6" orient="auto-start-reverse"><path d="M 0.5 1.6 L 9.2 5 L 0.5 8.4 L 2.2 5 z" fill="#e6ecff"/></marker>
+    <marker id="arr-ink-sm" viewBox="0 0 10 10" refX="8.2" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M 0.5 1.6 L 9.2 5 L 0.5 8.4 L 2.2 5 z" fill="#e6ecff"/></marker>
+    <marker id="arr-ink-secondary" viewBox="0 0 10 10" refX="8.2" refY="5" markerWidth="6.6" markerHeight="6.6" orient="auto-start-reverse"><path d="M 0.5 1.6 L 9.2 5 L 0.5 8.4 L 2.2 5 z" fill="#c3cbe6"/></marker>
+    <marker id="arr-ink-secondary-sm" viewBox="0 0 10 10" refX="8.2" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M 0.5 1.6 L 9.2 5 L 0.5 8.4 L 2.2 5 z" fill="#c3cbe6"/></marker>
+    <marker id="arr-ink-muted" viewBox="0 0 10 10" refX="8.2" refY="5" markerWidth="6.6" markerHeight="6.6" orient="auto-start-reverse"><path d="M 0.5 1.6 L 9.2 5 L 0.5 8.4 L 2.2 5 z" fill="#9ca6c7"/></marker>
+    <marker id="arr-ink-muted-sm" viewBox="0 0 10 10" refX="8.2" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M 0.5 1.6 L 9.2 5 L 0.5 8.4 L 2.2 5 z" fill="#9ca6c7"/></marker>
+    <marker id="arr-axis" viewBox="0 0 10 10" refX="8.2" refY="5" markerWidth="6.6" markerHeight="6.6" orient="auto-start-reverse"><path d="M 0.5 1.6 L 9.2 5 L 0.5 8.4 L 2.2 5 z" fill="#a7b0ce"/></marker>
+    <marker id="arr-axis-sm" viewBox="0 0 10 10" refX="8.2" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M 0.5 1.6 L 9.2 5 L 0.5 8.4 L 2.2 5 z" fill="#a7b0ce"/></marker>
+    <marker id="arr-m" viewBox="0 0 10 10" refX="8.2" refY="5" markerWidth="6.6" markerHeight="6.6" orient="auto-start-reverse"><path d="M 0.5 1.6 L 9.2 5 L 0.5 8.4 L 2.2 5 z" fill="#f38388"/></marker>
+    <marker id="arr-m-sm" viewBox="0 0 10 10" refX="8.2" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M 0.5 1.6 L 9.2 5 L 0.5 8.4 L 2.2 5 z" fill="#f38388"/></marker>
+    <marker id="arr-H" viewBox="0 0 10 10" refX="8.2" refY="5" markerWidth="6.6" markerHeight="6.6" orient="auto-start-reverse"><path d="M 0.5 1.6 L 9.2 5 L 0.5 8.4 L 2.2 5 z" fill="#7eb6ff"/></marker>
+    <marker id="arr-H-sm" viewBox="0 0 10 10" refX="8.2" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M 0.5 1.6 L 9.2 5 L 0.5 8.4 L 2.2 5 z" fill="#7eb6ff"/></marker>
+    <marker id="arr-flux" viewBox="0 0 10 10" refX="8.2" refY="5" markerWidth="6.6" markerHeight="6.6" orient="auto-start-reverse"><path d="M 0.5 1.6 L 9.2 5 L 0.5 8.4 L 2.2 5 z" fill="#5ee0cc"/></marker>
+    <marker id="arr-flux-sm" viewBox="0 0 10 10" refX="8.2" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M 0.5 1.6 L 9.2 5 L 0.5 8.4 L 2.2 5 z" fill="#5ee0cc"/></marker>
+    <marker id="arr-accent-warm" viewBox="0 0 10 10" refX="8.2" refY="5" markerWidth="6.6" markerHeight="6.6" orient="auto-start-reverse"><path d="M 0.5 1.6 L 9.2 5 L 0.5 8.4 L 2.2 5 z" fill="#f0b86e"/></marker>
+    <marker id="arr-accent-warm-sm" viewBox="0 0 10 10" refX="8.2" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M 0.5 1.6 L 9.2 5 L 0.5 8.4 L 2.2 5 z" fill="#f0b86e"/></marker>
+    <marker id="arr-accent-violet" viewBox="0 0 10 10" refX="8.2" refY="5" markerWidth="6.6" markerHeight="6.6" orient="auto-start-reverse"><path d="M 0.5 1.6 L 9.2 5 L 0.5 8.4 L 2.2 5 z" fill="#c5a3ff"/></marker>
+    <marker id="arr-accent-violet-sm" viewBox="0 0 10 10" refX="8.2" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M 0.5 1.6 L 9.2 5 L 0.5 8.4 L 2.2 5 z" fill="#c5a3ff"/></marker>
+    <marker id="arr-fm-stroke" viewBox="0 0 10 10" refX="8.2" refY="5" markerWidth="6.6" markerHeight="6.6" orient="auto-start-reverse"><path d="M 0.5 1.6 L 9.2 5 L 0.5 8.4 L 2.2 5 z" fill="#d89a78"/></marker>
+    <marker id="arr-fm-stroke-sm" viewBox="0 0 10 10" refX="8.2" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M 0.5 1.6 L 9.2 5 L 0.5 8.4 L 2.2 5 z" fill="#d89a78"/></marker>
+    <marker id="arr-hm-stroke" viewBox="0 0 10 10" refX="8.2" refY="5" markerWidth="6.6" markerHeight="6.6" orient="auto-start-reverse"><path d="M 0.5 1.6 L 9.2 5 L 0.5 8.4 L 2.2 5 z" fill="#7bb8d4"/></marker>
+    <marker id="arr-hm-stroke-sm" viewBox="0 0 10 10" refX="8.2" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M 0.5 1.6 L 9.2 5 L 0.5 8.4 L 2.2 5 z" fill="#7bb8d4"/></marker>
+    <marker id="arr-spacer-stroke" viewBox="0 0 10 10" refX="8.2" refY="5" markerWidth="6.6" markerHeight="6.6" orient="auto-start-reverse"><path d="M 0.5 1.6 L 9.2 5 L 0.5 8.4 L 2.2 5 z" fill="#8f97b5"/></marker>
+    <marker id="arr-spacer-stroke-sm" viewBox="0 0 10 10" refX="8.2" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M 0.5 1.6 L 9.2 5 L 0.5 8.4 L 2.2 5 z" fill="#8f97b5"/></marker>
+    <marker id="arr-air-stroke" viewBox="0 0 10 10" refX="8.2" refY="5" markerWidth="6.6" markerHeight="6.6" orient="auto-start-reverse"><path d="M 0.5 1.6 L 9.2 5 L 0.5 8.4 L 2.2 5 z" fill="#8f98b8"/></marker>
+    <marker id="arr-air-stroke-sm" viewBox="0 0 10 10" refX="8.2" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M 0.5 1.6 L 9.2 5 L 0.5 8.4 L 2.2 5 z" fill="#8f98b8"/></marker>
+    <marker id="arr-ok" viewBox="0 0 10 10" refX="8.2" refY="5" markerWidth="6.6" markerHeight="6.6" orient="auto-start-reverse"><path d="M 0.5 1.6 L 9.2 5 L 0.5 8.4 L 2.2 5 z" fill="#8ce099"/></marker>
+    <marker id="arr-ok-sm" viewBox="0 0 10 10" refX="8.2" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M 0.5 1.6 L 9.2 5 L 0.5 8.4 L 2.2 5 z" fill="#8ce099"/></marker>
+    <marker id="arr-warn" viewBox="0 0 10 10" refX="8.2" refY="5" markerWidth="6.6" markerHeight="6.6" orient="auto-start-reverse"><path d="M 0.5 1.6 L 9.2 5 L 0.5 8.4 L 2.2 5 z" fill="#f2c478"/></marker>
+    <marker id="arr-warn-sm" viewBox="0 0 10 10" refX="8.2" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M 0.5 1.6 L 9.2 5 L 0.5 8.4 L 2.2 5 z" fill="#f2c478"/></marker>
+    <marker id="arr-err" viewBox="0 0 10 10" refX="8.2" refY="5" markerWidth="6.6" markerHeight="6.6" orient="auto-start-reverse"><path d="M 0.5 1.6 L 9.2 5 L 0.5 8.4 L 2.2 5 z" fill="#f5889c"/></marker>
+    <marker id="arr-err-sm" viewBox="0 0 10 10" refX="8.2" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M 0.5 1.6 L 9.2 5 L 0.5 8.4 L 2.2 5 z" fill="#f5889c"/></marker>
+    <pattern id="hatch-warm" width="7" height="7" patternTransform="rotate(45 0 0)" patternUnits="userSpaceOnUse"><line x1="0" y1="0" x2="0" y2="7" stroke="#f0b86e" stroke-width="1.1" stroke-opacity="0.24"/></pattern>
+    <pattern id="hatch-cool" width="7" height="7" patternTransform="rotate(-45 0 0)" patternUnits="userSpaceOnUse"><line x1="0" y1="0" x2="0" y2="7" stroke="#7eb6ff" stroke-width="1.1" stroke-opacity="0.22"/></pattern>
+    <pattern id="hatch-muted" width="7" height="7" patternTransform="rotate(-45 0 0)" patternUnits="userSpaceOnUse"><line x1="0" y1="0" x2="0" y2="7" stroke="#8f98b8" stroke-width="1.1" stroke-opacity="0.24"/></pattern>
+    <pattern id="hatch-fm" width="7" height="7" patternTransform="rotate(45 0 0)" patternUnits="userSpaceOnUse"><line x1="0" y1="0" x2="0" y2="7" stroke="#d89a78" stroke-width="1.1" stroke-opacity="0.22"/></pattern>
+    <pattern id="hatch-flux" width="7" height="7" patternTransform="rotate(45 0 0)" patternUnits="userSpaceOnUse"><line x1="0" y1="0" x2="0" y2="7" stroke="#5ee0cc" stroke-width="1.1" stroke-opacity="0.22"/></pattern>
+    <radialGradient id="sphere-grad" cx="36%" cy="30%" r="70%"><stop offset="0%" stop-color="#363956" stop-opacity="0.82"/><stop offset="62%" stop-color="#2b2d46" stop-opacity="0.58"/><stop offset="100%" stop-color="#1f2135" stop-opacity="0.45"/></radialGradient>
+  </defs>
+  <line x1="12" y1="12" x2="238" y2="12" stroke="#5ee0cc" stroke-width="1.5" stroke-linecap="round"/>
+  <text x="12" y="28" class="fm-panel-letter">a</text>
+  <text x="29" y="28" class="fm-panel-title">Accepted-step sampling</text>
+  <text x="29" y="43.5" class="fm-note">Rejected RK trials emit zero rows</text>
+  <line x1="264" y1="12" x2="496" y2="12" stroke="#c5a3ff" stroke-width="1.5" stroke-linecap="round"/>
+  <text x="264" y="28" class="fm-panel-letter">b</text>
+  <text x="281" y="28" class="fm-panel-title">Planner legality gate</text>
+  <text x="281" y="43.5" class="fm-note">validate_executable_outputs</text>
+  <line x1="522" y1="12" x2="760" y2="12" stroke="#7eb6ff" stroke-width="1.5" stroke-linecap="round"/>
+  <text x="522" y="28" class="fm-panel-letter">c</text>
+  <text x="539" y="28" class="fm-panel-title">Support &amp; reduction</text>
+  <text x="539" y="43.5" class="fm-note">Native fields &amp; airbox-free <tspan font-family="'STIX Two Math', 'Cambria Math', 'Times New Roman', Georgia, serif" font-style="italic" font-weight="400">w<tspan baseline-shift="sub" font-size="74%" font-style="normal" font-weight="400">i</tspan></tspan></text>
+  <line x1="786" y1="12" x2="968" y2="12" stroke="#8ce099" stroke-width="1.5" stroke-linecap="round"/>
+  <text x="786" y="28" class="fm-panel-letter">d</text>
+  <text x="803" y="28" class="fm-panel-title">Artifacts &amp; provenance</text>
+  <text x="803" y="43.5" class="fm-note">OutputStorage (Zarr/HDF5/CSV)</text>
+  <line x1="240" y1="230" x2="261" y2="230" stroke="#a7b0ce" stroke-width="1.55" stroke-linecap="round" marker-end="url(#arr-axis-sm)"/>
+  <line x1="498" y1="230" x2="519" y2="230" stroke="#8ce099" stroke-width="1.55" stroke-linecap="round" marker-end="url(#arr-ok-sm)"/>
+  <line x1="762" y1="230" x2="783" y2="230" stroke="#8ce099" stroke-width="1.55" stroke-linecap="round" marker-end="url(#arr-ok-sm)"/>
+  <line x1="22" y1="132" x2="226" y2="132" stroke="#a7b0ce" stroke-width="1.4" stroke-linecap="round" marker-end="url(#arr-axis-sm)"/>
+  <text x="226" y="123" class="fm-math" text-anchor="end" fill="#c3cbe6" font-size="10.5" font-weight="400" font-style="italic" font-family="'STIX Two Math', 'Cambria Math', 'Times New Roman', Georgia, serif" style="fill:#c3cbe6;font-size:10.5px;font-weight:400;font-style:italic;font-family:'STIX Two Math', 'Cambria Math', 'Times New Roman', Georgia, serif">t <tspan font-style="normal" font-weight="400">(s)</tspan></text>
+  <line x1="36" y1="127" x2="36" y2="137" stroke="#8ce099" stroke-width="1.8" stroke-linecap="round"/>
+  <circle cx="36" cy="132" r="4" fill="#8ce099" stroke="#242438" stroke-width="1"/>
+  <text x="36" y="151" class="fm-math" text-anchor="middle" fill="#8ce099" font-size="10.6" font-weight="400" font-style="italic" font-family="'STIX Two Math', 'Cambria Math', 'Times New Roman', Georgia, serif" style="fill:#8ce099;font-size:10.6px;font-weight:400;font-style:italic;font-family:'STIX Two Math', 'Cambria Math', 'Times New Roman', Georgia, serif">t<tspan baseline-shift="sub" font-size="74%" font-style="normal" font-weight="400">0</tspan></text>
+  <line x1="88" y1="127" x2="88" y2="137" stroke="#8ce099" stroke-width="1.8" stroke-linecap="round"/>
+  <circle cx="88" cy="132" r="4" fill="#8ce099" stroke="#242438" stroke-width="1"/>
+  <text x="88" y="151" class="fm-math" text-anchor="middle" fill="#8ce099" font-size="10.6" font-weight="400" font-style="italic" font-family="'STIX Two Math', 'Cambria Math', 'Times New Roman', Georgia, serif" style="fill:#8ce099;font-size:10.6px;font-weight:400;font-style:italic;font-family:'STIX Two Math', 'Cambria Math', 'Times New Roman', Georgia, serif">t<tspan baseline-shift="sub" font-size="74%" font-style="normal" font-weight="400">1</tspan></text>
+  <line x1="174" y1="127" x2="174" y2="137" stroke="#8ce099" stroke-width="1.8" stroke-linecap="round"/>
+  <circle cx="174" cy="132" r="4" fill="#8ce099" stroke="#242438" stroke-width="1"/>
+  <text x="174" y="151" class="fm-math" text-anchor="middle" fill="#8ce099" font-size="10.6" font-weight="400" font-style="italic" font-family="'STIX Two Math', 'Cambria Math', 'Times New Roman', Georgia, serif" style="fill:#8ce099;font-size:10.6px;font-weight:400;font-style:italic;font-family:'STIX Two Math', 'Cambria Math', 'Times New Roman', Georgia, serif">t<tspan baseline-shift="sub" font-size="74%" font-style="normal" font-weight="400">2</tspan></text>
+  <line x1="206" y1="127" x2="206" y2="137" stroke="#8ce099" stroke-width="1.8" stroke-linecap="round"/>
+  <circle cx="206" cy="132" r="4" fill="#8ce099" stroke="#242438" stroke-width="1"/>
+  <text x="206" y="151" class="fm-math" text-anchor="middle" fill="#8ce099" font-size="10.6" font-weight="400" font-style="italic" font-family="'STIX Two Math', 'Cambria Math', 'Times New Roman', Georgia, serif" style="fill:#8ce099;font-size:10.6px;font-weight:400;font-style:italic;font-family:'STIX Two Math', 'Cambria Math', 'Times New Roman', Georgia, serif">t<tspan baseline-shift="sub" font-size="74%" font-style="normal" font-weight="400">3</tspan></text>
+  <path d="M 88 128 Q 116 86 144 125" fill="none" stroke="#f5889c" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="3.5,2.5" marker-end="url(#arr-err-sm)"/>
+  <circle cx="144" cy="128" r="5.2" fill="#442937" stroke="#f5889c" stroke-width="1.2"/>
+  <line x1="141.4" y1="125.4" x2="146.6" y2="130.6" stroke="#f5889c" stroke-width="1.3" stroke-linecap="round"/>
+  <line x1="141.4" y1="130.6" x2="146.6" y2="125.4" stroke="#f5889c" stroke-width="1.3" stroke-linecap="round"/>
+  <text x="122" y="73" class="fm-note" text-anchor="middle" fill="#f5889c" font-size="9.4" style="fill:#f5889c;font-size:9.4px">Rejected RK trial (err &gt; tol)</text>
+  <text x="122" y="86" class="fm-note" text-anchor="middle" fill="#f5889c" font-size="9.2" style="fill:#f5889c;font-size:9.2px">Discarded — no row emitted</text>
+  <path d="M 88 136 Q 131 184 174 136" fill="none" stroke="#8ce099" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arr-ok-sm)"/>
+  <text x="131" y="186" class="fm-note" text-anchor="middle" fill="#8ce099" font-size="9.4" style="fill:#8ce099;font-size:9.4px">Shrunk Δt accepted → sample</text>
+  <line x1="16" y1="206" x2="234" y2="206" stroke="#525874" stroke-width="0.75" stroke-linecap="round" opacity="0.6"/>
+  <text x="16" y="224" class="fm-label-bold" fill="#5ee0cc" font-size="10.6" style="fill:#5ee0cc;font-size:10.6px">Cadence contracts</text>
+  <text x="16" y="243" class="fm-code" font-size="9.1" style="font-size:9.1px">TableAutosave(steps | t_sampl)</text>
+  <text x="16" y="260" class="fm-code" font-size="9.1" style="font-size:9.1px">FieldAutosave(qty, steps | every)</text>
+  <text x="16" y="277" class="fm-code" font-size="9.1" style="font-size:9.1px">PlanarMonitor(target, frame, op)</text>
+  <text x="16" y="294" class="fm-note" font-size="9.2" style="font-size:9.2px">Step vs. time cadence mutually exclusive</text>
+  <line x1="16" y1="314" x2="234" y2="314" stroke="#525874" stroke-width="0.75" stroke-linecap="round" opacity="0.6"/>
+  <text x="16" y="333" class="fm-label-bold" font-size="10.6" style="font-size:10.6px">Accepted state <tspan font-family="'STIX Two Math', 'Cambria Math', 'Times New Roman', Georgia, serif" font-style="italic" font-weight="400"><tspan font-style="normal" font-weight="700">m</tspan>(t<tspan baseline-shift="sub" font-size="74%" font-style="normal" font-weight="400">n</tspan>)</tspan></text>
+  <text x="16" y="355" class="fm-math" fill="#e6ecff" font-size="11.4" font-weight="400" font-style="italic" font-family="'STIX Two Math', 'Cambria Math', 'Times New Roman', Georgia, serif" style="fill:#e6ecff;font-size:11.4px;font-weight:400;font-style:italic;font-family:'STIX Two Math', 'Cambria Math', 'Times New Roman', Georgia, serif">Q<tspan baseline-shift="sub" font-size="74%" font-style="normal" font-weight="400">n</tspan> = Q[ <tspan font-style="normal" font-weight="700">m</tspan>(t<tspan baseline-shift="sub" font-size="74%" font-style="normal" font-weight="400">n</tspan>), G, M, P ]</text>
+  <text x="16" y="376" class="fm-note" font-size="9.6" style="font-size:9.6px">Evaluated after step acceptance on</text>
+  <text x="16" y="391" class="fm-note" font-size="9.6" style="font-size:9.6px">normalized spins (<tspan font-family="'STIX Two Math', 'Cambria Math', 'Times New Roman', Georgia, serif" font-style="italic" font-weight="400">‖<tspan font-style="normal" font-weight="700">m</tspan><tspan baseline-shift="sub" font-size="74%" font-style="normal" font-weight="400">i</tspan>‖<tspan baseline-shift="sub" font-size="74%" font-style="normal" font-weight="400">2</tspan> = 1</tspan>).</text>
+  <text x="266" y="72" class="fm-label-bold" fill="#c5a3ff" font-size="10.4" style="fill:#c5a3ff;font-size:10.4px">Enabling-interaction prerequisites</text>
+  <text x="268" y="92" class="fm-code" fill="#e6ecff" font-size="9.3" style="fill:#e6ecff;font-size:9.3px">m, mx, my, mz</text>
+  <text x="494" y="92" class="fm-note" text-anchor="end" font-size="9.2" style="font-size:9.2px">always available</text>
+  <line x1="266" y1="99" x2="494" y2="99" stroke="#34374f" stroke-width="0.65" stroke-linecap="round"/>
+  <text x="268" y="112" class="fm-code" fill="#e6ecff" font-size="9.3" style="fill:#e6ecff;font-size:9.3px">H_ex, E_ex</text>
+  <text x="494" y="112" class="fm-note" text-anchor="end" font-size="9.2" style="font-size:9.2px">requires Exchange()</text>
+  <line x1="266" y1="119" x2="494" y2="119" stroke="#34374f" stroke-width="0.65" stroke-linecap="round"/>
+  <text x="268" y="132" class="fm-code" fill="#e6ecff" font-size="9.3" style="fill:#e6ecff;font-size:9.3px">H_demag, E_demag</text>
+  <text x="494" y="132" class="fm-note" text-anchor="end" font-size="9.2" style="font-size:9.2px">requires Demag()</text>
+  <line x1="266" y1="139" x2="494" y2="139" stroke="#34374f" stroke-width="0.65" stroke-linecap="round"/>
+  <text x="268" y="152" class="fm-code" fill="#e6ecff" font-size="9.3" style="fill:#e6ecff;font-size:9.3px">H_ext, E_ext</text>
+  <text x="494" y="152" class="fm-note" text-anchor="end" font-size="9.2" style="font-size:9.2px">requires Zeeman()</text>
+  <line x1="266" y1="159" x2="494" y2="159" stroke="#34374f" stroke-width="0.65" stroke-linecap="round"/>
+  <text x="268" y="172" class="fm-code" fill="#e6ecff" font-size="9.3" style="fill:#e6ecff;font-size:9.3px">H_dmi, E_dmi</text>
+  <text x="494" y="172" class="fm-note" text-anchor="end" font-size="9.2" style="font-size:9.2px">requires DMI term</text>
+  <line x1="266" y1="179" x2="494" y2="179" stroke="#34374f" stroke-width="0.65" stroke-linecap="round"/>
+  <text x="268" y="192" class="fm-code" fill="#e6ecff" font-size="9.3" style="fill:#e6ecff;font-size:9.3px">H_mel / H_therm</text>
+  <text x="494" y="192" class="fm-note" text-anchor="end" font-size="9.2" style="font-size:9.2px">Mel / ThermalNoise</text>
+  <line x1="266" y1="199" x2="494" y2="199" stroke="#34374f" stroke-width="0.65" stroke-linecap="round"/>
+  <text x="268" y="212" class="fm-code" fill="#e6ecff" font-size="9.3" style="fill:#e6ecff;font-size:9.3px">H_eff, E_total</text>
+  <text x="494" y="212" class="fm-note" text-anchor="end" font-size="9.2" style="font-size:9.2px">≥ 1 active field/energy</text>
+  <rect x="266" y="232" width="228" height="72" rx="3" fill="#362c50" stroke="#c5a3ff" stroke-width="0.95"/>
+  <line x1="267.3" y1="235" x2="267.3" y2="301" stroke="#c5a3ff" stroke-width="2.5" stroke-linecap="round"/>
+  <text x="278" y="250" class="fm-label-bold" fill="#c5a3ff" font-size="10.5" style="fill:#c5a3ff;font-size:10.5px">Lane CapabilityMatrix Check</text>
+  <text x="278" y="267" class="fm-note" font-size="9.4" style="font-size:9.4px">• Selected (FDM|FEM) × (CPU|GPU)</text>
+  <text x="278" y="281" class="fm-note" font-size="9.4" style="font-size:9.4px">• Verifies materialization &amp; precision</text>
+  <text x="278" y="295" class="fm-note" font-size="9.4" style="font-size:9.4px">• Rejects unknown / duplicate names</text>
+  <line x1="380" y1="304" x2="380" y2="336" stroke="#f5889c" stroke-width="1.45" stroke-linecap="round" stroke-dasharray="3.5,2.5" marker-end="url(#arr-err-sm)"/>
+  <text x="388" y="323" class="fm-note" fill="#f5889c" font-size="9.3" style="fill:#f5889c;font-size:9.3px">fail-closed</text>
+  <rect x="266" y="339" width="228" height="74" rx="3" fill="#442937" stroke="#f5889c" stroke-width="0.95"/>
+  <line x1="267.3" y1="342" x2="267.3" y2="410" stroke="#f5889c" stroke-width="2.5" stroke-linecap="round"/>
+  <text x="380" y="358" class="fm-label-bold" text-anchor="middle" fill="#f5889c" font-size="10.6" style="fill:#f5889c;font-size:10.6px">Immediate Planner Error</text>
+  <text x="380" y="375" class="fm-note" text-anchor="middle" fill="#f5889c" font-size="9.4" style="fill:#f5889c;font-size:9.4px">Missing term or unmaterializable lane</text>
+  <text x="380" y="391" class="fm-label-bold" text-anchor="middle" fill="#f5889c" font-size="9.8" style="fill:#f5889c;font-size:9.8px">Never emits silent 0.0 substitution</text>
+  <rect x="524" y="60" width="234" height="72" rx="3" fill="#263452" stroke="#7eb6ff" stroke-width="0.95"/>
+  <line x1="525.3" y1="63" x2="525.3" y2="129" stroke="#7eb6ff" stroke-width="2.5" stroke-linecap="round"/>
+  <text x="536" y="78" class="fm-label-bold" fill="#7eb6ff" font-size="10.4" style="fill:#7eb6ff;font-size:10.4px">Field Observables (native support)</text>
+  <text x="536" y="95" class="fm-note" font-size="9.4" style="font-size:9.4px">• FDM: cell-centered Cartesian arrays</text>
+  <text x="536" y="109" class="fm-note" font-size="9.4" style="font-size:9.4px">• FEM: nodal / vector DOF arrays</text>
+  <text x="536" y="123" class="fm-code" fill="#7eb6ff" font-size="8.8" style="fill:#7eb6ff;font-size:8.8px">  context_copy_field_f64 (native)</text>
+  <text x="526" y="155" class="fm-label-bold" fill="#7eb6ff" font-size="10.5" style="fill:#7eb6ff;font-size:10.5px">Volume-weighted scalar reductions</text>
+  <text x="641" y="180" class="fm-math" text-anchor="middle" fill="#e6ecff" font-size="12.6" font-weight="400" font-style="italic" font-family="'STIX Two Math', 'Cambria Math', 'Times New Roman', Georgia, serif" style="fill:#e6ecff;font-size:12.6px;font-weight:400;font-style:italic;font-family:'STIX Two Math', 'Cambria Math', 'Times New Roman', Georgia, serif">Q<tspan baseline-shift="sub" font-size="74%" font-style="normal" font-weight="400">scalar</tspan> = ∑<tspan baseline-shift="sub" font-size="74%" font-style="normal" font-weight="400">i ∈ Ωm</tspan> w<tspan baseline-shift="sub" font-size="74%" font-style="normal" font-weight="400">i</tspan> q<tspan baseline-shift="sub" font-size="74%" font-style="normal" font-weight="400">i</tspan></text>
+  <text x="641" y="202" class="fm-math" text-anchor="middle" fill="#c3cbe6" font-size="11" font-weight="400" font-style="italic" font-family="'STIX Two Math', 'Cambria Math', 'Times New Roman', Georgia, serif" style="fill:#c3cbe6;font-size:11px;font-weight:400;font-style:italic;font-family:'STIX Two Math', 'Cambria Math', 'Times New Roman', Georgia, serif">E<tspan baseline-shift="sub" font-size="74%" font-style="normal" font-weight="400">total</tspan>(t<tspan baseline-shift="sub" font-size="74%" font-style="normal" font-weight="400">n</tspan>) = ∑<tspan baseline-shift="sub" font-size="74%" font-style="normal" font-weight="400">k ∈ K</tspan> E<tspan baseline-shift="sub" font-size="74%" font-style="normal" font-weight="400">k</tspan>(t<tspan baseline-shift="sub" font-size="74%" font-style="normal" font-weight="400">n</tspan>)</text>
+  <text x="641" y="220" class="fm-code" text-anchor="middle" fill="#9ca6c7" font-size="9.1" style="fill:#9ca6c7;font-size:9.1px">QuantityRegistry::evaluate_by_name</text>
+  <line x1="524" y1="234" x2="758" y2="234" stroke="#525874" stroke-width="0.75" stroke-linecap="round" opacity="0.6"/>
+  <text x="526" y="252" class="fm-label-bold" font-size="10.2" style="font-size:10.2px">Domain support masking (airbox excluded)</text>
+  <rect x="528" y="262" width="226" height="108" rx="3" fill="#292b41" stroke="#8f98b8" stroke-width="1.3"/>
+  <rect x="528" y="262" width="226" height="108" rx="3" fill="url(#hatch-muted)"/>
+  <text x="536" y="279" class="fm-math" fill="#8f98b8" font-size="10" font-weight="400" font-style="italic" font-family="'STIX Two Math', 'Cambria Math', 'Times New Roman', Georgia, serif" style="fill:#8f98b8;font-size:10px;font-weight:400;font-style:italic;font-family:'STIX Two Math', 'Cambria Math', 'Times New Roman', Georgia, serif" paint-order="stroke" stroke="#242438" stroke-width="3.4" stroke-linejoin="round">Ω<tspan baseline-shift="sub" font-size="74%" font-style="normal" font-weight="400">a</tspan> ∖ Ω<tspan baseline-shift="sub" font-size="74%" font-style="normal" font-weight="400">m</tspan> <tspan font-style="normal" font-weight="400">(airbox):</tspan> w<tspan baseline-shift="sub" font-size="74%" font-style="normal" font-weight="400">i</tspan> = 0  <tspan font-style="normal" font-weight="400">excluded</tspan></text>
+  <rect x="564" y="294" width="154" height="58" rx="2.5" fill="#3b2d31" stroke="#d89a78" stroke-width="1.5"/>
+  <text x="641" y="317" class="fm-math" text-anchor="middle" fill="#d89a78" font-size="11.4" font-weight="400" font-style="italic" font-family="'STIX Two Math', 'Cambria Math', 'Times New Roman', Georgia, serif" style="fill:#d89a78;font-size:11.4px;font-weight:400;font-style:italic;font-family:'STIX Two Math', 'Cambria Math', 'Times New Roman', Georgia, serif">Ω<tspan baseline-shift="sub" font-size="74%" font-style="normal" font-weight="400">m</tspan> <tspan font-style="normal" font-weight="400">(magnetic)</tspan></text>
+  <text x="641" y="338" class="fm-math" text-anchor="middle" fill="#8ce099" font-size="10.4" font-weight="400" font-style="italic" font-family="'STIX Two Math', 'Cambria Math', 'Times New Roman', Georgia, serif" style="fill:#8ce099;font-size:10.4px;font-weight:400;font-style:italic;font-family:'STIX Two Math', 'Cambria Math', 'Times New Roman', Georgia, serif">w<tspan baseline-shift="sub" font-size="74%" font-style="normal" font-weight="400">i</tspan> &gt; 0  <tspan font-style="normal" font-weight="400">included</tspan></text>
+  <text x="641" y="388" class="fm-note" text-anchor="middle" font-size="9.5" style="font-size:9.5px">FDM: <tspan font-family="'STIX Two Math', 'Cambria Math', 'Times New Roman', Georgia, serif" font-style="italic" font-weight="400">w<tspan baseline-shift="sub" font-size="74%" font-style="normal" font-weight="400">i</tspan> = ΔxΔyΔz</tspan>  |  FEM: quadrature</text>
+  <text x="641" y="404" class="fm-note" text-anchor="middle" font-size="9.4" style="font-size:9.4px">Airbox scalar potential <tspan font-family="'STIX Two Math', 'Cambria Math', 'Times New Roman', Georgia, serif" font-style="italic" font-weight="400">u</tspan> never enters <tspan font-family="'STIX Two Math', 'Cambria Math', 'Times New Roman', Georgia, serif" font-style="italic" font-weight="400">E<tspan baseline-shift="sub" font-size="74%" font-style="normal" font-weight="400">k</tspan></tspan></text>
+  <rect x="786" y="60" width="182" height="79" rx="3" fill="#2b2d45" stroke="#6f7796" stroke-width="0.95"/>
+  <line x1="787.3" y1="63" x2="787.3" y2="136" stroke="#f0b86e" stroke-width="2.5" stroke-linecap="round"/>
+  <text x="798" y="80" class="fm-label-bold" fill="#f0b86e" font-size="10.6" style="fill:#f0b86e;font-size:10.6px">1. Scalar Table</text>
+  <text x="798" y="98" class="fm-code" font-size="9.1" style="font-size:9.1px">TableAutosave (CSV / Zarr)</text>
+  <text x="798" y="119" class="fm-note" font-size="9.3" style="font-size:9.3px"><tspan font-family="'STIX Two Math', 'Cambria Math', 'Times New Roman', Georgia, serif" font-style="italic" font-weight="400">t, Δt, E<tspan baseline-shift="sub" font-size="74%" font-style="normal" font-weight="400">k</tspan>, ⟨<tspan font-style="normal" font-weight="700">m</tspan>⟩, τ<tspan baseline-shift="sub" font-size="74%" font-style="normal" font-weight="400">max</tspan></tspan> · step</text>
+  <rect x="786" y="151" width="182" height="79" rx="3" fill="#2b2d45" stroke="#6f7796" stroke-width="0.95"/>
+  <line x1="787.3" y1="154" x2="787.3" y2="227" stroke="#7eb6ff" stroke-width="2.5" stroke-linecap="round"/>
+  <text x="798" y="171" class="fm-label-bold" fill="#7eb6ff" font-size="10.6" style="fill:#7eb6ff;font-size:10.6px">2. Spatial Fields</text>
+  <text x="798" y="189" class="fm-code" font-size="9.1" style="font-size:9.1px">FieldAutosave · Monitor</text>
+  <text x="798" y="210" class="fm-note" font-size="9.3" style="font-size:9.3px">Native <tspan font-family="'STIX Two Math', 'Cambria Math', 'Times New Roman', Georgia, serif" font-style="italic" font-weight="400"><tspan font-style="normal" font-weight="700">m</tspan>, <tspan font-style="normal" font-weight="700">H</tspan><tspan baseline-shift="sub" font-size="74%" font-style="normal" font-weight="400">eff</tspan>, <tspan font-style="normal" font-weight="700">H</tspan><tspan baseline-shift="sub" font-size="74%" font-style="normal" font-weight="400">k</tspan>, u, <tspan font-style="normal" font-weight="700">J</tspan><tspan baseline-shift="sub" font-size="74%" font-style="normal" font-weight="400">c</tspan></tspan></text>
+  <rect x="786" y="242" width="182" height="79" rx="3" fill="#2b2d45" stroke="#6f7796" stroke-width="0.95"/>
+  <line x1="787.3" y1="245" x2="787.3" y2="318" stroke="#8ce099" stroke-width="2.5" stroke-linecap="round"/>
+  <text x="798" y="262" class="fm-label-bold" fill="#8ce099" font-size="10.6" style="fill:#8ce099;font-size:10.6px">3. Archive Store</text>
+  <text x="798" y="280" class="fm-code" font-size="9.1" style="font-size:9.1px">OutputStorage ('zarr')</text>
+  <text x="798" y="301" class="fm-note" font-size="9.3" style="font-size:9.3px">Stage layout &amp; checkpoints</text>
+  <rect x="786" y="333" width="182" height="79" rx="3" fill="#2b2d45" stroke="#6f7796" stroke-width="0.95"/>
+  <line x1="787.3" y1="336" x2="787.3" y2="409" stroke="#e6ecff" stroke-width="2.5" stroke-linecap="round"/>
+  <text x="798" y="353" class="fm-label-bold" fill="#e6ecff" font-size="10.6" style="fill:#e6ecff;font-size:10.6px">4. Run Provenance</text>
+  <text x="798" y="371" class="fm-code" font-size="9.1" style="font-size:9.1px">Run Receipt &amp; fm.Result</text>
+  <text x="798" y="392" class="fm-note" font-size="9.3" style="font-size:9.3px">Engine, device ID, precision</text>
+</svg>

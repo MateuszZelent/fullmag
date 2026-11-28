@@ -64,6 +64,29 @@ are treated:
    depth $\delta_{\mathrm{SAW}}$, and high-aspect-ratio thin-film layers without FDM checkerboard
    modes or FEM shear/volumetric locking.
 
+{numref}`fig-magnetoelastic-bc-meshing` summarizes the multi-domain mechanical boundary and
+interface operators together with FullMag's staggered FDM and conforming FEM spatial
+discretizations.
+
+```{figure} /_static/diagrams/magnetoelastic-boundary-conditions-and-meshing.svg
+:alt: Two-panel diagram of magnetoelastic boundary conditions and spatial meshing in FullMag: Panel (a) depicts a ferromagnetic film Omega_mag bonded to a non-magnetic elastic substrate Omega_sub with a traction-free top surface, prescribed IDT traction t_0, clamped base u = 0, Lysmer-Kuhlemeyer local viscous impedance on the left, a Rayleigh ABL / ADE CFS-PML absorbing collar on the right attenuating outgoing waves, and FM/NM interface continuity of displacement and total traction; Panel (b) compares the staggered FDM Virieux/Lebedev velocity-stress unit cell (normal stresses and m at cell centers, velocities on faces, shear stresses on edges) against a conforming FEM SubMesh (Omega_m subset Omega_el stripping Omega_air and Pyramid5) with shared interface nodes and locking-free P2 Tet10 B-bar and Prism6 MITC6+EAS-1 elements.
+:width: 100%
+:name: fig-magnetoelastic-bc-meshing
+:figclass: fm-physics-figure
+
+Multi-domain mechanical boundary conditions, interface jump relations, and spatial meshing in
+FullMag. Panel (a) illustrates the canonical boundary operators on $\partial\Omega_{\mathrm{mech}}$
+(traction-free $\boldsymbol{\sigma}^{\mathrm{tot}}\cdot\hat{\mathbf{n}}=\mathbf{0}$, prescribed
+traction $\mathbf{t}_0$, clamped base $\mathbf{u}=\mathbf{0}$, Lysmer–Kuhlemeyer local impedance
+$-\mathbf{Z}_{\mathrm{LK}}\dot{\mathbf{u}}$, and Rayleigh ABL vs. ADE CFS-PML absorbing collars)
+alongside continuous displacement and total-traction jumps across $\Gamma_{\mathrm{FM/NM}}$
+(Komatitsch & Martin 2007; Bécache *et al.* 2003). Panel (b) contrasts the checkerboard-free
+staggered FDM Virieux/Lebedev velocity–stress cell (Virieux 1986; Lisitsa & Vishnevskiy 2010)
+against the conforming `mfem::SubMesh` extracting $\Omega_{\mathrm{el}} \supset \Omega_m$ without
+vacuum airbox DOFs, equipped with locking-free `Tet10` $\bar{\mathbf{B}}$ and `Prism6`
+`MITC6/ANS + EAS-1` elements (Hughes 1980; Bathe & Dvorkin 1986).
+```
+
 (magnetoelastic-bc-governing-equations)=
 ## Governing boundary, interface, and discretization equations
 

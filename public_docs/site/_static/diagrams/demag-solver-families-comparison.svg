@@ -1,247 +1,225 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1360 860" role="img" aria-labelledby="title desc">
-  <title id="title">Magnetostatic sources and Fullmag&#x27;s four demagnetization solver families</title>
-  <desc id="desc">Comparison of continuum magnetostatic volume and surface charges (rho_m = -div M, sigma_m = M . n) and Fullmag&#x27;s four realization families: (a) FDM open FFT convolution, (b) FEM Poisson with finite airbox Omega_m subset Omega_a, (c) FEM-BEM Fredkin-Koehler open exterior on Gamma_m, and (d) periodic replicated images.</desc>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 980 612" width="100%" role="img" aria-labelledby="title desc">
+  <title id="title">Magnetostatic Sources and FullMag Demagnetization Solver Families</title>
+  <desc id="desc">Continuum magnetostatic volume and surface charges (rho_m = -div M, sigma_m = M . n) and FullMag's four discrete demagnetization operator families across FDM CPU/GPU and FEM CPU/GPU: (a) FDM 2N zero-padded Hermitian FFT convolution, (b) FEM Poisson with graded shared airbox (tet4 P2, pure_prism_p2, GPU cuDSS or CG/AMG), (c) body-only FEM-BEM Fredkin-Koehler (CPU H2 and GPU CUDA near-CSR/far-ACA with atomic cuDSS or CG/AMG), and (d) periodic FDM truncated images versus FEM reduced periodic_airbox_k0.</desc>
   <defs>
     <style>
-      .title-main { font: 700 22px 'Segoe UI', 'Inter', Arial, sans-serif; fill: #1e2433; }
-      .subtitle-main { font: 400 13.5px 'Segoe UI', 'Inter', Arial, sans-serif; fill: #526077; }
-      .panel-badge-txt { font: 700 13px 'Segoe UI', 'Inter', Arial, sans-serif; fill: #ffffff; }
-      .panel-title { font: 700 16px 'Segoe UI', 'Inter', Arial, sans-serif; fill: #1e2433; }
-      .sec-head { font: 700 13.5px 'Segoe UI', 'Inter', Arial, sans-serif; fill: #1e2433; }
-      .body-txt { font: 400 13px 'Segoe UI', 'Inter', Arial, sans-serif; fill: #344054; }
-      .body-bold { font: 600 13px 'Segoe UI', 'Inter', Arial, sans-serif; fill: #1e2433; }
-      .small-txt { font: 400 11.8px 'Segoe UI', 'Inter', Arial, sans-serif; fill: #526077; }
-      .small-bold { font: 600 11.8px 'Segoe UI', 'Inter', Arial, sans-serif; fill: #344054; }
-      .mono { font: 600 11.5px 'Consolas', 'Cascadia Mono', 'DejaVu Sans Mono', monospace; fill: #1e2433; }
-      .mono-sm { font: 500 10.8px 'Consolas', 'Cascadia Mono', 'DejaVu Sans Mono', monospace; fill: #344054; }
-      .math { font: italic 14.5px 'Cambria Math', 'STIX Two Math', 'Times New Roman', serif; fill: #1e2433; }
-      .math-b { font: italic 700 14.5px 'Cambria Math', 'STIX Two Math', 'Times New Roman', serif; fill: #1e2433; }
-      .math-sm { font: italic 13px 'Cambria Math', 'STIX Two Math', 'Times New Roman', serif; fill: #344054; }
-      .axis-txt { font: 500 11.5px 'Segoe UI', 'Inter', Arial, sans-serif; fill: #526077; }
+      .fm-panel-letter { font: 700 15px 'Inter', 'Helvetica Neue', 'Liberation Sans', Arial, sans-serif; fill: #1c2030; }
+      .fm-panel-title { font: 600 12.5px 'Inter', 'Helvetica Neue', 'Liberation Sans', Arial, sans-serif; fill: #1c2030; }
+      .fm-label { font: 500 11.8px 'Inter', 'Helvetica Neue', 'Liberation Sans', Arial, sans-serif; fill: #1c2030; }
+      .fm-label-bold { font: 600 11.8px 'Inter', 'Helvetica Neue', 'Liberation Sans', Arial, sans-serif; fill: #1c2030; }
+      .fm-sub { font: 400 11px 'Inter', 'Helvetica Neue', 'Liberation Sans', Arial, sans-serif; fill: #3b4058; }
+      .fm-note { font: 400 10.4px 'Inter', 'Helvetica Neue', 'Liberation Sans', Arial, sans-serif; fill: #575e78; }
+      .fm-tick { font: 400 10.4px 'Inter', 'Helvetica Neue', 'Liberation Sans', Arial, sans-serif; fill: #575e78; }
+      .fm-math { font: italic 12.5px 'STIX Two Math', 'Cambria Math', 'Times New Roman', Georgia, serif; fill: #1c2030; }
+      .fm-math-sm { font: italic 11.2px 'STIX Two Math', 'Cambria Math', 'Times New Roman', Georgia, serif; fill: #3b4058; }
+      .fm-math-bold { font: italic 700 13px 'STIX Two Math', 'Cambria Math', 'Times New Roman', Georgia, serif; fill: #1c2030; }
+      .fm-code { font: 500 10.6px 'JetBrains Mono', 'Fira Code', 'Liberation Mono', 'DejaVu Sans Mono', monospace; fill: #3b4058; }
     </style>
-    <marker id="arr-ink" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 1 L 10 5 L 0 9 z" fill="#1e2433"/></marker>
-    <marker id="arr-muted" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 1 L 10 5 L 0 9 z" fill="#526077"/></marker>
-    <marker id="arr-m" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 1 L 10 5 L 0 9 z" fill="#b8392b"/></marker>
-    <marker id="arr-h" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 1 L 10 5 L 0 9 z" fill="#1d5fa7"/></marker>
-    <marker id="arr-dl" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 1 L 10 5 L 0 9 z" fill="#b86b11"/></marker>
-    <marker id="arr-fl" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 1 L 10 5 L 0 9 z" fill="#147d75"/></marker>
-    <marker id="arr-bem" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 1 L 10 5 L 0 9 z" fill="#6f3cc4"/></marker>
-    <marker id="arr-jc" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 1 L 10 5 L 0 9 z" fill="#246b8e"/></marker>
-    <marker id="arr-air" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 1 L 10 5 L 0 9 z" fill="#6e7b91"/></marker>
-    <pattern id="air-hatch" width="12" height="12" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
-      <line x1="0" y1="0" x2="0" y2="12" stroke="#cbd4e4" stroke-width="1.2"/>
-    </pattern>
+    <marker id="arr-ink" viewBox="0 0 10 10" refX="8.2" refY="5" markerWidth="6.6" markerHeight="6.6" orient="auto-start-reverse"><path d="M 0.5 1.6 L 9.2 5 L 0.5 8.4 L 2.2 5 z" fill="#1c2030"/></marker>
+    <marker id="arr-ink-sm" viewBox="0 0 10 10" refX="8.2" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M 0.5 1.6 L 9.2 5 L 0.5 8.4 L 2.2 5 z" fill="#1c2030"/></marker>
+    <marker id="arr-ink-secondary" viewBox="0 0 10 10" refX="8.2" refY="5" markerWidth="6.6" markerHeight="6.6" orient="auto-start-reverse"><path d="M 0.5 1.6 L 9.2 5 L 0.5 8.4 L 2.2 5 z" fill="#3b4058"/></marker>
+    <marker id="arr-ink-secondary-sm" viewBox="0 0 10 10" refX="8.2" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M 0.5 1.6 L 9.2 5 L 0.5 8.4 L 2.2 5 z" fill="#3b4058"/></marker>
+    <marker id="arr-ink-muted" viewBox="0 0 10 10" refX="8.2" refY="5" markerWidth="6.6" markerHeight="6.6" orient="auto-start-reverse"><path d="M 0.5 1.6 L 9.2 5 L 0.5 8.4 L 2.2 5 z" fill="#575e78"/></marker>
+    <marker id="arr-ink-muted-sm" viewBox="0 0 10 10" refX="8.2" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M 0.5 1.6 L 9.2 5 L 0.5 8.4 L 2.2 5 z" fill="#575e78"/></marker>
+    <marker id="arr-axis" viewBox="0 0 10 10" refX="8.2" refY="5" markerWidth="6.6" markerHeight="6.6" orient="auto-start-reverse"><path d="M 0.5 1.6 L 9.2 5 L 0.5 8.4 L 2.2 5 z" fill="#4a5168"/></marker>
+    <marker id="arr-axis-sm" viewBox="0 0 10 10" refX="8.2" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M 0.5 1.6 L 9.2 5 L 0.5 8.4 L 2.2 5 z" fill="#4a5168"/></marker>
+    <marker id="arr-m" viewBox="0 0 10 10" refX="8.2" refY="5" markerWidth="6.6" markerHeight="6.6" orient="auto-start-reverse"><path d="M 0.5 1.6 L 9.2 5 L 0.5 8.4 L 2.2 5 z" fill="#b82e24"/></marker>
+    <marker id="arr-m-sm" viewBox="0 0 10 10" refX="8.2" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M 0.5 1.6 L 9.2 5 L 0.5 8.4 L 2.2 5 z" fill="#b82e24"/></marker>
+    <marker id="arr-H" viewBox="0 0 10 10" refX="8.2" refY="5" markerWidth="6.6" markerHeight="6.6" orient="auto-start-reverse"><path d="M 0.5 1.6 L 9.2 5 L 0.5 8.4 L 2.2 5 z" fill="#1857a8"/></marker>
+    <marker id="arr-H-sm" viewBox="0 0 10 10" refX="8.2" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M 0.5 1.6 L 9.2 5 L 0.5 8.4 L 2.2 5 z" fill="#1857a8"/></marker>
+    <marker id="arr-flux" viewBox="0 0 10 10" refX="8.2" refY="5" markerWidth="6.6" markerHeight="6.6" orient="auto-start-reverse"><path d="M 0.5 1.6 L 9.2 5 L 0.5 8.4 L 2.2 5 z" fill="#0e746c"/></marker>
+    <marker id="arr-flux-sm" viewBox="0 0 10 10" refX="8.2" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M 0.5 1.6 L 9.2 5 L 0.5 8.4 L 2.2 5 z" fill="#0e746c"/></marker>
+    <marker id="arr-accent-warm" viewBox="0 0 10 10" refX="8.2" refY="5" markerWidth="6.6" markerHeight="6.6" orient="auto-start-reverse"><path d="M 0.5 1.6 L 9.2 5 L 0.5 8.4 L 2.2 5 z" fill="#9c5409"/></marker>
+    <marker id="arr-accent-warm-sm" viewBox="0 0 10 10" refX="8.2" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M 0.5 1.6 L 9.2 5 L 0.5 8.4 L 2.2 5 z" fill="#9c5409"/></marker>
+    <marker id="arr-accent-violet" viewBox="0 0 10 10" refX="8.2" refY="5" markerWidth="6.6" markerHeight="6.6" orient="auto-start-reverse"><path d="M 0.5 1.6 L 9.2 5 L 0.5 8.4 L 2.2 5 z" fill="#6b38b5"/></marker>
+    <marker id="arr-accent-violet-sm" viewBox="0 0 10 10" refX="8.2" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M 0.5 1.6 L 9.2 5 L 0.5 8.4 L 2.2 5 z" fill="#6b38b5"/></marker>
+    <marker id="arr-fm-stroke" viewBox="0 0 10 10" refX="8.2" refY="5" markerWidth="6.6" markerHeight="6.6" orient="auto-start-reverse"><path d="M 0.5 1.6 L 9.2 5 L 0.5 8.4 L 2.2 5 z" fill="#945630"/></marker>
+    <marker id="arr-fm-stroke-sm" viewBox="0 0 10 10" refX="8.2" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M 0.5 1.6 L 9.2 5 L 0.5 8.4 L 2.2 5 z" fill="#945630"/></marker>
+    <marker id="arr-hm-stroke" viewBox="0 0 10 10" refX="8.2" refY="5" markerWidth="6.6" markerHeight="6.6" orient="auto-start-reverse"><path d="M 0.5 1.6 L 9.2 5 L 0.5 8.4 L 2.2 5 z" fill="#316580"/></marker>
+    <marker id="arr-hm-stroke-sm" viewBox="0 0 10 10" refX="8.2" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M 0.5 1.6 L 9.2 5 L 0.5 8.4 L 2.2 5 z" fill="#316580"/></marker>
+    <marker id="arr-spacer-stroke" viewBox="0 0 10 10" refX="8.2" refY="5" markerWidth="6.6" markerHeight="6.6" orient="auto-start-reverse"><path d="M 0.5 1.6 L 9.2 5 L 0.5 8.4 L 2.2 5 z" fill="#636c82"/></marker>
+    <marker id="arr-spacer-stroke-sm" viewBox="0 0 10 10" refX="8.2" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M 0.5 1.6 L 9.2 5 L 0.5 8.4 L 2.2 5 z" fill="#636c82"/></marker>
+    <marker id="arr-air-stroke" viewBox="0 0 10 10" refX="8.2" refY="5" markerWidth="6.6" markerHeight="6.6" orient="auto-start-reverse"><path d="M 0.5 1.6 L 9.2 5 L 0.5 8.4 L 2.2 5 z" fill="#636d85"/></marker>
+    <marker id="arr-air-stroke-sm" viewBox="0 0 10 10" refX="8.2" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M 0.5 1.6 L 9.2 5 L 0.5 8.4 L 2.2 5 z" fill="#636d85"/></marker>
+    <marker id="arr-ok" viewBox="0 0 10 10" refX="8.2" refY="5" markerWidth="6.6" markerHeight="6.6" orient="auto-start-reverse"><path d="M 0.5 1.6 L 9.2 5 L 0.5 8.4 L 2.2 5 z" fill="#1d6f30"/></marker>
+    <marker id="arr-ok-sm" viewBox="0 0 10 10" refX="8.2" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M 0.5 1.6 L 9.2 5 L 0.5 8.4 L 2.2 5 z" fill="#1d6f30"/></marker>
+    <marker id="arr-warn" viewBox="0 0 10 10" refX="8.2" refY="5" markerWidth="6.6" markerHeight="6.6" orient="auto-start-reverse"><path d="M 0.5 1.6 L 9.2 5 L 0.5 8.4 L 2.2 5 z" fill="#965608"/></marker>
+    <marker id="arr-warn-sm" viewBox="0 0 10 10" refX="8.2" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M 0.5 1.6 L 9.2 5 L 0.5 8.4 L 2.2 5 z" fill="#965608"/></marker>
+    <marker id="arr-err" viewBox="0 0 10 10" refX="8.2" refY="5" markerWidth="6.6" markerHeight="6.6" orient="auto-start-reverse"><path d="M 0.5 1.6 L 9.2 5 L 0.5 8.4 L 2.2 5 z" fill="#b51b32"/></marker>
+    <marker id="arr-err-sm" viewBox="0 0 10 10" refX="8.2" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M 0.5 1.6 L 9.2 5 L 0.5 8.4 L 2.2 5 z" fill="#b51b32"/></marker>
+    <pattern id="hatch-warm" width="7" height="7" patternTransform="rotate(45 0 0)" patternUnits="userSpaceOnUse"><line x1="0" y1="0" x2="0" y2="7" stroke="#9c5409" stroke-width="1.1" stroke-opacity="0.24"/></pattern>
+    <pattern id="hatch-cool" width="7" height="7" patternTransform="rotate(-45 0 0)" patternUnits="userSpaceOnUse"><line x1="0" y1="0" x2="0" y2="7" stroke="#1857a8" stroke-width="1.1" stroke-opacity="0.22"/></pattern>
+    <pattern id="hatch-muted" width="7" height="7" patternTransform="rotate(-45 0 0)" patternUnits="userSpaceOnUse"><line x1="0" y1="0" x2="0" y2="7" stroke="#636d85" stroke-width="1.1" stroke-opacity="0.24"/></pattern>
+    <pattern id="hatch-fm" width="7" height="7" patternTransform="rotate(45 0 0)" patternUnits="userSpaceOnUse"><line x1="0" y1="0" x2="0" y2="7" stroke="#945630" stroke-width="1.1" stroke-opacity="0.22"/></pattern>
+    <pattern id="hatch-flux" width="7" height="7" patternTransform="rotate(45 0 0)" patternUnits="userSpaceOnUse"><line x1="0" y1="0" x2="0" y2="7" stroke="#0e746c" stroke-width="1.1" stroke-opacity="0.22"/></pattern>
+    <radialGradient id="sphere-grad" cx="36%" cy="30%" r="70%"><stop offset="0%" stop-color="#ffffff" stop-opacity="0.82"/><stop offset="62%" stop-color="#f0f3fa" stop-opacity="0.58"/><stop offset="100%" stop-color="#dde3f0" stop-opacity="0.45"/></radialGradient>
   </defs>
-  <rect x="1" y="1" width="1358" height="858" rx="10" fill="#fbfcfe" stroke="#ccd0da" stroke-width="1.6"/>
-  <text x="28" y="34" class="title-main">Magnetostatic Demagnetization: Continuum Sources and Fullmag Solver Families</text>
-  <text x="28" y="57" class="subtitle-main">Shared continuum Maxwell problem (∇×H<tspan baseline-shift="sub" font-size="9.5">d</tspan> = 0, ∇·(H<tspan baseline-shift="sub" font-size="9.5">d</tspan> + M) = 0) realized by four mathematically distinct discrete operators</text>
-  <rect x="24" y="70" width="1312" height="106" rx="8" fill="#f6f8fc" stroke="#dce0e8" stroke-width="1.4"/>
-  <rect x="44" y="87" width="180" height="72" rx="6" fill="#f6e8df" stroke="#b97a56" stroke-width="2"/>
-  <circle cx="44" cy="101" r="6.5" fill="#1d5fa7"/>
-  <text x="44" y="105" text-anchor="middle" font-size="11" font-weight="700" fill="#ffffff">−</text>
-  <circle cx="224" cy="101" r="6.5" fill="#b86b11"/>
-  <text x="224" y="105" text-anchor="middle" font-size="11" font-weight="700" fill="#ffffff">+</text>
-  <circle cx="44" cy="121" r="6.5" fill="#1d5fa7"/>
-  <text x="44" y="125" text-anchor="middle" font-size="11" font-weight="700" fill="#ffffff">−</text>
-  <circle cx="224" cy="121" r="6.5" fill="#b86b11"/>
-  <text x="224" y="125" text-anchor="middle" font-size="11" font-weight="700" fill="#ffffff">+</text>
-  <circle cx="44" cy="141" r="6.5" fill="#1d5fa7"/>
-  <text x="44" y="145" text-anchor="middle" font-size="11" font-weight="700" fill="#ffffff">−</text>
-  <circle cx="224" cy="141" r="6.5" fill="#b86b11"/>
-  <text x="224" y="145" text-anchor="middle" font-size="11" font-weight="700" fill="#ffffff">+</text>
-  <line x1="78" y1="107" x2="128" y2="101" stroke="#b8392b" stroke-width="2.4" marker-end="url(#arr-m)"/>
-  <line x1="80" y1="140" x2="132" y2="146" stroke="#b8392b" stroke-width="2.4" marker-end="url(#arr-m)"/>
-  <line x1="154" y1="123" x2="198" y2="123" stroke="#b8392b" stroke-width="2.4" marker-end="url(#arr-m)"/>
-  <path d="M 210 95 C 258 79, 258 167, 210 151" fill="none" stroke="#1d5fa7" stroke-width="1.8" stroke-dasharray="4 3" marker-end="url(#arr-h)"/>
-  <rect x="116" y="111" width="34" height="24" rx="4" fill="#ffffff" fill-opacity="0.90"/>
-  <text x="133" y="128" text-anchor="middle" class="math-b" fill="#1e2433">Ω<tspan baseline-shift="sub" font-size="10.5">m</tspan></text>
-  <text x="280" y="96" class="sec-head">Continuum magnetic charge sources</text>
-  <text x="280" y="120" class="math" fill="#b8392b">ρ<tspan baseline-shift="sub" font-size="10.5">m</tspan> = −∇·M</text>
-  <text x="392" y="120" class="body-txt">(volume charge inside Ω<tspan baseline-shift="sub" font-size="10.5">m</tspan>)</text>
-  <text x="280" y="144" class="math" fill="#b86b11">σ<tspan baseline-shift="sub" font-size="10.5">m</tspan> = M · n</text>
-  <text x="392" y="144" class="body-txt">(surface charge on Γ<tspan baseline-shift="sub" font-size="10.5">m</tspan> = ∂Ω<tspan baseline-shift="sub" font-size="10.5">m</tspan>)</text>
-  <text x="280" y="167" class="small-txt">Open-boundary decay: u(x) → 0 as |x| → ∞</text>
-  <line x1="688" y1="82" x2="688" y2="164" stroke="#e2e6ef" stroke-width="1.4"/>
-  <text x="712" y="96" class="sec-head">Potential &amp; energy equivalence (all backends)</text>
-  <text x="712" y="121" class="math" fill="#1d5fa7">H<tspan baseline-shift="sub" font-size="10.5">d</tspan> = −∇u,   Δu = ∇·M  (distributional)</text>
-  <text x="712" y="146" class="math" fill="#1e2433">E<tspan baseline-shift="sub" font-size="10.5">d</tspan> = −(μ<tspan baseline-shift="sub" font-size="10.5">0</tspan>/2)∫<tspan baseline-shift="sub" font-size="10.5">Ωm</tspan> M·H<tspan baseline-shift="sub" font-size="10.5">d</tspan> dV = (μ<tspan baseline-shift="sub" font-size="10.5">0</tspan>/2)∫<tspan baseline-shift="sub" font-size="10.5">ℝ³</tspan> |H<tspan baseline-shift="sub" font-size="10.5">d</tspan>|<tspan baseline-shift="super" font-size="10.5">2</tspan> dV</text>
-  <text x="712" y="168" class="small-txt">Evaluated from resolved field &amp; active magnetic support only (never double-counting surface terms)</text>
-  <rect x="24.0" y="190.0" width="646.0" height="322.0" rx="8" fill="#ffffff" stroke="#dce0e8" stroke-width="1.4"/>
-  <rect x="38.0" y="202.0" width="32" height="22" rx="11" fill="#246b8e"/>
-  <text x="54.0" y="217.5" text-anchor="middle" class="panel-badge-txt">(a)</text>
-  <text x="80.0" y="218.5" class="panel-title">FDM Open-Boundary FFT Convolution</text>
-  <line x1="38.0" y1="234.0" x2="656.0" y2="234.0" stroke="#e2e6ef" stroke-width="1"/>
-  <rect x="50" y="252" width="248" height="184" rx="5" fill="#eef2f8" stroke="#6e7b91" stroke-width="1.5" stroke-dasharray="6 4"/>
-  <text x="174" y="273" text-anchor="middle" class="small-bold" fill="#6e7b91">2N<tspan baseline-shift="sub" font-size="10.5">x</tspan> × 2N<tspan baseline-shift="sub" font-size="10.5">y</tspan> × 2N<tspan baseline-shift="sub" font-size="10.5">z</tspan> zero-padded FFT domain</text>
-  <rect x="60" y="326" width="20" height="18" fill="#ffffff" stroke="#dce0e8" stroke-width="1"/>
-  <rect x="60" y="344" width="20" height="18" fill="#f6e8df" stroke="#b97a56" stroke-width="1"/>
-  <rect x="60" y="362" width="20" height="18" fill="#f6e8df" stroke="#b97a56" stroke-width="1"/>
-  <line x1="65.0" y1="371.0" x2="75.0" y2="371.0" stroke="#b8392b" stroke-width="1.5" marker-end="url(#arr-m)"/>
-  <rect x="60" y="380" width="20" height="18" fill="#f6e8df" stroke="#b97a56" stroke-width="1"/>
-  <rect x="60" y="398" width="20" height="18" fill="#f6e8df" stroke="#b97a56" stroke-width="1"/>
-  <line x1="65.0" y1="407.0" x2="75.0" y2="407.0" stroke="#b8392b" stroke-width="1.5" marker-end="url(#arr-m)"/>
-  <rect x="80" y="326" width="20" height="18" fill="#f6e8df" stroke="#b97a56" stroke-width="1"/>
-  <rect x="80" y="344" width="20" height="18" fill="#f6e8df" stroke="#b97a56" stroke-width="1"/>
-  <line x1="85.0" y1="353.0" x2="95.0" y2="353.0" stroke="#b8392b" stroke-width="1.5" marker-end="url(#arr-m)"/>
-  <rect x="80" y="362" width="20" height="18" fill="#f6e8df" stroke="#b97a56" stroke-width="1"/>
-  <rect x="80" y="380" width="20" height="18" fill="#f6e8df" stroke="#b97a56" stroke-width="1"/>
-  <line x1="85.0" y1="389.0" x2="95.0" y2="389.0" stroke="#b8392b" stroke-width="1.5" marker-end="url(#arr-m)"/>
-  <rect x="80" y="398" width="20" height="18" fill="#f6e8df" stroke="#b97a56" stroke-width="1"/>
-  <rect x="100" y="326" width="20" height="18" fill="#f6e8df" stroke="#b97a56" stroke-width="1"/>
-  <line x1="105.0" y1="335.0" x2="115.0" y2="335.0" stroke="#b8392b" stroke-width="1.5" marker-end="url(#arr-m)"/>
-  <rect x="100" y="344" width="20" height="18" fill="#f6e8df" stroke="#b97a56" stroke-width="1"/>
-  <rect x="100" y="362" width="20" height="18" fill="#f6e8df" stroke="#b97a56" stroke-width="1"/>
-  <line x1="105.0" y1="371.0" x2="115.0" y2="371.0" stroke="#b8392b" stroke-width="1.5" marker-end="url(#arr-m)"/>
-  <rect x="100" y="380" width="20" height="18" fill="#f6e8df" stroke="#b97a56" stroke-width="1"/>
-  <rect x="100" y="398" width="20" height="18" fill="#f6e8df" stroke="#b97a56" stroke-width="1"/>
-  <line x1="105.0" y1="407.0" x2="115.0" y2="407.0" stroke="#b8392b" stroke-width="1.5" marker-end="url(#arr-m)"/>
-  <rect x="120" y="326" width="20" height="18" fill="#f6e8df" stroke="#b97a56" stroke-width="1"/>
-  <rect x="120" y="344" width="20" height="18" fill="#f6e8df" stroke="#b97a56" stroke-width="1"/>
-  <line x1="125.0" y1="353.0" x2="135.0" y2="353.0" stroke="#b8392b" stroke-width="1.5" marker-end="url(#arr-m)"/>
-  <rect x="120" y="362" width="20" height="18" fill="#f6e8df" stroke="#b97a56" stroke-width="1"/>
-  <rect x="120" y="380" width="20" height="18" fill="#f6e8df" stroke="#b97a56" stroke-width="1"/>
-  <line x1="125.0" y1="389.0" x2="135.0" y2="389.0" stroke="#b8392b" stroke-width="1.5" marker-end="url(#arr-m)"/>
-  <rect x="120" y="398" width="20" height="18" fill="#f6e8df" stroke="#b97a56" stroke-width="1"/>
-  <rect x="140" y="326" width="20" height="18" fill="#f6e8df" stroke="#b97a56" stroke-width="1"/>
-  <line x1="145.0" y1="335.0" x2="155.0" y2="335.0" stroke="#b8392b" stroke-width="1.5" marker-end="url(#arr-m)"/>
-  <rect x="140" y="344" width="20" height="18" fill="#f6e8df" stroke="#b97a56" stroke-width="1"/>
-  <rect x="140" y="362" width="20" height="18" fill="#f6e8df" stroke="#b97a56" stroke-width="1"/>
-  <line x1="145.0" y1="371.0" x2="155.0" y2="371.0" stroke="#b8392b" stroke-width="1.5" marker-end="url(#arr-m)"/>
-  <rect x="140" y="380" width="20" height="18" fill="#f6e8df" stroke="#b97a56" stroke-width="1"/>
-  <rect x="140" y="398" width="20" height="18" fill="#f6e8df" stroke="#b97a56" stroke-width="1"/>
-  <line x1="145.0" y1="407.0" x2="155.0" y2="407.0" stroke="#b8392b" stroke-width="1.5" marker-end="url(#arr-m)"/>
-  <rect x="160" y="326" width="20" height="18" fill="#f6e8df" stroke="#b97a56" stroke-width="1"/>
-  <rect x="160" y="344" width="20" height="18" fill="#f6e8df" stroke="#b97a56" stroke-width="1"/>
-  <line x1="165.0" y1="353.0" x2="175.0" y2="353.0" stroke="#b8392b" stroke-width="1.5" marker-end="url(#arr-m)"/>
-  <rect x="160" y="362" width="20" height="18" fill="#f6e8df" stroke="#b97a56" stroke-width="1"/>
-  <rect x="160" y="380" width="20" height="18" fill="#f6e8df" stroke="#b97a56" stroke-width="1"/>
-  <line x1="165.0" y1="389.0" x2="175.0" y2="389.0" stroke="#b8392b" stroke-width="1.5" marker-end="url(#arr-m)"/>
-  <rect x="160" y="398" width="20" height="18" fill="#f6e8df" stroke="#b97a56" stroke-width="1"/>
-  <text x="120" y="316" text-anchor="middle" class="small-bold" fill="#b8392b">Active grid Ω<tspan baseline-shift="sub" font-size="10.5">m</tspan> (N)</text>
-  <text x="240" y="344" text-anchor="middle" class="small-txt">M = 0 pad</text>
-  <text x="240" y="364" text-anchor="middle" class="small-txt">prevents circular</text>
-  <text x="240" y="384" text-anchor="middle" class="small-txt">wraparound</text>
-  <text x="320" y="260" class="sec-head">Operator &amp; Discrete Realization</text>
-  <text x="320" y="285" class="math" fill="#246b8e">H<tspan baseline-shift="sub" font-size="10.5">d,p,i</tspan> = −∑<tspan baseline-shift="sub" font-size="10.5">q</tspan> ∑<tspan baseline-shift="sub" font-size="10.5">j</tspan> N<tspan baseline-shift="super" font-size="10.5">cell</tspan><tspan baseline-shift="sub" font-size="10.5">pq,ij</tspan> M<tspan baseline-shift="sub" font-size="10.5">q,j</tspan></text>
-  <text x="320" y="311" class="math" fill="#1d5fa7">Ĥ<tspan baseline-shift="sub" font-size="10.5">d</tspan>(k) = −N̂<tspan baseline-shift="super" font-size="10.5">cell</tspan>(k) M̂(k),   H<tspan baseline-shift="sub" font-size="10.5">d</tspan> = ℱ<tspan baseline-shift="super" font-size="10.5">−1</tspan>[Ĥ<tspan baseline-shift="sub" font-size="10.5">d</tspan>]</text>
-  <text x="320" y="338" class="body-txt">• 6 symmetric cell-averaged Newell components</text>
-  <text x="320" y="362" class="body-txt">• No scalar potential u solve or airbox mesh</text>
-  <text x="320" y="386" class="body-txt">• Multilayer option: native per-magnet grids</text>
-  <text x="320" y="410" class="body-txt">• Authoring: study.demag() + FDMDemag(...)</text>
-  <text x="320" y="435" class="small-txt">Note: H_demag is full_domain on structured grid</text>
-  <rect x="46.0" y="460.0" width="290.0" height="34.0" rx="5" fill="#e6f5f3" stroke="#147d75" stroke-width="1.1"/>
-  <text x="191.0" y="481.2" text-anchor="middle" class="small-bold" fill="#147d75">FDM CPU: reference (Newell + FFT)</text>
-  <rect x="348.0" y="460.0" width="300.0" height="34.0" rx="5" fill="#e4eff5" stroke="#246b8e" stroke-width="1.1"/>
-  <text x="498.0" y="481.2" text-anchor="middle" class="small-bold" fill="#246b8e">FDM GPU: cuFFT FP64 / FP32 (device parity)</text>
-  <rect x="690.0" y="190.0" width="646.0" height="322.0" rx="8" fill="#ffffff" stroke="#dce0e8" stroke-width="1.4"/>
-  <rect x="704.0" y="202.0" width="32" height="22" rx="11" fill="#1d5fa7"/>
-  <text x="720.0" y="217.5" text-anchor="middle" class="panel-badge-txt">(b)</text>
-  <text x="746.0" y="218.5" class="panel-title">FEM Poisson with Shared Finite Airbox</text>
-  <line x1="704.0" y1="234.0" x2="1322.0" y2="234.0" stroke="#e2e6ef" stroke-width="1"/>
-  <rect x="716" y="250" width="248" height="160" rx="4" fill="#eef2f8" stroke="#1d5fa7" stroke-width="2.4"/>
-  <rect x="716" y="250" width="248" height="160" rx="4" fill="url(#air-hatch)"/>
-  <line x1="716" y1="250" x2="788" y2="296" stroke="#9aa8bf" stroke-width="1"/>
-  <line x1="840.0" y1="250" x2="840.0" y2="296" stroke="#9aa8bf" stroke-width="1"/>
-  <line x1="964" y1="250" x2="892" y2="296" stroke="#9aa8bf" stroke-width="1"/>
-  <line x1="964" y1="330.0" x2="892" y2="330.0" stroke="#9aa8bf" stroke-width="1"/>
-  <line x1="964" y1="410" x2="892" y2="364" stroke="#9aa8bf" stroke-width="1"/>
-  <line x1="840.0" y1="410" x2="840.0" y2="364" stroke="#9aa8bf" stroke-width="1"/>
-  <line x1="716" y1="410" x2="788" y2="364" stroke="#9aa8bf" stroke-width="1"/>
-  <line x1="716" y1="330.0" x2="788" y2="330.0" stroke="#9aa8bf" stroke-width="1"/>
-  <line x1="761" y1="250" x2="788" y2="296" stroke="#9aa8bf" stroke-width="1"/>
-  <line x1="919" y1="250" x2="892" y2="296" stroke="#9aa8bf" stroke-width="1"/>
-  <line x1="761" y1="410" x2="788" y2="364" stroke="#9aa8bf" stroke-width="1"/>
-  <line x1="919" y1="410" x2="892" y2="364" stroke="#9aa8bf" stroke-width="1"/>
-  <rect x="788" y="296" width="104" height="68" fill="#f6e8df" stroke="#b97a56" stroke-width="2"/>
-  <line x1="788" y1="296" x2="892" y2="364" stroke="#b97a56" stroke-width="0.9"/>
-  <line x1="892" y1="296" x2="788" y2="364" stroke="#b97a56" stroke-width="0.9"/>
-  <line x1="840.0" y1="296" x2="840.0" y2="364" stroke="#b97a56" stroke-width="0.9"/>
-  <rect x="819.0" y="317.0" width="42" height="26" rx="4" fill="#ffffff" fill-opacity="0.94"/>
-  <text x="840.0" y="335.0" text-anchor="middle" class="math-b" fill="#b8392b">Ω<tspan baseline-shift="sub" font-size="10.5">m</tspan></text>
-  <rect x="724" y="256" width="36" height="22" rx="4" fill="#ffffff" fill-opacity="0.94"/>
-  <text x="742" y="271" text-anchor="middle" class="math-b" fill="#6e7b91">Ω<tspan baseline-shift="sub" font-size="10.5">a</tspan></text>
-  <rect x="861" y="254" width="96" height="25" rx="4" fill="#ffffff" fill-opacity="0.96"/>
-  <text x="909" y="270" text-anchor="middle" class="small-bold" fill="#1d5fa7">Γ<tspan baseline-shift="sub" font-size="10.5">a</tspan> (marker)</text>
-  <text x="840.0" y="430" text-anchor="middle" class="small-txt">Graded conforming mesh (Ω<tspan baseline-shift="sub" font-size="10.5">m</tspan> ⊂ Ω<tspan baseline-shift="sub" font-size="10.5">a</tspan>)</text>
-  <text x="986" y="260" class="sec-head">Weak Form &amp; Outer Closure</text>
-  <text x="986" y="285" class="math" fill="#1d5fa7">∫<tspan baseline-shift="sub" font-size="10.5">Ωa</tspan> ∇u·∇v dV + β∫<tspan baseline-shift="sub" font-size="10.5">Γa</tspan> uv dS = ∫<tspan baseline-shift="sub" font-size="10.5">Ωm</tspan> M·∇v dV</text>
-  <text x="986" y="311" class="body-txt">• Robin (default): ∂<tspan baseline-shift="sub" font-size="10.5">n</tspan>u + βu = 0,  A<tspan baseline-shift="sub" font-size="10.5">R</tspan> = K + βB<tspan baseline-shift="sub" font-size="10.5">Γa</tspan></text>
-  <text x="986" y="335" class="body-txt">• Dirichlet: u = 0 on Γ<tspan baseline-shift="sub" font-size="10.5">a</tspan> (essential DOF elimination)</text>
-  <text x="986" y="359" class="body-txt">• Recovery: H<tspan baseline-shift="sub" font-size="10.5">d</tspan> = −∇u; air LLG nodes masked to 0</text>
-  <text x="986" y="383" class="body-txt">• Authoring: Demag(model="airbox", variant=...)</text>
-  <text x="986" y="407" class="body-txt">• Solver: CG / GMRES + Hypre BoomerAMG / Jacobi</text>
-  <text x="986" y="434" class="small-txt">Convergence requires independent mesh &amp; box checks</text>
-  <rect x="712.0" y="460.0" width="290.0" height="34.0" rx="5" fill="#e6f5f3" stroke="#147d75" stroke-width="1.1"/>
-  <text x="857.0" y="481.2" text-anchor="middle" class="small-bold" fill="#147d75">FEM CPU: implemented (MFEM + Hypre)</text>
-  <rect x="1014.0" y="460.0" width="300.0" height="34.0" rx="5" fill="#fdf3e7" stroke="#b86b11" stroke-width="1.1"/>
-  <text x="1164.0" y="481.2" text-anchor="middle" class="small-bold" fill="#b86b11">FEM GPU: partial (CSR + device Hypre)</text>
-  <rect x="24.0" y="524.0" width="646.0" height="322.0" rx="8" fill="#ffffff" stroke="#dce0e8" stroke-width="1.4"/>
-  <rect x="38.0" y="536.0" width="32" height="22" rx="11" fill="#6f3cc4"/>
-  <text x="54.0" y="551.5" text-anchor="middle" class="panel-badge-txt">(c)</text>
-  <text x="80.0" y="552.5" class="panel-title">FEM–BEM Fredkin–Koehler (Body-Only Open Exterior)</text>
-  <line x1="38.0" y1="568.0" x2="656.0" y2="568.0" stroke="#e2e6ef" stroke-width="1"/>
-  <circle cx="174" cy="692" r="80" fill="none" stroke="#6f3cc4" stroke-width="1.4" stroke-dasharray="5 4"/>
-  <text x="174" y="604" text-anchor="middle" class="small-bold" fill="#6f3cc4">Unbounded exterior via Γ<tspan baseline-shift="sub" font-size="10.5">m</tspan> (NO airbox mesh)</text>
-  <circle cx="174" cy="692" r="66" fill="#f6e8df" stroke="#6f3cc4" stroke-width="2.5"/>
-  <polygon points="174,626 231,660 220,738 128,738 117,660" fill="none" stroke="#b97a56" stroke-width="1"/>
-  <line x1="174" y1="626" x2="174" y2="758" stroke="#b97a56" stroke-width="0.9"/>
-  <line x1="117" y1="660" x2="220" y2="738" stroke="#b97a56" stroke-width="0.9"/>
-  <line x1="231" y1="660" x2="128" y2="738" stroke="#b97a56" stroke-width="0.9"/>
-  <rect x="154" y="679" width="40" height="26" rx="4" fill="#ffffff" fill-opacity="0.94"/>
-  <text x="174" y="698" text-anchor="middle" class="math-b" fill="#b8392b">Ω<tspan baseline-shift="sub" font-size="10.5">m</tspan></text>
-  <text x="246" y="748" class="math-b" fill="#6f3cc4">Γ<tspan baseline-shift="sub" font-size="10.5">m</tspan></text>
-  <text x="320" y="594" class="sec-head">Two-Solve Boundary-Integral Splitting</text>
-  <text x="320" y="619" class="math" fill="#6f3cc4">u = u<tspan baseline-shift="sub" font-size="10.5">1</tspan> + u<tspan baseline-shift="sub" font-size="10.5">2</tspan>,   g<tspan baseline-shift="sub" font-size="10.5">2</tspan> = ℬ γu<tspan baseline-shift="sub" font-size="10.5">1</tspan> on Γ<tspan baseline-shift="sub" font-size="10.5">m</tspan></text>
-  <text x="320" y="645" class="body-txt">• Solve 1 (Neumann, b<tspan baseline-shift="sub" font-size="10.5">1,0</tspan>=0): Δu<tspan baseline-shift="sub" font-size="10.5">1</tspan> = ∇·M in Ω<tspan baseline-shift="sub" font-size="10.5">m</tspan></text>
-  <text x="320" y="669" class="body-txt">• Dense BEM map ℬ<tspan baseline-shift="sub" font-size="10.5">ii</tspan> = ∑ω<tspan baseline-shift="sub" font-size="10.5">T</tspan>/(4π) − 1 + Lindholm</text>
-  <text x="320" y="693" class="body-txt">• Solve 2 (Laplace): Δu<tspan baseline-shift="sub" font-size="10.5">2</tspan> = 0, γu<tspan baseline-shift="sub" font-size="10.5">2</tspan> = g<tspan baseline-shift="sub" font-size="10.5">2</tspan> on Γ<tspan baseline-shift="sub" font-size="10.5">m</tspan></text>
-  <text x="320" y="717" class="body-txt">• Authoring: Demag(model="fredkin_koehler")</text>
-  <text x="320" y="741" class="body-txt">• Rejects airbox or non-closed surfaces fail-closed</text>
-  <text x="320" y="768" class="small-txt">Generic bem / fmm remain separate planner requests</text>
-  <rect x="46.0" y="794.0" width="290.0" height="34.0" rx="5" fill="#fdf3e7" stroke="#b86b11" stroke-width="1.1"/>
-  <text x="191.0" y="815.2" text-anchor="middle" class="small-bold" fill="#b86b11">FEM CPU: dense reference (partial)</text>
-  <rect x="348.0" y="794.0" width="300.0" height="34.0" rx="5" fill="#fdf0f1" stroke="#c43a47" stroke-width="1.1"/>
-  <text x="498.0" y="815.2" text-anchor="middle" class="small-bold" fill="#c43a47">FEM GPU: unsupported (no silent fallback)</text>
-  <rect x="690.0" y="524.0" width="646.0" height="322.0" rx="8" fill="#ffffff" stroke="#dce0e8" stroke-width="1.4"/>
-  <rect x="704.0" y="536.0" width="32" height="22" rx="11" fill="#b86b11"/>
-  <text x="720.0" y="551.5" text-anchor="middle" class="panel-badge-txt">(d)</text>
-  <text x="746.0" y="552.5" class="panel-title">Periodic Replicated Images &amp; Reduced Airbox</text>
-  <line x1="704.0" y1="568.0" x2="1322.0" y2="568.0" stroke="#e2e6ef" stroke-width="1"/>
-  <rect x="712" y="578" width="292" height="202" rx="6" fill="#f6f8fc" stroke="#dce0e8" stroke-width="1.2"/>
-  <text x="858" y="598" text-anchor="middle" class="sec-head" fill="#246b8e">FDM: truncated_images</text>
-  <rect x="788" y="612" width="46" height="26" rx="2" fill="#eef2f6" stroke="#9aa8bf" stroke-width="1.1" stroke-dasharray="3 2"/>
-  <text x="811.0" y="629" text-anchor="middle" class="small-txt">img</text>
-  <rect x="788" y="642" width="46" height="26" rx="2" fill="#eef2f6" stroke="#9aa8bf" stroke-width="1.1" stroke-dasharray="3 2"/>
-  <text x="811.0" y="659" text-anchor="middle" class="small-txt">img</text>
-  <rect x="788" y="672" width="46" height="26" rx="2" fill="#eef2f6" stroke="#9aa8bf" stroke-width="1.1" stroke-dasharray="3 2"/>
-  <text x="811.0" y="689" text-anchor="middle" class="small-txt">img</text>
-  <rect x="838" y="612" width="46" height="26" rx="2" fill="#eef2f6" stroke="#9aa8bf" stroke-width="1.1" stroke-dasharray="3 2"/>
-  <text x="861.0" y="629" text-anchor="middle" class="small-txt">img</text>
-  <rect x="838" y="642" width="46" height="26" rx="2" fill="#f6e8df" stroke="#b8392b" stroke-width="1.8"/>
-  <text x="861.0" y="659" text-anchor="middle" class="small-txt">n=0</text>
-  <rect x="838" y="672" width="46" height="26" rx="2" fill="#eef2f6" stroke="#9aa8bf" stroke-width="1.1" stroke-dasharray="3 2"/>
-  <text x="861.0" y="689" text-anchor="middle" class="small-txt">img</text>
-  <rect x="888" y="612" width="46" height="26" rx="2" fill="#eef2f6" stroke="#9aa8bf" stroke-width="1.1" stroke-dasharray="3 2"/>
-  <text x="911.0" y="629" text-anchor="middle" class="small-txt">img</text>
-  <rect x="888" y="642" width="46" height="26" rx="2" fill="#eef2f6" stroke="#9aa8bf" stroke-width="1.1" stroke-dasharray="3 2"/>
-  <text x="911.0" y="659" text-anchor="middle" class="small-txt">img</text>
-  <rect x="888" y="672" width="46" height="26" rx="2" fill="#eef2f6" stroke="#9aa8bf" stroke-width="1.1" stroke-dasharray="3 2"/>
-  <text x="911.0" y="689" text-anchor="middle" class="small-txt">img</text>
-  <text x="858" y="720" text-anchor="middle" class="math-sm">N<tspan baseline-shift="super" font-size="10.5">pbc</tspan> = ∑<tspan baseline-shift="sub" font-size="10.5">n∈[−I,I]</tspan> N<tspan baseline-shift="super" font-size="10.5">open</tspan>(r + n·L)</text>
-  <text x="858" y="745" text-anchor="middle" class="small-txt">FFT size: N<tspan baseline-shift="sub" font-size="10.5">α</tspan> (periodic), 2N<tspan baseline-shift="sub" font-size="10.5">α</tspan> (open)</text>
-  <text x="858" y="768" text-anchor="middle" class="small-txt">Rejects periodic_airbox_k0 in FDM</text>
-  <rect x="1022" y="578" width="292" height="202" rx="6" fill="#f6f8fc" stroke="#dce0e8" stroke-width="1.2"/>
-  <text x="1168" y="598" text-anchor="middle" class="sec-head" fill="#1d5fa7">FEM: periodic_airbox_k0</text>
-  <rect x="1094" y="612" width="148" height="86" fill="#eef2f8" stroke="#1d5fa7" stroke-width="1.5"/>
-  <line x1="1094" y1="612" x2="1094" y2="698" stroke="#147d75" stroke-width="3.5"/>
-  <line x1="1242" y1="612" x2="1242" y2="698" stroke="#147d75" stroke-width="3.5"/>
-  <rect x="1114" y="640" width="108" height="30" fill="#f6e8df" stroke="#b97a56" stroke-width="1.6"/>
-  <text x="1168.0" y="659" text-anchor="middle" class="small-bold" fill="#b8392b">Ω<tspan baseline-shift="sub" font-size="10.5">m</tspan> (open z)</text>
-  <text x="1086" y="659" text-anchor="end" class="small-bold" fill="#147d75">P</text>
-  <text x="1250" y="659" class="small-bold" fill="#147d75">P</text>
-  <text x="1168" y="720" text-anchor="middle" class="math-sm">A<tspan baseline-shift="sub" font-size="10.5">p</tspan> = P<tspan baseline-shift="super" font-size="10.5">T</tspan>A<tspan baseline-shift="sub" font-size="10.5">open</tspan>P,  b<tspan baseline-shift="sub" font-size="10.5">p</tspan> = P<tspan baseline-shift="super" font-size="10.5">T</tspan>b</text>
-  <text x="1168" y="745" text-anchor="middle" class="small-txt">At least 1 open axis; seams ∉ Robin mass</text>
-  <text x="1168" y="768" text-anchor="middle" class="small-txt">Records k=0 gauge &amp; class map P</text>
-  <rect x="712.0" y="794.0" width="602.0" height="34.0" rx="5" fill="#fff7e8" stroke="#d48817" stroke-width="1.1"/>
-  <text x="1013.0" y="815.2" text-anchor="middle" class="small-bold" fill="#b86b11">Both require explicit zero-mode / truncation provenance; 3D fully periodic FEM fails closed</text>
+  <rect x="38" y="30" width="142" height="56" rx="3" fill="#f5e8df" stroke="#945630" stroke-width="1.5"/>
+  <line x1="58" y1="46" x2="100" y2="42" stroke="#b82e24" stroke-width="1.8" stroke-linecap="round" marker-end="url(#arr-m-sm)"/>
+  <line x1="122" y1="42" x2="162" y2="46" stroke="#b82e24" stroke-width="1.8" stroke-linecap="round" marker-end="url(#arr-m-sm)"/>
+  <line x1="58" y1="70" x2="100" y2="74" stroke="#b82e24" stroke-width="1.8" stroke-linecap="round" marker-end="url(#arr-m-sm)"/>
+  <line x1="122" y1="74" x2="162" y2="70" stroke="#b82e24" stroke-width="1.8" stroke-linecap="round" marker-end="url(#arr-m-sm)"/>
+  <text x="109" y="62" class="fm-math-bold" text-anchor="middle" fill="#1c2030" font-size="12" font-weight="700" font-style="normal" font-family="'STIX Two Math', 'Cambria Math', 'Times New Roman', Georgia, serif" style="fill:#1c2030;font-size:12px;font-weight:700;font-style:normal;font-family:'STIX Two Math', 'Cambria Math', 'Times New Roman', Georgia, serif" paint-order="stroke" stroke="#f7f8fb" stroke-width="3.4" stroke-linejoin="round">Ω<tspan baseline-shift="sub" font-size="74%" font-style="normal" font-weight="400">m</tspan></text>
+  <circle cx="38" cy="42" r="5.2" fill="#1857a8"/>
+  <text x="38" y="45.4" class="fm-note" text-anchor="middle" fill="#f7f8fb" font-weight="700" style="fill:#f7f8fb;font-weight:700">−</text>
+  <circle cx="180" cy="42" r="5.2" fill="#9c5409"/>
+  <text x="180" y="45.4" class="fm-note" text-anchor="middle" fill="#f7f8fb" font-weight="700" style="fill:#f7f8fb;font-weight:700">+</text>
+  <circle cx="38" cy="58" r="5.2" fill="#1857a8"/>
+  <text x="38" y="61.4" class="fm-note" text-anchor="middle" fill="#f7f8fb" font-weight="700" style="fill:#f7f8fb;font-weight:700">−</text>
+  <circle cx="180" cy="58" r="5.2" fill="#9c5409"/>
+  <text x="180" y="61.4" class="fm-note" text-anchor="middle" fill="#f7f8fb" font-weight="700" style="fill:#f7f8fb;font-weight:700">+</text>
+  <circle cx="38" cy="74" r="5.2" fill="#1857a8"/>
+  <text x="38" y="77.4" class="fm-note" text-anchor="middle" fill="#f7f8fb" font-weight="700" style="fill:#f7f8fb;font-weight:700">−</text>
+  <circle cx="180" cy="74" r="5.2" fill="#9c5409"/>
+  <text x="180" y="77.4" class="fm-note" text-anchor="middle" fill="#f7f8fb" font-weight="700" style="fill:#f7f8fb;font-weight:700">+</text>
+  <path d="M 184.0 38.0 C 214.0 10.0, 4.0 10.0, 34.0 38.0" fill="none" stroke="#1857a8" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="4,3" marker-end="url(#arr-H-sm)"/>
+  <path d="M 184.0 78.0 C 214.0 106.0, 4.0 106.0, 34.0 78.0" fill="none" stroke="#1857a8" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="4,3" marker-end="url(#arr-H-sm)"/>
+  <text x="198" y="62" class="fm-math" fill="#1857a8" font-size="11.4" font-weight="400" font-style="italic" font-family="'STIX Two Math', 'Cambria Math', 'Times New Roman', Georgia, serif" style="fill:#1857a8;font-size:11.4px;font-weight:400;font-style:italic;font-family:'STIX Two Math', 'Cambria Math', 'Times New Roman', Georgia, serif"><tspan font-style="normal" font-weight="700">H</tspan><tspan baseline-shift="sub" font-size="74%" font-style="normal" font-weight="400">d</tspan></text>
+  <text x="248" y="28" class="fm-label-bold">Continuum magnetostatic problem</text>
+  <text x="248" y="51" class="fm-math" fill="#1857a8" font-size="11.8" font-weight="400" font-style="italic" font-family="'STIX Two Math', 'Cambria Math', 'Times New Roman', Georgia, serif" style="fill:#1857a8;font-size:11.8px;font-weight:400;font-style:italic;font-family:'STIX Two Math', 'Cambria Math', 'Times New Roman', Georgia, serif">∇×<tspan font-style="normal" font-weight="700">H</tspan><tspan baseline-shift="sub" font-size="74%" font-style="normal" font-weight="400">d</tspan> = <tspan font-style="normal" font-weight="700">0</tspan>,   ∇·(<tspan font-style="normal" font-weight="700">H</tspan><tspan baseline-shift="sub" font-size="74%" font-style="normal" font-weight="400">d</tspan> + <tspan font-style="normal" font-weight="700">M</tspan>) = 0,   <tspan font-style="normal" font-weight="700">H</tspan><tspan baseline-shift="sub" font-size="74%" font-style="normal" font-weight="400">d</tspan> = −∇u</text>
+  <text x="248" y="74" class="fm-math" fill="#b82e24" font-size="11.5" font-weight="400" font-style="italic" font-family="'STIX Two Math', 'Cambria Math', 'Times New Roman', Georgia, serif" style="fill:#b82e24;font-size:11.5px;font-weight:400;font-style:italic;font-family:'STIX Two Math', 'Cambria Math', 'Times New Roman', Georgia, serif">ρ<tspan baseline-shift="sub" font-size="74%" font-style="normal" font-weight="400">m</tspan> = −∇·<tspan font-style="normal" font-weight="700">M</tspan> <tspan font-style="normal" font-weight="400">(in Ω</tspan><tspan baseline-shift="sub" font-size="74%" font-style="normal" font-weight="400">m</tspan><tspan font-style="normal" font-weight="400">)</tspan>,   σ<tspan baseline-shift="sub" font-size="74%" font-style="normal" font-weight="400">m</tspan> = <tspan font-style="normal" font-weight="700">M</tspan>·<tspan font-style="normal" font-weight="700">n</tspan> <tspan font-style="normal" font-weight="400">(on Γ</tspan><tspan baseline-shift="sub" font-size="74%" font-style="normal" font-weight="400">m</tspan><tspan font-style="normal" font-weight="400">)</tspan></text>
+  <text x="248" y="95" class="fm-note">Open exterior decay: <tspan font-family="'STIX Two Math', 'Cambria Math', 'Times New Roman', Georgia, serif" font-style="italic" font-weight="400">u(<tspan font-style="normal" font-weight="700">x</tspan>) → 0</tspan> as <tspan font-family="'STIX Two Math', 'Cambria Math', 'Times New Roman', Georgia, serif" font-style="italic" font-weight="400">|<tspan font-style="normal" font-weight="700">x</tspan>| → ∞</tspan></text>
+  <line x1="586" y1="18" x2="586" y2="98" stroke="#aeb5c9" stroke-width="0.85" stroke-linecap="round" opacity="0.55"/>
+  <text x="606" y="28" class="fm-label-bold">Potential &amp; energy equivalence</text>
+  <text x="606" y="51" class="fm-math" fill="#1c2030" font-size="11.8" font-weight="400" font-style="italic" font-family="'STIX Two Math', 'Cambria Math', 'Times New Roman', Georgia, serif" style="fill:#1c2030;font-size:11.8px;font-weight:400;font-style:italic;font-family:'STIX Two Math', 'Cambria Math', 'Times New Roman', Georgia, serif">Δu = ∇·<tspan font-style="normal" font-weight="700">M</tspan>  <tspan font-style="normal" font-weight="400">(distributional)</tspan></text>
+  <text x="606" y="74" class="fm-math" fill="#1c2030" font-size="11.5" font-weight="400" font-style="italic" font-family="'STIX Two Math', 'Cambria Math', 'Times New Roman', Georgia, serif" style="fill:#1c2030;font-size:11.5px;font-weight:400;font-style:italic;font-family:'STIX Two Math', 'Cambria Math', 'Times New Roman', Georgia, serif">E<tspan baseline-shift="sub" font-size="74%" font-style="normal" font-weight="400">d</tspan> = −(μ<tspan baseline-shift="sub" font-size="74%" font-style="normal" font-weight="400">0</tspan>/2) ∫<tspan baseline-shift="sub" font-size="74%" font-style="normal" font-weight="400">Ωm</tspan> <tspan font-style="normal" font-weight="700">M</tspan>·<tspan font-style="normal" font-weight="700">H</tspan><tspan baseline-shift="sub" font-size="74%" font-style="normal" font-weight="400">d</tspan> <tspan font-style="normal" font-weight="400">d</tspan>V = (μ<tspan baseline-shift="sub" font-size="74%" font-style="normal" font-weight="400">0</tspan>/2) ∫<tspan baseline-shift="sub" font-size="74%" font-style="normal" font-weight="400">ℝ³</tspan> |<tspan font-style="normal" font-weight="700">H</tspan><tspan baseline-shift="sub" font-size="74%" font-style="normal" font-weight="400">d</tspan>|<tspan baseline-shift="super" font-size="74%" font-style="normal" font-weight="400">2</tspan> <tspan font-style="normal" font-weight="400">d</tspan>V</text>
+  <text x="606" y="95" class="fm-note">Evaluated on active magnetic support (no surface double-counting).</text>
+  <line x1="16" y1="112" x2="964" y2="112" stroke="#aeb5c9" stroke-width="0.85" stroke-linecap="round" opacity="0.55"/>
+  <line x1="490" y1="122" x2="490" y2="598" stroke="#aeb5c9" stroke-width="0.85" stroke-linecap="round" opacity="0.55"/>
+  <line x1="16" y1="360" x2="964" y2="360" stroke="#aeb5c9" stroke-width="0.85" stroke-linecap="round" opacity="0.55"/>
+  <text x="16" y="134" class="fm-panel-letter">a</text>
+  <text x="33" y="134" class="fm-panel-title">FDM open FFT convolution</text>
+  <text x="33" y="149.5" class="fm-note">Cell-averaged Newell tensor · no airbox mesh</text>
+  <rect x="24" y="166" width="178" height="142" rx="3" fill="#eff2f8" fill-opacity="0.65" stroke="#636d85" stroke-width="1.1" stroke-dasharray="5,3.5"/>
+  <text x="193" y="182.5" class="fm-note" text-anchor="end" fill="#636d85" style="fill:#636d85">2N<tspan baseline-shift="sub" font-size="74%" font-style="normal" font-weight="400">x</tspan>×2N<tspan baseline-shift="sub" font-size="74%" font-style="normal" font-weight="400">y</tspan>×2N<tspan baseline-shift="sub" font-size="74%" font-style="normal" font-weight="400">z</tspan> pad</text>
+  <rect x="32" y="224" width="17" height="17" fill="#f5e8df" stroke="#945630" stroke-width="0.85"/>
+  <line x1="35.5" y1="232.5" x2="45.5" y2="232.5" stroke="#b82e24" stroke-width="1.3" stroke-linecap="round" marker-end="url(#arr-m-sm)"/>
+  <rect x="49" y="224" width="17" height="17" fill="#f5e8df" stroke="#945630" stroke-width="0.85"/>
+  <rect x="66" y="224" width="17" height="17" fill="#f5e8df" stroke="#945630" stroke-width="0.85"/>
+  <line x1="69.5" y1="232.5" x2="79.5" y2="232.5" stroke="#b82e24" stroke-width="1.3" stroke-linecap="round" marker-end="url(#arr-m-sm)"/>
+  <rect x="83" y="224" width="17" height="17" fill="#f5e8df" stroke="#945630" stroke-width="0.85"/>
+  <rect x="100" y="224" width="17" height="17" fill="#f5e8df" stroke="#945630" stroke-width="0.85"/>
+  <line x1="103.5" y1="232.5" x2="113.5" y2="232.5" stroke="#b82e24" stroke-width="1.3" stroke-linecap="round" marker-end="url(#arr-m-sm)"/>
+  <rect x="32" y="241" width="17" height="17" fill="#f5e8df" stroke="#945630" stroke-width="0.85"/>
+  <rect x="49" y="241" width="17" height="17" fill="#f5e8df" stroke="#945630" stroke-width="0.85"/>
+  <line x1="52.5" y1="249.5" x2="62.5" y2="249.5" stroke="#b82e24" stroke-width="1.3" stroke-linecap="round" marker-end="url(#arr-m-sm)"/>
+  <rect x="66" y="241" width="17" height="17" fill="#f5e8df" stroke="#945630" stroke-width="0.85"/>
+  <rect x="83" y="241" width="17" height="17" fill="#f5e8df" stroke="#945630" stroke-width="0.85"/>
+  <line x1="86.5" y1="249.5" x2="96.5" y2="249.5" stroke="#b82e24" stroke-width="1.3" stroke-linecap="round" marker-end="url(#arr-m-sm)"/>
+  <rect x="100" y="241" width="17" height="17" fill="#f5e8df" stroke="#945630" stroke-width="0.85"/>
+  <rect x="32" y="258" width="17" height="17" fill="#f5e8df" stroke="#945630" stroke-width="0.85"/>
+  <line x1="35.5" y1="266.5" x2="45.5" y2="266.5" stroke="#b82e24" stroke-width="1.3" stroke-linecap="round" marker-end="url(#arr-m-sm)"/>
+  <rect x="49" y="258" width="17" height="17" fill="#f5e8df" stroke="#945630" stroke-width="0.85"/>
+  <rect x="66" y="258" width="17" height="17" fill="#f5e8df" stroke="#945630" stroke-width="0.85"/>
+  <line x1="69.5" y1="266.5" x2="79.5" y2="266.5" stroke="#b82e24" stroke-width="1.3" stroke-linecap="round" marker-end="url(#arr-m-sm)"/>
+  <rect x="83" y="258" width="17" height="17" fill="#f5e8df" stroke="#945630" stroke-width="0.85"/>
+  <rect x="100" y="258" width="17" height="17" fill="#f5e8df" stroke="#945630" stroke-width="0.85"/>
+  <line x1="103.5" y1="266.5" x2="113.5" y2="266.5" stroke="#b82e24" stroke-width="1.3" stroke-linecap="round" marker-end="url(#arr-m-sm)"/>
+  <rect x="32" y="275" width="17" height="17" fill="#f5e8df" stroke="#945630" stroke-width="0.85"/>
+  <rect x="49" y="275" width="17" height="17" fill="#f5e8df" stroke="#945630" stroke-width="0.85"/>
+  <line x1="52.5" y1="283.5" x2="62.5" y2="283.5" stroke="#b82e24" stroke-width="1.3" stroke-linecap="round" marker-end="url(#arr-m-sm)"/>
+  <rect x="66" y="275" width="17" height="17" fill="#f5e8df" stroke="#945630" stroke-width="0.85"/>
+  <rect x="83" y="275" width="17" height="17" fill="#f5e8df" stroke="#945630" stroke-width="0.85"/>
+  <line x1="86.5" y1="283.5" x2="96.5" y2="283.5" stroke="#b82e24" stroke-width="1.3" stroke-linecap="round" marker-end="url(#arr-m-sm)"/>
+  <rect x="100" y="275" width="17" height="17" fill="#f5e8df" stroke="#945630" stroke-width="0.85"/>
+  <text x="74" y="217" class="fm-math" text-anchor="middle" fill="#b82e24" font-size="10.8" font-weight="400" font-style="normal" font-family="'STIX Two Math', 'Cambria Math', 'Times New Roman', Georgia, serif" style="fill:#b82e24;font-size:10.8px;font-weight:400;font-style:normal;font-family:'STIX Two Math', 'Cambria Math', 'Times New Roman', Georgia, serif">Ω<tspan baseline-shift="sub" font-size="74%" font-style="normal" font-weight="400">m</tspan> (N)</text>
+  <text x="158" y="250" class="fm-note" text-anchor="middle" fill="#636d85" style="fill:#636d85">M = 0</text>
+  <text x="158" y="265" class="fm-note" text-anchor="middle" fill="#636d85" style="fill:#636d85">zero pad</text>
+  <text x="220" y="184" class="fm-math" fill="#1857a8" font-size="12" font-weight="400" font-style="italic" font-family="'STIX Two Math', 'Cambria Math', 'Times New Roman', Georgia, serif" style="fill:#1857a8;font-size:12px;font-weight:400;font-style:italic;font-family:'STIX Two Math', 'Cambria Math', 'Times New Roman', Georgia, serif"><tspan font-style="normal" font-weight="700">H</tspan><tspan baseline-shift="sub" font-size="74%" font-style="normal" font-weight="400">d,p</tspan> = −Σ<tspan baseline-shift="sub" font-size="74%" font-style="normal" font-weight="400">q</tspan> N<tspan baseline-shift="super" font-size="74%" font-style="normal" font-weight="400">cell</tspan><tspan baseline-shift="sub" font-size="74%" font-style="normal" font-weight="400">pq</tspan> <tspan font-style="normal" font-weight="700">M</tspan><tspan baseline-shift="sub" font-size="74%" font-style="normal" font-weight="400">q</tspan></text>
+  <text x="220" y="210" class="fm-math" fill="#1c2030" font-size="11.8" font-weight="400" font-style="italic" font-family="'STIX Two Math', 'Cambria Math', 'Times New Roman', Georgia, serif" style="fill:#1c2030;font-size:11.8px;font-weight:400;font-style:italic;font-family:'STIX Two Math', 'Cambria Math', 'Times New Roman', Georgia, serif">Ĥ<tspan baseline-shift="sub" font-size="74%" font-style="normal" font-weight="400">d</tspan>(<tspan font-style="normal" font-weight="700">k</tspan>) = −N̂<tspan baseline-shift="super" font-size="74%" font-style="normal" font-weight="400">cell</tspan>(<tspan font-style="normal" font-weight="700">k</tspan>) M̂(<tspan font-style="normal" font-weight="700">k</tspan>)</text>
+  <text x="220" y="238" class="fm-sub">• 6 symmetric 27-point Newell components</text>
+  <text x="220" y="257" class="fm-sub">• No scalar potential u or airbox mesh</text>
+  <text x="220" y="276" class="fm-sub">• Multilayer option skips vacuum gaps</text>
+  <text x="220" y="295" class="fm-sub">• FDM CPU: FP64 reference + multilayer</text>
+  <text x="220" y="314" class="fm-sub">• FDM GPU: Hermitian D2Z / R2C cuFFT</text>
+  <text x="508" y="134" class="fm-panel-letter">b</text>
+  <text x="525" y="134" class="fm-panel-title">FEM Poisson airbox</text>
+  <text x="525" y="149.5" class="fm-note">Conforming shared domain <tspan font-family="'STIX Two Math', 'Cambria Math', 'Times New Roman', Georgia, serif" font-style="normal" font-weight="400">Ω<tspan baseline-shift="sub" font-size="74%" font-style="normal" font-weight="400">m</tspan> ⊂ Ω<tspan baseline-shift="sub" font-size="74%" font-style="normal" font-weight="400">a</tspan></tspan></text>
+  <rect x="516" y="166" width="174" height="142" rx="2" fill="#eff2f8" stroke="#1857a8" stroke-width="2"/>
+  <line x1="516" y1="166" x2="562" y2="208" stroke="#aeb5c9" stroke-width="0.9" stroke-linecap="round"/>
+  <line x1="603" y1="166" x2="603" y2="208" stroke="#aeb5c9" stroke-width="0.9" stroke-linecap="round"/>
+  <line x1="690" y1="166" x2="644" y2="208" stroke="#aeb5c9" stroke-width="0.9" stroke-linecap="round"/>
+  <line x1="690" y1="237" x2="644" y2="237" stroke="#aeb5c9" stroke-width="0.9" stroke-linecap="round"/>
+  <line x1="690" y1="308" x2="644" y2="266" stroke="#aeb5c9" stroke-width="0.9" stroke-linecap="round"/>
+  <line x1="603" y1="308" x2="603" y2="266" stroke="#aeb5c9" stroke-width="0.9" stroke-linecap="round"/>
+  <line x1="516" y1="308" x2="562" y2="266" stroke="#aeb5c9" stroke-width="0.9" stroke-linecap="round"/>
+  <line x1="516" y1="237" x2="562" y2="237" stroke="#aeb5c9" stroke-width="0.9" stroke-linecap="round"/>
+  <rect x="539" y="187" width="128" height="100" fill="none" stroke="#aeb5c9" stroke-width="0.85" stroke-dasharray="3,2.5"/>
+  <rect x="562" y="208" width="82" height="58" fill="#f5e8df" stroke="#945630" stroke-width="1.6"/>
+  <line x1="562" y1="208" x2="644" y2="266" stroke="#945630" stroke-width="0.75" stroke-linecap="round" opacity="0.75"/>
+  <line x1="644" y1="208" x2="562" y2="266" stroke="#945630" stroke-width="0.75" stroke-linecap="round" opacity="0.75"/>
+  <line x1="603" y1="208" x2="603" y2="266" stroke="#945630" stroke-width="0.75" stroke-linecap="round" opacity="0.75"/>
+  <rect x="588" y="227" width="30" height="20" rx="3" fill="#f5e8df"/>
+  <text x="603" y="241" class="fm-math-bold" text-anchor="middle" fill="#b82e24" font-size="11.8" font-weight="700" font-style="normal" font-family="'STIX Two Math', 'Cambria Math', 'Times New Roman', Georgia, serif" style="fill:#b82e24;font-size:11.8px;font-weight:700;font-style:normal;font-family:'STIX Two Math', 'Cambria Math', 'Times New Roman', Georgia, serif">Ω<tspan baseline-shift="sub" font-size="74%" font-style="normal" font-weight="400">m</tspan></text>
+  <text x="568" y="181" class="fm-math" text-anchor="middle" fill="#636d85" font-size="11" font-weight="400" font-style="normal" font-family="'STIX Two Math', 'Cambria Math', 'Times New Roman', Georgia, serif" style="fill:#636d85;font-size:11px;font-weight:400;font-style:normal;font-family:'STIX Two Math', 'Cambria Math', 'Times New Roman', Georgia, serif" paint-order="stroke" stroke="#f7f8fb" stroke-width="3.4" stroke-linejoin="round">Ω<tspan baseline-shift="sub" font-size="74%" font-style="normal" font-weight="400">a</tspan></text>
+  <text x="638" y="181" class="fm-math-bold" text-anchor="middle" fill="#1857a8" font-size="11.2" font-weight="700" font-style="normal" font-family="'STIX Two Math', 'Cambria Math', 'Times New Roman', Georgia, serif" style="fill:#1857a8;font-size:11.2px;font-weight:700;font-style:normal;font-family:'STIX Two Math', 'Cambria Math', 'Times New Roman', Georgia, serif" paint-order="stroke" stroke="#f7f8fb" stroke-width="3.4" stroke-linejoin="round">Γ<tspan baseline-shift="sub" font-size="74%" font-style="normal" font-weight="400">a</tspan></text>
+  <text x="708" y="184" class="fm-math" fill="#1857a8" font-size="11.2" font-weight="400" font-style="italic" font-family="'STIX Two Math', 'Cambria Math', 'Times New Roman', Georgia, serif" style="fill:#1857a8;font-size:11.2px;font-weight:400;font-style:italic;font-family:'STIX Two Math', 'Cambria Math', 'Times New Roman', Georgia, serif">∫<tspan baseline-shift="sub" font-size="74%" font-style="normal" font-weight="400">Ωa</tspan> ∇u·∇v <tspan font-style="normal" font-weight="400">d</tspan>V + β∫<tspan baseline-shift="sub" font-size="74%" font-style="normal" font-weight="400">Γa</tspan> uv <tspan font-style="normal" font-weight="400">d</tspan>S = ∫<tspan baseline-shift="sub" font-size="74%" font-style="normal" font-weight="400">Ωm</tspan> <tspan font-style="normal" font-weight="700">M</tspan>·∇v <tspan font-style="normal" font-weight="400">d</tspan>V</text>
+  <text x="708" y="210" class="fm-math" fill="#1c2030" font-size="11.2" font-weight="400" font-style="italic" font-family="'STIX Two Math', 'Cambria Math', 'Times New Roman', Georgia, serif" style="fill:#1c2030;font-size:11.2px;font-weight:400;font-style:italic;font-family:'STIX Two Math', 'Cambria Math', 'Times New Roman', Georgia, serif"><tspan font-style="normal" font-weight="400">Robin: </tspan>∂<tspan baseline-shift="sub" font-size="74%" font-style="normal" font-weight="400">n</tspan>u + βu = 0   <tspan font-style="normal" font-weight="400">|  Dirichlet: </tspan>u = 0</text>
+  <text x="708" y="238" class="fm-sub">• P2 potential on <tspan font-family="'JetBrains Mono', 'Fira Code', 'Liberation Mono', 'DejaVu Sans Mono', monospace" font-size="9.8">tet4</tspan> &amp; <tspan font-family="'JetBrains Mono', 'Fira Code', 'Liberation Mono', 'DejaVu Sans Mono', monospace" font-size="9.8">pure_prism_p2</tspan></text>
+  <text x="708" y="257" class="fm-sub">• P1 potential on <tspan font-family="'JetBrains Mono', 'Fira Code', 'Liberation Mono', 'DejaVu Sans Mono', monospace" font-size="9.8">mixed_p1</tspan> (pyramids)</text>
+  <text x="708" y="276" class="fm-sub">• FEM CPU: MFEM + Hypre CG/AMG</text>
+  <text x="708" y="295" class="fm-sub">• FEM GPU: <tspan font-family="'JetBrains Mono', 'Fira Code', 'Liberation Mono', 'DejaVu Sans Mono', monospace" font-size="9.8">cuDSS</tspan> Cholesky (<tspan font-family="'JetBrains Mono', 'Fira Code', 'Liberation Mono', 'DejaVu Sans Mono', monospace" font-size="9.8">auto</tspan>) or</text>
+  <text x="708" y="314" class="fm-sub">  device Hypre CG/AMG (coarse relax 18)</text>
+  <text x="16" y="382" class="fm-panel-letter">c</text>
+  <text x="33" y="382" class="fm-panel-title">FEM–BEM Fredkin–Koehler</text>
+  <text x="33" y="397.5" class="fm-note">Closed body-only tet4 mesh · no airbox</text>
+  <circle cx="112" cy="488" r="68" fill="none" stroke="#6b38b5" stroke-width="1.1" stroke-dasharray="4,3.5" opacity="0.65"/>
+  <text x="112" y="415" class="fm-note" text-anchor="middle" fill="#6b38b5" style="fill:#6b38b5">open exterior (no airbox)</text>
+  <polygon points="112,438 147.36,452.64 162,488 147.36,523.36 112,538 76.64,523.36 62,488 76.64,452.64" fill="#f5e8df" stroke="#6b38b5" stroke-width="2.2" stroke-linejoin="round"/>
+  <line x1="112" y1="470.5" x2="112" y2="438" stroke="#945630" stroke-width="0.85" stroke-linecap="round" opacity="0.75"/>
+  <line x1="124.37" y1="475.63" x2="147.36" y2="452.64" stroke="#945630" stroke-width="0.85" stroke-linecap="round" opacity="0.75"/>
+  <line x1="129.5" y1="488" x2="162" y2="488" stroke="#945630" stroke-width="0.85" stroke-linecap="round" opacity="0.75"/>
+  <line x1="124.37" y1="500.37" x2="147.36" y2="523.36" stroke="#945630" stroke-width="0.85" stroke-linecap="round" opacity="0.75"/>
+  <line x1="112" y1="505.5" x2="112" y2="538" stroke="#945630" stroke-width="0.85" stroke-linecap="round" opacity="0.75"/>
+  <line x1="99.63" y1="500.37" x2="76.64" y2="523.36" stroke="#945630" stroke-width="0.85" stroke-linecap="round" opacity="0.75"/>
+  <line x1="94.5" y1="488" x2="62" y2="488" stroke="#945630" stroke-width="0.85" stroke-linecap="round" opacity="0.75"/>
+  <line x1="99.63" y1="475.63" x2="76.64" y2="452.64" stroke="#945630" stroke-width="0.85" stroke-linecap="round" opacity="0.75"/>
+  <text x="112" y="492" class="fm-math-bold" text-anchor="middle" fill="#b82e24" font-size="12" font-weight="700" font-style="normal" font-family="'STIX Two Math', 'Cambria Math', 'Times New Roman', Georgia, serif" style="fill:#b82e24;font-size:12px;font-weight:700;font-style:normal;font-family:'STIX Two Math', 'Cambria Math', 'Times New Roman', Georgia, serif">Ω<tspan baseline-shift="sub" font-size="74%" font-style="normal" font-weight="400">m</tspan></text>
+  <text x="160" y="532" class="fm-math-bold" fill="#6b38b5" font-size="11.6" font-weight="700" font-style="normal" font-family="'STIX Two Math', 'Cambria Math', 'Times New Roman', Georgia, serif" style="fill:#6b38b5;font-size:11.6px;font-weight:700;font-style:normal;font-family:'STIX Two Math', 'Cambria Math', 'Times New Roman', Georgia, serif">Γ<tspan baseline-shift="sub" font-size="74%" font-style="normal" font-weight="400">m</tspan></text>
+  <text x="220" y="434" class="fm-math" fill="#6b38b5" font-size="11.8" font-weight="400" font-style="italic" font-family="'STIX Two Math', 'Cambria Math', 'Times New Roman', Georgia, serif" style="fill:#6b38b5;font-size:11.8px;font-weight:400;font-style:italic;font-family:'STIX Two Math', 'Cambria Math', 'Times New Roman', Georgia, serif">u = u<tspan baseline-shift="sub" font-size="74%" font-style="normal" font-weight="400">1</tspan> + u<tspan baseline-shift="sub" font-size="74%" font-style="normal" font-weight="400">2</tspan>,   g<tspan baseline-shift="sub" font-size="74%" font-style="normal" font-weight="400">2</tspan> = ℬ γu<tspan baseline-shift="sub" font-size="74%" font-style="normal" font-weight="400">1</tspan> <tspan font-style="normal" font-weight="400">on Γ</tspan><tspan baseline-shift="sub" font-size="74%" font-style="normal" font-weight="400">m</tspan></text>
+  <text x="220" y="460" class="fm-math" fill="#1c2030" font-size="11.4" font-weight="400" font-style="italic" font-family="'STIX Two Math', 'Cambria Math', 'Times New Roman', Georgia, serif" style="fill:#1c2030;font-size:11.4px;font-weight:400;font-style:italic;font-family:'STIX Two Math', 'Cambria Math', 'Times New Roman', Georgia, serif">Δu<tspan baseline-shift="sub" font-size="74%" font-style="normal" font-weight="400">1</tspan> = ∇·<tspan font-style="normal" font-weight="700">M</tspan>  →  ℬ  →  Δu<tspan baseline-shift="sub" font-size="74%" font-style="normal" font-weight="400">2</tspan> = 0</text>
+  <text x="220" y="488" class="fm-sub">• Closed watertight <tspan font-family="'JetBrains Mono', 'Fira Code', 'Liberation Mono', 'DejaVu Sans Mono', monospace" font-size="9.8">tet4</tspan> P1 body only</text>
+  <text x="220" y="507" class="fm-sub">• FEM CPU: <tspan font-family="'STIX Two Math', 'Cambria Math', 'Times New Roman', Georgia, serif" font-style="italic" font-weight="400">H<tspan baseline-shift="super" font-size="74%" font-style="normal" font-weight="400">2</tspan></tspan> near Lindholm + far ACA</text>
+  <text x="220" y="526" class="fm-sub">• FEM GPU: CUDA near CSR + far ACA,</text>
+  <text x="220" y="545" class="fm-sub">  atomic <tspan font-family="'STIX Two Math', 'Cambria Math', 'Times New Roman', Georgia, serif" font-style="italic" font-weight="400">(u<tspan baseline-shift="sub" font-size="74%" font-style="normal" font-weight="400">1</tspan>, u<tspan baseline-shift="sub" font-size="74%" font-style="normal" font-weight="400">2</tspan>)</tspan> <tspan font-family="'JetBrains Mono', 'Fira Code', 'Liberation Mono', 'DejaVu Sans Mono', monospace" font-size="9.8">cuDSS</tspan> or CG/AMG</text>
+  <text x="220" y="564" class="fm-sub">• Generic <tspan font-family="'JetBrains Mono', 'Fira Code', 'Liberation Mono', 'DejaVu Sans Mono', monospace" font-size="9.8">bem</tspan> / <tspan font-family="'JetBrains Mono', 'Fira Code', 'Liberation Mono', 'DejaVu Sans Mono', monospace" font-size="9.8">fmm</tspan> remain planner-gated</text>
+  <text x="508" y="382" class="fm-panel-letter">d</text>
+  <text x="525" y="382" class="fm-panel-title">Periodic demagnetization</text>
+  <text x="525" y="397.5" class="fm-note">FDM finite image replicas vs FEM reduced airbox</text>
+  <text x="520" y="424" class="fm-label-bold" fill="#1857a8" style="fill:#1857a8">FDM: <tspan font-family="'JetBrains Mono', 'Fira Code', 'Liberation Mono', 'DejaVu Sans Mono', monospace" font-size="9.8">truncated_images</tspan></text>
+  <rect x="546" y="436" width="34" height="22" rx="2" fill="#eff2f8" stroke="#636d85" stroke-width="0.9" stroke-dasharray="3,2"/>
+  <text x="563" y="450.5" class="fm-note" text-anchor="middle" fill="#636d85" font-weight="400" style="fill:#636d85;font-weight:400">img</text>
+  <rect x="584" y="436" width="34" height="22" rx="2" fill="#eff2f8" stroke="#636d85" stroke-width="0.9" stroke-dasharray="3,2"/>
+  <text x="601" y="450.5" class="fm-note" text-anchor="middle" fill="#636d85" font-weight="400" style="fill:#636d85;font-weight:400">img</text>
+  <rect x="622" y="436" width="34" height="22" rx="2" fill="#eff2f8" stroke="#636d85" stroke-width="0.9" stroke-dasharray="3,2"/>
+  <text x="639" y="450.5" class="fm-note" text-anchor="middle" fill="#636d85" font-weight="400" style="fill:#636d85;font-weight:400">img</text>
+  <rect x="546" y="462" width="34" height="22" rx="2" fill="#eff2f8" stroke="#636d85" stroke-width="0.9" stroke-dasharray="3,2"/>
+  <text x="563" y="476.5" class="fm-note" text-anchor="middle" fill="#636d85" font-weight="400" style="fill:#636d85;font-weight:400">img</text>
+  <rect x="584" y="462" width="34" height="22" rx="2" fill="#f5e8df" stroke="#b82e24" stroke-width="1.6"/>
+  <text x="601" y="476.5" class="fm-note" text-anchor="middle" fill="#b82e24" font-weight="600" style="fill:#b82e24;font-weight:600">n=0</text>
+  <rect x="622" y="462" width="34" height="22" rx="2" fill="#eff2f8" stroke="#636d85" stroke-width="0.9" stroke-dasharray="3,2"/>
+  <text x="639" y="476.5" class="fm-note" text-anchor="middle" fill="#636d85" font-weight="400" style="fill:#636d85;font-weight:400">img</text>
+  <rect x="546" y="488" width="34" height="22" rx="2" fill="#eff2f8" stroke="#636d85" stroke-width="0.9" stroke-dasharray="3,2"/>
+  <text x="563" y="502.5" class="fm-note" text-anchor="middle" fill="#636d85" font-weight="400" style="fill:#636d85;font-weight:400">img</text>
+  <rect x="584" y="488" width="34" height="22" rx="2" fill="#eff2f8" stroke="#636d85" stroke-width="0.9" stroke-dasharray="3,2"/>
+  <text x="601" y="502.5" class="fm-note" text-anchor="middle" fill="#636d85" font-weight="400" style="fill:#636d85;font-weight:400">img</text>
+  <rect x="622" y="488" width="34" height="22" rx="2" fill="#eff2f8" stroke="#636d85" stroke-width="0.9" stroke-dasharray="3,2"/>
+  <text x="639" y="502.5" class="fm-note" text-anchor="middle" fill="#636d85" font-weight="400" style="fill:#636d85;font-weight:400">img</text>
+  <text x="602" y="528" class="fm-math" text-anchor="middle" fill="#1c2030" font-size="11" font-weight="400" font-style="italic" font-family="'STIX Two Math', 'Cambria Math', 'Times New Roman', Georgia, serif" style="fill:#1c2030;font-size:11px;font-weight:400;font-style:italic;font-family:'STIX Two Math', 'Cambria Math', 'Times New Roman', Georgia, serif">N<tspan baseline-shift="super" font-size="74%" font-style="normal" font-weight="400">P</tspan> = Σ<tspan baseline-shift="sub" font-size="74%" font-style="normal" font-weight="400">n=−I..I</tspan> N(<tspan font-style="normal" font-weight="700">r</tspan> + nL<tspan font-style="normal" font-weight="700">e&#x0302;</tspan>)</text>
+  <text x="520" y="548" class="fm-note">• Dipole tail <tspan font-family="'STIX Two Math', 'Cambria Math', 'Times New Roman', Georgia, serif" font-style="italic" font-weight="400">r ≥ 40 h<tspan baseline-shift="sub" font-size="74%" font-style="normal" font-weight="400">max</tspan></tspan>; P = N on PBC</text>
+  <text x="520" y="566" class="fm-note">• GPU FP64 cuFFT (FP32+PBC rejected)</text>
+  <text x="520" y="584" class="fm-note">• Rejects <tspan font-family="'JetBrains Mono', 'Fira Code', 'Liberation Mono', 'DejaVu Sans Mono', monospace" font-size="9.8">periodic_airbox_k0</tspan> in FDM</text>
+  <line x1="738" y1="414" x2="738" y2="592" stroke="#aeb5c9" stroke-width="0.85" stroke-linecap="round" stroke-dasharray="4,3.5" opacity="0.55"/>
+  <text x="752" y="424" class="fm-label-bold" fill="#0e746c" style="fill:#0e746c">FEM: <tspan font-family="'JetBrains Mono', 'Fira Code', 'Liberation Mono', 'DejaVu Sans Mono', monospace" font-size="9.8">periodic_airbox_k0</tspan></text>
+  <rect x="786" y="440" width="124" height="68" fill="#eff2f8" stroke="#1857a8" stroke-width="1.2"/>
+  <line x1="786" y1="440" x2="786" y2="508" stroke="#0e746c" stroke-width="3" stroke-linecap="round"/>
+  <line x1="910" y1="440" x2="910" y2="508" stroke="#0e746c" stroke-width="3" stroke-linecap="round"/>
+  <rect x="804" y="462" width="88" height="24" fill="#f5e8df" stroke="#945630" stroke-width="1.4"/>
+  <text x="848" y="478" class="fm-math" text-anchor="middle" fill="#b82e24" font-size="10.6" font-weight="400" font-style="italic" font-family="'STIX Two Math', 'Cambria Math', 'Times New Roman', Georgia, serif" style="fill:#b82e24;font-size:10.6px;font-weight:400;font-style:italic;font-family:'STIX Two Math', 'Cambria Math', 'Times New Roman', Georgia, serif">Ω<tspan baseline-shift="sub" font-size="74%" font-style="normal" font-weight="400">m</tspan> <tspan font-style="normal" font-weight="400">(open z)</tspan></text>
+  <text x="778" y="478" class="fm-math-bold" text-anchor="end" fill="#0e746c" font-size="11.5" font-weight="700" font-style="italic" font-family="'STIX Two Math', 'Cambria Math', 'Times New Roman', Georgia, serif" style="fill:#0e746c;font-size:11.5px;font-weight:700;font-style:italic;font-family:'STIX Two Math', 'Cambria Math', 'Times New Roman', Georgia, serif">P</text>
+  <text x="918" y="478" class="fm-math-bold" fill="#0e746c" font-size="11.5" font-weight="700" font-style="italic" font-family="'STIX Two Math', 'Cambria Math', 'Times New Roman', Georgia, serif" style="fill:#0e746c;font-size:11.5px;font-weight:700;font-style:italic;font-family:'STIX Two Math', 'Cambria Math', 'Times New Roman', Georgia, serif">P</text>
+  <text x="848" y="528" class="fm-math" text-anchor="middle" fill="#1c2030" font-size="11" font-weight="400" font-style="italic" font-family="'STIX Two Math', 'Cambria Math', 'Times New Roman', Georgia, serif" style="fill:#1c2030;font-size:11px;font-weight:400;font-style:italic;font-family:'STIX Two Math', 'Cambria Math', 'Times New Roman', Georgia, serif">A<tspan baseline-shift="sub" font-size="74%" font-style="normal" font-weight="400">p</tspan> = P<tspan baseline-shift="super" font-size="74%" font-style="normal" font-weight="400">T</tspan>A<tspan baseline-shift="sub" font-size="74%" font-style="normal" font-weight="400">open</tspan>P,   b<tspan baseline-shift="sub" font-size="74%" font-style="normal" font-weight="400">p</tspan> = P<tspan baseline-shift="super" font-size="74%" font-style="normal" font-weight="400">T</tspan>b</text>
+  <text x="752" y="548" class="fm-note">• 1D Robin or 2D film (Neumann + pin)</text>
+  <text x="752" y="566" class="fm-note">• GPU <tspan font-family="'JetBrains Mono', 'Fira Code', 'Liberation Mono', 'DejaVu Sans Mono', monospace" font-size="9.8">cuDSS</tspan> / CG+AMG (≥1 open axis)</text>
+  <text x="752" y="584" class="fm-note">• 3D unpinned &amp; P2 prism fail closed</text>
 </svg>
