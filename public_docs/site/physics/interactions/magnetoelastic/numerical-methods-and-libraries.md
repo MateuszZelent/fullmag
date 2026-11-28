@@ -76,6 +76,28 @@ Four distinct stiffness mechanisms govern coupled magnetoelastic integration:
    elements are unbalanced across ranks or if OpenMP thread runtimes (`libgomp` vs. `libiomp5`)
    conflict inside `oneMKL PARDISO`.
 
+{numref}`fig-magnetoelastic-solvers-dispersion` illustrates both the hybridized magnon–phonon
+avoided crossing resolved by FullMag's congruence-scaled coupled eigenpencils and the bidirectional
+time-stepping and four-lane HPC solver library architecture.
+
+```{figure} /_static/diagrams/magnetoelastic-magnon-phonon-dispersion-and-solvers.svg
+:alt: Two-panel diagram of magnetoelastic dispersion and FullMag's four-lane HPC solver stack: Panel (a) plots the exact analytically computed magnon-phonon avoided crossing dispersion omega_pm(k) hybridizing the bare quadratic spin-wave branch omega_m(k) = omega_0 + D_ex k^2 and linear transverse acoustic phonon branch omega_ph(k) = c_t k, marking the magnetoelastic polaron anticrossing gap Delta omega_me at k = k_x alongside the congruence-scaled coupled eigenpencil and YIG G5 verification oracles; Panel (b) diagrams the bidirectional spin-elastic time-stepping loop (explicit leapfrog Verlet and RK4/RK45 with Cubic Hermite multirate vs IMEX-ARK2/HEVI-z and Generalized-alpha) mapped across the four HPC lanes (FDM CPU AVX-512/oneMKL/MPI, FDM GPU CUDA 3.5D SMEM/cuDSS/cuFFT, FEM CPU MFEM/ParMETIS/oneMKL PARDISO/MUMPS/SLEPc, and FEM GPU cuDSS Frozen-Factor PCG/libCEED PA/Hypre BoomerAMG/CudssModalShift).
+:width: 100%
+:name: fig-magnetoelastic-solvers-dispersion
+:figclass: fm-physics-figure
+
+Hybridized magnon–phonon dispersion and FullMag's four-lane magnetoelastic solver architecture.
+Panel (a) shows the exact coupled dispersion branches $\omega_\pm(k)$ formed by hybridization of
+the bare spin wave $\omega_m(k)=\omega_0 + D_{\mathrm{ex}}k^2$ and transverse acoustic phonon
+$\omega_{\mathrm{ph}}(k)=c_t k$, opening the magnetoelastic polaron gap $\Delta\omega_{\mathrm{me}}$
+at the crossing $(k_\times,\omega_\times)$ resolved by congruence-scaled `SLEPc` / `MUMPS` /
+`CudssModalShift` and 1D-$z$ Floquet–Bloch eigenpencils (Benchmark `G5`). Panel (b) maps the
+bidirectional time-stepping loop ($\mathbf{m}^n \leftrightarrow \mathbf{u}^n,\mathbf{v}^n$ via
+explicit leapfrog/RK4 + Cubic Hermite multirate or IMEX-ARK2 / HEVI-$z$ / Chung–Hulbert
+Generalized-$\alpha$) across all four FDM/FEM CPU/GPU execution lanes and their pinned external
+numerical libraries (Chung & Hulbert 1993; Ascher *et al.* 1997; Anderson *et al.* 2021).
+```
+
 ### Positioning relative to existing magnetoelastic simulators
 
 | Simulator / literature reference | Spatial method | Coupling & time integration | Key architectural distinction in FullMag v2 |

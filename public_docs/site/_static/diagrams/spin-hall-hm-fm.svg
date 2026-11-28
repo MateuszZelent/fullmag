@@ -1,70 +1,121 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1400 720" role="img" aria-labelledby="title desc">
-  <title id="title">Spin Hall transport across a heavy-metal ferromagnet interface</title>
-  <desc id="desc">A conventional charge current flows along positive x in the heavy metal. The spin Hall effect creates a spin current flowing along the interface normal, positive z, with spin polarization along positive y, out of the page. Transverse spin absorbed in the ferromagnet produces torque on the magnetization.</desc>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 406" width="100%" role="img" aria-labelledby="title desc">
+  <title id="title">Right-handed spin Hall transport geometry across a heavy-metal/ferromagnet bilayer</title>
+  <desc id="desc">Isometric 3D heavy-metal/ferromagnet bilayer illustrating Fullmag's right-handed spin Hall convention: conventional charge current J_c and E along +x, transverse spin current Q_za along +z across interface normal n_hat with spin polarization +y, opposite-spin deflection -y downward, interfacial spin accumulation mu_s, and absorbed transverse torque T_tr^G on magnetization m.</desc>
   <defs>
-    <marker id="arrow-blue" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="9" markerHeight="9" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#276f91"/></marker>
-    <marker id="arrow-gold" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="9" markerHeight="9" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#c78324"/></marker>
-    <marker id="arrow-red" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="9" markerHeight="9" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#b84c3e"/></marker>
-    <marker id="arrow-gray" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#56616a"/></marker>
     <style>
-      .label { font: 600 23px 'Segoe UI', Arial, sans-serif; fill: #18242b; }
-      .body { font: 20px 'Segoe UI', Arial, sans-serif; fill: #34434b; }
-      .small { font: 17px 'Segoe UI', Arial, sans-serif; fill: #52616a; }
-      .math { font: italic 22px 'Cambria Math', 'Times New Roman', serif; fill: #18242b; }
-      .blue { fill: #276f91; } .gold { fill: #a96713; } .red { fill: #a63e34; }
+      .fm-panel-letter { font: 700 15px 'Inter', 'Helvetica Neue', 'Liberation Sans', Arial, sans-serif; fill: #1c2030; }
+      .fm-panel-title { font: 600 12.5px 'Inter', 'Helvetica Neue', 'Liberation Sans', Arial, sans-serif; fill: #1c2030; }
+      .fm-label { font: 500 11.8px 'Inter', 'Helvetica Neue', 'Liberation Sans', Arial, sans-serif; fill: #1c2030; }
+      .fm-label-bold { font: 600 11.8px 'Inter', 'Helvetica Neue', 'Liberation Sans', Arial, sans-serif; fill: #1c2030; }
+      .fm-sub { font: 400 11px 'Inter', 'Helvetica Neue', 'Liberation Sans', Arial, sans-serif; fill: #3b4058; }
+      .fm-note { font: 400 10.4px 'Inter', 'Helvetica Neue', 'Liberation Sans', Arial, sans-serif; fill: #575e78; }
+      .fm-tick { font: 400 10.4px 'Inter', 'Helvetica Neue', 'Liberation Sans', Arial, sans-serif; fill: #575e78; }
+      .fm-math { font: italic 12.5px 'STIX Two Math', 'Cambria Math', 'Times New Roman', Georgia, serif; fill: #1c2030; }
+      .fm-math-sm { font: italic 11.2px 'STIX Two Math', 'Cambria Math', 'Times New Roman', Georgia, serif; fill: #3b4058; }
+      .fm-math-bold { font: italic 700 13px 'STIX Two Math', 'Cambria Math', 'Times New Roman', Georgia, serif; fill: #1c2030; }
+      .fm-code { font: 500 10.6px 'JetBrains Mono', 'Fira Code', 'Liberation Mono', 'DejaVu Sans Mono', monospace; fill: #3b4058; }
     </style>
+    <marker id="arr-ink" viewBox="0 0 10 10" refX="8.2" refY="5" markerWidth="6.6" markerHeight="6.6" orient="auto-start-reverse"><path d="M 0.5 1.6 L 9.2 5 L 0.5 8.4 L 2.2 5 z" fill="#1c2030"/></marker>
+    <marker id="arr-ink-sm" viewBox="0 0 10 10" refX="8.2" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M 0.5 1.6 L 9.2 5 L 0.5 8.4 L 2.2 5 z" fill="#1c2030"/></marker>
+    <marker id="arr-ink-secondary" viewBox="0 0 10 10" refX="8.2" refY="5" markerWidth="6.6" markerHeight="6.6" orient="auto-start-reverse"><path d="M 0.5 1.6 L 9.2 5 L 0.5 8.4 L 2.2 5 z" fill="#3b4058"/></marker>
+    <marker id="arr-ink-secondary-sm" viewBox="0 0 10 10" refX="8.2" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M 0.5 1.6 L 9.2 5 L 0.5 8.4 L 2.2 5 z" fill="#3b4058"/></marker>
+    <marker id="arr-ink-muted" viewBox="0 0 10 10" refX="8.2" refY="5" markerWidth="6.6" markerHeight="6.6" orient="auto-start-reverse"><path d="M 0.5 1.6 L 9.2 5 L 0.5 8.4 L 2.2 5 z" fill="#575e78"/></marker>
+    <marker id="arr-ink-muted-sm" viewBox="0 0 10 10" refX="8.2" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M 0.5 1.6 L 9.2 5 L 0.5 8.4 L 2.2 5 z" fill="#575e78"/></marker>
+    <marker id="arr-axis" viewBox="0 0 10 10" refX="8.2" refY="5" markerWidth="6.6" markerHeight="6.6" orient="auto-start-reverse"><path d="M 0.5 1.6 L 9.2 5 L 0.5 8.4 L 2.2 5 z" fill="#4a5168"/></marker>
+    <marker id="arr-axis-sm" viewBox="0 0 10 10" refX="8.2" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M 0.5 1.6 L 9.2 5 L 0.5 8.4 L 2.2 5 z" fill="#4a5168"/></marker>
+    <marker id="arr-m" viewBox="0 0 10 10" refX="8.2" refY="5" markerWidth="6.6" markerHeight="6.6" orient="auto-start-reverse"><path d="M 0.5 1.6 L 9.2 5 L 0.5 8.4 L 2.2 5 z" fill="#b82e24"/></marker>
+    <marker id="arr-m-sm" viewBox="0 0 10 10" refX="8.2" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M 0.5 1.6 L 9.2 5 L 0.5 8.4 L 2.2 5 z" fill="#b82e24"/></marker>
+    <marker id="arr-H" viewBox="0 0 10 10" refX="8.2" refY="5" markerWidth="6.6" markerHeight="6.6" orient="auto-start-reverse"><path d="M 0.5 1.6 L 9.2 5 L 0.5 8.4 L 2.2 5 z" fill="#1857a8"/></marker>
+    <marker id="arr-H-sm" viewBox="0 0 10 10" refX="8.2" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M 0.5 1.6 L 9.2 5 L 0.5 8.4 L 2.2 5 z" fill="#1857a8"/></marker>
+    <marker id="arr-flux" viewBox="0 0 10 10" refX="8.2" refY="5" markerWidth="6.6" markerHeight="6.6" orient="auto-start-reverse"><path d="M 0.5 1.6 L 9.2 5 L 0.5 8.4 L 2.2 5 z" fill="#0e746c"/></marker>
+    <marker id="arr-flux-sm" viewBox="0 0 10 10" refX="8.2" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M 0.5 1.6 L 9.2 5 L 0.5 8.4 L 2.2 5 z" fill="#0e746c"/></marker>
+    <marker id="arr-accent-warm" viewBox="0 0 10 10" refX="8.2" refY="5" markerWidth="6.6" markerHeight="6.6" orient="auto-start-reverse"><path d="M 0.5 1.6 L 9.2 5 L 0.5 8.4 L 2.2 5 z" fill="#9c5409"/></marker>
+    <marker id="arr-accent-warm-sm" viewBox="0 0 10 10" refX="8.2" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M 0.5 1.6 L 9.2 5 L 0.5 8.4 L 2.2 5 z" fill="#9c5409"/></marker>
+    <marker id="arr-accent-violet" viewBox="0 0 10 10" refX="8.2" refY="5" markerWidth="6.6" markerHeight="6.6" orient="auto-start-reverse"><path d="M 0.5 1.6 L 9.2 5 L 0.5 8.4 L 2.2 5 z" fill="#6b38b5"/></marker>
+    <marker id="arr-accent-violet-sm" viewBox="0 0 10 10" refX="8.2" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M 0.5 1.6 L 9.2 5 L 0.5 8.4 L 2.2 5 z" fill="#6b38b5"/></marker>
+    <marker id="arr-fm-stroke" viewBox="0 0 10 10" refX="8.2" refY="5" markerWidth="6.6" markerHeight="6.6" orient="auto-start-reverse"><path d="M 0.5 1.6 L 9.2 5 L 0.5 8.4 L 2.2 5 z" fill="#945630"/></marker>
+    <marker id="arr-fm-stroke-sm" viewBox="0 0 10 10" refX="8.2" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M 0.5 1.6 L 9.2 5 L 0.5 8.4 L 2.2 5 z" fill="#945630"/></marker>
+    <marker id="arr-hm-stroke" viewBox="0 0 10 10" refX="8.2" refY="5" markerWidth="6.6" markerHeight="6.6" orient="auto-start-reverse"><path d="M 0.5 1.6 L 9.2 5 L 0.5 8.4 L 2.2 5 z" fill="#316580"/></marker>
+    <marker id="arr-hm-stroke-sm" viewBox="0 0 10 10" refX="8.2" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M 0.5 1.6 L 9.2 5 L 0.5 8.4 L 2.2 5 z" fill="#316580"/></marker>
+    <marker id="arr-spacer-stroke" viewBox="0 0 10 10" refX="8.2" refY="5" markerWidth="6.6" markerHeight="6.6" orient="auto-start-reverse"><path d="M 0.5 1.6 L 9.2 5 L 0.5 8.4 L 2.2 5 z" fill="#636c82"/></marker>
+    <marker id="arr-spacer-stroke-sm" viewBox="0 0 10 10" refX="8.2" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M 0.5 1.6 L 9.2 5 L 0.5 8.4 L 2.2 5 z" fill="#636c82"/></marker>
+    <marker id="arr-air-stroke" viewBox="0 0 10 10" refX="8.2" refY="5" markerWidth="6.6" markerHeight="6.6" orient="auto-start-reverse"><path d="M 0.5 1.6 L 9.2 5 L 0.5 8.4 L 2.2 5 z" fill="#636d85"/></marker>
+    <marker id="arr-air-stroke-sm" viewBox="0 0 10 10" refX="8.2" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M 0.5 1.6 L 9.2 5 L 0.5 8.4 L 2.2 5 z" fill="#636d85"/></marker>
+    <marker id="arr-ok" viewBox="0 0 10 10" refX="8.2" refY="5" markerWidth="6.6" markerHeight="6.6" orient="auto-start-reverse"><path d="M 0.5 1.6 L 9.2 5 L 0.5 8.4 L 2.2 5 z" fill="#1d6f30"/></marker>
+    <marker id="arr-ok-sm" viewBox="0 0 10 10" refX="8.2" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M 0.5 1.6 L 9.2 5 L 0.5 8.4 L 2.2 5 z" fill="#1d6f30"/></marker>
+    <marker id="arr-warn" viewBox="0 0 10 10" refX="8.2" refY="5" markerWidth="6.6" markerHeight="6.6" orient="auto-start-reverse"><path d="M 0.5 1.6 L 9.2 5 L 0.5 8.4 L 2.2 5 z" fill="#965608"/></marker>
+    <marker id="arr-warn-sm" viewBox="0 0 10 10" refX="8.2" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M 0.5 1.6 L 9.2 5 L 0.5 8.4 L 2.2 5 z" fill="#965608"/></marker>
+    <marker id="arr-err" viewBox="0 0 10 10" refX="8.2" refY="5" markerWidth="6.6" markerHeight="6.6" orient="auto-start-reverse"><path d="M 0.5 1.6 L 9.2 5 L 0.5 8.4 L 2.2 5 z" fill="#b51b32"/></marker>
+    <marker id="arr-err-sm" viewBox="0 0 10 10" refX="8.2" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M 0.5 1.6 L 9.2 5 L 0.5 8.4 L 2.2 5 z" fill="#b51b32"/></marker>
+    <marker id="arr-H-lg" viewBox="0 0 10 10" refX="8.2" refY="5" markerWidth="8.2" markerHeight="8.2" orient="auto-start-reverse"><path d="M 0.5 1.6 L 9.2 5 L 0.5 8.4 L 2.2 5 z" fill="#1857a8"/></marker>
+    <marker id="arr-accent-warm-lg" viewBox="0 0 10 10" refX="8.2" refY="5" markerWidth="8.2" markerHeight="8.2" orient="auto-start-reverse"><path d="M 0.5 1.6 L 9.2 5 L 0.5 8.4 L 2.2 5 z" fill="#9c5409"/></marker>
+    <marker id="arr-m-lg" viewBox="0 0 10 10" refX="8.2" refY="5" markerWidth="8.2" markerHeight="8.2" orient="auto-start-reverse"><path d="M 0.5 1.6 L 9.2 5 L 0.5 8.4 L 2.2 5 z" fill="#b82e24"/></marker>
+    <pattern id="hatch-warm" width="7" height="7" patternTransform="rotate(45 0 0)" patternUnits="userSpaceOnUse"><line x1="0" y1="0" x2="0" y2="7" stroke="#9c5409" stroke-width="1.1" stroke-opacity="0.24"/></pattern>
+    <pattern id="hatch-cool" width="7" height="7" patternTransform="rotate(-45 0 0)" patternUnits="userSpaceOnUse"><line x1="0" y1="0" x2="0" y2="7" stroke="#1857a8" stroke-width="1.1" stroke-opacity="0.22"/></pattern>
+    <pattern id="hatch-muted" width="7" height="7" patternTransform="rotate(-45 0 0)" patternUnits="userSpaceOnUse"><line x1="0" y1="0" x2="0" y2="7" stroke="#636d85" stroke-width="1.1" stroke-opacity="0.24"/></pattern>
+    <pattern id="hatch-fm" width="7" height="7" patternTransform="rotate(45 0 0)" patternUnits="userSpaceOnUse"><line x1="0" y1="0" x2="0" y2="7" stroke="#945630" stroke-width="1.1" stroke-opacity="0.22"/></pattern>
+    <pattern id="hatch-flux" width="7" height="7" patternTransform="rotate(45 0 0)" patternUnits="userSpaceOnUse"><line x1="0" y1="0" x2="0" y2="7" stroke="#0e746c" stroke-width="1.1" stroke-opacity="0.22"/></pattern>
+    <radialGradient id="sphere-grad" cx="36%" cy="30%" r="70%"><stop offset="0%" stop-color="#ffffff" stop-opacity="0.82"/><stop offset="62%" stop-color="#f0f3fa" stop-opacity="0.58"/><stop offset="100%" stop-color="#dde3f0" stop-opacity="0.45"/></radialGradient>
   </defs>
-  <rect width="1400" height="720" fill="#fffefb"/>
-
-  <rect x="75" y="70" width="850" height="245" rx="4" fill="#f7e7d7" stroke="#c8855d" stroke-width="2"/>
-  <rect x="75" y="340" width="850" height="270" rx="4" fill="#e5f0f4" stroke="#4f879d" stroke-width="2"/>
-  <line x1="75" y1="327.5" x2="925" y2="327.5" stroke="#26343b" stroke-width="2.5"/>
-  <text x="105" y="112" class="label">ferromagnet (FM)</text>
-  <text x="105" y="382" class="label">heavy metal (HM)</text>
-  <text x="90" y="321" class="small">HM/FM interface</text>
-
-  <line x1="175" y1="505" x2="465" y2="505" stroke="#276f91" stroke-width="6" stroke-linecap="round" marker-end="url(#arrow-blue)"/>
-  <text x="220" y="474" class="math blue">J<tspan baseline-shift="sub" font-size="15">c</tspan>, E = &#x2212;&#x2207;V</text>
-  <text x="220" y="545" class="small">conventional charge current, +x</text>
-
-  <circle cx="700" cy="505" r="24" fill="#fffefb" stroke="#276f91" stroke-width="3"/>
-  <circle cx="700" cy="505" r="6" fill="#276f91"/>
-  <text x="741" y="499" class="math blue">&#x03C3;&#x0302; &#x221D; n&#x0302; &#x00D7; E&#x0302; = +y&#x0302;</text>
-  <text x="741" y="529" class="small">spin polarization, out of page</text>
-
-  <line x1="605" y1="535" x2="605" y2="205" stroke="#c78324" stroke-width="7" stroke-linecap="round" marker-end="url(#arrow-gold)"/>
-  <text x="515" y="460" class="math gold">Q<tspan baseline-shift="sub" font-size="15">ia</tspan></text>
-  <text x="478" y="488" class="small">spin flow, +z</text>
-
-  <line x1="530" y1="390" x2="530" y2="280" stroke="#56616a" stroke-width="3" marker-end="url(#arrow-gray)"/>
-  <text x="470" y="415" class="math">n&#x0302;</text>
-  <text x="495" y="415" class="small">HM &#x2192; FM</text>
-
-  <circle cx="653" cy="327.5" r="7" fill="#c78324"/><circle cx="681" cy="327.5" r="7" fill="#c78324"/>
-  <circle cx="709" cy="327.5" r="7" fill="#c78324"/><circle cx="737" cy="327.5" r="7" fill="#c78324"/>
-  <text x="760" y="335" class="small">spin accumulation &#x03BC;<tspan baseline-shift="sub" font-size="13">s</tspan></text>
-
-  <line x1="700" y1="225" x2="840" y2="145" stroke="#b84c3e" stroke-width="7" stroke-linecap="round" marker-end="url(#arrow-red)"/>
-  <text x="847" y="146" class="math red">m</text>
-  <path d="M 655 277 C 690 215, 770 205, 800 255" fill="none" stroke="#c78324" stroke-width="4" marker-end="url(#arrow-gold)"/>
-  <text x="665" y="285" class="body">absorbed transverse spin</text>
-  <text x="690" y="312" class="math gold">&#x2192; T<tspan baseline-shift="sub" font-size="15">tr</tspan><tspan baseline-shift="super" font-size="15">G</tspan></text>
-
-  <line x1="985" y1="70" x2="985" y2="610" stroke="#d6d4cd" stroke-width="2"/>
-  <text x="1030" y="110" class="label">Geometry in this sketch</text>
-  <circle cx="1090" cy="220" r="18" fill="#fffefb" stroke="#276f91" stroke-width="2.5"/><circle cx="1090" cy="220" r="5" fill="#276f91"/>
-  <line x1="1090" y1="220" x2="1215" y2="220" stroke="#276f91" stroke-width="3" marker-end="url(#arrow-blue)"/>
-  <line x1="1090" y1="220" x2="1090" y2="145" stroke="#c78324" stroke-width="3" marker-end="url(#arrow-gold)"/>
-  <text x="1228" y="227" class="math blue">+x</text><text x="1068" y="138" class="math gold">+z</text><text x="1028" y="227" class="math blue">+y</text>
-
-  <text x="1030" y="306" class="body">charge current and E</text><text x="1280" y="306" class="math blue">+x</text>
-  <text x="1030" y="344" class="body">spin-flow direction</text><text x="1280" y="344" class="math gold">+z</text>
-  <text x="1030" y="382" class="body">spin polarization</text><text x="1280" y="382" class="math blue">+y</text>
-
-  <line x1="1030" y1="425" x2="1330" y2="425" stroke="#d6d4cd" stroke-width="2"/>
-  <text x="1030" y="470" class="math">Q<tspan baseline-shift="sub" font-size="15">ia</tspan></text><text x="1090" y="470" class="body">spin-current tensor</text>
-  <text x="1030" y="510" class="math">i</text><text x="1060" y="510" class="body">flow direction</text>
-  <text x="1030" y="548" class="math">a</text><text x="1060" y="548" class="body">spin component</text>
-  <text x="1030" y="598" class="small">e &gt; 0; J<tspan baseline-shift="sub" font-size="12">c</tspan> is conventional current</text>
-  <text x="75" y="676" class="small">Schematic, not to scale. Arrow directions follow the sign convention stated above.</text>
+  <polygon points="54,216 136,166 624,166 542,216" fill="#eef5f9" stroke="#316580" stroke-width="1.25" stroke-linejoin="round"/>
+  <polygon points="542,216 624,166 624,294 542,344" fill="#cddfe9" stroke="#316580" stroke-width="1.25" stroke-linejoin="round"/>
+  <rect x="54" y="216" width="488" height="128" fill="#e2eef4" stroke="#316580" stroke-width="1.25"/>
+  <polygon points="54,104 136,54 624,54 542,104" fill="#faf1ea" stroke="#945630" stroke-width="1.25" stroke-linejoin="round"/>
+  <polygon points="542,104 624,54 624,166 542,216" fill="#e6d2c3" stroke="#945630" stroke-width="1.25" stroke-linejoin="round"/>
+  <rect x="54" y="104" width="488" height="112" fill="#f5e8df" stroke="#945630" stroke-width="1.25"/>
+  <line x1="54" y1="216" x2="542" y2="216" stroke="#6b38b5" stroke-width="2.1" stroke-linecap="round"/>
+  <line x1="542" y1="216" x2="624" y2="166" stroke="#6b38b5" stroke-width="1.8" stroke-linecap="round"/>
+  <text x="70" y="130" class="fm-label-bold" fill="#945630" font-size="12.4" style="fill:#945630;font-size:12.4px">Ferromagnet (FM)</text>
+  <text x="70" y="244" class="fm-label-bold" fill="#316580" font-size="12.4" style="fill:#316580;font-size:12.4px">Heavy metal (HM)</text>
+  <text x="70" y="208" class="fm-note" fill="#6b38b5" font-weight="600" style="fill:#6b38b5;font-weight:600">HM / FM interface</text>
+  <line x1="98" y1="294" x2="260" y2="294" stroke="#1857a8" stroke-width="3.2" stroke-linecap="round" marker-end="url(#arr-H-lg)"/>
+  <text x="179" y="280" class="fm-math-bold" text-anchor="middle" fill="#1857a8" font-size="12.6" font-weight="700" font-style="italic" font-family="'STIX Two Math', 'Cambria Math', 'Times New Roman', Georgia, serif" style="fill:#1857a8;font-size:12.6px;font-weight:700;font-style:italic;font-family:'STIX Two Math', 'Cambria Math', 'Times New Roman', Georgia, serif"><tspan font-style="normal" font-weight="700">J</tspan><tspan baseline-shift="sub" font-size="74%" font-style="normal" font-weight="400">c</tspan>,  <tspan font-style="normal" font-weight="700">E</tspan> = −∇ V</text>
+  <text x="179" y="314" class="fm-note" text-anchor="middle" fill="#1857a8" style="fill:#1857a8">conventional charge current (+x)</text>
+  <path d="M 274 292 Q 322 288 338 232" fill="none" stroke="#9c5409" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arr-accent-warm-sm)"/>
+  <path d="M 274 298 Q 318 304 332 332" fill="none" stroke="#9c5409" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="4,3" opacity="0.8" marker-end="url(#arr-accent-warm-sm)"/>
+  <line x1="312" y1="266" x2="334" y2="252.5" stroke="#6b38b5" stroke-width="2.2" stroke-linecap="round" marker-end="url(#arr-accent-violet-sm)"/>
+  <text x="340" y="252" class="fm-math-bold" fill="#6b38b5" font-size="11" font-weight="700" font-style="italic" font-family="'STIX Two Math', 'Cambria Math', 'Times New Roman', Georgia, serif" style="fill:#6b38b5;font-size:11px;font-weight:700;font-style:italic;font-family:'STIX Two Math', 'Cambria Math', 'Times New Roman', Georgia, serif">+<tspan font-style="normal" font-weight="700">y&#x0302;</tspan></text>
+  <line x1="316" y1="320" x2="294" y2="333.5" stroke="#6b38b5" stroke-width="1.8" stroke-linecap="round" opacity="0.85" marker-end="url(#arr-accent-violet-sm)"/>
+  <text x="344" y="328" class="fm-math" fill="#6b38b5" font-size="10.6" font-weight="400" font-style="italic" font-family="'STIX Two Math', 'Cambria Math', 'Times New Roman', Georgia, serif" style="fill:#6b38b5;font-size:10.6px;font-weight:400;font-style:italic;font-family:'STIX Two Math', 'Cambria Math', 'Times New Roman', Georgia, serif">−<tspan font-style="normal" font-weight="700">y&#x0302;</tspan></text>
+  <line x1="386" y1="320" x2="386" y2="148" stroke="#9c5409" stroke-width="3.4" stroke-linecap="round" marker-end="url(#arr-accent-warm-lg)"/>
+  <text x="374" y="288" class="fm-math-bold" text-anchor="end" fill="#9c5409" font-size="13" font-weight="700" font-style="italic" font-family="'STIX Two Math', 'Cambria Math', 'Times New Roman', Georgia, serif" style="fill:#9c5409;font-size:13px;font-weight:700;font-style:italic;font-family:'STIX Two Math', 'Cambria Math', 'Times New Roman', Georgia, serif">Q<tspan baseline-shift="sub" font-size="74%" font-style="normal" font-weight="400">za</tspan></text>
+  <text x="374" y="304" class="fm-note" text-anchor="end" fill="#9c5409" style="fill:#9c5409">spin flow (+z)</text>
+  <line x1="290" y1="240" x2="290" y2="174" stroke="#4a5168" stroke-width="2" stroke-linecap="round" marker-end="url(#arr-axis)"/>
+  <text x="280" y="188" class="fm-math-bold" text-anchor="end" fill="#1c2030" font-size="12" font-weight="700" font-style="italic" font-family="'STIX Two Math', 'Cambria Math', 'Times New Roman', Georgia, serif" style="fill:#1c2030;font-size:12px;font-weight:700;font-style:italic;font-family:'STIX Two Math', 'Cambria Math', 'Times New Roman', Georgia, serif"><tspan font-style="normal" font-weight="700">n&#x0302;</tspan></text>
+  <text x="280" y="203" class="fm-tick" text-anchor="end" fill="#3b4058" style="fill:#3b4058">HM → FM</text>
+  <circle cx="414" cy="216" r="3.8" fill="#6b38b5" stroke="#f7f8fb" stroke-width="0.9"/>
+  <line x1="414" y1="216" x2="427" y2="208" stroke="#6b38b5" stroke-width="1.6" stroke-linecap="round" marker-end="url(#arr-accent-violet-sm)"/>
+  <circle cx="438" cy="216" r="3.8" fill="#6b38b5" stroke="#f7f8fb" stroke-width="0.9"/>
+  <line x1="438" y1="216" x2="451" y2="208" stroke="#6b38b5" stroke-width="1.6" stroke-linecap="round" marker-end="url(#arr-accent-violet-sm)"/>
+  <circle cx="462" cy="216" r="3.8" fill="#6b38b5" stroke="#f7f8fb" stroke-width="0.9"/>
+  <line x1="462" y1="216" x2="475" y2="208" stroke="#6b38b5" stroke-width="1.6" stroke-linecap="round" marker-end="url(#arr-accent-violet-sm)"/>
+  <circle cx="486" cy="216" r="3.8" fill="#6b38b5" stroke="#f7f8fb" stroke-width="0.9"/>
+  <line x1="486" y1="216" x2="499" y2="208" stroke="#6b38b5" stroke-width="1.6" stroke-linecap="round" marker-end="url(#arr-accent-violet-sm)"/>
+  <text x="450" y="238" class="fm-math" text-anchor="middle" fill="#6b38b5" font-size="11.4" font-weight="400" font-style="italic" font-family="'STIX Two Math', 'Cambria Math', 'Times New Roman', Georgia, serif" style="fill:#6b38b5;font-size:11.4px;font-weight:400;font-style:italic;font-family:'STIX Two Math', 'Cambria Math', 'Times New Roman', Georgia, serif"><tspan font-style="normal" font-weight="700">μ</tspan><tspan baseline-shift="sub" font-size="74%" font-style="normal" font-weight="400">s</tspan>  (<tspan font-style="normal" font-weight="700">σ&#x0302;</tspan> = +<tspan font-style="normal" font-weight="700">y&#x0302;</tspan>)</text>
+  <line x1="422" y1="180" x2="482" y2="126" stroke="#b82e24" stroke-width="3.4" stroke-linecap="round" marker-end="url(#arr-m-lg)"/>
+  <text x="490" y="130" class="fm-math-bold" fill="#b82e24" font-size="13.4" font-weight="700" font-style="italic" font-family="'STIX Two Math', 'Cambria Math', 'Times New Roman', Georgia, serif" style="fill:#b82e24;font-size:13.4px;font-weight:700;font-style:italic;font-family:'STIX Two Math', 'Cambria Math', 'Times New Roman', Georgia, serif"><tspan font-style="normal" font-weight="700">m</tspan></text>
+  <path d="M 404 160 Q 428 126 456 138" fill="none" stroke="#9c5409" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arr-accent-warm)"/>
+  <text x="490" y="176" class="fm-note" text-anchor="middle" fill="#9c5409" font-weight="600" style="fill:#9c5409;font-weight:600">absorbed ⊥ spin</text>
+  <text x="490" y="192" class="fm-math-bold" text-anchor="middle" fill="#9c5409" font-size="12" font-weight="700" font-style="italic" font-family="'STIX Two Math', 'Cambria Math', 'Times New Roman', Georgia, serif" style="fill:#9c5409;font-size:12px;font-weight:700;font-style:italic;font-family:'STIX Two Math', 'Cambria Math', 'Times New Roman', Georgia, serif">→  <tspan font-style="normal" font-weight="700">T</tspan><tspan baseline-shift="sub" font-size="74%" font-style="normal" font-weight="400">tr</tspan><tspan baseline-shift="super" font-size="74%" font-style="normal" font-weight="400">G</tspan></text>
+  <line x1="668" y1="24" x2="668" y2="384" stroke="#aeb5c9" stroke-width="0.85" stroke-linecap="round" opacity="0.55"/>
+  <text x="692" y="40" class="fm-panel-title" fill="#1c2030" font-size="12.6" style="fill:#1c2030;font-size:12.6px">Fullmag convention</text>
+  <line x1="744" y1="140" x2="822" y2="140" stroke="#1857a8" stroke-width="2.2" stroke-linecap="round" marker-end="url(#arr-H)"/>
+  <text x="830" y="144" class="fm-math-bold" fill="#1857a8" font-size="12" font-weight="700" font-style="italic" font-family="'STIX Two Math', 'Cambria Math', 'Times New Roman', Georgia, serif" style="fill:#1857a8;font-size:12px;font-weight:700;font-style:italic;font-family:'STIX Two Math', 'Cambria Math', 'Times New Roman', Georgia, serif">+<tspan font-style="normal" font-weight="700">x&#x0302;</tspan></text>
+  <line x1="744" y1="140" x2="744" y2="82" stroke="#9c5409" stroke-width="2.2" stroke-linecap="round" marker-end="url(#arr-accent-warm)"/>
+  <text x="744" y="74" class="fm-math-bold" text-anchor="middle" fill="#9c5409" font-size="12" font-weight="700" font-style="italic" font-family="'STIX Two Math', 'Cambria Math', 'Times New Roman', Georgia, serif" style="fill:#9c5409;font-size:12px;font-weight:700;font-style:italic;font-family:'STIX Two Math', 'Cambria Math', 'Times New Roman', Georgia, serif">+<tspan font-style="normal" font-weight="700">z&#x0302;</tspan></text>
+  <line x1="744" y1="140" x2="796" y2="108" stroke="#6b38b5" stroke-width="2.2" stroke-linecap="round" marker-end="url(#arr-accent-violet)"/>
+  <text x="802" y="106" class="fm-math-bold" fill="#6b38b5" font-size="12" font-weight="700" font-style="italic" font-family="'STIX Two Math', 'Cambria Math', 'Times New Roman', Georgia, serif" style="fill:#6b38b5;font-size:12px;font-weight:700;font-style:italic;font-family:'STIX Two Math', 'Cambria Math', 'Times New Roman', Georgia, serif">+<tspan font-style="normal" font-weight="700">y&#x0302;</tspan></text>
+  <circle cx="744" cy="140" r="2.8" fill="#1c2030"/>
+  <text x="692" y="172" class="fm-sub" fill="#3b4058" style="fill:#3b4058">Charge current, <tspan font-family="'STIX Two Math', 'Cambria Math', 'Times New Roman', Georgia, serif" font-style="italic" font-weight="400"><tspan font-style="normal" font-weight="700">E</tspan></tspan></text>
+  <text x="934" y="172" class="fm-math-bold" text-anchor="end" fill="#1857a8" font-size="12" font-weight="700" font-style="italic" font-family="'STIX Two Math', 'Cambria Math', 'Times New Roman', Georgia, serif" style="fill:#1857a8;font-size:12px;font-weight:700;font-style:italic;font-family:'STIX Two Math', 'Cambria Math', 'Times New Roman', Georgia, serif">+<tspan font-style="normal" font-weight="700">x&#x0302;</tspan></text>
+  <text x="692" y="196" class="fm-sub" fill="#3b4058" style="fill:#3b4058">Normal <tspan font-family="'STIX Two Math', 'Cambria Math', 'Times New Roman', Georgia, serif" font-style="italic" font-weight="400"><tspan font-style="normal" font-weight="700">n&#x0302;</tspan></tspan>, spin flow</text>
+  <text x="934" y="196" class="fm-math-bold" text-anchor="end" fill="#9c5409" font-size="12" font-weight="700" font-style="italic" font-family="'STIX Two Math', 'Cambria Math', 'Times New Roman', Georgia, serif" style="fill:#9c5409;font-size:12px;font-weight:700;font-style:italic;font-family:'STIX Two Math', 'Cambria Math', 'Times New Roman', Georgia, serif">+<tspan font-style="normal" font-weight="700">z&#x0302;</tspan></text>
+  <text x="692" y="220" class="fm-sub" fill="#3b4058" style="fill:#3b4058">Spin polarization <tspan font-family="'STIX Two Math', 'Cambria Math', 'Times New Roman', Georgia, serif" font-style="italic" font-weight="400"><tspan font-style="normal" font-weight="700">σ&#x0302;</tspan></tspan></text>
+  <text x="934" y="220" class="fm-math-bold" text-anchor="end" fill="#6b38b5" font-size="12" font-weight="700" font-style="italic" font-family="'STIX Two Math', 'Cambria Math', 'Times New Roman', Georgia, serif" style="fill:#6b38b5;font-size:12px;font-weight:700;font-style:italic;font-family:'STIX Two Math', 'Cambria Math', 'Times New Roman', Georgia, serif">+<tspan font-style="normal" font-weight="700">y&#x0302;</tspan></text>
+  <line x1="692" y1="240" x2="938" y2="240" stroke="#aeb5c9" stroke-width="0.85" stroke-linecap="round" opacity="0.55"/>
+  <text x="692" y="264" class="fm-label-bold" fill="#1c2030" font-size="11.4" style="fill:#1c2030;font-size:11.4px">Rank-2 spin-current tensor</text>
+  <text x="692" y="286" class="fm-math" fill="#3b4058" font-size="11" font-weight="400" font-style="italic" font-family="'STIX Two Math', 'Cambria Math', 'Times New Roman', Georgia, serif" style="fill:#3b4058;font-size:11px;font-weight:400;font-style:italic;font-family:'STIX Two Math', 'Cambria Math', 'Times New Roman', Georgia, serif">Q<tspan baseline-shift="sub" font-size="74%" font-style="normal" font-weight="400">ia</tspan>  :  <tspan font-style="normal" font-weight="400">first  index</tspan>  i  (<tspan font-style="normal" font-weight="400">flow</tspan>),  a  (<tspan font-style="normal" font-weight="400">spin</tspan>)</text>
+  <text x="692" y="310" class="fm-math" fill="#1c2030" font-size="11.8" font-weight="400" font-style="italic" font-family="'STIX Two Math', 'Cambria Math', 'Times New Roman', Georgia, serif" style="fill:#1c2030;font-size:11.8px;font-weight:400;font-style:italic;font-family:'STIX Two Math', 'Cambria Math', 'Times New Roman', Georgia, serif">J<tspan baseline-shift="super" font-size="74%" font-style="normal" font-weight="400">s</tspan><tspan baseline-shift="sub" font-size="74%" font-style="normal" font-weight="400">ia</tspan> = (ℏ / 2e) Q<tspan baseline-shift="sub" font-size="74%" font-style="normal" font-weight="400">ia</tspan></text>
+  <text x="692" y="336" class="fm-math-bold" fill="#9c5409" font-size="12" font-weight="700" font-style="italic" font-family="'STIX Two Math', 'Cambria Math', 'Times New Roman', Georgia, serif" style="fill:#9c5409;font-size:12px;font-weight:700;font-style:italic;font-family:'STIX Two Math', 'Cambria Math', 'Times New Roman', Georgia, serif"><tspan font-style="normal" font-weight="700">Q</tspan><tspan baseline-shift="sub" font-size="74%" font-style="normal" font-weight="400">n</tspan><tspan baseline-shift="super" font-size="74%" font-style="normal" font-weight="400">SHE</tspan> = θ<tspan baseline-shift="sub" font-size="74%" font-style="normal" font-weight="400">SH</tspan> σ (<tspan font-style="normal" font-weight="700">n&#x0302;</tspan>×<tspan font-style="normal" font-weight="700">E</tspan>)</text>
+  <text x="692" y="366" class="fm-note" fill="#575e78" style="fill:#575e78"><tspan font-family="'STIX Two Math', 'Cambria Math', 'Times New Roman', Georgia, serif" font-style="italic" font-weight="400">e &gt; 0</tspan> · conventional <tspan font-family="'STIX Two Math', 'Cambria Math', 'Times New Roman', Georgia, serif" font-style="italic" font-weight="400"><tspan font-style="normal" font-weight="700">J</tspan><tspan baseline-shift="sub" font-size="74%" font-style="normal" font-weight="400">c</tspan></tspan> · right-handed <tspan font-family="'STIX Two Math', 'Cambria Math', 'Times New Roman', Georgia, serif" font-style="italic" font-weight="400">(<tspan font-style="normal" font-weight="700">x&#x0302;</tspan>,<tspan font-style="normal" font-weight="700">y&#x0302;</tspan>,<tspan font-style="normal" font-weight="700">z&#x0302;</tspan>)</tspan></text>
 </svg>
