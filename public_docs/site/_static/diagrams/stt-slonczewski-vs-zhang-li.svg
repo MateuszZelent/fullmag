@@ -1,152 +1,180 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1360 740" width="1360" height="740" role="img" aria-labelledby="title desc">
-  <title id="title">Slonczewski CPP/MTJ torque vs Zhang-Li CIP gradient torque in Fullmag</title>
-  <desc id="desc">Panel (a) shows SlonczewskiSTT CPP/MTJ trilayer geometry, angular asymmetry parameter Lambda, and computed angular efficiency curves epsilon_DL(theta). Panel (b) shows ZhangLiSTT CIP domain-wall translation, separating conventional current J_c from electron drift, spin-drift velocity u, and adiabatic vs non-adiabatic torques. The bottom strip states the single Gilbert-to-explicit RHS conversion invariant.</desc>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 452" width="100%" role="img" aria-labelledby="title desc">
+  <title id="title">Slonczewski CPP/MTJ torque versus Zhang-Li CIP domain-wall torque in Fullmag</title>
+  <desc id="desc">Two-panel publication diagram comparing (a) Slonczewski CPP/MTJ trilayer geometry and computed angular asymmetry epsilon_DL(theta) at P=0.40 for Lambda in {1.0, 1.5, 2.0}, and (b) Zhang-Li CIP domain-wall spin profile m(x) with conventional current J_c, electron drift, adiabatic drag, and non-adiabatic canting, plus the single Gilbert-to-explicit conversion invariant.</desc>
   <defs>
-    <marker id="arrow-m" viewBox="0 0 10 10" refX="8.4" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0.5 1.2 L 9.2 5 L 0.5 8.8 z" fill="#b8392b"/></marker>
-    <marker id="arrow-h" viewBox="0 0 10 10" refX="8.4" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0.5 1.2 L 9.2 5 L 0.5 8.8 z" fill="#1d5fa7"/></marker>
-    <marker id="arrow-dl" viewBox="0 0 10 10" refX="8.4" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0.5 1.2 L 9.2 5 L 0.5 8.8 z" fill="#b86b11"/></marker>
-    <marker id="arrow-fl" viewBox="0 0 10 10" refX="8.4" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0.5 1.2 L 9.2 5 L 0.5 8.8 z" fill="#147d75"/></marker>
-    <marker id="arrow-sigma" viewBox="0 0 10 10" refX="8.4" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0.5 1.2 L 9.2 5 L 0.5 8.8 z" fill="#6f3cc4"/></marker>
-    <marker id="arrow-jc" viewBox="0 0 10 10" refX="8.4" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0.5 1.2 L 9.2 5 L 0.5 8.8 z" fill="#246b8e"/></marker>
-    <marker id="arrow-slate" viewBox="0 0 10 10" refX="8.4" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0.5 1.2 L 9.2 5 L 0.5 8.8 z" fill="#475569"/></marker>
-    <marker id="arrow-dark" viewBox="0 0 10 10" refX="8.4" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0.5 1.2 L 9.2 5 L 0.5 8.8 z" fill="#18202c"/></marker>
-    <marker id="arrow-warn" viewBox="0 0 10 10" refX="8.4" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0.5 1.2 L 9.2 5 L 0.5 8.8 z" fill="#d97706"/></marker>
-    <marker id="arrow-green" viewBox="0 0 10 10" refX="8.4" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0.5 1.2 L 9.2 5 L 0.5 8.8 z" fill="#059669"/></marker>
     <style>
-      .fig-title { font: 700 18.5px 'Segoe UI', 'Inter', Arial, sans-serif; fill: #18202c; }
-      .fig-subtitle { font: 400 13px 'Segoe UI', 'Inter', Arial, sans-serif; fill: #5a687a; }
-      .panel-title { font: 700 15px 'Segoe UI', 'Inter', Arial, sans-serif; fill: #18202c; }
-      .badge-text { font: 700 13px 'Segoe UI', 'Inter', Arial, sans-serif; fill: #ffffff; }
-      .card-title { font: 700 13.5px 'Segoe UI', 'Inter', Arial, sans-serif; fill: #18202c; }
-      .body { font: 400 12.5px 'Segoe UI', 'Inter', Arial, sans-serif; fill: #334155; }
-      .body-bold { font: 600 12.5px 'Segoe UI', 'Inter', Arial, sans-serif; fill: #18202c; }
-      .small { font: 400 11.3px 'Segoe UI', 'Inter', Arial, sans-serif; fill: #5a687a; }
-      .small-bold { font: 600 11.3px 'Segoe UI', 'Inter', Arial, sans-serif; fill: #334155; }
-      .mono { font: 600 11.5px 'JetBrains Mono', 'Cascadia Code', Consolas, monospace; fill: #18202c; }
-      .mono-sm { font: 500 10.8px 'JetBrains Mono', 'Cascadia Code', Consolas, monospace; fill: #334155; }
-      .math { font: 400 14.5px 'Cambria Math', 'STIX Two Text', Georgia, serif; fill: #18202c; }
-      .math-sm { font: 400 12.8px 'Cambria Math', 'STIX Two Text', Georgia, serif; fill: #18202c; }
-      .math-it { font: italic 14.5px 'Cambria Math', 'STIX Two Text', Georgia, serif; fill: #18202c; }
-      .tick { font: 400 11px 'Segoe UI', 'Inter', Arial, sans-serif; fill: #5a687a; }
-      .axis-lbl { font: 600 12px 'Segoe UI', 'Inter', Arial, sans-serif; fill: #334155; }
+      .fm-panel-letter { font: 700 15px 'Inter', 'Helvetica Neue', 'Liberation Sans', Arial, sans-serif; fill: #1c2030; }
+      .fm-panel-title { font: 600 12.5px 'Inter', 'Helvetica Neue', 'Liberation Sans', Arial, sans-serif; fill: #1c2030; }
+      .fm-label { font: 500 11.8px 'Inter', 'Helvetica Neue', 'Liberation Sans', Arial, sans-serif; fill: #1c2030; }
+      .fm-label-bold { font: 600 11.8px 'Inter', 'Helvetica Neue', 'Liberation Sans', Arial, sans-serif; fill: #1c2030; }
+      .fm-sub { font: 400 11px 'Inter', 'Helvetica Neue', 'Liberation Sans', Arial, sans-serif; fill: #3b4058; }
+      .fm-note { font: 400 10.4px 'Inter', 'Helvetica Neue', 'Liberation Sans', Arial, sans-serif; fill: #575e78; }
+      .fm-tick { font: 400 10.4px 'Inter', 'Helvetica Neue', 'Liberation Sans', Arial, sans-serif; fill: #575e78; }
+      .fm-math { font: italic 12.5px 'STIX Two Math', 'Cambria Math', 'Times New Roman', Georgia, serif; fill: #1c2030; }
+      .fm-math-sm { font: italic 11.2px 'STIX Two Math', 'Cambria Math', 'Times New Roman', Georgia, serif; fill: #3b4058; }
+      .fm-math-bold { font: italic 700 13px 'STIX Two Math', 'Cambria Math', 'Times New Roman', Georgia, serif; fill: #1c2030; }
+      .fm-code { font: 500 10.6px 'JetBrains Mono', 'Fira Code', 'Liberation Mono', 'DejaVu Sans Mono', monospace; fill: #3b4058; }
     </style>
-    
+    <marker id="arr-ink" viewBox="0 0 10 10" refX="8.2" refY="5" markerWidth="6.6" markerHeight="6.6" orient="auto-start-reverse"><path d="M 0.5 1.6 L 9.2 5 L 0.5 8.4 L 2.2 5 z" fill="#1c2030"/></marker>
+    <marker id="arr-ink-sm" viewBox="0 0 10 10" refX="8.2" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M 0.5 1.6 L 9.2 5 L 0.5 8.4 L 2.2 5 z" fill="#1c2030"/></marker>
+    <marker id="arr-ink-secondary" viewBox="0 0 10 10" refX="8.2" refY="5" markerWidth="6.6" markerHeight="6.6" orient="auto-start-reverse"><path d="M 0.5 1.6 L 9.2 5 L 0.5 8.4 L 2.2 5 z" fill="#3b4058"/></marker>
+    <marker id="arr-ink-secondary-sm" viewBox="0 0 10 10" refX="8.2" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M 0.5 1.6 L 9.2 5 L 0.5 8.4 L 2.2 5 z" fill="#3b4058"/></marker>
+    <marker id="arr-ink-muted" viewBox="0 0 10 10" refX="8.2" refY="5" markerWidth="6.6" markerHeight="6.6" orient="auto-start-reverse"><path d="M 0.5 1.6 L 9.2 5 L 0.5 8.4 L 2.2 5 z" fill="#575e78"/></marker>
+    <marker id="arr-ink-muted-sm" viewBox="0 0 10 10" refX="8.2" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M 0.5 1.6 L 9.2 5 L 0.5 8.4 L 2.2 5 z" fill="#575e78"/></marker>
+    <marker id="arr-axis" viewBox="0 0 10 10" refX="8.2" refY="5" markerWidth="6.6" markerHeight="6.6" orient="auto-start-reverse"><path d="M 0.5 1.6 L 9.2 5 L 0.5 8.4 L 2.2 5 z" fill="#4a5168"/></marker>
+    <marker id="arr-axis-sm" viewBox="0 0 10 10" refX="8.2" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M 0.5 1.6 L 9.2 5 L 0.5 8.4 L 2.2 5 z" fill="#4a5168"/></marker>
+    <marker id="arr-m" viewBox="0 0 10 10" refX="8.2" refY="5" markerWidth="6.6" markerHeight="6.6" orient="auto-start-reverse"><path d="M 0.5 1.6 L 9.2 5 L 0.5 8.4 L 2.2 5 z" fill="#b82e24"/></marker>
+    <marker id="arr-m-sm" viewBox="0 0 10 10" refX="8.2" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M 0.5 1.6 L 9.2 5 L 0.5 8.4 L 2.2 5 z" fill="#b82e24"/></marker>
+    <marker id="arr-H" viewBox="0 0 10 10" refX="8.2" refY="5" markerWidth="6.6" markerHeight="6.6" orient="auto-start-reverse"><path d="M 0.5 1.6 L 9.2 5 L 0.5 8.4 L 2.2 5 z" fill="#1857a8"/></marker>
+    <marker id="arr-H-sm" viewBox="0 0 10 10" refX="8.2" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M 0.5 1.6 L 9.2 5 L 0.5 8.4 L 2.2 5 z" fill="#1857a8"/></marker>
+    <marker id="arr-flux" viewBox="0 0 10 10" refX="8.2" refY="5" markerWidth="6.6" markerHeight="6.6" orient="auto-start-reverse"><path d="M 0.5 1.6 L 9.2 5 L 0.5 8.4 L 2.2 5 z" fill="#0e746c"/></marker>
+    <marker id="arr-flux-sm" viewBox="0 0 10 10" refX="8.2" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M 0.5 1.6 L 9.2 5 L 0.5 8.4 L 2.2 5 z" fill="#0e746c"/></marker>
+    <marker id="arr-accent-warm" viewBox="0 0 10 10" refX="8.2" refY="5" markerWidth="6.6" markerHeight="6.6" orient="auto-start-reverse"><path d="M 0.5 1.6 L 9.2 5 L 0.5 8.4 L 2.2 5 z" fill="#9c5409"/></marker>
+    <marker id="arr-accent-warm-sm" viewBox="0 0 10 10" refX="8.2" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M 0.5 1.6 L 9.2 5 L 0.5 8.4 L 2.2 5 z" fill="#9c5409"/></marker>
+    <marker id="arr-accent-violet" viewBox="0 0 10 10" refX="8.2" refY="5" markerWidth="6.6" markerHeight="6.6" orient="auto-start-reverse"><path d="M 0.5 1.6 L 9.2 5 L 0.5 8.4 L 2.2 5 z" fill="#6b38b5"/></marker>
+    <marker id="arr-accent-violet-sm" viewBox="0 0 10 10" refX="8.2" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M 0.5 1.6 L 9.2 5 L 0.5 8.4 L 2.2 5 z" fill="#6b38b5"/></marker>
+    <marker id="arr-fm-stroke" viewBox="0 0 10 10" refX="8.2" refY="5" markerWidth="6.6" markerHeight="6.6" orient="auto-start-reverse"><path d="M 0.5 1.6 L 9.2 5 L 0.5 8.4 L 2.2 5 z" fill="#945630"/></marker>
+    <marker id="arr-fm-stroke-sm" viewBox="0 0 10 10" refX="8.2" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M 0.5 1.6 L 9.2 5 L 0.5 8.4 L 2.2 5 z" fill="#945630"/></marker>
+    <marker id="arr-hm-stroke" viewBox="0 0 10 10" refX="8.2" refY="5" markerWidth="6.6" markerHeight="6.6" orient="auto-start-reverse"><path d="M 0.5 1.6 L 9.2 5 L 0.5 8.4 L 2.2 5 z" fill="#316580"/></marker>
+    <marker id="arr-hm-stroke-sm" viewBox="0 0 10 10" refX="8.2" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M 0.5 1.6 L 9.2 5 L 0.5 8.4 L 2.2 5 z" fill="#316580"/></marker>
+    <marker id="arr-spacer-stroke" viewBox="0 0 10 10" refX="8.2" refY="5" markerWidth="6.6" markerHeight="6.6" orient="auto-start-reverse"><path d="M 0.5 1.6 L 9.2 5 L 0.5 8.4 L 2.2 5 z" fill="#636c82"/></marker>
+    <marker id="arr-spacer-stroke-sm" viewBox="0 0 10 10" refX="8.2" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M 0.5 1.6 L 9.2 5 L 0.5 8.4 L 2.2 5 z" fill="#636c82"/></marker>
+    <marker id="arr-air-stroke" viewBox="0 0 10 10" refX="8.2" refY="5" markerWidth="6.6" markerHeight="6.6" orient="auto-start-reverse"><path d="M 0.5 1.6 L 9.2 5 L 0.5 8.4 L 2.2 5 z" fill="#636d85"/></marker>
+    <marker id="arr-air-stroke-sm" viewBox="0 0 10 10" refX="8.2" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M 0.5 1.6 L 9.2 5 L 0.5 8.4 L 2.2 5 z" fill="#636d85"/></marker>
+    <marker id="arr-ok" viewBox="0 0 10 10" refX="8.2" refY="5" markerWidth="6.6" markerHeight="6.6" orient="auto-start-reverse"><path d="M 0.5 1.6 L 9.2 5 L 0.5 8.4 L 2.2 5 z" fill="#1d6f30"/></marker>
+    <marker id="arr-ok-sm" viewBox="0 0 10 10" refX="8.2" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M 0.5 1.6 L 9.2 5 L 0.5 8.4 L 2.2 5 z" fill="#1d6f30"/></marker>
+    <marker id="arr-warn" viewBox="0 0 10 10" refX="8.2" refY="5" markerWidth="6.6" markerHeight="6.6" orient="auto-start-reverse"><path d="M 0.5 1.6 L 9.2 5 L 0.5 8.4 L 2.2 5 z" fill="#965608"/></marker>
+    <marker id="arr-warn-sm" viewBox="0 0 10 10" refX="8.2" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M 0.5 1.6 L 9.2 5 L 0.5 8.4 L 2.2 5 z" fill="#965608"/></marker>
+    <marker id="arr-err" viewBox="0 0 10 10" refX="8.2" refY="5" markerWidth="6.6" markerHeight="6.6" orient="auto-start-reverse"><path d="M 0.5 1.6 L 9.2 5 L 0.5 8.4 L 2.2 5 z" fill="#b51b32"/></marker>
+    <marker id="arr-err-sm" viewBox="0 0 10 10" refX="8.2" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M 0.5 1.6 L 9.2 5 L 0.5 8.4 L 2.2 5 z" fill="#b51b32"/></marker>
+    <pattern id="hatch-warm" width="7" height="7" patternTransform="rotate(45 0 0)" patternUnits="userSpaceOnUse"><line x1="0" y1="0" x2="0" y2="7" stroke="#9c5409" stroke-width="1.1" stroke-opacity="0.24"/></pattern>
+    <pattern id="hatch-cool" width="7" height="7" patternTransform="rotate(-45 0 0)" patternUnits="userSpaceOnUse"><line x1="0" y1="0" x2="0" y2="7" stroke="#1857a8" stroke-width="1.1" stroke-opacity="0.22"/></pattern>
+    <pattern id="hatch-muted" width="7" height="7" patternTransform="rotate(-45 0 0)" patternUnits="userSpaceOnUse"><line x1="0" y1="0" x2="0" y2="7" stroke="#636d85" stroke-width="1.1" stroke-opacity="0.24"/></pattern>
+    <pattern id="hatch-fm" width="7" height="7" patternTransform="rotate(45 0 0)" patternUnits="userSpaceOnUse"><line x1="0" y1="0" x2="0" y2="7" stroke="#945630" stroke-width="1.1" stroke-opacity="0.22"/></pattern>
+    <pattern id="hatch-flux" width="7" height="7" patternTransform="rotate(45 0 0)" patternUnits="userSpaceOnUse"><line x1="0" y1="0" x2="0" y2="7" stroke="#0e746c" stroke-width="1.1" stroke-opacity="0.22"/></pattern>
+    <radialGradient id="sphere-grad" cx="36%" cy="30%" r="70%"><stop offset="0%" stop-color="#ffffff" stop-opacity="0.82"/><stop offset="62%" stop-color="#f0f3fa" stop-opacity="0.58"/><stop offset="100%" stop-color="#dde3f0" stop-opacity="0.45"/></radialGradient>
+    <clipPath id="clip-1"><rect x="270" y="66" width="204" height="186"/></clipPath>
   </defs>
-  <rect x="4" y="4" width="1352" height="732" rx="10" fill="#fbfcfe" stroke="#ccd0da" stroke-width="1.5"/>
-  <text x="28" y="34" class="fig-title">Spin-Transfer Torque: Slonczewski CPP/MTJ vs Zhang–Li CIP Domain-Wall Models</text>
-  <text x="28" y="54" class="fig-subtitle">Conventional charge current J_c (e &gt; 0) drives both local realizations; Gilbert source T_G converts to explicit RHS exactly once</text>
-  <line x1="24" y1="66" x2="1336" y2="66" stroke="#d6dde8" stroke-width="1.2"/>
-  <rect x="22.0" y="80.0" width="648.0" height="558.0" rx="8" fill="#ffffff" stroke="#d6dde8" stroke-width="1.3"/>
-  <rect x="36.0" y="92.0" width="26" height="22" rx="5" fill="#6f3cc4"/>
-  <text x="49.0" y="107.5" text-anchor="middle" class="badge-text">a</text>
-  <text x="71.0" y="108.0" class="panel-title">SlonczewskiSTT: CPP / MTJ trilayer (slonczewski.fullmag.v2)</text>
-  <rect x="690.0" y="80.0" width="648.0" height="558.0" rx="8" fill="#ffffff" stroke="#d6dde8" stroke-width="1.3"/>
-  <rect x="704.0" y="92.0" width="26" height="22" rx="5" fill="#b86b11"/>
-  <text x="717.0" y="107.5" text-anchor="middle" class="badge-text">b</text>
-  <text x="739.0" y="108.0" class="panel-title">ZhangLiSTT: CIP domain-wall gradient torque</text>
-  <rect x="40.0" y="122" width="276" height="292" rx="7" fill="#f4f7fb" stroke="#d6dde8" stroke-width="1.2"/>
-  <text x="54.0" y="143" class="card-title">CPP / MTJ trilayer stack</text>
-  <rect x="74.0" y="160" width="206" height="48" rx="4" fill="#ede9fe" stroke="#6f3cc4" stroke-width="1.6"/>
-  <text x="84.0" y="180" class="body-bold" fill="#6f3cc4">Pinned layer (p̂)</text>
-  <line x1="206.0" y1="186" x2="262.0" y2="170" stroke="#6f3cc4" stroke-width="3" marker-end="url(#arrow-sigma)"/>
-  <text x="267.0" y="182" class="math-sm" fill="#6f3cc4" font-weight="700">p̂</text>
-  <rect x="74.0" y="213" width="206" height="24" rx="3" fill="#e2e8f0" stroke="#94a3b8" stroke-width="1.2"/>
-  <text x="84.0" y="229" class="small-bold">Spacer</text>
-  <rect x="74.0" y="242" width="206" height="66" rx="4" fill="#f6e8df" stroke="#b97a56" stroke-width="1.8"/>
-  <text x="84.0" y="262" class="body-bold" fill="#7c2d12">Free layer (m)</text>
-  <text x="84.0" y="280" class="mono-sm">RegionRef target</text>
-  <line x1="60.0" y1="244" x2="60.0" y2="306" stroke="#18202c" stroke-width="1.3"/>
-  <line x1="55.0" y1="242" x2="65.0" y2="242" stroke="#18202c" stroke-width="1.3"/>
-  <line x1="55.0" y1="308" x2="65.0" y2="308" stroke="#18202c" stroke-width="1.3"/>
-  <text x="51.0" y="279" text-anchor="end" class="math-sm" font-weight="700">t<tspan dy="3.5" font-size="10.5">F</tspan><tspan dy="-3.5">&#x200B;</tspan></text>
-  <line x1="216.0" y1="296" x2="252.0" y2="254" stroke="#b8392b" stroke-width="3.2" marker-end="url(#arrow-m)"/>
-  <text x="258.0" y="262" class="math-sm" fill="#b8392b" font-weight="700">m</text>
-  <text x="84.0" y="298" class="small" fill="#334155">θ = ∠(m, p̂)</text>
-  <line x1="180.0" y1="340" x2="180.0" y2="152" stroke="#246b8e" stroke-width="2.6" marker-end="url(#arrow-jc)"/>
-  <rect x="116.0" y="318" width="128" height="22" rx="4" fill="#ffffff" stroke="#246b8e" stroke-width="1"/>
-  <text x="180.0" y="333" text-anchor="middle" class="small-bold" fill="#246b8e">J<tspan dy="3.5" font-size="10.5">⊥</tspan><tspan dy="-3.5">&#x200B;</tspan> = J<tspan dy="3.5" font-size="10.5">c</tspan><tspan dy="-3.5">&#x200B;</tspan> · n̂<tspan dy="3.5" font-size="10.5">stack</tspan><tspan dy="-3.5">&#x200B;</tspan></text>
-  <text x="54.0" y="366" class="small-bold">Canonical v2 prefactor (denom 1):</text>
-  <text x="54.0" y="385" class="math-sm">Ω<tspan dy="3.5" font-size="10.5">J</tspan><tspan dy="-3.5">&#x200B;</tspan> = γ<tspan dy="3.5" font-size="10.5">e</tspan><tspan dy="-3.5">&#x200B;</tspan>ℏ J<tspan dy="3.5" font-size="10.5">⊥</tspan><tspan dy="-3.5">&#x200B;</tspan> / (e M<tspan dy="3.5" font-size="10.5">s</tspan><tspan dy="-3.5">&#x200B;</tspan> t<tspan dy="3.5" font-size="10.5">F</tspan><tspan dy="-3.5">&#x200B;</tspan>)</text>
-  <text x="54.0" y="403" class="tick">(Legacy v0 uses 2 e M_s t_F &amp; fixed_layer_position)</text>
-  <rect x="330.0" y="122.0" width="322.0" height="292.0" rx="7" fill="#ffffff" stroke="#d6dde8" stroke-width="1.2"/>
-  <text x="491.0" y="142.0" text-anchor="middle" class="card-title">Asymmetry Λ: ε_DL(θ) at P = 0.40</text>
-  <text x="491.0" y="159.0" text-anchor="middle" class="math-sm">ε_DL = PΛ² / [(Λ²+1) + (Λ²−1) cos θ]</text>
-  <line x1="380.0" y1="370.0" x2="634.0" y2="370.0" stroke="#e2e8f0" stroke-width="1"/>
-  <text x="374.0" y="373.5" text-anchor="end" class="tick">0.0</text>
-  <line x1="380.0" y1="326.4" x2="634.0" y2="326.4" stroke="#e2e8f0" stroke-width="1"/>
-  <text x="374.0" y="329.9" text-anchor="end" class="tick">0.2</text>
-  <line x1="380.0" y1="282.9" x2="634.0" y2="282.9" stroke="#e2e8f0" stroke-width="1"/>
-  <text x="374.0" y="286.4" text-anchor="end" class="tick">0.4</text>
-  <line x1="380.0" y1="239.3" x2="634.0" y2="239.3" stroke="#e2e8f0" stroke-width="1"/>
-  <text x="374.0" y="242.8" text-anchor="end" class="tick">0.6</text>
-  <line x1="380.0" y1="195.8" x2="634.0" y2="195.8" stroke="#e2e8f0" stroke-width="1"/>
-  <text x="374.0" y="199.3" text-anchor="end" class="tick">0.8</text>
-  <line x1="380.0" y1="174.0" x2="380.0" y2="370.0" stroke="#f1f5f9" stroke-width="1"/>
-  <text x="380.0" y="385.0" text-anchor="middle" class="tick">0°</text>
-  <line x1="443.5" y1="174.0" x2="443.5" y2="370.0" stroke="#f1f5f9" stroke-width="1"/>
-  <text x="443.5" y="385.0" text-anchor="middle" class="tick">45°</text>
-  <line x1="507.0" y1="174.0" x2="507.0" y2="370.0" stroke="#f1f5f9" stroke-width="1"/>
-  <text x="507.0" y="385.0" text-anchor="middle" class="tick">90°</text>
-  <line x1="570.5" y1="174.0" x2="570.5" y2="370.0" stroke="#f1f5f9" stroke-width="1"/>
-  <text x="570.5" y="385.0" text-anchor="middle" class="tick">135°</text>
-  <line x1="634.0" y1="174.0" x2="634.0" y2="370.0" stroke="#f1f5f9" stroke-width="1"/>
-  <text x="634.0" y="385.0" text-anchor="middle" class="tick">180°</text>
-  <rect x="380.0" y="174.0" width="254.0" height="196.0" fill="none" stroke="#94a3b8" stroke-width="1.2"/>
-  <polyline points="380.0,326.4 382.1,326.4 384.2,326.4 386.4,326.4 388.5,326.4 390.6,326.4 392.7,326.4 394.8,326.4 396.9,326.4 399.1,326.4 401.2,326.4 403.3,326.4 405.4,326.4 407.5,326.4 409.6,326.4 411.8,326.4 413.9,326.4 416.0,326.4 418.1,326.4 420.2,326.4 422.3,326.4 424.4,326.4 426.6,326.4 428.7,326.4 430.8,326.4 432.9,326.4 435.0,326.4 437.1,326.4 439.3,326.4 441.4,326.4 443.5,326.4 445.6,326.4 447.7,326.4 449.9,326.4 452.0,326.4 454.1,326.4 456.2,326.4 458.3,326.4 460.4,326.4 462.6,326.4 464.7,326.4 466.8,326.4 468.9,326.4 471.0,326.4 473.1,326.4 475.2,326.4 477.4,326.4 479.5,326.4 481.6,326.4 483.7,326.4 485.8,326.4 487.9,326.4 490.1,326.4 492.2,326.4 494.3,326.4 496.4,326.4 498.5,326.4 500.6,326.4 502.8,326.4 504.9,326.4 507.0,326.4 509.1,326.4 511.2,326.4 513.4,326.4 515.5,326.4 517.6,326.4 519.7,326.4 521.8,326.4 523.9,326.4 526.0,326.4 528.2,326.4 530.3,326.4 532.4,326.4 534.5,326.4 536.6,326.4 538.8,326.4 540.9,326.4 543.0,326.4 545.1,326.4 547.2,326.4 549.3,326.4 551.5,326.4 553.6,326.4 555.7,326.4 557.8,326.4 559.9,326.4 562.0,326.4 564.1,326.4 566.3,326.4 568.4,326.4 570.5,326.4 572.6,326.4 574.7,326.4 576.9,326.4 579.0,326.4 581.1,326.4 583.2,326.4 585.3,326.4 587.4,326.4 589.5,326.4 591.7,326.4 593.8,326.4 595.9,326.4 598.0,326.4 600.1,326.4 602.2,326.4 604.4,326.4 606.5,326.4 608.6,326.4 610.7,326.4 612.8,326.4 615.0,326.4 617.1,326.4 619.2,326.4 621.3,326.4 623.4,326.4 625.5,326.4 627.6,326.4 629.8,326.4 631.9,326.4 634.0,326.4" fill="none" stroke="#475569" stroke-width="2.5" stroke-dasharray="4 3"/>
-  <text x="507.0" y="343.4" text-anchor="middle" class="tick" fill="#475569" font-weight="700">Λ = 1.0 (sym. P/2)</text>
-  <polyline points="380.0,326.4 382.1,326.4 384.2,326.4 386.4,326.4 388.5,326.4 390.6,326.3 392.7,326.3 394.8,326.2 396.9,326.2 399.1,326.1 401.2,326.0 403.3,325.9 405.4,325.8 407.5,325.7 409.6,325.6 411.8,325.5 413.9,325.4 416.0,325.2 418.1,325.1 420.2,324.9 422.3,324.8 424.4,324.6 426.6,324.4 428.7,324.2 430.8,324.0 432.9,323.8 435.0,323.6 437.1,323.3 439.3,323.1 441.4,322.8 443.5,322.6 445.6,322.3 447.7,322.0 449.9,321.7 452.0,321.4 454.1,321.1 456.2,320.8 458.3,320.5 460.4,320.1 462.6,319.8 464.7,319.4 466.8,319.0 468.9,318.7 471.0,318.3 473.1,317.9 475.2,317.4 477.4,317.0 479.5,316.6 481.6,316.1 483.7,315.6 485.8,315.2 487.9,314.7 490.1,314.2 492.2,313.6 494.3,313.1 496.4,312.6 498.5,312.0 500.6,311.5 502.8,310.9 504.9,310.3 507.0,309.7 509.1,309.1 511.2,308.5 513.4,307.8 515.5,307.2 517.6,306.5 519.7,305.8 521.8,305.1 523.9,304.5 526.0,303.7 528.2,303.0 530.3,302.3 532.4,301.6 534.5,300.8 536.6,300.1 538.8,299.3 540.9,298.5 543.0,297.7 545.1,296.9 547.2,296.1 549.3,295.3 551.5,294.5 553.6,293.7 555.7,292.9 557.8,292.1 559.9,291.3 562.0,290.4 564.1,289.6 566.3,288.8 568.4,288.0 570.5,287.2 572.6,286.4 574.7,285.6 576.9,284.8 579.0,284.0 581.1,283.2 583.2,282.5 585.3,281.7 587.4,281.0 589.5,280.3 591.7,279.6 593.8,278.9 595.9,278.3 598.0,277.6 600.1,277.0 602.2,276.5 604.4,275.9 606.5,275.4 608.6,274.9 610.7,274.5 612.8,274.0 615.0,273.7 617.1,273.3 619.2,273.0 621.3,272.7 623.4,272.5 625.5,272.3 627.6,272.2 629.8,272.1 631.9,272.0 634.0,272.0" fill="none" stroke="#1d5fa7" stroke-width="2.5"/>
-  <text x="571.9" y="302.6" text-anchor="start" class="tick" fill="#1d5fa7" font-weight="700">Λ = 1.5</text>
-  <polyline points="380.0,326.4 382.1,326.4 384.2,326.4 386.4,326.4 388.5,326.4 390.6,326.3 392.7,326.2 394.8,326.2 396.9,326.1 399.1,326.0 401.2,325.9 403.3,325.8 405.4,325.6 407.5,325.5 409.6,325.3 411.8,325.2 413.9,325.0 416.0,324.8 418.1,324.6 420.2,324.4 422.3,324.1 424.4,323.9 426.6,323.6 428.7,323.4 430.8,323.1 432.9,322.8 435.0,322.5 437.1,322.1 439.3,321.8 441.4,321.4 443.5,321.1 445.6,320.7 447.7,320.3 449.9,319.9 452.0,319.4 454.1,319.0 456.2,318.5 458.3,318.0 460.4,317.5 462.6,316.9 464.7,316.4 466.8,315.8 468.9,315.2 471.0,314.6 473.1,314.0 475.2,313.3 477.4,312.6 479.5,311.9 481.6,311.2 483.7,310.5 485.8,309.7 487.9,308.9 490.1,308.0 492.2,307.2 494.3,306.3 496.4,305.4 498.5,304.4 500.6,303.4 502.8,302.4 504.9,301.4 507.0,300.3 509.1,299.2 511.2,298.1 513.4,296.9 515.5,295.6 517.6,294.4 519.7,293.1 521.8,291.8 523.9,290.4 526.0,289.0 528.2,287.5 530.3,286.0 532.4,284.4 534.5,282.9 536.6,281.2 538.8,279.5 540.9,277.8 543.0,276.0 545.1,274.2 547.2,272.4 549.3,270.4 551.5,268.5 553.6,266.5 555.7,264.4 557.8,262.3 559.9,260.2 562.0,258.0 564.1,255.8 566.3,253.6 568.4,251.3 570.5,249.0 572.6,246.6 574.7,244.2 576.9,241.8 579.0,239.4 581.1,237.0 583.2,234.6 585.3,232.1 587.4,229.7 589.5,227.3 591.7,224.9 593.8,222.6 595.9,220.3 598.0,218.0 600.1,215.8 602.2,213.6 604.4,211.6 606.5,209.6 608.6,207.7 610.7,205.9 612.8,204.2 615.0,202.7 617.1,201.3 619.2,200.0 621.3,198.9 623.4,198.0 625.5,197.2 627.6,196.6 629.8,196.1 631.9,195.9 634.0,195.8" fill="none" stroke="#6f3cc4" stroke-width="2.5"/>
-  <text x="622.7" y="190.3" text-anchor="end" class="tick" fill="#6f3cc4" font-weight="700">Λ = 2.0 (AP enhanced)</text>
-  <text x="507.0" y="404.0" text-anchor="middle" class="axis-lbl">Relative angle θ between m and p̂</text>
-  <text x="346.0" y="272.0" text-anchor="middle" transform="rotate(-90 346.0 272.0)" class="axis-lbl">ε_DL(θ)</text>
-  <rect x="40.0" y="428" width="612" height="194" rx="7" fill="#f4f7fb" stroke="#d6dde8" stroke-width="1.2"/>
-  <text x="54.0" y="450" class="card-title">Slonczewski Gilbert torque &amp; realization variants</text>
-  <text x="54.0" y="476" class="math">T<tspan dy="3.5" font-size="10.0">SL</tspan><tspan dy="-8.0" font-size="10.0">G</tspan><tspan dy="4.5">&#x200B;</tspan> = Ω<tspan dy="3.5" font-size="10.5">J</tspan><tspan dy="-3.5">&#x200B;</tspan> ε_DL(m) [m × (m × p̂)] + Ω<tspan dy="3.5" font-size="10.5">J</tspan><tspan dy="-3.5">&#x200B;</tspan> ε′ (m × p̂)</text>
-  <text x="54.0" y="502" class="body">• <tspan font-weight="700" fill="#6f3cc4">Thin-layer homogenized</tspan> (<tspan font-family="monospace">slonczewski_thin_layer_homogenized.v1</tspan>): executable on FDM &amp; FEM.</text>
-  <text x="54.0" y="523" class="body">• <tspan font-weight="700" fill="#b8392b">Interface flux</tspan> (<tspan font-family="monospace">slonczewski_interface_flux.v1</tspan>): authoring/IR only (fail-closed on FDM &amp; FEM).</text>
-  <text x="54.0" y="544" class="small">• Mutually exclusive drive: prescribed <tspan font-family="monospace">current_density</tspan> OR named <tspan font-family="monospace">current_source</tspan>.</text>
-  <text x="54.0" y="564" class="small">• Canonical v2 requires <tspan font-family="monospace">id, target, stack_normal, free_layer_thickness_m</tspan> (no silent fallback).</text>
-  <text x="54.0" y="584" class="small">• Notice: <tspan font-family="monospace">slonczewski.fullmag.v2</tspan> flips m×(m×p̂) = −m×(p̂×m); check sign with stack_normal.</text>
-  <text x="54.0" y="604" class="small">• Zero DL torque when m ∥ ±p̂; odd scaling under J_⊥ sign reversal.</text>
-  <rect x="708.0" y="122" width="612" height="292" rx="7" fill="#f4f7fb" stroke="#d6dde8" stroke-width="1.2"/>
-  <text x="722.0" y="143" class="card-title">CIP domain-wall motion (computed Néel/Bloch profile m(x))</text>
-  <rect x="734.0" y="178.0" width="560.0" height="136.0" rx="5" fill="#f6e8df" stroke="#b97a56" stroke-width="1.8"/>
-  <text x="752.0" y="200.0" class="body-bold" fill="#7c2d12">+m_z domain</text>
-  <text x="1276.0" y="200.0" text-anchor="end" class="body-bold" fill="#7c2d12">−m_z domain</text>
-  <text x="1014.0" y="196.0" text-anchor="middle" class="small-bold" fill="#b86b11">Domain wall (∇m ≠ 0)</text>
-  <line x1="783.3" y1="266.0" x2="784.7" y2="242.0" stroke="#b8392b" stroke-width="2.6" marker-end="url(#arrow-m)"/>
-  <line x1="828.5" y1="265.9" x2="831.5" y2="242.1" stroke="#b8392b" stroke-width="2.6" marker-end="url(#arrow-m)"/>
-  <line x1="873.1" y1="265.6" x2="878.9" y2="242.4" stroke="#b8392b" stroke-width="2.6" marker-end="url(#arrow-m)"/>
-  <line x1="916.4" y1="264.6" x2="927.6" y2="243.4" stroke="#b8392b" stroke-width="2.6" marker-end="url(#arrow-m)"/>
-  <line x1="958.4" y1="261.2" x2="977.6" y2="246.8" stroke="#b86b11" stroke-width="2.6" marker-end="url(#arrow-dl)"/>
-  <line x1="1002.0" y1="254.0" x2="1026.0" y2="254.0" stroke="#b86b11" stroke-width="2.6" marker-end="url(#arrow-dl)"/>
-  <line x1="1050.4" y1="246.8" x2="1069.6" y2="261.2" stroke="#b86b11" stroke-width="2.6" marker-end="url(#arrow-dl)"/>
-  <line x1="1100.4" y1="243.4" x2="1111.6" y2="264.6" stroke="#b8392b" stroke-width="2.6" marker-end="url(#arrow-m)"/>
-  <line x1="1149.1" y1="242.4" x2="1154.9" y2="265.6" stroke="#b8392b" stroke-width="2.6" marker-end="url(#arrow-m)"/>
-  <line x1="1196.5" y1="242.1" x2="1199.5" y2="265.9" stroke="#b8392b" stroke-width="2.6" marker-end="url(#arrow-m)"/>
-  <line x1="1243.3" y1="242.0" x2="1244.7" y2="266.0" stroke="#b8392b" stroke-width="2.6" marker-end="url(#arrow-m)"/>
-  <line x1="1026.0" y1="224.0" x2="968.0" y2="224.0" stroke="#b86b11" stroke-width="2.8" marker-end="url(#arrow-dl)"/>
-  <text x="960.0" y="228.0" text-anchor="end" class="small-bold" fill="#b86b11">−(u·∇)m (adiabatic)</text>
-  <line x1="1014.0" y1="266.0" x2="1014.0" y2="302.0" stroke="#147d75" stroke-width="2.6" marker-end="url(#arrow-fl)"/>
-  <text x="1024.0" y="299.0" class="small-bold" fill="#147d75">+β m×[(u·∇)m] (canting)</text>
-  <line x1="764.0" y1="334.0" x2="964.0" y2="334.0" stroke="#246b8e" stroke-width="3.2" marker-end="url(#arrow-jc)"/>
-  <text x="864.0" y="352.0" text-anchor="middle" class="small-bold" fill="#246b8e">Conventional charge current J<tspan dy="3.5" font-size="10.5">c</tspan><tspan dy="-3.5">&#x200B;</tspan> (+x)</text>
-  <line x1="1264.0" y1="334.0" x2="1064.0" y2="334.0" stroke="#475569" stroke-width="2.6" stroke-dasharray="5 3" marker-end="url(#arrow-slate)"/>
-  <text x="1164.0" y="352.0" text-anchor="middle" class="small-bold" fill="#475569">Electron drift velocity (−x, e &gt; 0)</text>
-  <text x="722.0" y="396" class="small">Canonical equations never switch to electron-flow signs mid-formula; sign is fixed to conventional J<tspan dy="3.5" font-size="10.5">c</tspan><tspan dy="-3.5">&#x200B;</tspan> &amp; e &gt; 0.</text>
-  <rect x="708.0" y="428" width="612" height="194" rx="7" fill="#f4f7fb" stroke="#d6dde8" stroke-width="1.2"/>
-  <text x="722.0" y="450" class="card-title">Zhang–Li velocity, Gilbert form, and FDM vs FEM formulas</text>
-  <text x="722.0" y="476" class="math">u = [g μ<tspan dy="3.5" font-size="10.5">B</tspan><tspan dy="-3.5">&#x200B;</tspan> P / (2 e M<tspan dy="3.5" font-size="10.5">s</tspan><tspan dy="-3.5">&#x200B;</tspan>)] J<tspan dy="3.5" font-size="10.5">c</tspan><tspan dy="-3.5">&#x200B;</tspan>    |    T<tspan dy="3.5" font-size="10.0">ZL</tspan><tspan dy="-8.0" font-size="10.0">G</tspan><tspan dy="4.5">&#x200B;</tspan> = −(u·∇)m + β m × [(u·∇)m]</text>
-  <text x="722.0" y="502" class="body">• <tspan font-weight="700" fill="#1d5fa7">FEM canonical</tspan> (<tspan font-family="monospace">zhang_li.fullmag.v1</tspan>): P1 tetrahedral ∇m, user <tspan font-family="monospace">lande_g</tspan>, exact e.</text>
-  <text x="722.0" y="523" class="body">• <tspan font-weight="700" fill="#b86b11">FDM MuMax3-compat</tspan> (<tspan font-family="monospace">zhang_li.mumax3.v1</tspan>): central clamped stencil, fixed g = 2.0, (1+β²)⁻¹.</text>
-  <text x="722.0" y="544" class="body">• <tspan font-weight="700" fill="#475569">Legacy</tspan> (<tspan font-family="monospace">zhang_li.legacy_fullmag.v0</tspan>): retained for migration; never silently upgraded.</text>
-  <text x="722.0" y="566" class="small">• Supports prescribed <tspan font-family="monospace">current_density</tspan> OR named <tspan font-family="monospace">current_source</tspan> (mutually exclusive).</text>
-  <text x="722.0" y="586" class="small">• Aliases: <tspan font-family="monospace">xi</tspan> maps to <tspan font-family="monospace">beta</tspan> (contradictory nonzero values fail validation).</text>
-  <text x="722.0" y="606" class="small">• Active planner gate: currently one executable spin-torque module at a time.</text>
-  <rect x="22" y="652.0" width="1316" height="72" rx="8" fill="#ecfdf5" stroke="#059669" stroke-width="1.5"/>
-  <rect x="38" y="664.0" width="218" height="22" rx="5" fill="#059669"/>
-  <text x="147" y="679.0" text-anchor="middle" class="badge-text">SINGLE-CONVERSION GUARD</text>
-  <text x="272" y="680.0" class="math" fill="#065f46" font-weight="700">T<tspan dy="3.5" font-size="10.5">explicit</tspan><tspan dy="-3.5">&#x200B;</tspan> = (T<tspan dy="3.5" font-size="10.5">G</tspan><tspan dy="-3.5">&#x200B;</tspan> + α m × T<tspan dy="3.5" font-size="10.5">G</tspan><tspan dy="-3.5">&#x200B;</tspan>) / (1 + α²)     [applied EXACTLY ONCE before RHS integration]</text>
-  <text x="38" y="706.0" class="small" fill="#065f46">Backends must NEVER pre-convert T_G to explicit form and then convert it a second time in the LLG layer; transport observations retain unconverted T_G.</text>
+  <text x="16" y="22" class="fm-panel-letter">a</text>
+  <text x="33" y="22" class="fm-panel-title">Slonczewski CPP / MTJ torque</text>
+  <line x1="111" y1="294" x2="111" y2="254" stroke="#1857a8" stroke-width="2.2" stroke-linecap="round"/>
+  <line x1="111" y1="294" x2="111" y2="260" stroke="#1857a8" stroke-width="2.2" stroke-linecap="round" marker-end="url(#arr-H)"/>
+  <line x1="111" y1="126.5" x2="111" y2="76" stroke="#1857a8" stroke-width="2.2" stroke-linecap="round" marker-end="url(#arr-H)"/>
+  <polygon points="44,212 64,201 190,201 170,212" fill="#eef5f9" stroke="#316580" stroke-width="1.1" stroke-linejoin="round"/>
+  <polygon points="170,212 190,201 190,243 170,254" fill="#cddfe9" stroke="#316580" stroke-width="1.1" stroke-linejoin="round"/>
+  <rect x="44" y="212" width="126" height="42" fill="#e2eef4" stroke="#316580" stroke-width="1.1"/>
+  <polygon points="44,192 64,181 190,181 170,192" fill="#f3f5f9" stroke="#636c82" stroke-width="1.1" stroke-linejoin="round"/>
+  <polygon points="170,192 190,181 190,201 170,212" fill="#d9dde7" stroke="#636c82" stroke-width="1.1" stroke-linejoin="round"/>
+  <rect x="44" y="192" width="126" height="20" fill="#eaedf3" stroke="#636c82" stroke-width="1.1"/>
+  <polygon points="44,132 64,121 190,121 170,132" fill="#faf1ea" stroke="#945630" stroke-width="1.1" stroke-linejoin="round"/>
+  <polygon points="170,132 190,121 190,181 170,192" fill="#e6d2c3" stroke="#945630" stroke-width="1.1" stroke-linejoin="round"/>
+  <rect x="44" y="132" width="126" height="60" fill="#f5e8df" stroke="#945630" stroke-width="1.1"/>
+  <line x1="111" y1="254" x2="111" y2="132" stroke="#1857a8" stroke-width="1.4" stroke-linecap="round" stroke-dasharray="3.5,3" opacity="0.55"/>
+  <text x="52" y="229" class="fm-label-bold" fill="#316580" font-size="11" style="fill:#316580;font-size:11px">Pinned</text>
+  <text x="52" y="244" class="fm-math" fill="#6b38b5" font-size="11.5" font-weight="400" font-style="italic" font-family="'STIX Two Math', 'Cambria Math', 'Times New Roman', Georgia, serif" style="fill:#6b38b5;font-size:11.5px;font-weight:400;font-style:italic;font-family:'STIX Two Math', 'Cambria Math', 'Times New Roman', Georgia, serif"><tspan font-style="normal" font-weight="700">p&#x0302;</tspan></text>
+  <text x="52" y="205.5" class="fm-note" fill="#636c82" font-size="10.2" style="fill:#636c82;font-size:10.2px">Spacer</text>
+  <text x="52" y="149" class="fm-label-bold" fill="#945630" font-size="11" style="fill:#945630;font-size:11px">Free FM</text>
+  <line x1="33.5" y1="132" x2="28.5" y2="132" stroke="#575e78" stroke-width="0.9" stroke-linecap="round"/>
+  <line x1="33.5" y1="192" x2="28.5" y2="192" stroke="#575e78" stroke-width="0.9" stroke-linecap="round"/>
+  <line x1="31" y1="132" x2="31" y2="192" stroke="#575e78" stroke-width="0.95" stroke-linecap="round" marker-start="url(#arr-ink-muted-sm)" marker-end="url(#arr-ink-muted-sm)"/>
+  <text x="23" y="165.5" class="fm-math" text-anchor="end" fill="#575e78" font-size="11" font-weight="400" font-style="italic" font-family="'STIX Two Math', 'Cambria Math', 'Times New Roman', Georgia, serif" style="fill:#575e78;font-size:11px;font-weight:400;font-style:italic;font-family:'STIX Two Math', 'Cambria Math', 'Times New Roman', Georgia, serif">t<tspan baseline-shift="sub" font-size="74%" font-style="normal" font-weight="400">F</tspan></text>
+  <line x1="204" y1="218" x2="204" y2="142" stroke="#4a5168" stroke-width="1.4" stroke-linecap="round" marker-end="url(#arr-axis-sm)"/>
+  <text x="210" y="196" class="fm-math" fill="#3b4058" font-size="11" font-weight="400" font-style="italic" font-family="'STIX Two Math', 'Cambria Math', 'Times New Roman', Georgia, serif" style="fill:#3b4058;font-size:11px;font-weight:400;font-style:italic;font-family:'STIX Two Math', 'Cambria Math', 'Times New Roman', Georgia, serif"><tspan font-style="normal" font-weight="700">n&#x0302;</tspan><tspan baseline-shift="sub" font-size="74%" font-style="normal" font-weight="400">stack</tspan></text>
+  <line x1="108" y1="236" x2="158" y2="236" stroke="#6b38b5" stroke-width="2.4" stroke-linecap="round" marker-end="url(#arr-accent-violet)"/>
+  <line x1="100" y1="182" x2="136" y2="182" stroke="#6b38b5" stroke-width="1" stroke-linecap="round" stroke-dasharray="3,2.5" opacity="0.75"/>
+  <path d="M 115.0 182.0 A 15 15 0 0 0 109.2 170.2" fill="none" stroke="#575e78" stroke-width="1" stroke-linecap="round" stroke-linejoin="round"/>
+  <text x="118" y="178" class="fm-math" fill="#3b4058" font-size="10.5" font-weight="400" font-style="italic" font-family="'STIX Two Math', 'Cambria Math', 'Times New Roman', Georgia, serif" style="fill:#3b4058;font-size:10.5px;font-weight:400;font-style:italic;font-family:'STIX Two Math', 'Cambria Math', 'Times New Roman', Georgia, serif">θ</text>
+  <line x1="100" y1="182" x2="120.93" y2="155.21" stroke="#b82e24" stroke-width="2.5" stroke-linecap="round" marker-end="url(#arr-m)"/>
+  <text x="101" y="161" class="fm-math-bold" fill="#b82e24" font-size="11.6" font-weight="700" font-style="italic" font-family="'STIX Two Math', 'Cambria Math', 'Times New Roman', Georgia, serif" style="fill:#b82e24;font-size:11.6px;font-weight:700;font-style:italic;font-family:'STIX Two Math', 'Cambria Math', 'Times New Roman', Georgia, serif"><tspan font-style="normal" font-weight="700">m</tspan></text>
+  <line x1="120.93" y1="155.21" x2="139.84" y2="169.98" stroke="#9c5409" stroke-width="2" stroke-linecap="round" marker-end="url(#arr-accent-warm-sm)"/>
+  <text x="143.84" y="175.98" class="fm-math-bold" fill="#9c5409" font-size="10.6" font-weight="700" font-style="italic" font-family="'STIX Two Math', 'Cambria Math', 'Times New Roman', Georgia, serif" style="fill:#9c5409;font-size:10.6px;font-weight:700;font-style:italic;font-family:'STIX Two Math', 'Cambria Math', 'Times New Roman', Georgia, serif"><tspan font-style="normal" font-weight="700">T</tspan><tspan baseline-shift="sub" font-size="74%" font-style="normal" font-weight="400">DL</tspan></text>
+  <line x1="120.93" y1="155.21" x2="136.93" y2="143.21" stroke="#0e746c" stroke-width="2" stroke-linecap="round" marker-end="url(#arr-flux-sm)"/>
+  <text x="140.93" y="142.21" class="fm-math-bold" fill="#0e746c" font-size="10.6" font-weight="700" font-style="italic" font-family="'STIX Two Math', 'Cambria Math', 'Times New Roman', Georgia, serif" style="fill:#0e746c;font-size:10.6px;font-weight:700;font-style:italic;font-family:'STIX Two Math', 'Cambria Math', 'Times New Roman', Georgia, serif"><tspan font-style="normal" font-weight="700">T</tspan><tspan baseline-shift="sub" font-size="74%" font-style="normal" font-weight="400">FL</tspan></text>
+  <text x="121" y="82" class="fm-math-bold" fill="#1857a8" font-size="12" font-weight="700" font-style="italic" font-family="'STIX Two Math', 'Cambria Math', 'Times New Roman', Georgia, serif" style="fill:#1857a8;font-size:12px;font-weight:700;font-style:italic;font-family:'STIX Two Math', 'Cambria Math', 'Times New Roman', Georgia, serif"><tspan font-style="normal" font-weight="700">J</tspan><tspan baseline-shift="sub" font-size="74%" font-style="normal" font-weight="400">c</tspan></text>
+  <text x="112" y="310" class="fm-math" text-anchor="middle" fill="#1857a8" font-size="11.5" font-weight="400" font-style="italic" font-family="'STIX Two Math', 'Cambria Math', 'Times New Roman', Georgia, serif" style="fill:#1857a8;font-size:11.5px;font-weight:400;font-style:italic;font-family:'STIX Two Math', 'Cambria Math', 'Times New Roman', Georgia, serif">J<tspan baseline-shift="sub" font-size="74%" font-style="normal" font-weight="400">⊥</tspan> = <tspan font-style="normal" font-weight="700">J</tspan><tspan baseline-shift="sub" font-size="74%" font-style="normal" font-weight="400">c</tspan> · <tspan font-style="normal" font-weight="700">n&#x0302;</tspan><tspan baseline-shift="sub" font-size="74%" font-style="normal" font-weight="400">stack</tspan></text>
+  <line x1="321" y1="66" x2="321" y2="252" stroke="#dde2ec" stroke-width="0.75" stroke-linecap="round"/>
+  <line x1="372" y1="66" x2="372" y2="252" stroke="#dde2ec" stroke-width="0.75" stroke-linecap="round"/>
+  <line x1="423" y1="66" x2="423" y2="252" stroke="#dde2ec" stroke-width="0.75" stroke-linecap="round"/>
+  <line x1="270" y1="208.74" x2="474" y2="208.74" stroke="#dde2ec" stroke-width="0.75" stroke-linecap="round"/>
+  <line x1="270" y1="165.49" x2="474" y2="165.49" stroke="#dde2ec" stroke-width="0.75" stroke-linecap="round"/>
+  <line x1="270" y1="122.23" x2="474" y2="122.23" stroke="#dde2ec" stroke-width="0.75" stroke-linecap="round"/>
+  <line x1="270" y1="78.98" x2="474" y2="78.98" stroke="#dde2ec" stroke-width="0.75" stroke-linecap="round"/>
+  <line x1="270" y1="252" x2="474" y2="252" stroke="#4a5168" stroke-width="1.15" stroke-linecap="round"/>
+  <line x1="270" y1="252" x2="270" y2="66" stroke="#4a5168" stroke-width="1.15" stroke-linecap="round"/>
+  <line x1="270" y1="252" x2="270" y2="256" stroke="#4a5168" stroke-width="1" stroke-linecap="round"/>
+  <text x="270" y="267" class="fm-tick" text-anchor="middle">0°</text>
+  <line x1="321" y1="252" x2="321" y2="256" stroke="#4a5168" stroke-width="1" stroke-linecap="round"/>
+  <text x="321" y="267" class="fm-tick" text-anchor="middle">45°</text>
+  <line x1="372" y1="252" x2="372" y2="256" stroke="#4a5168" stroke-width="1" stroke-linecap="round"/>
+  <text x="372" y="267" class="fm-tick" text-anchor="middle">90°</text>
+  <line x1="423" y1="252" x2="423" y2="256" stroke="#4a5168" stroke-width="1" stroke-linecap="round"/>
+  <text x="423" y="267" class="fm-tick" text-anchor="middle">135°</text>
+  <line x1="474" y1="252" x2="474" y2="256" stroke="#4a5168" stroke-width="1" stroke-linecap="round"/>
+  <text x="474" y="267" class="fm-tick" text-anchor="middle">180°</text>
+  <line x1="266" y1="252" x2="270" y2="252" stroke="#4a5168" stroke-width="1" stroke-linecap="round"/>
+  <text x="263" y="255.5" class="fm-tick" text-anchor="end">0.0</text>
+  <line x1="266" y1="208.74" x2="270" y2="208.74" stroke="#4a5168" stroke-width="1" stroke-linecap="round"/>
+  <text x="263" y="212.24" class="fm-tick" text-anchor="end">0.2</text>
+  <line x1="266" y1="165.49" x2="270" y2="165.49" stroke="#4a5168" stroke-width="1" stroke-linecap="round"/>
+  <text x="263" y="168.99" class="fm-tick" text-anchor="end">0.4</text>
+  <line x1="266" y1="122.23" x2="270" y2="122.23" stroke="#4a5168" stroke-width="1" stroke-linecap="round"/>
+  <text x="263" y="125.73" class="fm-tick" text-anchor="end">0.6</text>
+  <line x1="266" y1="78.98" x2="270" y2="78.98" stroke="#4a5168" stroke-width="1" stroke-linecap="round"/>
+  <text x="263" y="82.48" class="fm-tick" text-anchor="end">0.8</text>
+  <text x="372" y="281" class="fm-math" text-anchor="middle" fill="#3b4058" font-size="11.8" font-weight="400" font-style="italic" font-family="'STIX Two Math', 'Cambria Math', 'Times New Roman', Georgia, serif" style="fill:#3b4058;font-size:11.8px;font-weight:400;font-style:italic;font-family:'STIX Two Math', 'Cambria Math', 'Times New Roman', Georgia, serif">θ <tspan font-style="normal" font-weight="400"> (deg)</tspan></text>
+  <text x="237" y="159" class="fm-math" text-anchor="middle" fill="#3b4058" font-size="11.8" font-weight="400" font-style="italic" font-family="'STIX Two Math', 'Cambria Math', 'Times New Roman', Georgia, serif" style="fill:#3b4058;font-size:11.8px;font-weight:400;font-style:italic;font-family:'STIX Two Math', 'Cambria Math', 'Times New Roman', Georgia, serif" transform="rotate(-90 237 159)">ε<tspan baseline-shift="sub" font-size="74%" font-style="normal" font-weight="400">DL</tspan>(θ)</text>
+  <text x="372" y="55" class="fm-math" text-anchor="middle" fill="#3b4058" font-size="9.7" font-weight="400" font-style="italic" font-family="'STIX Two Math', 'Cambria Math', 'Times New Roman', Georgia, serif" style="fill:#3b4058;font-size:9.7px;font-weight:400;font-style:italic;font-family:'STIX Two Math', 'Cambria Math', 'Times New Roman', Georgia, serif">P = 0.40:  ε<tspan baseline-shift="sub" font-size="74%" font-style="normal" font-weight="400">DL</tspan> = PΛ<tspan baseline-shift="super" font-size="74%" font-style="normal" font-weight="400">2</tspan>/[(Λ<tspan baseline-shift="super" font-size="74%" font-style="normal" font-weight="400">2</tspan>+1)+(Λ<tspan baseline-shift="super" font-size="74%" font-style="normal" font-weight="400">2</tspan>-1)cosθ]</text>
+  <g clip-path="url(#clip-1)">
+    <path d="M 270 208.74 L 271.7 208.74 L 273.4 208.74 L 275.1 208.74 L 276.8 208.74 L 278.5 208.74 L 280.2 208.74 L 281.9 208.74 L 283.6 208.74 L 285.3 208.74 L 287 208.74 L 288.7 208.74 L 290.4 208.74 L 292.1 208.74 L 293.8 208.74 L 295.5 208.74 L 297.2 208.74 L 298.9 208.74 L 300.6 208.74 L 302.3 208.74 L 304 208.74 L 305.7 208.74 L 307.4 208.74 L 309.1 208.74 L 310.8 208.74 L 312.5 208.74 L 314.2 208.74 L 315.9 208.74 L 317.6 208.74 L 319.3 208.74 L 321 208.74 L 322.7 208.74 L 324.4 208.74 L 326.1 208.74 L 327.8 208.74 L 329.5 208.74 L 331.2 208.74 L 332.9 208.74 L 334.6 208.74 L 336.3 208.74 L 338 208.74 L 339.7 208.74 L 341.4 208.74 L 343.1 208.74 L 344.8 208.74 L 346.5 208.74 L 348.2 208.74 L 349.9 208.74 L 351.6 208.74 L 353.3 208.74 L 355 208.74 L 356.7 208.74 L 358.4 208.74 L 360.1 208.74 L 361.8 208.74 L 363.5 208.74 L 365.2 208.74 L 366.9 208.74 L 368.6 208.74 L 370.3 208.74 L 372 208.74 L 373.7 208.74 L 375.4 208.74 L 377.1 208.74 L 378.8 208.74 L 380.5 208.74 L 382.2 208.74 L 383.9 208.74 L 385.6 208.74 L 387.3 208.74 L 389 208.74 L 390.7 208.74 L 392.4 208.74 L 394.1 208.74 L 395.8 208.74 L 397.5 208.74 L 399.2 208.74 L 400.9 208.74 L 402.6 208.74 L 404.3 208.74 L 406 208.74 L 407.7 208.74 L 409.4 208.74 L 411.1 208.74 L 412.8 208.74 L 414.5 208.74 L 416.2 208.74 L 417.9 208.74 L 419.6 208.74 L 421.3 208.74 L 423 208.74 L 424.7 208.74 L 426.4 208.74 L 428.1 208.74 L 429.8 208.74 L 431.5 208.74 L 433.2 208.74 L 434.9 208.74 L 436.6 208.74 L 438.3 208.74 L 440 208.74 L 441.7 208.74 L 443.4 208.74 L 445.1 208.74 L 446.8 208.74 L 448.5 208.74 L 450.2 208.74 L 451.9 208.74 L 453.6 208.74 L 455.3 208.74 L 457 208.74 L 458.7 208.74 L 460.4 208.74 L 462.1 208.74 L 463.8 208.74 L 465.5 208.74 L 467.2 208.74 L 468.9 208.74 L 470.6 208.74 L 472.3 208.74 L 474 208.74" fill="none" stroke="#575e78" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="4.5,3"/>
+  </g>
+  <g clip-path="url(#clip-1)">
+    <path d="M 270 208.74 L 271.7 208.74 L 273.4 208.73 L 275.1 208.71 L 276.8 208.68 L 278.5 208.64 L 280.2 208.6 L 281.9 208.54 L 283.6 208.48 L 285.3 208.41 L 287 208.33 L 288.7 208.24 L 290.4 208.15 L 292.1 208.04 L 293.8 207.93 L 295.5 207.81 L 297.2 207.68 L 298.9 207.54 L 300.6 207.39 L 302.3 207.24 L 304 207.07 L 305.7 206.9 L 307.4 206.71 L 309.1 206.52 L 310.8 206.32 L 312.5 206.11 L 314.2 205.89 L 315.9 205.66 L 317.6 205.42 L 319.3 205.17 L 321 204.91 L 322.7 204.64 L 324.4 204.37 L 326.1 204.08 L 327.8 203.78 L 329.5 203.47 L 331.2 203.15 L 332.9 202.82 L 334.6 202.48 L 336.3 202.13 L 338 201.77 L 339.7 201.39 L 341.4 201.01 L 343.1 200.62 L 344.8 200.21 L 346.5 199.79 L 348.2 199.36 L 349.9 198.92 L 351.6 198.47 L 353.3 198.01 L 355 197.53 L 356.7 197.04 L 358.4 196.54 L 360.1 196.03 L 361.8 195.51 L 363.5 194.97 L 365.2 194.42 L 366.9 193.86 L 368.6 193.29 L 370.3 192.7 L 372 192.11 L 373.7 191.5 L 375.4 190.88 L 377.1 190.24 L 378.8 189.6 L 380.5 188.94 L 382.2 188.27 L 383.9 187.59 L 385.6 186.9 L 387.3 186.2 L 389 185.49 L 390.7 184.76 L 392.4 184.03 L 394.1 183.29 L 395.8 182.53 L 397.5 181.77 L 399.2 181 L 400.9 180.22 L 402.6 179.44 L 404.3 178.65 L 406 177.85 L 407.7 177.04 L 409.4 176.24 L 411.1 175.43 L 412.8 174.61 L 414.5 173.8 L 416.2 172.98 L 417.9 172.17 L 419.6 171.35 L 421.3 170.54 L 423 169.73 L 424.7 168.93 L 426.4 168.14 L 428.1 167.35 L 429.8 166.57 L 431.5 165.81 L 433.2 165.05 L 434.9 164.31 L 436.6 163.59 L 438.3 162.88 L 440 162.19 L 441.7 161.53 L 443.4 160.88 L 445.1 160.26 L 446.8 159.66 L 448.5 159.09 L 450.2 158.55 L 451.9 158.04 L 453.6 157.56 L 455.3 157.12 L 457 156.7 L 458.7 156.33 L 460.4 155.99 L 462.1 155.68 L 463.8 155.42 L 465.5 155.19 L 467.2 155.01 L 468.9 154.86 L 470.6 154.76 L 472.3 154.7 L 474 154.67" fill="none" stroke="#1857a8" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+  </g>
+  <g clip-path="url(#clip-1)">
+    <path d="M 270 208.74 L 271.7 208.74 L 273.4 208.72 L 275.1 208.69 L 276.8 208.66 L 278.5 208.6 L 280.2 208.54 L 281.9 208.47 L 283.6 208.39 L 285.3 208.29 L 287 208.18 L 288.7 208.07 L 290.4 207.94 L 292.1 207.79 L 293.8 207.64 L 295.5 207.47 L 297.2 207.29 L 298.9 207.1 L 300.6 206.9 L 302.3 206.68 L 304 206.46 L 305.7 206.21 L 307.4 205.96 L 309.1 205.69 L 310.8 205.41 L 312.5 205.11 L 314.2 204.8 L 315.9 204.47 L 317.6 204.13 L 319.3 203.78 L 321 203.41 L 322.7 203.02 L 324.4 202.62 L 326.1 202.2 L 327.8 201.76 L 329.5 201.31 L 331.2 200.84 L 332.9 200.35 L 334.6 199.84 L 336.3 199.31 L 338 198.76 L 339.7 198.19 L 341.4 197.61 L 343.1 197 L 344.8 196.37 L 346.5 195.71 L 348.2 195.04 L 349.9 194.34 L 351.6 193.62 L 353.3 192.87 L 355 192.09 L 356.7 191.29 L 358.4 190.47 L 360.1 189.61 L 361.8 188.73 L 363.5 187.82 L 365.2 186.88 L 366.9 185.9 L 368.6 184.9 L 370.3 183.86 L 372 182.79 L 373.7 181.69 L 375.4 180.55 L 377.1 179.37 L 378.8 178.16 L 380.5 176.91 L 382.2 175.62 L 383.9 174.29 L 385.6 172.93 L 387.3 171.52 L 389 170.07 L 390.7 168.57 L 392.4 167.04 L 394.1 165.46 L 395.8 163.83 L 397.5 162.16 L 399.2 160.45 L 400.9 158.69 L 402.6 156.88 L 404.3 155.03 L 406 153.13 L 407.7 151.19 L 409.4 149.2 L 411.1 147.16 L 412.8 145.08 L 414.5 142.96 L 416.2 140.8 L 417.9 138.6 L 419.6 136.37 L 421.3 134.09 L 423 131.79 L 424.7 129.46 L 426.4 127.1 L 428.1 124.72 L 429.8 122.32 L 431.5 119.92 L 433.2 117.51 L 434.9 115.09 L 436.6 112.69 L 438.3 110.3 L 440 107.93 L 441.7 105.59 L 443.4 103.29 L 445.1 101.04 L 446.8 98.84 L 448.5 96.71 L 450.2 94.65 L 451.9 92.68 L 453.6 90.81 L 455.3 89.04 L 457 87.39 L 458.7 85.86 L 460.4 84.47 L 462.1 83.22 L 463.8 82.11 L 465.5 81.17 L 467.2 80.39 L 468.9 79.77 L 470.6 79.33 L 472.3 79.07 L 474 78.98" fill="none" stroke="#6b38b5" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/>
+  </g>
+  <text x="410.53" y="96.28" class="fm-math" text-anchor="end" fill="#6b38b5" font-size="10.8" font-weight="400" font-style="italic" font-family="'STIX Two Math', 'Cambria Math', 'Times New Roman', Georgia, serif" style="fill:#6b38b5;font-size:10.8px;font-weight:400;font-style:italic;font-family:'STIX Two Math', 'Cambria Math', 'Times New Roman', Georgia, serif" paint-order="stroke" stroke="#f7f8fb" stroke-width="3.4" stroke-linejoin="round">Λ = 2.0</text>
+  <text x="455.87" y="178.47" class="fm-math" text-anchor="end" fill="#1857a8" font-size="10.8" font-weight="400" font-style="italic" font-family="'STIX Two Math', 'Cambria Math', 'Times New Roman', Georgia, serif" style="fill:#1857a8;font-size:10.8px;font-weight:400;font-style:italic;font-family:'STIX Two Math', 'Cambria Math', 'Times New Roman', Georgia, serif" paint-order="stroke" stroke="#f7f8fb" stroke-width="3.4" stroke-linejoin="round">Λ = 1.5</text>
+  <text x="392.4" y="226.05" class="fm-math" text-anchor="middle" fill="#575e78" font-size="10.4" font-weight="400" font-style="italic" font-family="'STIX Two Math', 'Cambria Math', 'Times New Roman', Georgia, serif" style="fill:#575e78;font-size:10.4px;font-weight:400;font-style:italic;font-family:'STIX Two Math', 'Cambria Math', 'Times New Roman', Georgia, serif" paint-order="stroke" stroke="#f7f8fb" stroke-width="3.4" stroke-linejoin="round">Λ = 1.0  (P/2)</text>
+  <text x="26" y="342" class="fm-math" fill="#1c2030" font-size="11.8" font-weight="400" font-style="italic" font-family="'STIX Two Math', 'Cambria Math', 'Times New Roman', Georgia, serif" style="fill:#1c2030;font-size:11.8px;font-weight:400;font-style:italic;font-family:'STIX Two Math', 'Cambria Math', 'Times New Roman', Georgia, serif"><tspan font-style="normal" font-weight="700">T</tspan><tspan baseline-shift="sub" font-size="74%" font-style="normal" font-weight="400">SL,G</tspan> = Ω<tspan baseline-shift="sub" font-size="74%" font-style="normal" font-weight="400">DL</tspan> <tspan font-style="normal" font-weight="700">m</tspan>×(<tspan font-style="normal" font-weight="700">p&#x0302;</tspan>×<tspan font-style="normal" font-weight="700">m</tspan>) + Ω<tspan baseline-shift="sub" font-size="74%" font-style="normal" font-weight="400">FL</tspan> <tspan font-style="normal" font-weight="700">m</tspan>×<tspan font-style="normal" font-weight="700">p&#x0302;</tspan></text>
+  <text x="26" y="366" class="fm-math" fill="#3b4058" font-size="10.8" font-weight="400" font-style="italic" font-family="'STIX Two Math', 'Cambria Math', 'Times New Roman', Georgia, serif" style="fill:#3b4058;font-size:10.8px;font-weight:400;font-style:italic;font-family:'STIX Two Math', 'Cambria Math', 'Times New Roman', Georgia, serif">Ω<tspan baseline-shift="sub" font-size="74%" font-style="normal" font-weight="400">J</tspan> = γ<tspan baseline-shift="sub" font-size="74%" font-style="normal" font-weight="400">e</tspan> ℏ J<tspan baseline-shift="sub" font-size="74%" font-style="normal" font-weight="400">⊥</tspan> / (e M<tspan baseline-shift="sub" font-size="74%" font-style="normal" font-weight="400">s</tspan> t<tspan baseline-shift="sub" font-size="74%" font-style="normal" font-weight="400">F</tspan>),   Ω<tspan baseline-shift="sub" font-size="74%" font-style="normal" font-weight="400">DL</tspan> = −Ω<tspan baseline-shift="sub" font-size="74%" font-style="normal" font-weight="400">J</tspan> ε<tspan baseline-shift="sub" font-size="74%" font-style="normal" font-weight="400">DL</tspan>(θ),   Ω<tspan baseline-shift="sub" font-size="74%" font-style="normal" font-weight="400">FL</tspan> = Ω<tspan baseline-shift="sub" font-size="74%" font-style="normal" font-weight="400">J</tspan> ε'</text>
+  <line x1="496" y1="18" x2="496" y2="378" stroke="#aeb5c9" stroke-width="0.85" stroke-linecap="round" opacity="0.55"/>
+  <text x="514" y="22" class="fm-panel-letter">b</text>
+  <text x="531" y="22" class="fm-panel-title">Zhang–Li CIP domain-wall torque</text>
+  <rect x="528" y="108" width="404" height="88" rx="2" fill="#f5e8df" stroke="#945630" stroke-width="1.25"/>
+  <line x1="730" y1="146" x2="730" y2="202" stroke="#aeb5c9" stroke-width="0.9" stroke-linecap="round" stroke-dasharray="3,3"/>
+  <text x="540" y="126" class="fm-math-bold" fill="#945630" font-size="11.2" font-weight="700" font-style="italic" font-family="'STIX Two Math', 'Cambria Math', 'Times New Roman', Georgia, serif" style="fill:#945630;font-size:11.2px;font-weight:700;font-style:italic;font-family:'STIX Two Math', 'Cambria Math', 'Times New Roman', Georgia, serif">+m<tspan baseline-shift="sub" font-size="74%" font-style="normal" font-weight="400">z</tspan></text>
+  <text x="920" y="126" class="fm-math-bold" text-anchor="end" fill="#945630" font-size="11.2" font-weight="700" font-style="italic" font-family="'STIX Two Math', 'Cambria Math', 'Times New Roman', Georgia, serif" style="fill:#945630;font-size:11.2px;font-weight:700;font-style:italic;font-family:'STIX Two Math', 'Cambria Math', 'Times New Roman', Georgia, serif">−m<tspan baseline-shift="sub" font-size="74%" font-style="normal" font-weight="400">z</tspan></text>
+  <text x="730" y="125" class="fm-note" text-anchor="middle" fill="#9c5409" style="fill:#9c5409">Domain wall</text>
+  <text x="730" y="139" class="fm-math" text-anchor="middle" fill="#9c5409" font-size="10.2" font-weight="400" font-style="italic" font-family="'STIX Two Math', 'Cambria Math', 'Times New Roman', Georgia, serif" style="fill:#9c5409;font-size:10.2px;font-weight:400;font-style:italic;font-family:'STIX Two Math', 'Cambria Math', 'Times New Roman', Georgia, serif">(∇<tspan font-style="normal" font-weight="700">m</tspan> ≠ 0)</text>
+  <line x1="551.07" y1="181.97" x2="552.93" y2="154.03" stroke="#b82e24" stroke-width="1.85" stroke-linecap="round" marker-end="url(#arr-m-sm)"/>
+  <line x1="585.76" y1="181.88" x2="589.44" y2="154.12" stroke="#b82e24" stroke-width="1.85" stroke-linecap="round" marker-end="url(#arr-m-sm)"/>
+  <line x1="619.62" y1="181.53" x2="626.78" y2="154.47" stroke="#b82e24" stroke-width="1.85" stroke-linecap="round" marker-end="url(#arr-m-sm)"/>
+  <line x1="652.06" y1="180.27" x2="665.54" y2="155.73" stroke="#b82e24" stroke-width="1.85" stroke-linecap="round" marker-end="url(#arr-m-sm)"/>
+  <line x1="683.11" y1="176.28" x2="705.69" y2="159.72" stroke="#9c5409" stroke-width="2.1" stroke-linecap="round" marker-end="url(#arr-accent-warm-sm)"/>
+  <line x1="716" y1="168" x2="744" y2="168" stroke="#9c5409" stroke-width="2.1" stroke-linecap="round" marker-end="url(#arr-accent-warm-sm)"/>
+  <line x1="754.31" y1="159.72" x2="776.89" y2="176.28" stroke="#9c5409" stroke-width="2.1" stroke-linecap="round" marker-end="url(#arr-accent-warm-sm)"/>
+  <line x1="794.46" y1="155.73" x2="807.94" y2="180.27" stroke="#b82e24" stroke-width="1.85" stroke-linecap="round" marker-end="url(#arr-m-sm)"/>
+  <line x1="833.22" y1="154.47" x2="840.38" y2="181.53" stroke="#b82e24" stroke-width="1.85" stroke-linecap="round" marker-end="url(#arr-m-sm)"/>
+  <line x1="870.56" y1="154.12" x2="874.24" y2="181.88" stroke="#b82e24" stroke-width="1.85" stroke-linecap="round" marker-end="url(#arr-m-sm)"/>
+  <line x1="907.07" y1="154.03" x2="908.93" y2="181.97" stroke="#b82e24" stroke-width="1.85" stroke-linecap="round" marker-end="url(#arr-m-sm)"/>
+  <line x1="764" y1="88" x2="696" y2="88" stroke="#9c5409" stroke-width="2.3" stroke-linecap="round" marker-end="url(#arr-accent-warm)"/>
+  <text x="730" y="64" class="fm-label-bold" text-anchor="middle" fill="#9c5409" font-size="11" style="fill:#9c5409;font-size:11px">Adiabatic wall drag</text>
+  <text x="730" y="79" class="fm-math" text-anchor="middle" fill="#9c5409" font-size="11.2" font-weight="400" font-style="italic" font-family="'STIX Two Math', 'Cambria Math', 'Times New Roman', Georgia, serif" style="fill:#9c5409;font-size:11.2px;font-weight:400;font-style:italic;font-family:'STIX Two Math', 'Cambria Math', 'Times New Roman', Georgia, serif">−(<tspan font-style="normal" font-weight="700">u</tspan>·∇)<tspan font-style="normal" font-weight="700">m</tspan></text>
+  <circle cx="730" cy="220" r="7.5" fill="#f7f8fb" stroke="#0e746c" stroke-width="1.5"/>
+  <circle cx="730" cy="220" r="2.1" fill="#0e746c"/>
+  <text x="744" y="216.5" class="fm-label-bold" fill="#0e746c" font-size="10.8" style="fill:#0e746c;font-size:10.8px">Non-adiabatic canting</text>
+  <text x="744" y="231" class="fm-math" fill="#0e746c" font-size="11" font-weight="400" font-style="italic" font-family="'STIX Two Math', 'Cambria Math', 'Times New Roman', Georgia, serif" style="fill:#0e746c;font-size:11px;font-weight:400;font-style:italic;font-family:'STIX Two Math', 'Cambria Math', 'Times New Roman', Georgia, serif">+β <tspan font-style="normal" font-weight="700">m</tspan>×[(<tspan font-style="normal" font-weight="700">u</tspan>·∇)<tspan font-style="normal" font-weight="700">m</tspan>]</text>
+  <line x1="538" y1="266" x2="706" y2="266" stroke="#1857a8" stroke-width="2.5" stroke-linecap="round" marker-end="url(#arr-H)"/>
+  <text x="622" y="284" class="fm-math" text-anchor="middle" fill="#1857a8" font-size="11.3" font-weight="400" font-style="italic" font-family="'STIX Two Math', 'Cambria Math', 'Times New Roman', Georgia, serif" style="fill:#1857a8;font-size:11.3px;font-weight:400;font-style:italic;font-family:'STIX Two Math', 'Cambria Math', 'Times New Roman', Georgia, serif"><tspan font-style="normal" font-weight="700">J</tspan><tspan baseline-shift="sub" font-size="74%" font-style="normal" font-weight="400">c</tspan>,  <tspan font-style="normal" font-weight="700">u</tspan>   (+<tspan font-style="normal" font-weight="700">x&#x0302;</tspan>,  e &gt; 0)</text>
+  <line x1="922" y1="266" x2="754" y2="266" stroke="#575e78" stroke-width="2" stroke-linecap="round" stroke-dasharray="5,3" marker-end="url(#arr-ink-muted)"/>
+  <text x="838" y="284" class="fm-sub" text-anchor="middle" fill="#575e78" font-size="11" style="fill:#575e78;font-size:11px">Electron drift (−x)</text>
+  <text x="526" y="322" class="fm-math" fill="#3b4058" font-size="11.5" font-weight="400" font-style="italic" font-family="'STIX Two Math', 'Cambria Math', 'Times New Roman', Georgia, serif" style="fill:#3b4058;font-size:11.5px;font-weight:400;font-style:italic;font-family:'STIX Two Math', 'Cambria Math', 'Times New Roman', Georgia, serif"><tspan font-style="normal" font-weight="700">u</tspan> = [g μ<tspan baseline-shift="sub" font-size="74%" font-style="normal" font-weight="400">B</tspan> P / (2 e M<tspan baseline-shift="sub" font-size="74%" font-style="normal" font-weight="400">s</tspan>)] <tspan font-style="normal" font-weight="700">J</tspan><tspan baseline-shift="sub" font-size="74%" font-style="normal" font-weight="400">c</tspan></text>
+  <text x="526" y="346" class="fm-math" fill="#1c2030" font-size="11.8" font-weight="400" font-style="italic" font-family="'STIX Two Math', 'Cambria Math', 'Times New Roman', Georgia, serif" style="fill:#1c2030;font-size:11.8px;font-weight:400;font-style:italic;font-family:'STIX Two Math', 'Cambria Math', 'Times New Roman', Georgia, serif"><tspan font-style="normal" font-weight="700">T</tspan><tspan baseline-shift="sub" font-size="74%" font-style="normal" font-weight="400">ZL,G</tspan> = −(<tspan font-style="normal" font-weight="700">u</tspan>·∇)<tspan font-style="normal" font-weight="700">m</tspan> + β <tspan font-style="normal" font-weight="700">m</tspan>×[(<tspan font-style="normal" font-weight="700">u</tspan>·∇)<tspan font-style="normal" font-weight="700">m</tspan>]</text>
+  <text x="526" y="367" class="fm-note" fill="#575e78" style="fill:#575e78">Sign anchored to conventional charge current (e &gt; 0) across FDM &amp; FEM.</text>
+  <line x1="16" y1="392" x2="944" y2="392" stroke="#aeb5c9" stroke-width="0.85" stroke-linecap="round" opacity="0.55"/>
+  <line x1="20" y1="404" x2="20" y2="434" stroke="#1d6f30" stroke-width="3" stroke-linecap="round"/>
+  <text x="32" y="417" class="fm-label-bold" fill="#1d6f30" font-size="11.4" style="fill:#1d6f30;font-size:11.4px">Single Gilbert-to-explicit RHS conversion</text>
+  <text x="294" y="417" class="fm-math" fill="#1c2030" font-size="12.2" font-weight="400" font-style="italic" font-family="'STIX Two Math', 'Cambria Math', 'Times New Roman', Georgia, serif" style="fill:#1c2030;font-size:12.2px;font-weight:400;font-style:italic;font-family:'STIX Two Math', 'Cambria Math', 'Times New Roman', Georgia, serif"><tspan font-style="normal" font-weight="700">T</tspan><tspan baseline-shift="sub" font-size="74%" font-style="normal" font-weight="400">explicit</tspan> = (<tspan font-style="normal" font-weight="700">T</tspan><tspan baseline-shift="sub" font-size="74%" font-style="normal" font-weight="400">G</tspan> + α <tspan font-style="normal" font-weight="700">m</tspan>×<tspan font-style="normal" font-weight="700">T</tspan><tspan baseline-shift="sub" font-size="74%" font-style="normal" font-weight="400">G</tspan>) / (1 + α<tspan baseline-shift="super" font-size="74%" font-style="normal" font-weight="400">2</tspan>)</text>
+  <text x="32" y="435" class="fm-note" fill="#575e78" style="fill:#575e78">Evaluated exactly once by backends before LLG integration; never pre-converted in Python authoring.</text>
 </svg>

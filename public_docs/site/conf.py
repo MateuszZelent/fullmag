@@ -25,6 +25,7 @@ extensions = [
     "status_navigation",
     "page_last_modified",
     "documentation_changelog",
+    "themed_diagrams",
 ]
 templates_path = ["_templates"]
 

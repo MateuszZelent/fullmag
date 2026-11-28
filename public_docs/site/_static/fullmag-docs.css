@@ -2,10 +2,12 @@
  * Mirrors apps/control-room/src/design/styles/theme.css so standalone and
  * embedded documentation share the exact surface, border, text, and accent tokens.
  */
+:root {
+  color-scheme: light dark;
+}
+
 :root,
 html[data-theme="light"] {
-  color-scheme: light;
-
   --fm-docs-bg-app: #eff1f5;
   --fm-docs-bg-chrome: #e6e9ef;
   --fm-docs-bg-surface: #f7f8fb;
@@ -91,6 +93,10 @@ html[data-theme="light"] {
   --sd-color-tabs-underline: var(--fm-docs-border-subtle);
 }
 
+html[data-theme="light"] {
+  color-scheme: light;
+}
+
 html[data-theme="dark"] {
   color-scheme: dark;
 
@@ -158,6 +164,78 @@ html[data-theme="dark"] {
   --article-heading--color: var(--fm-docs-text-primary);
   --article-text--color: var(--fm-docs-text-secondary);
   --article-mono--color: var(--fm-docs-mauve-text);
+}
+
+/* No-JS dark OS fallback when data-theme has not been stamped by script. */
+@media (prefers-color-scheme: dark) {
+  html:not([data-theme]) {
+    color-scheme: dark;
+
+    --fm-docs-bg-app: #1e1e2e;
+    --fm-docs-bg-chrome: #181825;
+    --fm-docs-bg-surface: #242438;
+    --fm-docs-bg-elevated: #313244;
+    --fm-docs-bg-muted: #262739;
+    --fm-docs-bg-canvas: #11111b;
+    --fm-docs-bg-hover: #3b3c4f;
+    --fm-docs-bg-selected: #264069;
+
+    --fm-docs-border-subtle: #313244;
+    --fm-docs-border-default: #45475a;
+    --fm-docs-border-strong: #585b70;
+
+    --fm-docs-text-primary: #cdd6f4;
+    --fm-docs-text-secondary: #bac2de;
+    --fm-docs-text-muted: #a6adc8;
+    --fm-docs-text-disabled: #7f849c;
+    --fm-docs-text-on-accent: #1e1e2e;
+
+    --fm-docs-accent: #89b4fa;
+    --fm-docs-accent-text: #89b4fa;
+    --fm-docs-accent-strong: #b4befe;
+    --fm-docs-accent-soft: #2a2d52;
+
+    --fm-docs-success: #a6e3a1;
+    --fm-docs-success-text: #a6e3a1;
+    --fm-docs-info: #89dceb;
+    --fm-docs-info-text: #89dceb;
+    --fm-docs-warning: #f9e2af;
+    --fm-docs-warning-text: #f9e2af;
+    --fm-docs-danger: #f38ba8;
+    --fm-docs-danger-text: #f592ad;
+    --fm-docs-mauve: #cba6f7;
+    --fm-docs-mauve-text: #cba6f7;
+    --fm-docs-peach: #fab387;
+    --fm-docs-degraded-text: #fab387;
+    --fm-docs-teal: #94e2d5;
+    --fm-docs-teal-text: #94e2d5;
+
+    --root-bg: var(--fm-docs-bg-app);
+    --color-base-100: var(--fm-docs-bg-app);
+    --color-base-200: var(--fm-docs-border-subtle);
+    --color-base-300: var(--fm-docs-border-default);
+    --color-base-content: var(--fm-docs-text-primary);
+    --color-primary: var(--fm-docs-bg-elevated);
+    --color-primary-content: var(--fm-docs-text-primary);
+    --color-secondary: var(--fm-docs-bg-surface);
+    --color-secondary-content: var(--fm-docs-text-secondary);
+    --color-accent: var(--fm-docs-accent-soft);
+    --color-accent-content: var(--fm-docs-accent-text);
+    --color-neutral: var(--fm-docs-text-primary);
+    --color-neutral-content: var(--fm-docs-bg-app);
+    --color-info: var(--fm-docs-info);
+    --color-info-content: var(--fm-docs-info-text);
+    --color-success: var(--fm-docs-success);
+    --color-success-content: var(--fm-docs-success-text);
+    --color-warning: var(--fm-docs-warning);
+    --color-warning-content: var(--fm-docs-warning-text);
+    --color-error: var(--fm-docs-danger);
+    --color-error-content: var(--fm-docs-danger-text);
+
+    --article-heading--color: var(--fm-docs-text-primary);
+    --article-text--color: var(--fm-docs-text-secondary);
+    --article-mono--color: var(--fm-docs-mauve-text);
+  }
 }
 
 html,
@@ -653,54 +731,136 @@ main article figure.fm-physics-figure {
   box-sizing: border-box;
   min-width: 0;
   max-width: 100%;
-  margin: 1.5rem 0;
-  padding: 0.9rem;
+  margin: 1.75rem 0;
+  padding: 1.15rem 1.25rem 0.95rem;
   background: var(--fm-docs-bg-surface);
   border: 1px solid var(--fm-docs-border-subtle);
-  border-radius: 0.6rem;
+  border-radius: 0.5rem;
 }
 
 main article figure.fm-physics-figure a.image-reference {
-  display: block;
   max-width: 100%;
   text-decoration: none;
 }
 
+main article figure.fm-physics-figure a.image-reference:not(:has(> img.fm-diagram-light)):not(:has(> img.fm-diagram-dark)) {
+  display: block;
+}
+
 main article figure.fm-physics-figure img,
 main article figure.align-default img[src$=".svg"] {
-  display: block;
   box-sizing: border-box;
   width: 100%;
   max-width: 100%;
   height: auto;
   margin-inline: auto;
-  background-color: #fbfcfe;
-  border: 1px solid var(--fm-docs-border-subtle);
-  border-radius: 0.45rem;
 }
 
+main article figure.fm-physics-figure img:not(.fm-diagram-light):not(.fm-diagram-dark),
+main article figure.align-default img[src$=".svg"]:not(.fm-diagram-light):not(.fm-diagram-dark) {
+  display: block;
+}
+
+/* Minimalist transparent scientific SVGs blend directly into light & dark figure surfaces. */
 main article figure.fm-physics-figure img[src$=".svg"],
 main article figure.align-default img[src$=".svg"] {
-  padding: 0.35rem;
+  background-color: transparent;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+  padding: 0;
 }
 
-html[data-theme="dark"] main article figure.fm-physics-figure {
-  border-color: var(--fm-docs-border-default);
+/* Non-SVG validation plots (e.g. raster PNGs) keep a subtle hairline border. */
+main article figure.fm-physics-figure img:not([src$=".svg"]) {
+  background-color: var(--fm-docs-bg-surface);
+  border: 1px solid var(--fm-docs-border-subtle);
+  border-radius: 0.35rem;
 }
 
-html[data-theme="dark"] main article figure.fm-physics-figure img[src$=".svg"],
-html[data-theme="dark"] main article figure.align-default img[src$=".svg"] {
-  background-color: #fbfcfe;
-  border-color: #ccd0da;
-  box-shadow: 0 2px 12px rgb(17 17 27 / 0.36);
+/* Dual-theme diagram toggle: hidden variant is removed from layout, tab order, and a11y tree. */
+img.fm-diagram-dark,
+a.image-reference.fm-diagram-dark,
+a.image-reference:has(> img.fm-diagram-dark),
+main article figure.fm-physics-figure img.fm-diagram-dark,
+main article figure.fm-physics-figure a.image-reference.fm-diagram-dark,
+main article figure.fm-physics-figure a.image-reference:has(> img.fm-diagram-dark) {
+  display: none;
+}
+
+img.fm-diagram-light,
+a.image-reference.fm-diagram-light,
+a.image-reference:has(> img.fm-diagram-light),
+main article figure.fm-physics-figure img.fm-diagram-light,
+main article figure.fm-physics-figure a.image-reference.fm-diagram-light,
+main article figure.fm-physics-figure a.image-reference:has(> img.fm-diagram-light) {
+  display: block;
+}
+
+html[data-theme="dark"] img.fm-diagram-light,
+html[data-theme="dark"] a.image-reference.fm-diagram-light,
+html[data-theme="dark"] a.image-reference:has(> img.fm-diagram-light),
+html[data-theme="dark"] main article figure.fm-physics-figure img.fm-diagram-light,
+html[data-theme="dark"] main article figure.fm-physics-figure a.image-reference.fm-diagram-light,
+html[data-theme="dark"] main article figure.fm-physics-figure a.image-reference:has(> img.fm-diagram-light) {
+  display: none;
+}
+
+html[data-theme="dark"] img.fm-diagram-dark,
+html[data-theme="dark"] a.image-reference.fm-diagram-dark,
+html[data-theme="dark"] a.image-reference:has(> img.fm-diagram-dark),
+html[data-theme="dark"] main article figure.fm-physics-figure img.fm-diagram-dark,
+html[data-theme="dark"] main article figure.fm-physics-figure a.image-reference.fm-diagram-dark,
+html[data-theme="dark"] main article figure.fm-physics-figure a.image-reference:has(> img.fm-diagram-dark) {
+  display: block;
+}
+
+@media (prefers-color-scheme: dark) {
+  html:not([data-theme]) img.fm-diagram-light,
+  html:not([data-theme]) a.image-reference.fm-diagram-light,
+  html:not([data-theme]) a.image-reference:has(> img.fm-diagram-light),
+  html:not([data-theme]) main article figure.fm-physics-figure img.fm-diagram-light,
+  html:not([data-theme]) main article figure.fm-physics-figure a.image-reference.fm-diagram-light,
+  html:not([data-theme]) main article figure.fm-physics-figure a.image-reference:has(> img.fm-diagram-light) {
+    display: none;
+  }
+
+  html:not([data-theme]) img.fm-diagram-dark,
+  html:not([data-theme]) a.image-reference.fm-diagram-dark,
+  html:not([data-theme]) a.image-reference:has(> img.fm-diagram-dark),
+  html:not([data-theme]) main article figure.fm-physics-figure img.fm-diagram-dark,
+  html:not([data-theme]) main article figure.fm-physics-figure a.image-reference.fm-diagram-dark,
+  html:not([data-theme]) main article figure.fm-physics-figure a.image-reference:has(> img.fm-diagram-dark) {
+    display: block;
+  }
+}
+
+@media print {
+  html img.fm-diagram-dark,
+  html a.image-reference.fm-diagram-dark,
+  html a.image-reference:has(> img.fm-diagram-dark),
+  html main article figure.fm-physics-figure img.fm-diagram-dark,
+  html main article figure.fm-physics-figure a.image-reference.fm-diagram-dark,
+  html main article figure.fm-physics-figure a.image-reference:has(> img.fm-diagram-dark) {
+    display: none;
+  }
+
+  html img.fm-diagram-light,
+  html a.image-reference.fm-diagram-light,
+  html a.image-reference:has(> img.fm-diagram-light),
+  html main article figure.fm-physics-figure img.fm-diagram-light,
+  html main article figure.fm-physics-figure a.image-reference.fm-diagram-light,
+  html main article figure.fm-physics-figure a.image-reference:has(> img.fm-diagram-light) {
+    display: block;
+  }
 }
 
 main article figure.fm-physics-figure figcaption {
-  margin-top: 0.75rem;
-  padding-top: 0.55rem;
+  margin-top: 0.9rem;
+  padding-top: 0.65rem;
   border-top: 1px solid var(--fm-docs-border-subtle);
-  font-size: 0.92rem;
-  line-height: 1.55;
+  font-size: 0.9rem;
+  line-height: 1.58;
   color: var(--fm-docs-text-secondary);
 }
 
@@ -713,14 +873,21 @@ main article figure.fm-physics-figure figcaption > p + p {
 }
 
 main article figure.fm-physics-figure figcaption .caption-number {
-  font-weight: 600;
+  font-weight: 700;
+  letter-spacing: 0.01em;
   color: var(--fm-docs-text-primary);
+}
+
+@media (forced-colors: active) {
+  main article figure.fm-physics-figure {
+    border: 1px solid CanvasText;
+  }
 }
 
 @media (max-width: 48rem) {
   main article figure.fm-physics-figure {
-    margin: 1.1rem 0;
-    padding: 0.6rem;
+    margin: 1.2rem 0;
+    padding: 0.75rem 0.7rem 0.65rem;
   }
 
   main article figure.fm-physics-figure figcaption {
